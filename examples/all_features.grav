@@ -1,0 +1,123 @@
+/* ===========================================================================
+ * Grav — a tour of every language feature in one program.
+ *
+ *   ./build/gravc examples/all_features.grav --emit bin -o /tmp/all && /tmp/all
+ * =========================================================================== */
+
+// --- Plain value types: structs --------------------------------------------
+struct Point {
+    x: int
+    y: int
+}
+
+// Structs may contain other structs (stored by value) and primitives.
+struct Rect {
+    origin: Point
+    width: int
+    height: int
+}
+
+fn area_of(r: Rect) -> int {
+    return r.width * r.height
+}
+
+// --- Free functions, primitives, casts -------------------------------------
+fn hypotSq(a: int, b: int) -> int {
+    return a * a + b * b
+}
+
+// --- Namespaces, interfaces, abstract classes, inheritance -----------------
+namespace zoo {
+    interface Named {
+        fn label() -> string
+    }
+
+    abstract class Animal implements Named {
+        protected name: string
+        constructor(name: string) { self.name = name }
+        abstract fn speak() -> string
+        public fn label() -> string { return self.name }
+    }
+
+    class Dog extends Animal {
+        constructor(name: string) { self.name = name }
+        public fn speak() -> string { return "woof" }
+    }
+
+    class Cat extends Animal {
+        constructor(name: string) { self.name = name }
+        public fn speak() -> string { return "meow" }
+    }
+}
+
+// --- Access modifiers, readonly, auto getters/setters, static methods ------
+class BankAccount {
+    public readonly owner: string
+    private balance: int
+
+    constructor(owner: string) {
+        self.owner = owner
+        self.balance = 0
+    }
+
+    public fn deposit(n: int) -> void { self.balance = self.balance + n }
+
+    static fn opening(owner: string) -> BankAccount {
+        return new BankAccount(owner)
+    }
+}
+
+fn main() {
+    // structs: literals, value semantics, field read/write, nesting
+    let p: Point = Point { x: 3, y: 4 }
+    print(hypotSq(p.x, p.y))                 // 25
+
+    let r = Rect { origin: p, width: 5, height: 6 }
+    print(area_of(r))                        // 30
+    print(r.origin.x)                        // 3
+
+    let p2 = p                               // copy (value type)
+    p2.x = 100
+    print(p.x)                               // 3  (original unchanged)
+
+    // control flow: if / else-if / else, while, for, do-while, match, ++/--
+    let i: int = 1
+    while (i <= 3) {
+        if (i == 1) { print("one") }
+        else if (i == 2) { print("two") }
+        else { print("three") }
+        i++
+    }
+    for (let k: int = 0; k < 2; k++) { print(k) }    // 0 1
+    let n: int = 2
+    do { print(n)  n-- } while (n > 0)               // 2 1
+
+    print(classify(7))                       // big
+
+    // OOP: polymorphism via vtable, interface dispatch, RTTI, namespaces
+    let a: zoo.Animal = new zoo.Dog("Rex")
+    print(a.speak())                         // woof  (virtual dispatch)
+    print(a.label())                         // Rex
+    let named: zoo.Named = new zoo.Cat("Mia")
+    print(named.label())                     // Mia   (interface dispatch)
+    print(typename(a))                       // zoo.Dog
+    print(isInstance(a, zoo.Animal))         // true
+
+    // access control + auto getter for a private field + static factory
+    let acct = BankAccount.opening("Ada")
+    acct.deposit(50)
+    print(acct.get_balance())                // 50
+    print(acct.owner)                        // Ada
+
+    // logical operators short-circuit
+    print(!(1 > 2) && true)                  // true
+}
+
+fn classify(x: int) -> string {
+    match (x) {
+        case 0:       { return "zero" }
+        case 1, 2, 3: { return "small" }
+        default:      { return "big" }
+    }
+    return "?"
+}
