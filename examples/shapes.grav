@@ -1,0 +1,25 @@
+/* Vela OOP demo: interface, class, methods, fields, print */
+interface Shape {
+    fn area() -> int
+}
+
+class Circle implements Shape {
+    public radius: int
+
+    constructor(r: int) {
+        self.radius = r
+    }
+
+    public fn area() -> int {
+        return 3 * self.radius * self.radius
+    }
+
+    public fn describe() -> string {
+        return "circle r=" + string("?")  // placeholder string concat
+    }
+}
+
+fn main() {
+    let c = new Circle(10)   // type inferred
+    print(c.area())
+}
