@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace grav {
 
@@ -18,6 +19,10 @@ struct TypeRef {
     std::string name;              // populated only when kind == Named
     std::shared_ptr<TypeRef> elem; // populated when kind == Future, Pointer, or Array
     int arrayLen = 0;              // populated when kind == Array (fixed length)
+    // Generic type arguments for a Named type before monomorphization, e.g. the
+    // `int` in `Box<int>`. Cleared once the monomorphizer rewrites the reference
+    // to its concrete, mangled name.
+    std::vector<TypeRef> args;
 
     static TypeRef prim(Kind k) {
         TypeRef t;
@@ -58,9 +63,11 @@ struct TypeRef {
     bool isPointer() const { return kind == Kind::Pointer; }
     bool isArray() const { return kind == Kind::Array; }
 
+    bool hasArgs() const { return !args.empty(); }
+
     bool operator==(const TypeRef &o) const {
         if (kind != o.kind) return false;
-        if (kind == Kind::Named) return name == o.name;
+        if (kind == Kind::Named) return name == o.name && args == o.args;
         if (kind == Kind::Array)
             return arrayLen == o.arrayLen && elem && o.elem && *elem == *o.elem;
         if (kind == Kind::Future || kind == Kind::Pointer)
