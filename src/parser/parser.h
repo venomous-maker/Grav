@@ -50,6 +50,12 @@ private:
     std::vector<Param> parseParams();
     TypeRef parseType(const char *context);
     std::string parseQualifiedName(const char *context);
+    // Generics: `<T, U>` param lists on declarations, `<int, string>` argument
+    // lists in type/call positions, and the `>`-splitting close that lets
+    // `Box<Box<int>>` work despite the `>>` token.
+    std::vector<std::string> parseTypeParams();
+    std::vector<TypeRef> parseTypeArgs();
+    void expectGenericClose();
     std::string qualify(const std::string &simpleName) const;
 
     // --- statements (parser_stmt.cpp) ---
