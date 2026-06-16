@@ -313,6 +313,22 @@ struct ForInStmt : Stmt {
 struct BreakStmt : Stmt {};
 struct ContinueStmt : Stmt {};
 
+// `throw expr;` — raises a class instance as an exception.
+struct ThrowStmt : Stmt {
+    ExprPtr value;
+};
+
+// `try { ... } catch (e: Type) { ... } [finally { ... }]`.
+struct TryStmt : Stmt {
+    Block tryBlock;
+    bool hasCatch = false;
+    std::string catchVar;
+    TypeRef catchType;     // a class type
+    Block catchBlock;
+    bool hasFinally = false;
+    Block finallyBlock;
+};
+
 // ===========================================================================
 // Declarations
 // ===========================================================================
