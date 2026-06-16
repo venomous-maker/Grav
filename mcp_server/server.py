@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,20 +38,51 @@ TIMEOUT_S = 30
 # ---------------------------------------------------------------------------
 # gravc plumbing
 # ---------------------------------------------------------------------------
+# Where the compiler is installed for general use (on PATH as `grav`). Override
+# the directory with GRAV_DIR; defaults to ~/.local/bin.
+INSTALL_DIR = Path(os.environ.get("GRAV_DIR") or "~/.local/bin").expanduser()
+INSTALL_PATH = INSTALL_DIR / "grav"
+
+
+def _sync_install() -> None:
+    """Copy the freshly built compiler to ~/.local/bin/grav (kept up to date).
+
+    The MCP server always installs the latest build executable as `grav` so that
+    editors, shells, and the nvim integration can invoke a stable path instead of
+    the in-repo build dir.
+    """
+    built = REPO_ROOT / "build" / "gravc"
+    if not built.exists():
+        return
+    try:
+        if (not INSTALL_PATH.exists()
+                or INSTALL_PATH.stat().st_mtime < built.stat().st_mtime):
+            INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(built, INSTALL_PATH)
+            INSTALL_PATH.chmod(0o755)
+    except OSError:
+        pass  # best effort; fall back to the build dir below
+
+
 def _gravc() -> Path:
-    """Resolve the gravc binary, preferring $GRAVC then <repo>/build/gravc."""
+    """Resolve the compiler, preferring $GRAVC, then ~/.local/bin/grav, then build."""
+    _sync_install()
     env = os.environ.get("GRAVC")
-    return Path(env) if env else REPO_ROOT / "build" / "gravc"
+    if env:
+        return Path(env)
+    if INSTALL_PATH.exists():
+        return INSTALL_PATH
+    return REPO_ROOT / "build" / "gravc"
 
 
 def _ensure_built() -> str | None:
-    """Return an error string if gravc is missing, else None."""
+    """Return an error string if the compiler is missing, else None."""
     binary = _gravc()
     if not binary.exists():
         return (
-            f"gravc not found at '{binary}'. Build it with "
-            "`cmake -S . -B build && cmake --build build`, or set the GRAVC "
-            "environment variable to the binary path."
+            f"the Grav compiler was not found at '{binary}'. Build it with "
+            "`cmake -S . -B build && cmake --build build` (the MCP server then "
+            "installs it as `grav` in ~/.local/bin), or set the GRAVC env var."
         )
     return None
 
