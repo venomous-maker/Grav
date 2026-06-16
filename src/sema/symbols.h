@@ -96,6 +96,18 @@ struct FunctionInfo {
     FunctionDecl *decl = nullptr;
 };
 
+// A module-level global (`const`/`let`) or a class `static` field. Both lower to
+// a C global; `cName` is the identifier emitted for it.
+struct GlobalInfo {
+    std::string fqName;
+    TypeRef type;          // canonical
+    bool isConst = false;
+    std::string cName;     // C identifier
+    Access access = Access::Public;
+    std::string ownerClass; // FQ class for a static field, empty for a global
+    int line = 0, col = 0;
+};
+
 // Owns the symbol tables and performs name/type resolution. Built in two passes
 // (register, then canonicalize) before type checking begins.
 class Registry {
@@ -118,9 +130,15 @@ public:
     const StructInfo *strct(const std::string &fq) const;
     const EnumInfo *en(const std::string &fq) const;
     const FunctionInfo *func(const std::string &fq) const;
+    const GlobalInfo *global(const std::string &fq) const;
 
     // Is `member` a constant of enum `enumFq`?
     bool hasEnumMember(const std::string &enumFq, const std::string &member) const;
+    // Resolve a (possibly qualified/unqualified) global name to its FQ. "" if none.
+    std::string resolveGlobal(const std::string &name, const std::string &nsContext) const;
+    // The static field `Class.name` (walking the inheritance chain). null if none.
+    const GlobalInfo *findStaticField(const std::string &classFq,
+                                      const std::string &name) const;
 
     // Resolve a (possibly dotted, possibly unqualified) class/interface name in
     // a namespace context to its FQ name. Returns "" if not found.
@@ -174,6 +192,7 @@ private:
     std::unordered_map<std::string, EnumInfo> enums_;
     std::unordered_map<std::string, AliasInfo> aliases_;
     std::unordered_map<std::string, FunctionInfo> functions_;
+    std::unordered_map<std::string, GlobalInfo> globals_; // by FQ name
     std::vector<std::string> namespaces_; // known namespace prefixes
     std::vector<GravError> errors_;
 };
