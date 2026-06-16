@@ -1,0 +1,14 @@
+// 16 — reading from stdin with input(), plus command-line arguments.
+// Run:   printf 'Ada\n7\n' | grav examples/16_input.grav --emit bin -o /tmp/16 && /tmp/16 demo
+
+fn main() {
+    print("program: ${argv(0)}, args: ${argc()}");
+
+    print("What is your name?");
+    let name = input();
+    print("Hello, ${name}!");
+
+    print("Pick a number:");
+    let n = input();
+    print("You typed: ${n}");
+}
