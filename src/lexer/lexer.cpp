@@ -57,6 +57,7 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"in", TokenType::In},
         {"as", TokenType::As},
         {"is", TokenType::Is},
+        {"export", TokenType::Export},
     };
     return table;
 }
@@ -171,6 +172,105 @@ Token Lexer::scanString() {
     return makeToken(TokenType::StringLiteral, std::move(value));
 }
 
+void Lexer::scanStringInto(std::vector<Token> &out) {
+    int sLine = tokLine_, sCol = tokCol_;
+    advance(); // opening quote
+    // A part is either literal text (isExpr == false) or embedded expression
+    // source (isExpr == true), captured between `${` and the matching `}`.
+    struct Part { bool isExpr; std::string text; };
+    std::vector<Part> parts;
+    std::string lit;
+    bool interpolated = false;
+
+    while (!atEnd() && peek() != '"') {
+        char c = peek();
+        if (c == '\\') {
+            advance();
+            if (atEnd()) break;
+            char esc = advance();
+            switch (esc) {
+                case 'n': lit += '\n'; break;
+                case 't': lit += '\t'; break;
+                case '\\': lit += '\\'; break;
+                case '"': lit += '"'; break;
+                case '$': lit += '$'; break; // escaped interpolation
+                default:
+                    throw GravError("lex", line_, col_,
+                                    std::string("invalid escape sequence '\\") + esc + "'");
+            }
+        } else if (c == '$' && peekNext() == '{') {
+            interpolated = true;
+            parts.push_back({false, lit});
+            lit.clear();
+            advance(); advance(); // ${
+            std::string expr;
+            int depth = 1;
+            while (!atEnd() && depth > 0) {
+                char d = peek();
+                if (d == '{') depth++;
+                else if (d == '}') { depth--; if (depth == 0) { advance(); break; } }
+                else if (d == '\n') throw GravError("lex", sLine, sCol,
+                                                    "unterminated interpolation in string");
+                expr += d;
+                advance();
+            }
+            if (depth > 0) throw GravError("lex", sLine, sCol,
+                                           "unterminated '${' in string literal");
+            parts.push_back({true, expr});
+        } else if (c == '\n') {
+            throw GravError("lex", sLine, sCol, "unterminated string literal");
+        } else {
+            lit += c;
+            advance();
+        }
+    }
+    if (atEnd()) throw GravError("lex", sLine, sCol, "unterminated string literal");
+    advance(); // closing quote
+    parts.push_back({false, lit});
+
+    if (!interpolated) {
+        out.push_back(Token{TokenType::StringLiteral, parts.empty() ? "" : parts[0].text,
+                            sLine, sCol});
+        return;
+    }
+
+    // Desugar to `( part + str( expr ) + part + ... )`, converting each embedded
+    // expression to a string via the `str` builtin so any printable type works.
+    auto emit = [&](TokenType t, std::string lx) {
+        out.push_back(Token{t, std::move(lx), sLine, sCol});
+    };
+    emit(TokenType::LParen, "(");
+    bool first = true;
+    for (const auto &p : parts) {
+        if (!first) emit(TokenType::Plus, "+");
+        first = false;
+        if (!p.isExpr) {
+            emit(TokenType::StringLiteral, p.text);
+        } else {
+            emit(TokenType::Identifier, "str");
+            emit(TokenType::LParen, "(");
+            Lexer sub(p.text);
+            for (auto &tk : sub.tokenize())
+                if (tk.type != TokenType::EndOfFile) out.push_back(tk);
+            emit(TokenType::RParen, ")");
+        }
+    }
+    emit(TokenType::RParen, ")");
+}
+
+Token Lexer::scanCBlock() {
+    advance(); advance(); // consume `%{`
+    std::string raw;
+    while (!atEnd()) {
+        if (peek() == '%' && peekNext() == '}') {
+            advance(); advance(); // `%}`
+            return makeToken(TokenType::CBlock, std::move(raw));
+        }
+        raw += advance();
+    }
+    throw GravError("lex", tokLine_, tokCol_, "unterminated inline C block (missing '%}')");
+}
+
 Token Lexer::scanIdentifierOrKeyword() {
     std::string text;
     while (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_') {
@@ -203,7 +303,11 @@ std::vector<Token> Lexer::tokenize() {
             continue;
         }
         if (c == '"') {
-            tokens.push_back(scanString());
+            scanStringInto(tokens);
+            continue;
+        }
+        if (c == '%' && peekNext() == '{') {
+            tokens.push_back(scanCBlock());
             continue;
         }
 
