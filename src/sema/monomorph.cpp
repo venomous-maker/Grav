@@ -240,6 +240,7 @@ private:
     std::unordered_map<std::string, StructDecl *> structTpl_;
     std::unordered_map<std::string, FunctionDecl *> fnTpl_;
     std::unordered_map<std::string, ClassDecl *> classTpl_;
+    std::unordered_map<std::string, InterfaceDecl *> ifaceTpl_;
     std::unordered_map<std::string, bool> done_;
     std::vector<DeclPtr> instances_;
 
@@ -252,6 +253,11 @@ private:
                               int line, int col);
     std::string instantiateClass(const std::string &name, const std::vector<TypeRef> &args,
                                  int line, int col);
+    std::string instantiateInterface(const std::string &name, const std::vector<TypeRef> &args,
+                                     int line, int col);
+    // Resolve a `Base<args>` reference (in extends/implements) to the instance name.
+    void rewriteSuper(std::string &name, std::vector<TypeRef> &args, const Subst &subst,
+                      bool isClass, int line, int col);
     std::string instName(const std::string &name, const std::vector<TypeRef> &args) const;
     void walkBlock(Block &b, const Subst &subst);
     void walkStmt(Stmt *s, const Subst &subst);
@@ -284,6 +290,9 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
             t.args.clear();
         } else if (classTpl_.count(t.name)) {
             t.name = instantiateClass(t.name, t.args, line, col);
+            t.args.clear();
+        } else if (ifaceTpl_.count(t.name)) {
+            t.name = instantiateInterface(t.name, t.args, line, col);
             t.args.clear();
         } else if (fnTpl_.count(t.name)) {
             error(line, col, "'" + t.name + "' is a generic function, not a type");
@@ -356,6 +365,43 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
     return inst;
 }
 
+void Mono::rewriteSuper(std::string &name, std::vector<TypeRef> &args, const Subst &subst,
+                        bool isClass, int line, int col) {
+    if (args.empty()) return;
+    for (auto &a : args) rewriteType(a, subst, line, col);
+    if (isClass && classTpl_.count(name)) name = instantiateClass(name, args, line, col);
+    else if (!isClass && ifaceTpl_.count(name)) name = instantiateInterface(name, args, line, col);
+    else error(line, col, "unknown generic supertype '" + name + "'");
+    args.clear();
+}
+
+std::string Mono::instantiateInterface(const std::string &name, const std::vector<TypeRef> &args,
+                                       int line, int col) {
+    std::string inst = instName(name, args);
+    if (done_.count(inst)) return inst;
+    done_[inst] = true;
+    InterfaceDecl *tpl = ifaceTpl_[name];
+    if (tpl->typeParams.size() != args.size()) {
+        error(line, col, "generic interface '" + name + "' expects " +
+                             std::to_string(tpl->typeParams.size()) + " type argument(s), got " +
+                             std::to_string(args.size()));
+        return inst;
+    }
+    Subst subst;
+    for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
+    auto out = std::make_unique<InterfaceDecl>();
+    out->line = tpl->line; out->col = tpl->col;
+    out->name = inst; out->fqName = inst;
+    for (const auto &m : tpl->methods) {
+        MethodDecl nm = cloneMethod(m);
+        for (auto &p : nm.params) rewriteType(p.type, subst, m.line, m.col);
+        rewriteType(nm.returnType, subst, m.line, m.col);
+        out->methods.push_back(std::move(nm));
+    }
+    instances_.push_back(std::move(out));
+    return inst;
+}
+
 std::string Mono::instantiateClass(const std::string &name, const std::vector<TypeRef> &args,
                                    int line, int col) {
     std::string inst = instName(name, args);
@@ -376,8 +422,15 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     out->line = tpl->line; out->col = tpl->col;
     out->name = inst; out->fqName = inst;
     out->isAbstract = tpl->isAbstract;
-    out->baseName = tpl->baseName;          // non-generic base (generic base TBD)
+    out->baseName = tpl->baseName;
+    out->baseArgs = tpl->baseArgs;
+    rewriteSuper(out->baseName, out->baseArgs, subst, /*isClass=*/true, tpl->line, tpl->col);
     out->interfaceNames = tpl->interfaceNames;
+    out->interfaceArgs = tpl->interfaceArgs;
+    for (size_t i = 0; i < out->interfaceNames.size(); ++i)
+        if (i < out->interfaceArgs.size())
+            rewriteSuper(out->interfaceNames[i], out->interfaceArgs[i], subst,
+                         /*isClass=*/false, tpl->line, tpl->col);
     for (const auto &f : tpl->fields) {
         FieldDecl nf = f;
         rewriteType(nf.type, subst, f.line, f.col);
@@ -521,6 +574,11 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         rewriteType(fn->returnType, subst, fn->line, fn->col);
         walkBlock(fn->body, subst);
     } else if (auto *cd = dynamic_cast<ClassDecl *>(d)) {
+        rewriteSuper(cd->baseName, cd->baseArgs, subst, /*isClass=*/true, cd->line, cd->col);
+        for (size_t i = 0; i < cd->interfaceNames.size(); ++i)
+            if (i < cd->interfaceArgs.size())
+                rewriteSuper(cd->interfaceNames[i], cd->interfaceArgs[i], subst,
+                             /*isClass=*/false, cd->line, cd->col);
         for (auto &f : cd->fields) rewriteType(f.type, subst, f.line, f.col);
         for (auto &sf : cd->staticFields) {
             rewriteType(sf.type, subst, sf.line, sf.col);
@@ -549,6 +607,8 @@ void Mono::run() {
             fnTpl_[fn->name] = fn; templates_.push_back(std::move(d));
         } else if (auto *cd = dynamic_cast<ClassDecl *>(d.get()); cd && !cd->typeParams.empty()) {
             classTpl_[cd->name] = cd; templates_.push_back(std::move(d));
+        } else if (auto *id = dynamic_cast<InterfaceDecl *>(d.get()); id && !id->typeParams.empty()) {
+            ifaceTpl_[id->name] = id; templates_.push_back(std::move(d));
         } else {
             kept.push_back(std::move(d));
         }
