@@ -139,7 +139,8 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
 }
 
 void CodeGen::emitMainWrapper() {
-    defs_ += "int main(void) {\n";
+    defs_ += "int main(int argc, char** argv) {\n";
+    defs_ += "    grav_argc = argc; grav_argv = argv;\n";
     if (hasMain_) defs_ += "    " + funcCName("main") + "();\n";
     defs_ += "    return 0;\n}\n";
 }
