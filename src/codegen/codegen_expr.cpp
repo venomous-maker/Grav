@@ -62,6 +62,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     if (auto *e = dynamic_cast<const StringLiteralExpr *>(&expr))
         return "\"" + escapeC(e->value) + "\"";
     if (dynamic_cast<const NullLiteralExpr *>(&expr)) return "0";
+    if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return e->code; // verbatim C
     if (auto *e = dynamic_cast<const NameExpr *>(&expr)) return e->name;
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
 
@@ -224,6 +225,25 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             if (call.targetName == "isInstance") {
                 return "grav_is_instance(" + emitExpr(*call.args[0]) + ", &" +
                        mangle(call.ownerClass) + "_typeinfo)";
+            }
+            if (call.targetName == "input") return "grav_input()";
+            if (call.targetName == "argc") return "grav_argc";
+            if (call.targetName == "argv")
+                return "grav_argv_at(" + emitExpr(*call.args[0]) + ")";
+            if (call.targetName == "str") {
+                std::string a = emitExpr(*call.args[0]);
+                const TypeRef &t = call.args[0]->type;
+                switch (t.kind) {
+                    case TypeRef::Kind::String: return a;
+                    case TypeRef::Kind::Int: return "grav_int_to_str(" + a + ")";
+                    case TypeRef::Kind::Float: return "grav_float_to_str(" + a + ")";
+                    case TypeRef::Kind::Bool:
+                        return "((" + a + ") ? \"true\" : \"false\")";
+                    default:
+                        if (t.isNamed() && reg_->isEnum(t.name))
+                            return "grav_int_to_str((int)(" + a + "))";
+                        return "\"\"";
+                }
             }
             // print
             std::string a = call.args.empty() ? "0" : emitExpr(*call.args[0]);
