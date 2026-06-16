@@ -1,0 +1,36 @@
+// 03 — control flow: if/else, loops, switch/match, and ranges.
+
+fn classify(n: int) -> string {
+    match (n) {                      // 'switch' is a synonym
+        case 0:        { return "zero"; }
+        case 1, 2, 3:  { return "small"; }
+        default:       { return "big"; }
+    }
+    return "?";
+}
+
+fn main() {
+    // if / else if / else
+    let n = 7;
+    if (n % 2 == 0) { print("even"); } else { print("odd"); }   // odd
+
+    // while + do/while
+    let i = 0;
+    while (i < 3) { print(i); i = i + 1; }                       // 0 1 2
+    let k = 3;
+    do { print(k); k = k - 1; } while (k > 0);                   // 3 2 1
+
+    // C-style for + break/continue
+    for (let j = 0; j < 5; j = j + 1) {
+        if (j == 3) { break; }
+        if (j == 1) { continue; }
+        print(j);                                                // 0 2
+    }
+
+    // range for-in (.. is half-open, ..= is inclusive)
+    let sum = 0;
+    for (x in 1..=4) { sum += x; }
+    print(sum);                                                  // 10
+
+    print(classify(2));                                          // small
+}
