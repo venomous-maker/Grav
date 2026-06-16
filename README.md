@@ -107,6 +107,16 @@ For `bin`/`both`, `gravc` invokes the system C compiler (`$CC`, default `cc`) as
 
 ## Language tour
 
+> **See it all at once:** [`examples/all_features.grav`](examples/all_features.grav)
+> is a single runnable program that exercises (almost) every feature below —
+> macros, type aliases, enums, structs, arrays, pointers, classes/interfaces,
+> the full operator set, control flow, `null`/`??`/`?.`, `as`/`is`, async/await,
+> and `sizeof`. Build and run it with:
+>
+> ```bash
+> ./build/gravc examples/all_features.grav --emit bin -o /tmp/all && /tmp/all
+> ```
+
 ### Primitive types & variables
 
 Four primitives: `int`, `float`, `bool`, `string`.

@@ -1,29 +1,69 @@
 /* ===========================================================================
- * Grav — a tour of every language feature in one program.
+ * Grav — a tour of (almost) every language feature in one program.
  *
  *   ./build/gravc examples/all_features.grav --emit bin -o /tmp/all && /tmp/all
+ *
+ * Covered: macros, type aliases, enums, structs, arrays, pointers, classes,
+ * interfaces, abstract classes, inheritance & polymorphism, access modifiers,
+ * readonly, auto getters/setters, static methods, namespaces, RTTI, the full
+ * operator set, control flow, null/??/?., as/is + casts, async/await, sizeof.
+ * (The only feature not shown here is file-level `import "..."`, which the driver
+ * handles across multiple files — see the README.)
  * =========================================================================== */
 
-// --- Plain value types: structs --------------------------------------------
-struct Point {
-    x: int
-    y: int
+// --- Macros: object-like and function-like ---------------------------------
+#define TEAM_SIZE 4
+#define SQUARE(x) ((x) * (x))
+
+// --- Type aliases (transparent: Celsius *is* int, Scores *is* int[4]) -------
+type Celsius = int
+type Scores  = int[TEAM_SIZE]
+
+// --- Enums + switch over an enum -------------------------------------------
+enum Direction { North, East, South, West }
+
+fn opposite(d: Direction) -> Direction {
+    switch (d) {
+        case Direction.North: { return Direction.South }
+        case Direction.South: { return Direction.North }
+        case Direction.East:  { return Direction.West }
+        default:              { return Direction.East }
+    }
 }
 
-// Structs may contain other structs (stored by value) and primitives.
-struct Rect {
-    origin: Point
-    width: int
-    height: int
+// --- Structs (plain value types) -------------------------------------------
+struct Point { x: int  y: int }
+struct Rect  { origin: Point  width: int  height: int }
+type Coord = Point
+
+fn areaOf(r: Rect) -> int { return r.width * r.height }
+
+// --- Free functions: arrays pass/return by value ---------------------------
+fn sumScores(s: Scores) -> int {
+    let total = 0
+    for (i in 0..s.length) { total += s[i] }
+    return total
 }
 
-fn area_of(r: Rect) -> int {
-    return r.width * r.height
+// --- Pointers: address-of / deref / write-through --------------------------
+fn bumpBy(p: int*, n: int) { *p = *p + n }
+
+// --- Async: callers get a Future<T>, `await` unwraps it --------------------
+async fn square(x: int) -> int { return x * x }
+async fn sumOfSquares(n: int) -> int {
+    let total = 0
+    for (i in 1..=n) { total += await square(i) }
+    return total
 }
 
-// --- Free functions, primitives, casts -------------------------------------
-fn hypotSq(a: int, b: int) -> int {
-    return a * a + b * b
+// --- switch/match over ints with multi-value cases -------------------------
+fn classify(x: int) -> string {
+    match (x) {
+        case 0:       { return "zero" }
+        case 1, 2, 3: { return "small" }
+        default:      { return "big" }
+    }
+    return "?"
 }
 
 // --- Namespaces, interfaces, abstract classes, inheritance -----------------
@@ -50,7 +90,7 @@ namespace zoo {
     }
 }
 
-// --- Access modifiers, readonly, auto getters/setters, static methods ------
+// --- Access modifiers, readonly, auto accessors, static factory ------------
 class BankAccount {
     public readonly owner: string
     private balance: int
@@ -60,64 +100,139 @@ class BankAccount {
         self.balance = 0
     }
 
-    public fn deposit(n: int) -> void { self.balance = self.balance + n }
+    public fn deposit(n: int) -> void { self.balance += n }
 
     static fn opening(owner: string) -> BankAccount {
         return new BankAccount(owner)
     }
 }
 
-fn main() {
-    // structs: literals, value semantics, field read/write, nesting
-    let p: Point = Point { x: 3, y: 4 }
-    print(hypotSq(p.x, p.y))                 // 25
+// --- An interface for the null / ?? / ?. demo ------------------------------
+interface Greeter { fn greet() -> string }
 
-    let r = Rect { origin: p, width: 5, height: 6 }
-    print(area_of(r))                        // 30
-    print(r.origin.x)                        // 3
-
-    let p2 = p                               // copy (value type)
-    p2.x = 100
-    print(p.x)                               // 3  (original unchanged)
-
-    // control flow: if / else-if / else, while, for, do-while, match, ++/--
-    let i: int = 1
-    while (i <= 3) {
-        if (i == 1) { print("one") }
-        else if (i == 2) { print("two") }
-        else { print("three") }
-        i++
-    }
-    for (let k: int = 0; k < 2; k++) { print(k) }    // 0 1
-    let n: int = 2
-    do { print(n)  n-- } while (n > 0)               // 2 1
-
-    print(classify(7))                       // big
-
-    // OOP: polymorphism via vtable, interface dispatch, RTTI, namespaces
-    let a: zoo.Animal = new zoo.Dog("Rex")
-    print(a.speak())                         // woof  (virtual dispatch)
-    print(a.label())                         // Rex
-    let named: zoo.Named = new zoo.Cat("Mia")
-    print(named.label())                     // Mia   (interface dispatch)
-    print(typename(a))                       // zoo.Dog
-    print(isInstance(a, zoo.Animal))         // true
-
-    // access control + auto getter for a private field + static factory
-    let acct = BankAccount.opening("Ada")
-    acct.deposit(50)
-    print(acct.get_balance())                // 50
-    print(acct.owner)                        // Ada
-
-    // logical operators short-circuit
-    print(!(1 > 2) && true)                  // true
+class Robot implements Greeter {
+    private id: int
+    constructor(id: int) { self.id = id }
+    public fn greet() -> string { return "beep" }
 }
 
-fn classify(x: int) -> string {
-    match (x) {
-        case 0:       { return "zero" }
-        case 1, 2, 3: { return "small" }
-        default:      { return "big" }
+async fn main() {
+    // primitives, string concat, casts (call-style and C-style)
+    let who = "Grav"
+    print("hello " + who)                        // hello Grav
+    print(int(3.9))                              // 3
+    print((int)3.9)                              // 3   (C-style cast)
+    print(float(7) / float(2))                   // 3.500000
+
+    // macros
+    print(TEAM_SIZE)                             // 4
+    print(SQUARE(5))                             // 25
+
+    // structs: literal, value semantics, nesting, struct parameter
+    let p: Point = Point { x: 3, y: 4 }
+    print(p.x * p.x + p.y * p.y)                 // 25
+    let r = Rect { origin: p, width: 5, height: 6 }
+    print(areaOf(r))                             // 30
+    print(r.origin.x)                            // 3
+    let p2 = p                                   // copy (value type)
+    p2.x = 100
+    print(p.x)                                   // 3   (original unchanged)
+
+    // type aliases
+    let temp: Celsius = 21
+    print(temp)                                  // 21
+    let here: Coord = Point { x: 2, y: 5 }
+    print(here.x + here.y)                       // 7
+
+    // arrays: literal, length, indexing (read/write), by-value function
+    let scores: Scores = [80, 90, 70, 100]
+    print(scores.length)                         // 4
+    print(scores[3])                             // 100
+    scores[0] = 85
+    print(sumScores(scores))                     // 345
+
+    // enums + switch
+    print(int(opposite(Direction.North)))        // 2   (South)
+
+    // operators: %, bitwise (& | ^ ~), shifts, compound assign, ternary
+    let mask = 0
+    mask |= 1
+    mask |= 4
+    print(mask & 6)                              // 4
+    print(13 % 5)                                // 3
+    print((1 << 8) ^ 255)                        // 511
+    print(~5)                                    // -6
+    print(9 % 2 == 0 ? "even" : "odd")           // odd
+
+    // ranges: `..` (exclusive) and `..=` (inclusive, used in sumOfSquares)
+    let acc = 0
+    for (i in 0..5) { acc += i }
+    print(acc)                                   // 10
+
+    // pointers: address-of, deref, write-through, and `->` on a struct
+    let count = 40
+    let cp: int* = &count
+    bumpBy(cp, 2)
+    *cp = *cp + 1
+    print(count)                                 // 43
+    let v = Point { x: 7, y: 8 }
+    let vp: Point* = &v
+    vp->x = 70
+    print(v.x + vp->y)                           // 78
+
+    // null + ?? null-coalescing + ?. optional chaining
+    let g: Greeter = null
+    print(g == null)                             // true
+    let chosen = g ?? new Robot(1)
+    print(chosen.greet())                        // beep
+    let maybe: Robot = null
+    print(maybe?.greet())                        // (empty: null-guarded)
+    print((new Robot(2))?.greet())               // beep
+
+    // `as` cast and `is` test
+    let rb = new Robot(3)
+    print((rb as Greeter).greet())               // beep
+    print(rb is Robot)                           // true
+
+    // control flow: if / else-if / else, while, for + break/continue, do/while
+    let step = 1
+    while (step <= 3) {
+        if (step == 1) { print("one") }
+        else if (step == 2) { print("two") }
+        else { print("three") }
+        step++
     }
-    return "?"
+    for (let k = 0; k < 5; k++) {
+        if (k == 1) { continue }
+        if (k == 3) { break }
+        print(k)                                 // 0 2
+    }
+    let m = 2
+    do { print(m)  m-- } while (m > 0)           // 2 1
+    print(classify(7))                           // big
+
+    // OOP: virtual dispatch, interface dispatch, RTTI, static, access control
+    let an: zoo.Animal = new zoo.Dog("Rex")
+    print(an.speak())                            // woof  (virtual dispatch)
+    print(an.label())                            // Rex
+    let nm: zoo.Named = new zoo.Cat("Mia")
+    print(nm.label())                            // Mia   (interface dispatch)
+    print(typename(an))                          // zoo.Dog
+    print(isInstance(an, zoo.Animal))            // true
+
+    let acct = BankAccount.opening("Ada")
+    acct.deposit(50)
+    print(acct.get_balance())                    // 50    (auto getter)
+    print(acct.owner)                            // Ada
+
+    // logical operators short-circuit
+    print(!(1 > 2) && true)                      // true
+
+    // async / await
+    print(await sumOfSquares(4))                 // 30    (1+4+9+16)
+
+    // sizeof: a type, an alias, and a value
+    print(sizeof(int) > 0)                       // true
+    print(sizeof(Point) == sizeof(Coord))        // true  (alias is transparent)
+    print(sizeof(scores) == sizeof(int) * TEAM_SIZE)  // true
 }
