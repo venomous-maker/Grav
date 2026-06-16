@@ -29,7 +29,12 @@ private:
     Token makeToken(TokenType type, std::string lexeme) const;
     Token scanNumber();
     Token scanString();
+    // Scans a (possibly interpolated) string. A plain string pushes one
+    // StringLiteral; `"a${e}b"` pushes the desugared token stream
+    // `( "a" + str( <tokens of e> ) + "b" )`.
+    void scanStringInto(std::vector<Token> &out);
     Token scanIdentifierOrKeyword();
+    Token scanCBlock(); // `%{ ... %}` verbatim C
 
     std::string source_;
     size_t pos_ = 0;
