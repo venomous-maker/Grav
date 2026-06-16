@@ -18,6 +18,13 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Primitive types & variables](#primitive-types--variables)
   - [Functions & `main`](#functions--main)
   - [Control flow](#control-flow)
+  - [Enums](#enums)
+  - [Operators](#operators)
+  - [Ranges (`for … in`)](#ranges-for--in)
+  - [Null, `??` & optional chaining](#null----optional-chaining)
+  - [Casts & type tests (`as` / `is`)](#casts--type-tests-as--is)
+  - [Pointers](#pointers)
+  - [Async / await](#async--await)
   - [Structs](#structs)
   - [Classes](#classes)
   - [Access modifiers & `readonly`](#access-modifiers--readonly)
@@ -165,8 +172,167 @@ fn main() {
 }
 ```
 
-Conditions must be `bool` (no truthy ints); `switch`/`match` subjects are `int` or
-`string`.
+Conditions must be `bool` (no truthy ints); `switch`/`match` subjects are `int`,
+`string`, or an [enum](#enums). Statements may be terminated with `;` (recommended,
+and required to disambiguate a statement that begins with `*`/`&`/`-` from the
+previous line); when omitted, whitespace separates statements.
+
+### Enums
+
+An `enum` is a named set of integer constants. Members are referenced as
+`EnumName.Member`, compared with `==`/`!=`, used as `switch`/`match` subjects, and
+cast to their ordinal with `int(...)`. Enums lower to a real C `enum`.
+
+```grav
+enum Direction { North, East, South, West }
+
+fn turn(d: Direction) -> Direction {
+    switch (d) {
+        case Direction.North: { return Direction.East }
+        default:              { return Direction.North }
+    }
+}
+
+fn main() {
+    let d = Direction.South
+    print(d == Direction.South)   // true
+    print(int(Direction.West))    // 3
+}
+```
+
+### Operators
+
+Beyond `+ - * /` and the comparison/logical operators, Grav has:
+
+| Group | Operators |
+| --- | --- |
+| Arithmetic | `%` (modulo, ints only) |
+| Bitwise | `&` `|` `^` `~` |
+| Shifts | `<<` `>>` |
+| Compound assignment | `+= -= *= /= %=` and `&= |= ^= <<= >>=` |
+| Ternary | `cond ? a : b` |
+
+Modulo, bitwise and shift operators require `int` operands. `string += string`
+concatenates in place. The ternary's branches must share a common type.
+
+```grav
+fn main() {
+    let flags = 0
+    flags |= 4
+    flags |= 1                       // flags == 5
+    print(flags & 6)                 // 4
+    print(1 << 10)                   // 1024
+    print(~0)                        // -1
+    print(flags % 2 == 0 ? "even" : "odd")   // odd
+}
+```
+
+### Ranges (`for … in`)
+
+A counting loop over a half-open (`..`) or inclusive (`..=`) integer range. The
+loop variable is an `int` scoped to the loop; the upper bound is evaluated once.
+
+```grav
+fn main() {
+    let sum = 0
+    for (i in 1..=100) { sum += i }  // 1 + 2 + … + 100
+    print(sum)                       // 5050
+}
+```
+
+### Null, `??` & optional chaining
+
+`null` is the null reference, assignable to any class, interface, or pointer type
+and compared with `==`/`!=`. (There is no `null` for value types — `int`, `bool`,
+etc.) Two operators build on it:
+
+- **`a ?? b`** — null-coalescing: `a` unless it is null, otherwise `b`. It lowers
+  at compile time to a plain "if null then `b` else `a`" conditional.
+- **`a?.m()` / `a?.field`** — optional chaining: guards a null receiver, yielding a
+  zero value (`0` / `""`) when `a` is null. The result must be a scalar, enum, or
+  reference (not a value-type struct or interface).
+
+```grav
+fn main() {
+    let s: Shape = null
+    print(s == null)                 // true
+    let shape = s ?? new Circle(3)   // falls back when s is null
+    print(shape.area())
+
+    let maybe: Circle = null
+    print(maybe?.area())             // 0  (guarded; no null deref)
+}
+```
+
+### Casts & type tests (`as` / `is`)
+
+Grav has three cast spellings — use whichever reads best:
+
+| Spelling | Example |
+| --- | --- |
+| Call | `int(x)`, `float(x)`, `bool(x)`, `string(x)` |
+| `as` | `x as int`, `c as Shape`, `p as Point*` |
+| C-style | `(int)x`, `(Shape)c`, `(Point*)p` |
+
+All cast between numeric types, enum→`int`, within a class hierarchy, class→interface,
+and between pointer types. `expr is ClassName` is a runtime type test (RTTI) → `bool`.
+
+```grav
+fn main() {
+    let c = new Circle(2)
+    let s = c as Shape               // class -> interface
+    print(s.area())
+    print(c is Circle)               // true
+    print((int)3.9)                  // 3
+}
+```
+
+### Pointers
+
+Pointer types are written `T*` (`int*`, `Point**`). `&x` takes the address of a
+variable, field, or dereference; `*p` dereferences (and is assignable); `p->field`
+is sugar for `(*p).field`. Pointers compare against `null` and lower directly to C
+pointers, so they give real memory access.
+
+```grav
+fn bump(p: int*) { *p = *p + 1; }   // write through the pointer
+
+fn main() {
+    let n = 41;
+    let p: int* = &n;
+    bump(p);
+    *p = *p + 1;
+    print(n);                        // 43
+
+    let pt = Point { x: 3, y: 4 };
+    let pp: Point* = &pt;
+    pp->x = 100;                     // (*pp).x = 100
+    print(pt.x)                      // 100
+}
+```
+
+### Async / await
+
+`async fn` marks a function whose callers receive a `Future<T>`; `await` (only
+valid inside an `async fn`) unwraps a `Future<T>` back to `T`.
+
+Grav uses an **eager-future** model: an async call runs to completion immediately
+and returns an already-resolved future, so `await` is a zero-cost, statically
+checked unwrap. This keeps the surface syntax of structured concurrency while the
+generated C stays a plain, dependency-free function call — a cooperative scheduler
+where every task finishes at its call site.
+
+```grav
+async fn square(x: int) -> int { return x * x }
+
+async fn main() {
+    let f = square(9)                // f : Future<int>
+    print(await f)                   // 81
+}
+```
+
+The type checker still enforces the discipline: a `Future<int>` is not an `int`,
+so you must `await` it before use, and you may not `await` outside an `async fn`.
 
 ### Structs
 
@@ -452,16 +618,25 @@ cmake --build build
 
 ## Roadmap / not yet implemented
 
-These were discussed but are **not** in the current core (`v0.2`); they are the next
-milestones:
+`v0.3` added enums, the expanded operator set, ranges, `null` + `??` + `?.`,
+`as`/`is` + C-style casts, pointers, optional `;` terminators, and async/await (see
+the language tour above). The lexer also recognizes a forward-looking token set
+(`[ ]`, `=>`, `::`, `@`, `#`, `...`, `..`) so the following features can be layered
+on without further lexer work. They are **not** implemented yet — using them is a
+parse/type error today:
 
-- **Built-in data structures** — `array<T>` / `list<T>` / `map<K,V>` (needs generics
-  plus a small C runtime).
+- **Collections** — `array<T>` / `list<T>` / `map<K,V>` and literals like `#{1, 2, 3}`
+  (needs generics plus a small C runtime).
 - **Generics / monomorphization** — `class Box<T> { … }`.
-- **`type` aliases** — naming an existing type. (Plain data `struct` types *are*
-  implemented — see [Structs](#structs).)
+- **String interpolation** — `"hello ${name}"`.
+- **Decorators / attributes** — `@Entity class User {}`.
+- **Variadics** — `fn print(...args)`.
+- **Modules** — `import` / `export` keywords (file-level `import "path"` *does* work
+  today via the driver — see [Imports](#imports)).
+- **Exceptions** — `try` / `catch` / `throw`.
+- **`type` aliases & traits/mixins.** (Plain data `struct` types *are* implemented.)
 - **Static fields & global `const`** — class-level `static x: T = …` lowered to C
-  globals, and module-level constants. (Local `const` *is* implemented.)
+  globals. (Local `const` *is* implemented.)
 - **Multiple class inheritance** — Grav supports a single base class plus multiple
   interfaces. True multiple *class* inheritance doesn't map cleanly onto C's struct
   prefix / single-vtable model; use interfaces (or composition) for multiple supertypes.

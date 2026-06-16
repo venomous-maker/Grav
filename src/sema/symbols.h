@@ -71,8 +71,16 @@ struct StructInfo {
     StructDecl *decl = nullptr;
 };
 
+// An enumeration: an ordered list of constant names (lowered to C ints).
+struct EnumInfo {
+    std::string fqName;
+    std::vector<std::string> members; // declared order
+    EnumDecl *decl = nullptr;
+};
+
 struct FunctionInfo {
     std::string fqName;
+    bool isAsync = false; // callers receive Future<returnType>
     std::vector<TypeRef> paramTypes;
     std::vector<std::string> paramNames;
     TypeRef returnType;
@@ -90,14 +98,19 @@ public:
     bool isClass(const std::string &fq) const { return classes_.count(fq) != 0; }
     bool isInterface(const std::string &fq) const { return interfaces_.count(fq) != 0; }
     bool isStruct(const std::string &fq) const { return structs_.count(fq) != 0; }
+    bool isEnum(const std::string &fq) const { return enums_.count(fq) != 0; }
     bool isType(const std::string &fq) const {
-        return isClass(fq) || isInterface(fq) || isStruct(fq);
+        return isClass(fq) || isInterface(fq) || isStruct(fq) || isEnum(fq);
     }
 
     const ClassInfo *cls(const std::string &fq) const;
     const InterfaceInfo *iface(const std::string &fq) const;
     const StructInfo *strct(const std::string &fq) const;
+    const EnumInfo *en(const std::string &fq) const;
     const FunctionInfo *func(const std::string &fq) const;
+
+    // Is `member` a constant of enum `enumFq`?
+    bool hasEnumMember(const std::string &enumFq, const std::string &member) const;
 
     // Resolve a (possibly dotted, possibly unqualified) class/interface name in
     // a namespace context to its FQ name. Returns "" if not found.
@@ -140,6 +153,7 @@ private:
     std::unordered_map<std::string, ClassInfo> classes_;
     std::unordered_map<std::string, InterfaceInfo> interfaces_;
     std::unordered_map<std::string, StructInfo> structs_;
+    std::unordered_map<std::string, EnumInfo> enums_;
     std::unordered_map<std::string, FunctionInfo> functions_;
     std::vector<std::string> namespaces_; // known namespace prefixes
     std::vector<GravError> errors_;

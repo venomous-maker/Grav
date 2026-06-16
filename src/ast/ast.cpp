@@ -8,6 +8,12 @@ const char *binaryOpSymbol(BinaryOp op) {
         case BinaryOp::Sub: return "-";
         case BinaryOp::Mul: return "*";
         case BinaryOp::Div: return "/";
+        case BinaryOp::Mod: return "%";
+        case BinaryOp::BitAnd: return "&";
+        case BinaryOp::BitOr: return "|";
+        case BinaryOp::BitXor: return "^";
+        case BinaryOp::Shl: return "<<";
+        case BinaryOp::Shr: return ">>";
         case BinaryOp::Eq: return "==";
         case BinaryOp::NotEq: return "!=";
         case BinaryOp::Greater: return ">";
@@ -36,6 +42,20 @@ bool isComparison(BinaryOp op) {
 
 bool isLogical(BinaryOp op) {
     return op == BinaryOp::And || op == BinaryOp::Or;
+}
+
+bool isIntOnly(BinaryOp op) {
+    switch (op) {
+        case BinaryOp::Mod:
+        case BinaryOp::BitAnd:
+        case BinaryOp::BitOr:
+        case BinaryOp::BitXor:
+        case BinaryOp::Shl:
+        case BinaryOp::Shr:
+            return true;
+        default:
+            return false;
+    }
 }
 
 const char *accessName(Access a) {

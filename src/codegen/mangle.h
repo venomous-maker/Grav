@@ -18,6 +18,7 @@ std::string vtableInstance(const std::string &classFq);// geometry__Circle_vtabl
 std::string methodCName(const std::string &classFq, const std::string &method);
 std::string ctorCName(const std::string &classFq);     // geometry__Circle_new
 std::string funcCName(const std::string &fnFq);        // vf_geometry__area
+std::string enumConst(const std::string &enumFq, const std::string &member); // Color_Red
 
 // C type spelling for a resolved Grav type. Named types become pointers.
 std::string cType(const TypeRef &t);

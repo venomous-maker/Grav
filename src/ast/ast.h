@@ -38,6 +38,9 @@ struct StringLiteralExpr : Expr {
     std::string value;
 };
 
+// `null` — the null reference, assignable to any class/interface type.
+struct NullLiteralExpr : Expr {};
+
 // A bare name: a local variable, parameter, or the leading segment of a
 // qualified reference (class / namespace) that the checker resolves later.
 struct NameExpr : Expr {
@@ -48,13 +51,16 @@ struct NameExpr : Expr {
 struct SelfExpr : Expr {};
 
 enum class BinaryOp {
-    Add, Sub, Mul, Div,
+    Add, Sub, Mul, Div, Mod,
+    BitAnd, BitOr, BitXor, Shl, Shr,
     Eq, NotEq, Greater, Less, GreaterEq, LessEq,
     And, Or,
 };
 const char *binaryOpSymbol(BinaryOp op);
 bool isComparison(BinaryOp op);
 bool isLogical(BinaryOp op);
+// Operators defined only on ints (modulo, bitwise, shifts).
+bool isIntOnly(BinaryOp op);
 
 struct BinaryExpr : Expr {
     BinaryOp op;
@@ -63,11 +69,53 @@ struct BinaryExpr : Expr {
     bool stringConcat = false; // set by checker: '+' on two strings
 };
 
-// Prefix unary: '!' (logical not).
-enum class UnaryOp { Not };
+// Prefix unary: '!' (logical not) and '~' (bitwise not).
+enum class UnaryOp { Not, BitNot };
 struct UnaryExpr : Expr {
     UnaryOp op;
     ExprPtr operand;
+};
+
+// `cond ? thenExpr : elseExpr`.
+struct TernaryExpr : Expr {
+    ExprPtr cond;
+    ExprPtr thenExpr;
+    ExprPtr elseExpr;
+};
+
+// `expr as Type` — an explicit value cast (numeric/enum/class).
+struct AsExpr : Expr {
+    ExprPtr operand;
+    TypeRef target;
+};
+
+// `expr is ClassName` — a runtime type test (RTTI), yields bool.
+struct IsExpr : Expr {
+    ExprPtr operand;
+    std::string typeName;  // as written; checker rewrites to FQ class name
+    std::string className; // resolved FQ class
+};
+
+// `await expr` — unwraps a Future<T> produced by an async call, yielding T.
+struct AwaitExpr : Expr {
+    ExprPtr operand;
+};
+
+// `&lvalue` — address-of, producing a pointer to the operand.
+struct AddrOfExpr : Expr {
+    ExprPtr operand;
+};
+
+// `*ptr` — pointer dereference (an lvalue).
+struct DerefExpr : Expr {
+    ExprPtr operand;
+};
+
+// `a ?? b` — null-coalescing: `a` unless it is null, otherwise `b`. Lowered to a
+// compile-time "if null then b else a" conditional.
+struct CoalesceExpr : Expr {
+    ExprPtr left;
+    ExprPtr right;
 };
 
 // ++x / --x (prefix) and x++ / x-- (postfix) on a numeric lvalue.
@@ -86,11 +134,12 @@ struct CastExpr : Expr {
 // `object.member`. Used both as a value (field read) and as the callee of a
 // call (method / static method). The checker tags how it resolved.
 enum class MemberKind {
-    Unresolved, InstanceField, StaticTarget, NamespaceTarget, MethodRef
+    Unresolved, InstanceField, StaticTarget, NamespaceTarget, MethodRef, EnumValue
 };
 struct MemberExpr : Expr {
     ExprPtr object;
     std::string member;
+    bool optional = false; // written with `?.` — guard against a null object
     MemberKind kind = MemberKind::Unresolved;
     // For InstanceField / MethodRef: fully-qualified owning class.
     std::string ownerClass;
@@ -159,6 +208,10 @@ struct LetStmt : Stmt {
 struct AssignStmt : Stmt {
     ExprPtr target; // NameExpr or MemberExpr (lvalue)
     ExprPtr value;
+    // Compound assignment (`x += y`): when set, the C output becomes
+    // `target <op>= value`. `op` is one of Add/Sub/Mul/Div/Mod.
+    bool isCompound = false;
+    BinaryOp compoundOp = BinaryOp::Add;
 };
 
 struct ReturnStmt : Stmt {
@@ -211,6 +264,15 @@ struct ForStmt : Stmt {
     StmtPtr init;   // LetStmt / AssignStmt / ExprStmt or null
     ExprPtr cond;   // or null (treated as true)
     StmtPtr update; // AssignStmt / ExprStmt or null
+    Block body;
+};
+
+// `for (i in lo..hi) { ... }` — i takes lo, lo+1, …, hi-1 (`..`) or hi (`..=`).
+struct ForInStmt : Stmt {
+    std::string var;
+    ExprPtr lo;
+    ExprPtr hi;
+    bool inclusive = false; // `..=` includes hi
     Block body;
 };
 
@@ -286,9 +348,20 @@ struct StructDecl : Decl {
 
 struct FunctionDecl : Decl {
     std::string name;
+    bool isAsync = false; // callers receive a Future<returnType>
     std::vector<Param> params;
     TypeRef returnType;
     Block body;
+};
+
+// A C-style enumeration: a named set of integer constants.
+struct EnumMember {
+    std::string name;
+    int line = 0, col = 0;
+};
+struct EnumDecl : Decl {
+    std::string name;
+    std::vector<EnumMember> members;
 };
 
 struct Program {

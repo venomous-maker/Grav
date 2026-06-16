@@ -46,6 +46,11 @@ TypeChecker::LocalVar *TypeChecker::lookupLocal(const std::string &name) {
 bool TypeChecker::isAssignable(const TypeRef &from, const TypeRef &to) const {
     if (from.isError() || to.isError()) return true; // suppress cascades
     if (from == to) return true;
+    // `null` flows into any class, interface, or pointer (reference) type.
+    if (from.kind == TypeRef::Kind::Null &&
+        (to.isPointer() ||
+         (to.isNamed() && (reg_->isClass(to.name) || reg_->isInterface(to.name)))))
+        return true;
     if (from.isNamed() && to.isNamed()) {
         if (reg_->isClass(from.name) && reg_->isClass(to.name) &&
             reg_->isSubclass(from.name, to.name))
@@ -95,15 +100,18 @@ void TypeChecker::checkFunction(FunctionDecl &fn) {
     currentReturn_ = fn.returnType;
     inConstructor_ = false;
     inStatic_ = false;
+    inAsync_ = fn.isAsync;
     pushScope();
     for (auto &p : fn.params) declareLocal(p.name, p.type, true, false, fn.line, fn.col);
     checkBlock(fn.body);
     popScope();
+    inAsync_ = false;
 }
 
 void TypeChecker::checkClass(ClassDecl &cls) {
     currentClass_ = cls.fqName;
     currentNs_ = Registry::namespaceOf(cls.fqName);
+    inAsync_ = false; // methods are not async in core v0.2
 
     if (cls.constructor.present) {
         inConstructor_ = true;
@@ -143,6 +151,7 @@ void TypeChecker::checkStmt(Stmt &stmt) {
     if (auto *s = dynamic_cast<WhileStmt *>(&stmt)) return checkWhile(*s);
     if (auto *s = dynamic_cast<DoWhileStmt *>(&stmt)) return checkDoWhile(*s);
     if (auto *s = dynamic_cast<ForStmt *>(&stmt)) return checkFor(*s);
+    if (auto *s = dynamic_cast<ForInStmt *>(&stmt)) return checkForIn(*s);
     if (auto *s = dynamic_cast<SwitchStmt *>(&stmt)) return checkSwitch(*s);
     if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) return checkBlock(s->block);
     if (dynamic_cast<BreakStmt *>(&stmt) || dynamic_cast<ContinueStmt *>(&stmt)) {
@@ -194,12 +203,32 @@ void TypeChecker::checkFor(ForStmt &s) {
     popScope();
 }
 
+void TypeChecker::checkForIn(ForInStmt &s) {
+    TypeRef lo = checkExpr(*s.lo);
+    TypeRef hi = checkExpr(*s.hi);
+    if (!lo.isError() && lo.kind != TypeRef::Kind::Int)
+        error(s.lo->line, s.lo->col,
+              "a 'for ... in' range bound must be int, got " + typeRefName(lo));
+    if (!hi.isError() && hi.kind != TypeRef::Kind::Int)
+        error(s.hi->line, s.hi->col,
+              "a 'for ... in' range bound must be int, got " + typeRefName(hi));
+    pushScope(); // the loop variable's scope spans the whole loop
+    declareLocal(s.var, TypeRef::prim(TypeRef::Kind::Int), true, false, s.line, s.col);
+    loopDepth_++;
+    checkBlock(s.body);
+    loopDepth_--;
+    popScope();
+}
+
 void TypeChecker::checkSwitch(SwitchStmt &s) {
     TypeRef subj = checkExpr(*s.subject);
-    bool ok = subj.kind == TypeRef::Kind::Int || subj.kind == TypeRef::Kind::String;
+    bool ok = subj.kind == TypeRef::Kind::Int ||
+              subj.kind == TypeRef::Kind::String ||
+              (subj.isNamed() && reg_->isEnum(subj.name));
     if (!subj.isError() && !ok)
         error(s.subject->line, s.subject->col,
-              "switch/match subject must be int or string, got " + typeRefName(subj));
+              "switch/match subject must be int, string, or enum, got " +
+                  typeRefName(subj));
     for (auto &c : s.cases) {
         for (auto &v : c.values) {
             TypeRef vt = checkExpr(*v);
@@ -247,6 +276,19 @@ void TypeChecker::checkLet(LetStmt &s) {
 void TypeChecker::checkAssign(AssignStmt &s) {
     TypeRef valueType = checkExpr(*s.value);
 
+    // `*p = value` — write through a pointer.
+    if (dynamic_cast<DerefExpr *>(s.target.get())) {
+        TypeRef targetType = checkExpr(*s.target); // validates the pointer, sets type
+        if (targetType.isError()) return;
+        if (s.isCompound)
+            checkCompound(s, targetType, valueType);
+        else if (!isAssignable(valueType, targetType))
+            error(s.value->line, s.value->col,
+                  "cannot assign a value of type " + typeRefName(valueType) +
+                      " through a pointer to " + typeRefName(targetType));
+        return;
+    }
+
     // Resolve the target as an lvalue.
     if (auto *name = dynamic_cast<NameExpr *>(s.target.get())) {
         LocalVar *local = lookupLocal(name->name);
@@ -260,7 +302,9 @@ void TypeChecker::checkAssign(AssignStmt &s) {
             error(name->line, name->col,
                   "cannot assign to constant '" + name->name + "'");
         }
-        if (!isAssignable(valueType, local->type)) {
+        if (s.isCompound) {
+            checkCompound(s, local->type, valueType);
+        } else if (!isAssignable(valueType, local->type)) {
             error(s.value->line, s.value->col,
                   "cannot assign a value of type " + typeRefName(valueType) +
                       " to '" + name->name + "' of type " + typeRefName(local->type));
@@ -280,7 +324,9 @@ void TypeChecker::checkAssign(AssignStmt &s) {
             mem->kind = MemberKind::InstanceField;
             mem->ownerClass = f->definingClass;
             mem->type = f->type;
-            if (!isAssignable(valueType, f->type))
+            if (s.isCompound)
+                checkCompound(s, f->type, valueType);
+            else if (!isAssignable(valueType, f->type))
                 error(s.value->line, s.value->col,
                       "cannot assign a value of type " + typeRefName(valueType) +
                           " to field '" + mem->member + "' of type " +
@@ -311,7 +357,9 @@ void TypeChecker::checkAssign(AssignStmt &s) {
             error(mem->line, mem->col, "cannot assign to readonly field '" +
                                            mem->member + "' outside its constructor");
         }
-        if (!isAssignable(valueType, f->type)) {
+        if (s.isCompound) {
+            checkCompound(s, f->type, valueType);
+        } else if (!isAssignable(valueType, f->type)) {
             error(s.value->line, s.value->col,
                   "cannot assign a value of type " + typeRefName(valueType) +
                       " to field '" + mem->member + "' of type " + typeRefName(f->type));
@@ -320,6 +368,31 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
 
     error(s.line, s.col, "invalid assignment target");
+}
+
+// `x <op>= y` is valid when `x <op> y` is well-typed and assignable back to x.
+// That means numeric (matching int/float; `%` int-only) or `string += string`.
+void TypeChecker::checkCompound(const AssignStmt &s, const TypeRef &targetType,
+                                const TypeRef &valueType) {
+    if (targetType.isError() || valueType.isError()) return;
+    const char *sym = binaryOpSymbol(s.compoundOp);
+    if (s.compoundOp == BinaryOp::Add && targetType.kind == TypeRef::Kind::String &&
+        valueType.kind == TypeRef::Kind::String)
+        return; // string concatenation in place
+    if (!targetType.isNumeric() || !valueType.isNumeric()) {
+        error(s.line, s.col, std::string("operator '") + sym +
+                                 "=' requires numeric operands, but got " +
+                                 typeRefName(targetType) + " and " + typeRefName(valueType));
+        return;
+    }
+    if (targetType != valueType) {
+        error(s.line, s.col, std::string("operator '") + sym +
+                                 "=' requires matching types, but got " +
+                                 typeRefName(targetType) + " and " + typeRefName(valueType));
+        return;
+    }
+    if (s.compoundOp == BinaryOp::Mod && targetType.kind != TypeRef::Kind::Int)
+        error(s.line, s.col, "operator '%=' requires int operands");
 }
 
 void TypeChecker::checkReturn(ReturnStmt &s) {

@@ -48,6 +48,18 @@ const StructInfo *Registry::strct(const std::string &fq) const {
     auto it = structs_.find(fq);
     return it == structs_.end() ? nullptr : &it->second;
 }
+const EnumInfo *Registry::en(const std::string &fq) const {
+    auto it = enums_.find(fq);
+    return it == enums_.end() ? nullptr : &it->second;
+}
+bool Registry::hasEnumMember(const std::string &enumFq,
+                             const std::string &member) const {
+    const EnumInfo *ei = en(enumFq);
+    if (!ei) return false;
+    for (const auto &m : ei->members)
+        if (m == member) return true;
+    return false;
+}
 const FunctionInfo *Registry::func(const std::string &fq) const {
     auto it = functions_.find(fq);
     return it == functions_.end() ? nullptr : &it->second;
@@ -317,10 +329,25 @@ void Registry::registerDecls(Program &program) {
                 info.methods.push_back(std::move(mi));
             }
             interfaces_[ifc->fqName] = std::move(info);
+        } else if (auto *en = dynamic_cast<EnumDecl *>(d)) {
+            if (isType(en->fqName)) { error(en->line, en->col, "duplicate type '" + en->fqName + "'"); continue; }
+            EnumInfo info;
+            info.fqName = en->fqName;
+            info.decl = en;
+            for (auto &m : en->members) {
+                if (std::find(info.members.begin(), info.members.end(), m.name) !=
+                    info.members.end())
+                    error(m.line, m.col, "duplicate enum member '" + m.name +
+                                             "' in '" + en->fqName + "'");
+                else
+                    info.members.push_back(m.name);
+            }
+            enums_[en->fqName] = std::move(info);
         } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
             if (functions_.count(fn->fqName)) { error(fn->line, fn->col, "duplicate function '" + fn->fqName + "'"); continue; }
             FunctionInfo info;
             info.fqName = fn->fqName;
+            info.isAsync = fn->isAsync;
             info.returnType = fn->returnType;
             info.decl = fn;
             for (auto &p : fn->params) {

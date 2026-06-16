@@ -8,7 +8,11 @@ Block Parser::parseBlock() {
     expect(TokenType::LBrace, "to open the block");
     Block block;
     while (!check(TokenType::RBrace) && !atEnd()) {
+        if (matchToken(TokenType::Semicolon)) continue; // stray / empty statement
         block.statements.push_back(parseStatement());
+        // Statements may be terminated by ';' (recommended). Consume any here;
+        // whitespace/newlines also separate statements when ';' is omitted.
+        while (matchToken(TokenType::Semicolon)) {}
     }
     expect(TokenType::RBrace, "to close the block");
     return block;
@@ -101,9 +105,25 @@ StmtPtr Parser::parseSimpleStmt() {
 
 StmtPtr Parser::parseFor() {
     const Token &kw = advance(); // 'for'
+    expect(TokenType::LParen, "after 'for'");
+
+    // Range form: `for (i in lo..hi)` / `for (i in lo..=hi)`.
+    if (check(TokenType::Identifier) && peekAt(1).type == TokenType::In) {
+        auto stmt = std::make_unique<ForInStmt>();
+        stmt->line = kw.line; stmt->col = kw.col;
+        stmt->var = advance().lexeme; // loop variable
+        advance();                    // 'in'
+        stmt->lo = parseExpression();
+        if (matchToken(TokenType::DotDotEq)) stmt->inclusive = true;
+        else { expect(TokenType::DotDot, "in a 'for ... in' range"); stmt->inclusive = false; }
+        stmt->hi = parseExpression();
+        expect(TokenType::RParen, "to close the for-header");
+        stmt->body = parseBlock();
+        return stmt;
+    }
+
     auto stmt = std::make_unique<ForStmt>();
     stmt->line = kw.line; stmt->col = kw.col;
-    expect(TokenType::LParen, "after 'for'");
     if (!check(TokenType::Semicolon)) stmt->init = parseSimpleStmt();
     expect(TokenType::Semicolon, "after the for-initializer");
     if (!check(TokenType::Semicolon)) stmt->cond = parseExpression();
@@ -172,16 +192,36 @@ StmtPtr Parser::parseReturn() {
 
 StmtPtr Parser::parseExprOrAssign() {
     ExprPtr expr = parseExpression();
-    if (check(TokenType::Assign)) {
+    // Plain `=` or a compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`).
+    bool isCompound = false;
+    BinaryOp compoundOp = BinaryOp::Add;
+    switch (peek().type) {
+        case TokenType::PlusEq:    isCompound = true; compoundOp = BinaryOp::Add; break;
+        case TokenType::MinusEq:   isCompound = true; compoundOp = BinaryOp::Sub; break;
+        case TokenType::StarEq:    isCompound = true; compoundOp = BinaryOp::Mul; break;
+        case TokenType::SlashEq:   isCompound = true; compoundOp = BinaryOp::Div; break;
+        case TokenType::PercentEq: isCompound = true; compoundOp = BinaryOp::Mod; break;
+        case TokenType::AmpEq:        isCompound = true; compoundOp = BinaryOp::BitAnd; break;
+        case TokenType::PipeEq:       isCompound = true; compoundOp = BinaryOp::BitOr; break;
+        case TokenType::CaretEq:      isCompound = true; compoundOp = BinaryOp::BitXor; break;
+        case TokenType::ShiftLeftEq:  isCompound = true; compoundOp = BinaryOp::Shl; break;
+        case TokenType::ShiftRightEq: isCompound = true; compoundOp = BinaryOp::Shr; break;
+        default: break;
+    }
+    if (check(TokenType::Assign) || isCompound) {
         const Token &eq = advance();
-        // Only names and member accesses are valid assignment targets.
+        // Names, member accesses, and pointer dereferences are assignable.
         if (dynamic_cast<NameExpr *>(expr.get()) == nullptr &&
-            dynamic_cast<MemberExpr *>(expr.get()) == nullptr) {
-            fail(eq, "the left-hand side of '=' is not assignable");
+            dynamic_cast<MemberExpr *>(expr.get()) == nullptr &&
+            dynamic_cast<DerefExpr *>(expr.get()) == nullptr) {
+            fail(eq, std::string("the left-hand side of ") + tokenTypeName(eq.type) +
+                         " is not assignable");
         }
         auto stmt = std::make_unique<AssignStmt>();
         stmt->line = eq.line;
         stmt->col = eq.col;
+        stmt->isCompound = isCompound;
+        stmt->compoundOp = compoundOp;
         stmt->target = std::move(expr);
         stmt->value = parseExpression();
         return stmt;

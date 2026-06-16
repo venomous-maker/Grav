@@ -33,6 +33,11 @@ bool Parser::matchToken(TokenType type) {
     return true;
 }
 
+bool Parser::onNewLine() const {
+    if (pos_ == 0) return false;
+    return peek().line != previous().line;
+}
+
 void Parser::fail(const Token &at, const std::string &message) {
     throw GravError("parse", at.line, at.col, message);
 }
@@ -87,11 +92,18 @@ void Parser::parseTopLevel(Program &program) {
             return;
         case TokenType::Interface: program.decls.push_back(parseInterface()); return;
         case TokenType::Struct: program.decls.push_back(parseStruct()); return;
-        case TokenType::Fn: program.decls.push_back(parseFunction()); return;
+        case TokenType::Enum: program.decls.push_back(parseEnum()); return;
+        case TokenType::Fn: program.decls.push_back(parseFunction(false)); return;
+        case TokenType::Async:
+            advance(); // 'async'
+            if (!check(TokenType::Fn))
+                fail(peek(), "expected 'fn' after 'async'");
+            program.decls.push_back(parseFunction(true));
+            return;
         default:
             fail(peek(), std::string("expected a top-level declaration "
-                                     "(namespace, class, struct, interface, fn, or "
-                                     "abstract class), but found ") +
+                                     "(namespace, class, struct, enum, interface, fn, "
+                                     "async fn, or abstract class), but found ") +
                              tokenTypeName(peek().type));
     }
 }
@@ -121,18 +133,23 @@ void Parser::parseNamespace(Program &program) {
 
 TypeRef Parser::parseType(const char *context) {
     const Token &t = peek();
+    TypeRef base;
     switch (t.type) {
-        case TokenType::KwInt: advance(); return TypeRef::prim(TypeRef::Kind::Int);
-        case TokenType::KwFloat: advance(); return TypeRef::prim(TypeRef::Kind::Float);
-        case TokenType::KwBool: advance(); return TypeRef::prim(TypeRef::Kind::Bool);
-        case TokenType::KwString: advance(); return TypeRef::prim(TypeRef::Kind::String);
-        case TokenType::KwVoid: advance(); return TypeRef::prim(TypeRef::Kind::Void);
+        case TokenType::KwInt: advance(); base = TypeRef::prim(TypeRef::Kind::Int); break;
+        case TokenType::KwFloat: advance(); base = TypeRef::prim(TypeRef::Kind::Float); break;
+        case TokenType::KwBool: advance(); base = TypeRef::prim(TypeRef::Kind::Bool); break;
+        case TokenType::KwString: advance(); base = TypeRef::prim(TypeRef::Kind::String); break;
+        case TokenType::KwVoid: advance(); base = TypeRef::prim(TypeRef::Kind::Void); break;
         case TokenType::Identifier:
-            return TypeRef::named(parseQualifiedName(context));
+            base = TypeRef::named(parseQualifiedName(context));
+            break;
         default:
             fail(t, std::string("expected a type ") + context + ", but found " +
                         tokenTypeName(t.type));
     }
+    // Trailing `*` makes a pointer type (`int*`, `Point**`).
+    while (matchToken(TokenType::Star)) base = TypeRef::pointer(base);
+    return base;
 }
 
 std::vector<Param> Parser::parseParams() {
@@ -151,11 +168,12 @@ std::vector<Param> Parser::parseParams() {
     return params;
 }
 
-DeclPtr Parser::parseFunction() {
+DeclPtr Parser::parseFunction(bool isAsync) {
     const Token &kw = advance(); // 'fn'
     auto fn = std::make_unique<FunctionDecl>();
     fn->line = kw.line;
     fn->col = kw.col;
+    fn->isAsync = isAsync;
     fn->name = expect(TokenType::Identifier, "after 'fn'").lexeme;
     fn->fqName = qualify(fn->name);
     fn->params = parseParams();
@@ -197,6 +215,26 @@ DeclPtr Parser::parseStruct() {
     }
     expect(TokenType::RBrace, "to close the struct body");
     return st;
+}
+
+DeclPtr Parser::parseEnum() {
+    const Token &kw = expect(TokenType::Enum, "to begin an enum");
+    auto en = std::make_unique<EnumDecl>();
+    en->line = kw.line;
+    en->col = kw.col;
+    en->name = expect(TokenType::Identifier, "after 'enum'").lexeme;
+    en->fqName = qualify(en->name);
+    expect(TokenType::LBrace, "to open the enum body");
+    if (!check(TokenType::RBrace)) {
+        do {
+            // Allow a trailing comma before the closing brace.
+            if (check(TokenType::RBrace)) break;
+            const Token &m = expect(TokenType::Identifier, "as an enum member");
+            en->members.push_back(EnumMember{m.lexeme, m.line, m.col});
+        } while (matchToken(TokenType::Comma));
+    }
+    expect(TokenType::RBrace, "to close the enum body");
+    return en;
 }
 
 DeclPtr Parser::parseClass(bool isAbstract) {

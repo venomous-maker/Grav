@@ -13,6 +13,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg) {
     program_ = &program;
 
     emitPrelude();
+    emitEnums();
     emitStructs();
     emitVTableTypes();
     emitPrototypes(program);
@@ -61,7 +62,34 @@ std::string CodeGen::cTy(const TypeRef &t) const {
     if (t.isNamed() && reg_->isInterface(t.name)) return "struct GravIface";
     // Structs are value types: spelled as the bare struct, never a pointer.
     if (t.isNamed() && reg_->isStruct(t.name)) return structName(t.name);
+    // Enums lower to a C enum type (an int), spelled by their tag name.
+    if (t.isNamed() && reg_->isEnum(t.name)) return structName(t.name);
+    // A Future<T> is resolved eagerly, so at the C level it *is* its value type.
+    if (t.isFuture()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void));
+    // A pointer is the C pointer to the (interface-aware) pointee spelling.
+    if (t.isPointer()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void)) + "*";
     return cType(t);
+}
+
+// Enums become real C enum typedefs. They have no type dependencies, so they
+// are emitted up front (into typedefs_) ahead of structs and prototypes.
+void CodeGen::emitEnums() {
+    bool any = false;
+    for (const auto &declPtr : program_->decls) {
+        auto *en = dynamic_cast<const EnumDecl *>(declPtr.get());
+        if (!en) continue;
+        any = true;
+        std::string s = structName(en->fqName);
+        typedefs_ += "typedef enum " + s + " {\n";
+        if (en->members.empty())
+            typedefs_ += "    " + s + "__empty /* empty enum */\n";
+        for (size_t i = 0; i < en->members.size(); ++i) {
+            typedefs_ += "    " + enumConst(en->fqName, en->members[i].name);
+            typedefs_ += i + 1 < en->members.size() ? ",\n" : "\n";
+        }
+        typedefs_ += "} " + s + ";\n";
+    }
+    if (any) typedefs_ += "\n";
 }
 
 std::vector<FieldInfo> CodeGen::collectFields(const std::string &classFq) const {

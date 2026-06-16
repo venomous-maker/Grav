@@ -30,18 +30,34 @@ private:
     void checkStmt(Stmt &stmt);
     void checkLet(LetStmt &s);
     void checkAssign(AssignStmt &s);
+    // Validates the operator of a compound assignment (`x += y`) against the
+    // resolved target/value types.
+    void checkCompound(const AssignStmt &s, const TypeRef &targetType,
+                       const TypeRef &valueType);
     void checkReturn(ReturnStmt &s);
     void checkIf(IfStmt &s);
     void checkWhile(WhileStmt &s);
     void checkDoWhile(DoWhileStmt &s);
     void checkFor(ForStmt &s);
     void checkSwitch(SwitchStmt &s);
+    void checkForIn(ForInStmt &s);
     void requireBool(Expr &cond, const char *ctx);
 
     // expressions (typechecker_expr.cpp)
     TypeRef checkExpr(Expr &expr);
     TypeRef checkBinary(BinaryExpr &e);
     TypeRef checkUnary(UnaryExpr &e);
+    TypeRef checkTernary(TernaryExpr &e);
+    TypeRef checkAs(AsExpr &e);
+    TypeRef checkIs(IsExpr &e);
+    TypeRef checkAwait(AwaitExpr &e);
+    TypeRef checkAddrOf(AddrOfExpr &e);
+    TypeRef checkDeref(DerefExpr &e);
+    TypeRef checkCoalesce(CoalesceExpr &e);
+    // Resolves a `Type.Member` reference to an enum constant, if it is one.
+    // Returns the enum type on success, or nullopt to fall through to normal
+    // member handling.
+    std::optional<TypeRef> tryEnumValue(MemberExpr &e);
     TypeRef checkIncDec(IncDecExpr &e);
     TypeRef checkCast(CastExpr &e);
     TypeRef checkNew(NewExpr &e);
@@ -49,6 +65,9 @@ private:
     TypeRef checkCall(CallExpr &e);
     TypeRef checkMember(MemberExpr &e); // value position (field read)
     bool isLvalue(const Expr &e) const;
+    // `?.` lowers to a null guard returning a zero sentinel, so its result must be
+    // a scalar/reference/enum (not a value-type struct or interface fat pointer).
+    void checkOptionalResult(int line, int col, const TypeRef &t, bool allowVoid);
 
     // helpers
     void error(int line, int col, const std::string &msg);
@@ -85,6 +104,7 @@ private:
     TypeRef currentReturn_;
     bool inConstructor_ = false;
     bool inStatic_ = false;
+    bool inAsync_ = false; // true while checking an `async fn` body
     int loopDepth_ = 0; // for validating break/continue
 
 public:

@@ -19,11 +19,15 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"void", TokenType::KwVoid},
         {"true", TokenType::True},
         {"false", TokenType::False},
+        {"null", TokenType::Null},
         {"fn", TokenType::Fn},
         {"class", TokenType::Class},
         {"struct", TokenType::Struct},
+        {"enum", TokenType::Enum},
         {"abstract", TokenType::Abstract},
         {"interface", TokenType::Interface},
+        {"async", TokenType::Async},
+        {"await", TokenType::Await},
         {"namespace", TokenType::Namespace},
         {"constructor", TokenType::Constructor},
         {"extends", TokenType::Extends},
@@ -48,6 +52,9 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"match", TokenType::Match},
         {"break", TokenType::Break},
         {"continue", TokenType::Continue},
+        {"in", TokenType::In},
+        {"as", TokenType::As},
+        {"is", TokenType::Is},
     };
     return table;
 }
@@ -200,58 +207,98 @@ std::vector<Token> Lexer::tokenize() {
 
         advance(); // consume the punctuation character
         switch (c) {
-            case ':': tokens.push_back(makeToken(TokenType::Colon, ":")); break;
+            case ':':
+                tokens.push_back(match(':') ? makeToken(TokenType::ColonColon, "::")
+                                            : makeToken(TokenType::Colon, ":"));
+                break;
             case ';': tokens.push_back(makeToken(TokenType::Semicolon, ";")); break;
             case ',': tokens.push_back(makeToken(TokenType::Comma, ",")); break;
-            case '.': tokens.push_back(makeToken(TokenType::Dot, ".")); break;
+            case '.':
+                if (match('.')) {
+                    if (match('.')) tokens.push_back(makeToken(TokenType::Ellipsis, "..."));
+                    else if (match('=')) tokens.push_back(makeToken(TokenType::DotDotEq, "..="));
+                    else tokens.push_back(makeToken(TokenType::DotDot, ".."));
+                } else {
+                    tokens.push_back(makeToken(TokenType::Dot, "."));
+                }
+                break;
             case '(': tokens.push_back(makeToken(TokenType::LParen, "(")); break;
             case ')': tokens.push_back(makeToken(TokenType::RParen, ")")); break;
             case '{': tokens.push_back(makeToken(TokenType::LBrace, "{")); break;
             case '}': tokens.push_back(makeToken(TokenType::RBrace, "}")); break;
+            case '[': tokens.push_back(makeToken(TokenType::LBracket, "[")); break;
+            case ']': tokens.push_back(makeToken(TokenType::RBracket, "]")); break;
+            case '@': tokens.push_back(makeToken(TokenType::At, "@")); break;
+            case '#': tokens.push_back(makeToken(TokenType::Hash, "#")); break;
+            case '?':
+                if (match('?')) tokens.push_back(makeToken(TokenType::QuestionQuestion, "??"));
+                else if (match('.')) tokens.push_back(makeToken(TokenType::QuestionDot, "?."));
+                else tokens.push_back(makeToken(TokenType::Question, "?"));
+                break;
             case '+':
-                tokens.push_back(match('+') ? makeToken(TokenType::PlusPlus, "++")
-                                            : makeToken(TokenType::Plus, "+"));
+                if (match('+')) tokens.push_back(makeToken(TokenType::PlusPlus, "++"));
+                else if (match('=')) tokens.push_back(makeToken(TokenType::PlusEq, "+="));
+                else tokens.push_back(makeToken(TokenType::Plus, "+"));
                 break;
             case '-':
                 if (match('>')) tokens.push_back(makeToken(TokenType::Arrow, "->"));
                 else if (match('-')) tokens.push_back(makeToken(TokenType::MinusMinus, "--"));
+                else if (match('=')) tokens.push_back(makeToken(TokenType::MinusEq, "-="));
                 else tokens.push_back(makeToken(TokenType::Minus, "-"));
                 break;
-            case '*': tokens.push_back(makeToken(TokenType::Star, "*")); break;
-            case '/': tokens.push_back(makeToken(TokenType::Slash, "/")); break;
+            case '*':
+                tokens.push_back(match('=') ? makeToken(TokenType::StarEq, "*=")
+                                            : makeToken(TokenType::Star, "*"));
+                break;
+            case '/':
+                tokens.push_back(match('=') ? makeToken(TokenType::SlashEq, "/=")
+                                            : makeToken(TokenType::Slash, "/"));
+                break;
+            case '%':
+                tokens.push_back(match('=') ? makeToken(TokenType::PercentEq, "%=")
+                                            : makeToken(TokenType::Percent, "%"));
+                break;
             case '=':
-                if (match('='))
-                    tokens.push_back(makeToken(TokenType::EqEq, "=="));
-                else
-                    tokens.push_back(makeToken(TokenType::Assign, "="));
+                if (match('=')) tokens.push_back(makeToken(TokenType::EqEq, "=="));
+                else if (match('>')) tokens.push_back(makeToken(TokenType::FatArrow, "=>"));
+                else tokens.push_back(makeToken(TokenType::Assign, "="));
                 break;
             case '!':
                 tokens.push_back(match('=') ? makeToken(TokenType::NotEq, "!=")
                                             : makeToken(TokenType::Bang, "!"));
                 break;
             case '&':
-                if (match('&'))
-                    tokens.push_back(makeToken(TokenType::AmpAmp, "&&"));
-                else
-                    throw GravError("lex", tokLine_, tokCol_,
-                                    "unexpected '&' (did you mean '&&' ?)");
+                if (match('&')) tokens.push_back(makeToken(TokenType::AmpAmp, "&&"));
+                else if (match('=')) tokens.push_back(makeToken(TokenType::AmpEq, "&="));
+                else tokens.push_back(makeToken(TokenType::Amp, "&"));
                 break;
             case '|':
-                if (match('|'))
-                    tokens.push_back(makeToken(TokenType::PipePipe, "||"));
-                else
-                    throw GravError("lex", tokLine_, tokCol_,
-                                    "unexpected '|' (did you mean '||' ?)");
+                if (match('|')) tokens.push_back(makeToken(TokenType::PipePipe, "||"));
+                else if (match('=')) tokens.push_back(makeToken(TokenType::PipeEq, "|="));
+                else tokens.push_back(makeToken(TokenType::Pipe, "|"));
                 break;
+            case '^':
+                tokens.push_back(match('=') ? makeToken(TokenType::CaretEq, "^=")
+                                            : makeToken(TokenType::Caret, "^"));
+                break;
+            case '~': tokens.push_back(makeToken(TokenType::Tilde, "~")); break;
             case '>':
-                tokens.push_back(match('=')
-                                     ? makeToken(TokenType::GreaterEq, ">=")
-                                     : makeToken(TokenType::Greater, ">"));
+                if (match('>')) {
+                    tokens.push_back(match('=') ? makeToken(TokenType::ShiftRightEq, ">>=")
+                                                : makeToken(TokenType::ShiftRight, ">>"));
+                } else {
+                    tokens.push_back(match('=') ? makeToken(TokenType::GreaterEq, ">=")
+                                                : makeToken(TokenType::Greater, ">"));
+                }
                 break;
             case '<':
-                tokens.push_back(match('=')
-                                     ? makeToken(TokenType::LessEq, "<=")
-                                     : makeToken(TokenType::Less, "<"));
+                if (match('<')) {
+                    tokens.push_back(match('=') ? makeToken(TokenType::ShiftLeftEq, "<<=")
+                                                : makeToken(TokenType::ShiftLeft, "<<"));
+                } else {
+                    tokens.push_back(match('=') ? makeToken(TokenType::LessEq, "<=")
+                                                : makeToken(TokenType::Less, "<"));
+                }
                 break;
             default:
                 throw GravError("lex", tokLine_, tokCol_,

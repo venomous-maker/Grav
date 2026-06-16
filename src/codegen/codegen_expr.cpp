@@ -21,6 +21,11 @@ std::string CodeGen::escapeC(const std::string &s) {
 
 std::string CodeGen::emitAs(const Expr &expr, const TypeRef &target) const {
     std::string e = emitExpr(expr);
+    // A null reference flowing into an interface value is an empty fat pointer.
+    if (target.isNamed() && reg_->isInterface(target.name) &&
+        expr.type.kind == TypeRef::Kind::Null) {
+        return "(struct GravIface){ 0, 0 }";
+    }
     // Boxing a class instance into an interface value builds a fat pointer
     // (object + the class's table for that interface).
     if (target.isNamed() && reg_->isInterface(target.name) &&
@@ -56,17 +61,76 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         return e->value ? "true" : "false";
     if (auto *e = dynamic_cast<const StringLiteralExpr *>(&expr))
         return "\"" + escapeC(e->value) + "\"";
+    if (dynamic_cast<const NullLiteralExpr *>(&expr)) return "0";
     if (auto *e = dynamic_cast<const NameExpr *>(&expr)) return e->name;
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
 
     if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
+        // Comparing an interface value against null tests its object pointer.
+        if (e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) {
+            auto isIface = [&](const Expr &x) {
+                return x.type.isNamed() && reg_->isInterface(x.type.name);
+            };
+            const Expr *iface = nullptr;
+            if (isIface(*e->left) && e->right->type.kind == TypeRef::Kind::Null)
+                iface = e->left.get();
+            else if (isIface(*e->right) && e->left->type.kind == TypeRef::Kind::Null)
+                iface = e->right.get();
+            if (iface)
+                return "((" + emitExpr(*iface) + ").obj " + binaryOpSymbol(e->op) + " 0)";
+        }
         std::string l = emitExpr(*e->left);
         std::string r = emitExpr(*e->right);
         if (e->stringConcat) return "grav_str_concat(" + l + ", " + r + ")";
         return "(" + l + " " + binaryOpSymbol(e->op) + " " + r + ")";
     }
     if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
-        return "(!" + emitExpr(*e->operand) + ")";
+        const char *op = e->op == UnaryOp::BitNot ? "~" : "!";
+        return std::string("(") + op + emitExpr(*e->operand) + ")";
+    }
+    if (auto *e = dynamic_cast<const TernaryExpr *>(&expr)) {
+        return "(" + emitExpr(*e->cond) + " ? " +
+               emitAs(*e->thenExpr, e->type) + " : " +
+               emitAs(*e->elseExpr, e->type) + ")";
+    }
+    if (auto *e = dynamic_cast<const AsExpr *>(&expr)) {
+        // Pointer casts spell out the C pointer type explicitly.
+        if (e->target.isPointer())
+            return "((" + cTy(e->target) + ")(" + emitExpr(*e->operand) + "))";
+        // Named targets reuse the upcast/box logic; primitives do a C cast.
+        if (e->target.isNamed()) return emitAs(*e->operand, e->target);
+        std::string inner = emitExpr(*e->operand);
+        switch (e->target.kind) {
+            case TypeRef::Kind::Int: return "((int)(" + inner + "))";
+            case TypeRef::Kind::Float: return "((double)(" + inner + "))";
+            case TypeRef::Kind::Bool: return "((" + inner + ") != 0)";
+            default: return inner;
+        }
+    }
+    if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
+        return "grav_is_instance(" + emitExpr(*e->operand) + ", &" +
+               mangle(e->className) + "_typeinfo)";
+    }
+    if (auto *e = dynamic_cast<const AwaitExpr *>(&expr)) {
+        // Futures resolve eagerly, so the awaited value is already computed:
+        // `await e` lowers to `e` itself.
+        return emitExpr(*e->operand);
+    }
+    if (auto *e = dynamic_cast<const AddrOfExpr *>(&expr)) {
+        return "(&" + emitExpr(*e->operand) + ")";
+    }
+    if (auto *e = dynamic_cast<const DerefExpr *>(&expr)) {
+        return "(*" + emitExpr(*e->operand) + ")";
+    }
+    if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
+        // `a ?? b` -> "is a null? then b else a". The left is re-evaluated for the
+        // test (keep `??` operands side-effect free).
+        std::string l = emitExpr(*e->left);
+        std::string guard = (e->left->type.isNamed() && reg_->isInterface(e->left->type.name))
+                                ? "(" + l + ").obj != 0"
+                                : l + " != 0";
+        return "(" + guard + " ? " + emitAs(*e->left, e->type) + " : " +
+               emitAs(*e->right, e->type) + ")";
     }
     if (auto *e = dynamic_cast<const IncDecExpr *>(&expr)) {
         std::string op = e->isIncrement ? "++" : "--";
@@ -109,9 +173,19 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     }
     if (auto *e = dynamic_cast<const CallExpr *>(&expr)) return emitCall(*e);
     if (auto *e = dynamic_cast<const MemberExpr *>(&expr)) {
+        // `EnumType.Member` lowers to the C enum constant.
+        if (e->kind == MemberKind::EnumValue)
+            return enumConst(e->qualified, e->member);
         // Field read: structs are values (`.`), class instances are pointers (`->`).
         bool valueObj = e->object->type.isNamed() && reg_->isStruct(e->object->type.name);
-        return "(" + emitExpr(*e->object) + (valueObj ? ")." : ")->") + e->member;
+        std::string obj = emitExpr(*e->object);
+        std::string access = "(" + obj + (valueObj ? ")." : ")->") + e->member;
+        // `a?.field` guards against a null object, yielding a zero value when null.
+        if (e->optional) {
+            std::string nul = e->type.kind == TypeRef::Kind::String ? "\"\"" : "0";
+            return "(" + obj + " != 0 ? " + access + " : " + nul + ")";
+        }
+        return access;
     }
     return "/*?*/ 0";
 }
@@ -158,6 +232,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
         case CallKind::InstanceMethod: {
             auto *mem = dynamic_cast<const MemberExpr *>(call.callee.get());
             std::string obj = emitExpr(*mem->object);
+            std::string out;
             if (call.ifaceDispatch) {
                 std::string itab = mangle(call.ownerClass) + "_ITAB";
                 std::vector<TypeRef> params;
@@ -167,20 +242,32 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 std::string disp = "((" + itab + "*)(" + obj + ").itab)->" +
                                    call.methodName;
                 std::string self = "(" + obj + ").obj";
-                std::string out = disp + "(";
+                out = disp + "(";
                 emitArgs(out, call, params, true, self);
-                return out + ")";
+                out += ")";
+            } else {
+                std::string vt = vtableType(call.slotOwner);
+                std::string self = "(" + structName(call.slotOwner) + "*)(" + obj + ")";
+                std::string disp = "((" + vt + "*)((struct GravObject*)(" + obj +
+                                   "))->__vt)->" + call.methodName;
+                std::vector<TypeRef> params;
+                if (const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName))
+                    params = mi->paramTypes;
+                out = disp + "(";
+                emitArgs(out, call, params, true, self);
+                out += ")";
             }
-            std::string vt = vtableType(call.slotOwner);
-            std::string self = "(" + structName(call.slotOwner) + "*)(" + obj + ")";
-            std::string disp = "((" + vt + "*)((struct GravObject*)(" + obj +
-                               "))->__vt)->" + call.methodName;
-            std::vector<TypeRef> params;
-            if (const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName))
-                params = mi->paramTypes;
-            std::string out = disp + "(";
-            emitArgs(out, call, params, true, self);
-            return out + ")";
+            // `a?.m(...)` guards the dispatch against a null receiver.
+            if (mem->optional) {
+                bool iface = mem->object->type.isNamed() &&
+                             reg_->isInterface(mem->object->type.name);
+                std::string guard = iface ? "(" + obj + ").obj != 0" : obj + " != 0";
+                if (call.type.isVoid())
+                    return "(" + guard + " ? (" + out + ", 0) : 0)";
+                std::string nul = call.type.kind == TypeRef::Kind::String ? "\"\"" : "0";
+                return "(" + guard + " ? " + out + " : " + nul + ")";
+            }
+            return out;
         }
         default:
             return "/*unresolved call*/ 0";

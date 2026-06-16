@@ -71,6 +71,7 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
     else if (dynamic_cast<FloatLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Float);
     else if (dynamic_cast<BoolLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Bool);
     else if (dynamic_cast<StringLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::String);
+    else if (dynamic_cast<NullLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Null);
     else if (auto *e = dynamic_cast<SelfExpr *>(&expr)) {
         if (currentClass_.empty() || inStatic_) {
             error(e->line, e->col, "'self' is only valid inside an instance method or constructor");
@@ -91,6 +92,20 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         t = checkBinary(*e);
     } else if (auto *e = dynamic_cast<UnaryExpr *>(&expr)) {
         t = checkUnary(*e);
+    } else if (auto *e = dynamic_cast<TernaryExpr *>(&expr)) {
+        t = checkTernary(*e);
+    } else if (auto *e = dynamic_cast<AsExpr *>(&expr)) {
+        t = checkAs(*e);
+    } else if (auto *e = dynamic_cast<IsExpr *>(&expr)) {
+        t = checkIs(*e);
+    } else if (auto *e = dynamic_cast<AwaitExpr *>(&expr)) {
+        t = checkAwait(*e);
+    } else if (auto *e = dynamic_cast<AddrOfExpr *>(&expr)) {
+        t = checkAddrOf(*e);
+    } else if (auto *e = dynamic_cast<DerefExpr *>(&expr)) {
+        t = checkDeref(*e);
+    } else if (auto *e = dynamic_cast<CoalesceExpr *>(&expr)) {
+        t = checkCoalesce(*e);
     } else if (auto *e = dynamic_cast<IncDecExpr *>(&expr)) {
         t = checkIncDec(*e);
     } else if (auto *e = dynamic_cast<CastExpr *>(&expr)) {
@@ -121,6 +136,20 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
                                      typeRefName(lt) + " and " + typeRefName(rt));
         return TypeRef::prim(TypeRef::Kind::Bool);
     }
+    // Reference equality against `null`: `obj == null`, `null != obj`, `null == null`.
+    if ((e.op == BinaryOp::Eq || e.op == BinaryOp::NotEq) &&
+        (lt.kind == TypeRef::Kind::Null || rt.kind == TypeRef::Kind::Null)) {
+        auto refOrNull = [&](const TypeRef &x) {
+            return x.kind == TypeRef::Kind::Null || x.isPointer() ||
+                   (x.isNamed() && (reg_->isClass(x.name) || reg_->isInterface(x.name)));
+        };
+        if (refOrNull(lt) && refOrNull(rt))
+            return TypeRef::prim(TypeRef::Kind::Bool);
+        error(e.line, e.col,
+              "cannot compare " + typeRefName(lt) + " and " + typeRefName(rt) +
+                  " against null");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     if (!isComparison(e.op)) {
         // string + string -> concatenation
         if (e.op == BinaryOp::Add && lt.kind == TypeRef::Kind::String &&
@@ -139,6 +168,13 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
                                      "' requires matching types, but got " +
                                      typeRefName(lt) + " and " + typeRefName(rt) +
                                      " (use int()/float() to convert)");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        // '%', bitwise and shift operators are integer-only in C.
+        if (isIntOnly(e.op) && lt.kind != TypeRef::Kind::Int) {
+            error(e.line, e.col, std::string("operator '") + sym +
+                                     "' requires int operands, but got " +
+                                     typeRefName(lt));
             return TypeRef::prim(TypeRef::Kind::Error);
         }
         return lt;
@@ -161,19 +197,190 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
 
 bool TypeChecker::isLvalue(const Expr &e) const {
     return dynamic_cast<const NameExpr *>(&e) != nullptr ||
-           dynamic_cast<const MemberExpr *>(&e) != nullptr;
+           dynamic_cast<const MemberExpr *>(&e) != nullptr ||
+           dynamic_cast<const DerefExpr *>(&e) != nullptr;
+}
+
+TypeRef TypeChecker::checkAddrOf(AddrOfExpr &e) {
+    TypeRef t = checkExpr(*e.operand);
+    if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    if (!isLvalue(*e.operand)) {
+        error(e.line, e.col, "'&' requires a variable, field, or dereference");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    return TypeRef::pointer(t);
+}
+
+TypeRef TypeChecker::checkDeref(DerefExpr &e) {
+    TypeRef t = checkExpr(*e.operand);
+    if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    if (!t.isPointer()) {
+        error(e.line, e.col,
+              "'*' requires a pointer operand, but got " + typeRefName(t));
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    return *t.elem; // an lvalue of the pointee type
+}
+
+TypeRef TypeChecker::checkCoalesce(CoalesceExpr &e) {
+    TypeRef l = checkExpr(*e.left);
+    TypeRef r = checkExpr(*e.right);
+    if (l.isError() || r.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // `null ?? b` -> b's type. Otherwise the left must be a nullable reference.
+    if (l.kind == TypeRef::Kind::Null) return r;
+    bool leftNullable = l.isPointer() ||
+                        (l.isNamed() && (reg_->isClass(l.name) || reg_->isInterface(l.name)));
+    if (!leftNullable) {
+        error(e.line, e.col, "the left of '??' must be a nullable reference "
+                             "(class, interface, or pointer), but got " + typeRefName(l));
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    if (isAssignable(r, l)) return l;
+    if (isAssignable(l, r)) return r;
+    error(e.line, e.col, "'??' branches have incompatible types " +
+                             typeRefName(l) + " and " + typeRefName(r));
+    return TypeRef::prim(TypeRef::Kind::Error);
 }
 
 TypeRef TypeChecker::checkUnary(UnaryExpr &e) {
     TypeRef t = checkExpr(*e.operand);
     if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
-    // Only '!' for now.
+    if (e.op == UnaryOp::BitNot) {
+        if (t.kind != TypeRef::Kind::Int) {
+            error(e.line, e.col,
+                  "operator '~' requires an int operand, but got " + typeRefName(t));
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        return TypeRef::prim(TypeRef::Kind::Int);
+    }
+    // UnaryOp::Not
     if (t.kind != TypeRef::Kind::Bool) {
         error(e.line, e.col,
               "operator '!' requires a bool operand, but got " + typeRefName(t));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     return TypeRef::prim(TypeRef::Kind::Bool);
+}
+
+TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
+    requireBool(*e.cond, "a ternary condition");
+    TypeRef a = checkExpr(*e.thenExpr);
+    TypeRef b = checkExpr(*e.elseExpr);
+    if (a.isError() || b.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // Pick the common type of the two branches (handles `cond ? obj : null`).
+    if (a == b) return a;
+    if (isAssignable(b, a)) return a;
+    if (isAssignable(a, b)) return b;
+    error(e.line, e.col, "ternary branches have incompatible types " +
+                             typeRefName(a) + " and " + typeRefName(b));
+    return TypeRef::prim(TypeRef::Kind::Error);
+}
+
+TypeRef TypeChecker::checkAs(AsExpr &e) {
+    TypeRef src = checkExpr(*e.operand);
+    // Resolve a named target (class / interface / enum) to its FQ form, looking
+    // through any pointer wrappers (e.g. `Point*`).
+    TypeRef *inner = &e.target;
+    while (inner->isPointer() && inner->elem) inner = inner->elem.get();
+    if (inner->isNamed()) {
+        std::string fq = reg_->resolveType(inner->name, currentNs_);
+        if (fq.empty()) {
+            error(e.line, e.col, "unknown type '" + inner->name + "' in cast");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        *inner = TypeRef::named(fq);
+    }
+    if (src.isError()) return e.target;
+
+    // Pointer cast: between any pointer types, or from null (like a C cast).
+    if (e.target.isPointer()) {
+        if (src.isPointer() || src.kind == TypeRef::Kind::Null) return e.target;
+        error(e.line, e.col, "cannot cast " + typeRefName(src) + " to a pointer type");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+
+    bool srcEnum = src.isNamed() && reg_->isEnum(src.name);
+    switch (e.target.kind) {
+        case TypeRef::Kind::Int:
+            if (src.isNumeric() || src.kind == TypeRef::Kind::Bool || srcEnum) return e.target;
+            break;
+        case TypeRef::Kind::Float:
+        case TypeRef::Kind::Bool:
+            if (src.isNumeric() || src.kind == TypeRef::Kind::Bool) return e.target;
+            break;
+        case TypeRef::Kind::String:
+            if (src.kind == TypeRef::Kind::String) return e.target;
+            break;
+        case TypeRef::Kind::Named: {
+            // Class<->class within one hierarchy, or class -> interface it implements.
+            if (reg_->isClass(e.target.name) && src.isNamed() && reg_->isClass(src.name) &&
+                (reg_->isSubclass(src.name, e.target.name) ||
+                 reg_->isSubclass(e.target.name, src.name)))
+                return e.target;
+            if (reg_->isInterface(e.target.name) && src.isNamed() &&
+                reg_->isClass(src.name) && reg_->classImplements(src.name, e.target.name))
+                return e.target;
+            if (src.kind == TypeRef::Kind::Null &&
+                (reg_->isClass(e.target.name) || reg_->isInterface(e.target.name)))
+                return e.target;
+            break;
+        }
+        default:
+            break;
+    }
+    error(e.line, e.col, "cannot cast a value of type " + typeRefName(src) +
+                             " to " + typeRefName(e.target));
+    return TypeRef::prim(TypeRef::Kind::Error);
+}
+
+TypeRef TypeChecker::checkIs(IsExpr &e) {
+    TypeRef src = checkExpr(*e.operand);
+    std::string fq = reg_->resolveType(e.typeName, currentNs_);
+    if (fq.empty() || !reg_->isClass(fq)) {
+        error(e.line, e.col, "'is' expects a class name, got '" + e.typeName + "'");
+        return TypeRef::prim(TypeRef::Kind::Bool);
+    }
+    e.className = fq;
+    if (!src.isError() && !(src.isNamed() && reg_->isClass(src.name)))
+        error(e.operand->line, e.operand->col,
+              "'is' expects a class instance on the left, got " + typeRefName(src));
+    return TypeRef::prim(TypeRef::Kind::Bool);
+}
+
+TypeRef TypeChecker::checkAwait(AwaitExpr &e) {
+    TypeRef t = checkExpr(*e.operand);
+    if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    if (!inAsync_) {
+        error(e.line, e.col, "'await' is only allowed inside an 'async fn'");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    if (!t.isFuture()) {
+        error(e.line, e.col,
+              "'await' expects a Future (from an async call), but got " + typeRefName(t));
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    return *t.elem; // unwrap Future<T> -> T
+}
+
+// `EnumType.Member` — recognized when the whole expression is a name chain whose
+// head is not a local and whose prefix resolves to an enum type.
+std::optional<TypeRef> TypeChecker::tryEnumValue(MemberExpr &e) {
+    auto chain = flattenNames(&e);
+    if (!chain || chain->size() < 2) return std::nullopt;
+    if (lookupLocal((*chain)[0]) != nullptr) return std::nullopt;
+    std::string member = chain->back();
+    std::string prefix = joinDots(*chain, chain->size() - 1);
+    std::string enumFq = reg_->resolveType(prefix, currentNs_);
+    if (enumFq.empty() || !reg_->isEnum(enumFq)) return std::nullopt;
+    if (!reg_->hasEnumMember(enumFq, member)) {
+        error(e.line, e.col,
+              "enum '" + enumFq + "' has no member '" + member + "'");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    e.kind = MemberKind::EnumValue;
+    e.qualified = enumFq;
+    e.member = member;
+    return TypeRef::named(enumFq);
 }
 
 TypeRef TypeChecker::checkIncDec(IncDecExpr &e) {
@@ -195,8 +402,12 @@ TypeRef TypeChecker::checkCast(CastExpr &e) {
     TypeRef src = checkExpr(*e.operand);
     if (src.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     bool ok = false;
+    bool srcEnum = src.isNamed() && reg_->isEnum(src.name);
     switch (e.target.kind) {
         case TypeRef::Kind::Int:
+            // enums lower to ints, so int(color) is allowed (e.g. for printing).
+            ok = src.isNumeric() || src.kind == TypeRef::Kind::Bool || srcEnum;
+            break;
         case TypeRef::Kind::Float:
         case TypeRef::Kind::Bool:
             ok = src.isNumeric() || src.kind == TypeRef::Kind::Bool;
@@ -332,7 +543,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         e.kind = CallKind::FreeFunction;
         e.targetName = fnFq;
         checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
-        return fi->returnType;
+        return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
     }
 
     auto *mem = dynamic_cast<MemberExpr *>(e.callee.get());
@@ -375,7 +586,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             e.kind = CallKind::FreeFunction;
             e.targetName = fnFq;
             checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
-            return fi->returnType;
+            return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
         }
         error(e.line, e.col, "unknown function or static method '" +
                                  joinDots(*chain, chain->size()) + "'");
@@ -434,10 +645,24 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     e.slotOwner = slotOwner;
     checkArgs(e.args, mi->paramTypes, e.line, e.col,
               "method '" + objType.name + "." + mem->member + "'");
+    if (mem->optional) checkOptionalResult(e.line, e.col, mi->returnType, /*allowVoid=*/true);
     return mi->returnType;
 }
 
+void TypeChecker::checkOptionalResult(int line, int col, const TypeRef &t,
+                                     bool allowVoid) {
+    if (t.isError()) return;
+    if (allowVoid && t.isVoid()) return;
+    bool bad = t.isVoid() ||
+               (t.isNamed() && (reg_->isStruct(t.name) || reg_->isInterface(t.name)));
+    if (bad)
+        error(line, col, "optional chaining '?.' cannot yield " + typeRefName(t) +
+                             " (a value-type or interface); use '.' instead");
+}
+
 TypeRef TypeChecker::checkMember(MemberExpr &e) {
+    // `EnumType.Member` is a constant, not a field access on a value.
+    if (auto enumTy = tryEnumValue(e)) return *enumTy;
     TypeRef objType = checkExpr(*e.object);
     if (objType.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     if (objType.isNamed() && reg_->isStruct(objType.name)) {
@@ -470,6 +695,7 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
                                  accessName(f->access) + " in '" + f->definingClass + "'");
     e.kind = MemberKind::InstanceField;
     e.ownerClass = f->definingClass;
+    if (e.optional) checkOptionalResult(e.line, e.col, f->type, /*allowVoid=*/false);
     return f->type;
 }
 

@@ -30,6 +30,10 @@ private:
     bool matchToken(TokenType type);
     const Token &expect(TokenType type, const char *context);
     [[noreturn]] void fail(const Token &at, const std::string &message);
+    // True when the current token begins a new source line (used to stop an
+    // expression before a line-leading prefix operator like `*p` / `&x`, which
+    // begins a new statement rather than continuing a binary `*` / `&`).
+    bool onNewLine() const;
 
     // --- declarations (parser_core.cpp) ---
     void parseTopLevel(Program &program);
@@ -37,7 +41,8 @@ private:
     DeclPtr parseClass(bool isAbstract);
     DeclPtr parseInterface();
     DeclPtr parseStruct();
-    DeclPtr parseFunction();
+    DeclPtr parseEnum();
+    DeclPtr parseFunction(bool isAsync);
     MethodDecl parseMethod(bool inInterface);
     ConstructorDecl parseConstructor();
     FieldDecl parseField(Access access, bool readonly);
@@ -60,17 +65,27 @@ private:
     StmtPtr parseSimpleStmt(); // for-loop init/update: let / assign / expr
 
     // --- expressions (parser_expr.cpp) ---
+    // Precedence, lowest to highest: ternary < || < && < | < ^ < & <
+    // (== !=  < > <= >=) < (<< >>) < (+ -) < (* / %) < (as/is) < unary < postfix.
     ExprPtr parseExpression();
+    ExprPtr parseTernary();
+    ExprPtr parseCoalesce();
     ExprPtr parseOr();
     ExprPtr parseAnd();
+    ExprPtr parseBitOr();
+    ExprPtr parseBitXor();
+    ExprPtr parseBitAnd();
     ExprPtr parseComparison();
+    ExprPtr parseShift();
     ExprPtr parseAdditive();
     ExprPtr parseMultiplicative();
+    ExprPtr parseAsIs();
     ExprPtr parseUnary();
     ExprPtr parsePostfix();
     ExprPtr parsePrimary();
     ExprPtr parseStructLiteral();
     bool looksLikeStructLiteral() const;
+    bool looksLikeCast() const; // C-style `(Type)value` at the current '('
     std::vector<ExprPtr> parseArguments();
 
     std::vector<Token> tokens_;

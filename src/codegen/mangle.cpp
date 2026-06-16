@@ -23,6 +23,10 @@ std::string ctorCName(const std::string &classFq) { return mangle(classFq) + "_n
 
 std::string funcCName(const std::string &fnFq) { return "vf_" + mangle(fnFq); }
 
+std::string enumConst(const std::string &enumFq, const std::string &member) {
+    return mangle(enumFq) + "_" + member;
+}
+
 std::string cType(const TypeRef &t) {
     switch (t.kind) {
         case TypeRef::Kind::Int: return "int";
@@ -31,6 +35,10 @@ std::string cType(const TypeRef &t) {
         case TypeRef::Kind::String: return "const char*";
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Named: return structName(t.name) + "*";
+        case TypeRef::Kind::Null: return "void*";
+        case TypeRef::Kind::Future: return "void* /*future*/";
+        case TypeRef::Kind::Pointer:
+            return (t.elem ? cType(*t.elem) : "void") + "*";
         case TypeRef::Kind::Error: return "int /*error*/";
     }
     return "int";

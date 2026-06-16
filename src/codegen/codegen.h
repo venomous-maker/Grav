@@ -21,6 +21,7 @@ public:
 private:
     // codegen_types.cpp
     void emitPrelude();
+    void emitEnums();
     void emitStructs();
     void emitStruct(const std::string &classFq);
     void emitValueStructs();              // plain `struct` types, in dependency order
@@ -52,6 +53,7 @@ private:
     void emitBlock(const Block &block);
     void emitStmt(const Stmt &stmt);
     void emitIf(const IfStmt &s);        // if / else-if / else chain
+    std::string emitAssign(const AssignStmt &s) const; // plain or compound assignment
     void emitBraced(const Block &block); // "{\n …\n}" at the current indent
     std::string inlineSimple(const Stmt *s) const; // render a for-header clause
     int switchCounter_ = 0;

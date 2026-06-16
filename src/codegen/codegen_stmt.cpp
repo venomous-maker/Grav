@@ -21,7 +21,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
-        line(emitExpr(*s->target) + " = " + emitAs(*s->value, s->target->type) + ";");
+        line(emitAssign(*s) + ";");
         return;
     }
     if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
@@ -92,6 +92,17 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         line("}");
         return;
     }
+    if (auto *s = dynamic_cast<const ForInStmt *>(&stmt)) {
+        // `for (i in lo..hi)` -> a counting C for loop. The upper bound is
+        // hoisted into a temp so it is evaluated once.
+        std::string lim = "__hi" + std::to_string(switchCounter_++);
+        std::string cmp = s->inclusive ? " <= " : " < ";
+        line("for (int " + s->var + " = " + emitExpr(*s->lo) + ", " + lim + " = " +
+             emitExpr(*s->hi) + "; " + s->var + cmp + lim + "; " + s->var + "++) {");
+        indent_++; emitBlock(s->body); indent_--;
+        line("}");
+        return;
+    }
     if (dynamic_cast<const BreakStmt *>(&stmt)) { line("break;"); return; }
     if (dynamic_cast<const ContinueStmt *>(&stmt)) { line("continue;"); return; }
 }
@@ -133,10 +144,22 @@ std::string CodeGen::inlineSimple(const Stmt *s) const {
     if (auto *l = dynamic_cast<const LetStmt *>(s))
         return cTy(l->resolvedType) + " " + l->name + " = " + emitAs(*l->init, l->resolvedType);
     if (auto *a = dynamic_cast<const AssignStmt *>(s))
-        return emitExpr(*a->target) + " = " + emitAs(*a->value, a->target->type);
+        return emitAssign(*a);
     if (auto *e = dynamic_cast<const ExprStmt *>(s))
         return emitExpr(*e->expr);
     return "";
+}
+
+// Renders an assignment (plain or compound) without a trailing ';'. `string +=`
+// has no C equivalent, so it lowers to an explicit concat re-assignment.
+std::string CodeGen::emitAssign(const AssignStmt &s) const {
+    std::string target = emitExpr(*s.target);
+    if (!s.isCompound)
+        return target + " = " + emitAs(*s.value, s.target->type);
+    if (s.compoundOp == BinaryOp::Add &&
+        s.target->type.kind == TypeRef::Kind::String)
+        return target + " = grav_str_concat(" + target + ", " + emitExpr(*s.value) + ")";
+    return target + " " + binaryOpSymbol(s.compoundOp) + "= " + emitExpr(*s.value);
 }
 
 } // namespace grav

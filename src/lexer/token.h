@@ -20,6 +20,7 @@ enum class TokenType {
     KwVoid,
     True,
     False,
+    Null,
 
     // declaration keywords
     Let,
@@ -27,8 +28,11 @@ enum class TokenType {
     Fn,
     Class,
     Struct,
+    Enum,
     Abstract,
     Interface,
+    Async,
+    Await,
     Namespace,
     Constructor,
     Extends,
@@ -52,26 +56,49 @@ enum class TokenType {
     Match,
     Break,
     Continue,
+    In,         // for-in ranges
+    As,         // value cast: expr as int
+    Is,         // RTTI test: expr is Shape
 
     // punctuation
     Colon,
+    ColonColon, // ::
     Semicolon,
     Comma,
     Dot,
+    DotDot,     // ..
+    DotDotEq,   // ..=
+    Ellipsis,   // ...
     Assign,     // =
     Arrow,      // ->
+    FatArrow,   // =>
+    At,         // @
+    Hash,       // #
+    Question,   // ?
+    QuestionQuestion, // ??
+    QuestionDot,      // ?.
     LParen,
     RParen,
     LBrace,
     RBrace,
+    LBracket,   // [
+    RBracket,   // ]
 
     // arithmetic
     Plus,
     Minus,
     Star,
     Slash,
+    Percent,    // %
     PlusPlus,   // ++
     MinusMinus, // --
+
+    // compound assignment
+    PlusEq,     // +=
+    MinusEq,    // -=
+    StarEq,     // *=
+    SlashEq,    // /=
+    PercentEq,  // %=
 
     // comparison
     EqEq,       // ==
@@ -85,6 +112,25 @@ enum class TokenType {
     AmpAmp,     // &&
     PipePipe,   // ||
     Bang,       // !
+
+    // bitwise
+    Amp,        // &
+    Pipe,       // |
+    Caret,      // ^
+    Tilde,      // ~
+    ShiftLeft,  // <<
+    ShiftRight, // >>
+
+    // compound bitwise assignment
+    AmpEq,        // &=
+    PipeEq,       // |=
+    CaretEq,      // ^=
+    ShiftLeftEq,  // <<=
+    ShiftRightEq, // >>=
+
+    // lexer recovery / future tooling
+    Unknown,
+    Invalid,
 
     EndOfFile,
 };
