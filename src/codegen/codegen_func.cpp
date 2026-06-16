@@ -8,7 +8,15 @@ std::string CodeGen::paramList(const std::vector<Param> &params,
                                const std::string &selfStruct) const {
     std::vector<std::string> parts;
     if (!selfStruct.empty()) parts.push_back(selfStruct + "* self");
-    for (const auto &p : params) parts.push_back(cTy(p.type) + " " + p.name);
+    for (const auto &p : params) {
+        // A variadic parameter lowers to a length + element pointer pair.
+        if (p.variadic) {
+            parts.push_back("int " + p.name + "__n");
+            parts.push_back(cTy(p.type) + "* " + p.name);
+        } else {
+            parts.push_back(cTy(p.type) + " " + p.name);
+        }
+    }
     if (parts.empty()) return "(void)";
     std::string out = "(";
     for (size_t i = 0; i < parts.size(); ++i) {
