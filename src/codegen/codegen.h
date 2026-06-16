@@ -1,6 +1,7 @@
 #ifndef GRAV_CODEGEN_H
 #define GRAV_CODEGEN_H
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,17 @@ private:
     void emitEnums();
     void emitStructs();
     void emitStruct(const std::string &classFq);
-    void emitValueStructs();              // plain `struct` types, in dependency order
+    void emitValueStructs();              // plain `struct` + array types, dependency-ordered
+    // Walks the whole program collecting every fixed-length array type that needs
+    // a backing C struct (into arrayTypes_), so they can be emitted up front.
+    void collectArrayTypes();
+    void collectInBlock(const Block &block);
+    void collectInStmt(const Stmt &stmt);
+    void collectInExpr(const Expr &expr);
+    void collectType(const TypeRef &t);
+    // C spelling of a type for `sizeof` (named class/struct/enum -> the value, not
+    // a pointer).
+    std::string sizeofSpelling(const TypeRef &t) const;
     void emitVTableTypes();
     void emitVTableType(const ClassInfo &ci);
     void emitVTableInstances();
@@ -71,6 +82,9 @@ private:
 
     const Registry *reg_ = nullptr;
     const Program *program_ = nullptr;
+
+    // Fixed-length array types in use, keyed by their C struct name (deduped).
+    std::map<std::string, TypeRef> arrayTypes_;
 
     // Output sections, concatenated in order by generate().
     std::string typedefs_;

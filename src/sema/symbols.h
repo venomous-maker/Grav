@@ -78,6 +78,15 @@ struct EnumInfo {
     EnumDecl *decl = nullptr;
 };
 
+// A transparent type alias. `target` is the fully-canonical type it expands to
+// (computed in dependency order during canonicalization).
+struct AliasInfo {
+    std::string fqName;
+    TypeRef target;            // canonical (after canonicalize())
+    TypeAliasDecl *decl = nullptr;
+    int state = 0;             // 0 unseen, 1 resolving (cycle guard), 2 done
+};
+
 struct FunctionInfo {
     std::string fqName;
     bool isAsync = false; // callers receive Future<returnType>
@@ -99,6 +108,7 @@ public:
     bool isInterface(const std::string &fq) const { return interfaces_.count(fq) != 0; }
     bool isStruct(const std::string &fq) const { return structs_.count(fq) != 0; }
     bool isEnum(const std::string &fq) const { return enums_.count(fq) != 0; }
+    bool isAlias(const std::string &fq) const { return aliases_.count(fq) != 0; }
     bool isType(const std::string &fq) const {
         return isClass(fq) || isInterface(fq) || isStruct(fq) || isEnum(fq);
     }
@@ -115,6 +125,12 @@ public:
     // Resolve a (possibly dotted, possibly unqualified) class/interface name in
     // a namespace context to its FQ name. Returns "" if not found.
     std::string resolveType(const std::string &name, const std::string &nsContext) const;
+    // Resolve a (possibly dotted/unqualified) name to a type *or* alias FQ name.
+    std::string resolveTypeOrAlias(const std::string &name, const std::string &nsContext) const;
+    // Canonicalize a written type in a namespace context: resolves named parts to
+    // their FQ form and fully expands type aliases (recursing through pointers and
+    // arrays). Sets ok=false (and returns Error) if any named part is unknown.
+    TypeRef resolveCanonical(const TypeRef &t, const std::string &nsContext, bool &ok) const;
     // Resolve a free function name. Returns "" if not found.
     std::string resolveFunc(const std::string &name, const std::string &nsContext) const;
     // Is `name` (in nsContext) a known namespace prefix?
@@ -143,6 +159,8 @@ public:
 private:
     void registerDecls(Program &program);
     void canonicalize();
+    void canonicalizeAliases();
+    TypeRef resolveAlias(const std::string &fq); // expands one alias (cycle-guarded)
     void synthesizeAccessors();
     TypeRef canonType(const TypeRef &t, const std::string &nsContext, int line, int col);
     void computeSlots();
@@ -154,6 +172,7 @@ private:
     std::unordered_map<std::string, InterfaceInfo> interfaces_;
     std::unordered_map<std::string, StructInfo> structs_;
     std::unordered_map<std::string, EnumInfo> enums_;
+    std::unordered_map<std::string, AliasInfo> aliases_;
     std::unordered_map<std::string, FunctionInfo> functions_;
     std::vector<std::string> namespaces_; // known namespace prefixes
     std::vector<GravError> errors_;

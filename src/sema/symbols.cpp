@@ -201,6 +201,7 @@ bool Registry::classImplements(const std::string &classFq,
 
 const std::vector<GravError> &Registry::build(Program &program) {
     registerDecls(program);
+    canonicalizeAliases();
     canonicalize();
     synthesizeAccessors();
     computeSlots();
@@ -271,7 +272,7 @@ void Registry::registerDecls(Program &program) {
         noteNamespace(d->fqName);
 
         if (auto *c = dynamic_cast<ClassDecl *>(d)) {
-            if (isType(c->fqName)) { error(c->line, c->col, "duplicate type '" + c->fqName + "'"); continue; }
+            if (isType(c->fqName) || isAlias(c->fqName)) { error(c->line, c->col, "duplicate type '" + c->fqName + "'"); continue; }
             ClassInfo info;
             info.fqName = c->fqName;
             info.isAbstract = c->isAbstract;
@@ -302,7 +303,7 @@ void Registry::registerDecls(Program &program) {
             }
             classes_[c->fqName] = std::move(info);
         } else if (auto *st = dynamic_cast<StructDecl *>(d)) {
-            if (isType(st->fqName)) { error(st->line, st->col, "duplicate type '" + st->fqName + "'"); continue; }
+            if (isType(st->fqName) || isAlias(st->fqName)) { error(st->line, st->col, "duplicate type '" + st->fqName + "'"); continue; }
             StructInfo info;
             info.fqName = st->fqName;
             info.decl = st;
@@ -312,7 +313,7 @@ void Registry::registerDecls(Program &program) {
             }
             structs_[st->fqName] = std::move(info);
         } else if (auto *ifc = dynamic_cast<InterfaceDecl *>(d)) {
-            if (isType(ifc->fqName)) { error(ifc->line, ifc->col, "duplicate type '" + ifc->fqName + "'"); continue; }
+            if (isType(ifc->fqName) || isAlias(ifc->fqName)) { error(ifc->line, ifc->col, "duplicate type '" + ifc->fqName + "'"); continue; }
             InterfaceInfo info;
             info.fqName = ifc->fqName;
             info.decl = ifc;
@@ -330,7 +331,7 @@ void Registry::registerDecls(Program &program) {
             }
             interfaces_[ifc->fqName] = std::move(info);
         } else if (auto *en = dynamic_cast<EnumDecl *>(d)) {
-            if (isType(en->fqName)) { error(en->line, en->col, "duplicate type '" + en->fqName + "'"); continue; }
+            if (isType(en->fqName) || isAlias(en->fqName)) { error(en->line, en->col, "duplicate type '" + en->fqName + "'"); continue; }
             EnumInfo info;
             info.fqName = en->fqName;
             info.decl = en;
@@ -343,6 +344,13 @@ void Registry::registerDecls(Program &program) {
                     info.members.push_back(m.name);
             }
             enums_[en->fqName] = std::move(info);
+        } else if (auto *ta = dynamic_cast<TypeAliasDecl *>(d)) {
+            if (isType(ta->fqName) || isAlias(ta->fqName)) { error(ta->line, ta->col, "duplicate type '" + ta->fqName + "'"); continue; }
+            AliasInfo info;
+            info.fqName = ta->fqName;
+            info.target = ta->target; // raw; canonicalized in canonicalizeAliases()
+            info.decl = ta;
+            aliases_[ta->fqName] = std::move(info);
         } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
             if (functions_.count(fn->fqName)) { error(fn->line, fn->col, "duplicate function '" + fn->fqName + "'"); continue; }
             FunctionInfo info;
@@ -359,15 +367,82 @@ void Registry::registerDecls(Program &program) {
     }
 }
 
-TypeRef Registry::canonType(const TypeRef &t, const std::string &nsContext,
-                            int line, int col) {
+std::string Registry::resolveTypeOrAlias(const std::string &name,
+                                         const std::string &nsContext) const {
+    auto parts = splitDots(nsContext);
+    for (size_t i = parts.size() + 1; i-- > 0;) {
+        std::string prefix = joinDots(parts, i);
+        std::string cand = prefix.empty() ? name : prefix + "." + name;
+        if (isType(cand) || isAlias(cand)) return cand;
+    }
+    return "";
+}
+
+TypeRef Registry::resolveCanonical(const TypeRef &t, const std::string &nsContext,
+                                   bool &ok) const {
+    if (t.isPointer())
+        return TypeRef::pointer(resolveCanonical(*t.elem, nsContext, ok));
+    if (t.isArray())
+        return TypeRef::array(resolveCanonical(*t.elem, nsContext, ok), t.arrayLen);
+    if (t.isFuture())
+        return TypeRef::future(resolveCanonical(*t.elem, nsContext, ok));
     if (!t.isNamed()) return t;
-    std::string fq = resolveType(t.name, nsContext);
+    std::string fq = resolveTypeOrAlias(t.name, nsContext);
     if (fq.empty()) {
-        error(line, col, "unknown type '" + t.name + "'");
+        ok = false;
         return TypeRef::prim(TypeRef::Kind::Error);
     }
+    auto it = aliases_.find(fq);
+    if (it != aliases_.end()) return it->second.target; // already canonical
     return TypeRef::named(fq);
+}
+
+// Expands one alias to its fully-canonical target, resolving nested aliases and
+// guarding against cycles via the per-alias `state` flag.
+TypeRef Registry::resolveAlias(const std::string &fq) {
+    AliasInfo &ai = aliases_[fq];
+    if (ai.state == 2) return ai.target;
+    int line = ai.decl ? ai.decl->line : 0, col = ai.decl ? ai.decl->col : 0;
+    if (ai.state == 1) {
+        error(line, col, "type alias '" + fq + "' is cyclic");
+        ai.target = TypeRef::prim(TypeRef::Kind::Error);
+        ai.state = 2;
+        return ai.target;
+    }
+    ai.state = 1;
+    std::string ns = namespaceOf(fq);
+    TypeRef raw = ai.target; // currently the raw, as-written target
+    std::function<TypeRef(const TypeRef &)> expand = [&](const TypeRef &t) -> TypeRef {
+        if (t.isPointer()) return TypeRef::pointer(expand(*t.elem));
+        if (t.isArray()) return TypeRef::array(expand(*t.elem), t.arrayLen);
+        if (t.isFuture()) return TypeRef::future(expand(*t.elem));
+        if (!t.isNamed()) return t;
+        std::string r = resolveTypeOrAlias(t.name, ns);
+        if (r.empty()) {
+            error(line, col, "unknown type '" + t.name + "'");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        if (isAlias(r)) return resolveAlias(r);
+        return TypeRef::named(r);
+    };
+    ai.target = expand(raw);
+    ai.state = 2;
+    return ai.target;
+}
+
+void Registry::canonicalizeAliases() {
+    for (auto &[fq, ai] : aliases_) {
+        (void)ai;
+        resolveAlias(fq);
+    }
+}
+
+TypeRef Registry::canonType(const TypeRef &t, const std::string &nsContext,
+                            int line, int col) {
+    bool ok = true;
+    TypeRef r = resolveCanonical(t, nsContext, ok);
+    if (!ok) error(line, col, "unknown type '" + typeRefName(t) + "'");
+    return r;
 }
 
 // Rewrites every Named type reference (in the AST decl nodes and the mirrored

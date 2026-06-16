@@ -210,10 +210,12 @@ StmtPtr Parser::parseExprOrAssign() {
     }
     if (check(TokenType::Assign) || isCompound) {
         const Token &eq = advance();
-        // Names, member accesses, and pointer dereferences are assignable.
+        // Names, member accesses, pointer dereferences, and element indexes are
+        // assignable.
         if (dynamic_cast<NameExpr *>(expr.get()) == nullptr &&
             dynamic_cast<MemberExpr *>(expr.get()) == nullptr &&
-            dynamic_cast<DerefExpr *>(expr.get()) == nullptr) {
+            dynamic_cast<DerefExpr *>(expr.get()) == nullptr &&
+            dynamic_cast<IndexExpr *>(expr.get()) == nullptr) {
             fail(eq, std::string("the left-hand side of ") + tokenTypeName(eq.type) +
                          " is not assignable");
         }

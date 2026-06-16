@@ -18,6 +18,7 @@
 #include "codegen/codegen.h"
 #include "common/diagnostics.h"
 #include "lexer/lexer.h"
+#include "lexer/preprocess.h"
 #include "parser/parser.h"
 #include "sema/symbols.h"
 #include "sema/typechecker.h"
@@ -145,6 +146,7 @@ int main(int argc, char **argv) {
     try {
         grav::Lexer lexer(source);
         auto tokens = lexer.tokenize();
+        tokens = grav::preprocess(std::move(tokens));
 
         grav::Parser parser(std::move(tokens));
         grav::Program program = parser.parseProgram();

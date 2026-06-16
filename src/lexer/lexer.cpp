@@ -24,6 +24,8 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"class", TokenType::Class},
         {"struct", TokenType::Struct},
         {"enum", TokenType::Enum},
+        {"type", TokenType::Type},
+        {"sizeof", TokenType::Sizeof},
         {"abstract", TokenType::Abstract},
         {"interface", TokenType::Interface},
         {"async", TokenType::Async},

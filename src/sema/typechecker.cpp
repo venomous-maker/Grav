@@ -244,13 +244,14 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
 
 void TypeChecker::checkLet(LetStmt &s) {
     TypeRef initType = checkExpr(*s.init);
-    if (s.hasDeclaredType && s.declaredType.isNamed()) {
-        std::string fq = reg_->resolveType(s.declaredType.name, currentNs_);
-        if (fq.empty()) {
-            error(s.line, s.col, "unknown type '" + s.declaredType.name + "'");
+    if (s.hasDeclaredType) {
+        bool ok = true;
+        TypeRef c = reg_->resolveCanonical(s.declaredType, currentNs_, ok);
+        if (!ok) {
+            error(s.line, s.col, "unknown type '" + typeRefName(s.declaredType) + "'");
             s.declaredType = TypeRef::prim(TypeRef::Kind::Error);
         } else {
-            s.declaredType = TypeRef::named(fq);
+            s.declaredType = c;
         }
     }
     if (s.hasDeclaredType) {
@@ -286,6 +287,19 @@ void TypeChecker::checkAssign(AssignStmt &s) {
             error(s.value->line, s.value->col,
                   "cannot assign a value of type " + typeRefName(valueType) +
                       " through a pointer to " + typeRefName(targetType));
+        return;
+    }
+
+    // `a[i] = value` — write through an array/pointer element.
+    if (dynamic_cast<IndexExpr *>(s.target.get())) {
+        TypeRef targetType = checkExpr(*s.target); // validates indexability, sets type
+        if (targetType.isError()) return;
+        if (s.isCompound)
+            checkCompound(s, targetType, valueType);
+        else if (!isAssignable(valueType, targetType))
+            error(s.value->line, s.value->col,
+                  "cannot assign a value of type " + typeRefName(valueType) +
+                      " to an element of type " + typeRefName(targetType));
         return;
     }
 

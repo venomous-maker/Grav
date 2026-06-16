@@ -20,6 +20,11 @@ std::string ctorCName(const std::string &classFq);     // geometry__Circle_new
 std::string funcCName(const std::string &fnFq);        // vf_geometry__area
 std::string enumConst(const std::string &enumFq, const std::string &member); // Color_Red
 
+// C struct name for a fixed-length array type, e.g. int[3] -> "GravArr_int_3".
+// Grav arrays are boxed in a struct so they keep value semantics in C (assignable,
+// passable, returnable).
+std::string arrayStructName(const TypeRef &arrayType);
+
 // C type spelling for a resolved Grav type. Named types become pointers.
 std::string cType(const TypeRef &t);
 

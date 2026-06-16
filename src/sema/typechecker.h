@@ -60,6 +60,9 @@ private:
     std::optional<TypeRef> tryEnumValue(MemberExpr &e);
     TypeRef checkIncDec(IncDecExpr &e);
     TypeRef checkCast(CastExpr &e);
+    TypeRef checkSizeof(SizeofExpr &e);
+    TypeRef checkArrayLiteral(ArrayLiteralExpr &e);
+    TypeRef checkIndex(IndexExpr &e);
     TypeRef checkNew(NewExpr &e);
     TypeRef checkStructLiteral(StructLiteralExpr &e);
     TypeRef checkCall(CallExpr &e);

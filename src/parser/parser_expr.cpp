@@ -353,6 +353,15 @@ ExprPtr Parser::parsePostfix() {
             call->args = parseArguments();
             call->callee = std::move(expr);
             expr = std::move(call);
+        } else if (check(TokenType::LBracket) && !onNewLine()) {
+            // `base[index]` — element access. A line-leading `[` begins a new
+            // statement (an array literal), not an index of the previous line.
+            const Token &lb = advance();
+            auto idx = at<IndexExpr>(lb);
+            idx->base = std::move(expr);
+            idx->index = parseExpression();
+            expect(TokenType::RBracket, "to close the index");
+            expr = std::move(idx);
         } else if (check(TokenType::PlusPlus) || check(TokenType::MinusMinus)) {
             const Token &opTok = advance();
             auto e = at<IncDecExpr>(opTok);
@@ -405,9 +414,62 @@ ExprPtr Parser::parseStructLiteral() {
     return e;
 }
 
+// Lookahead from the token after `sizeof(`: does the parenthesized content spell
+// a *definite* type (a primitive, or a named type with a `*`/`[N]`/dotted suffix)
+// rather than an expression? A lone identifier stays an expression and is sorted
+// out by the type checker, which can tell a type name from a variable.
+bool Parser::looksLikeTypeArg() const {
+    size_t i = pos_;
+    if (i >= tokens_.size()) return false;
+    TokenType t0 = tokens_[i].type;
+    bool primitive = t0 == TokenType::KwInt || t0 == TokenType::KwFloat ||
+                     t0 == TokenType::KwBool || t0 == TokenType::KwString ||
+                     t0 == TokenType::KwVoid;
+    bool named = t0 == TokenType::Identifier;
+    if (!primitive && !named) return false;
+    ++i;
+    bool sawExtra = false;
+    if (named)
+        while (i + 1 < tokens_.size() && tokens_[i].type == TokenType::Dot &&
+               tokens_[i + 1].type == TokenType::Identifier) { i += 2; sawExtra = true; }
+    for (;;) {
+        if (i < tokens_.size() && tokens_[i].type == TokenType::Star) { ++i; sawExtra = true; }
+        else if (i + 2 < tokens_.size() && tokens_[i].type == TokenType::LBracket &&
+                 tokens_[i + 1].type == TokenType::IntLiteral &&
+                 tokens_[i + 2].type == TokenType::RBracket) { i += 3; sawExtra = true; }
+        else break;
+    }
+    if (i >= tokens_.size() || tokens_[i].type != TokenType::RParen) return false;
+    return primitive || sawExtra;
+}
+
 ExprPtr Parser::parsePrimary() {
     const Token &t = peek();
     switch (t.type) {
+        case TokenType::Sizeof: {
+            advance(); // 'sizeof'
+            expect(TokenType::LParen, "after 'sizeof'");
+            auto e = at<SizeofExpr>(t);
+            if (looksLikeTypeArg()) {
+                e->isType = true;
+                e->target = parseType("in 'sizeof'");
+            } else {
+                e->operand = parseExpression();
+            }
+            expect(TokenType::RParen, "to close 'sizeof'");
+            return e;
+        }
+        case TokenType::LBracket: { // `[a, b, c]` — an array literal
+            advance(); // '['
+            auto e = at<ArrayLiteralExpr>(t);
+            if (!check(TokenType::RBracket)) {
+                do {
+                    e->elements.push_back(parseExpression());
+                } while (matchToken(TokenType::Comma));
+            }
+            expect(TokenType::RBracket, "to close the array literal");
+            return e;
+        }
         case TokenType::IntLiteral: {
             advance();
             auto e = at<IntLiteralExpr>(t);

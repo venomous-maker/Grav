@@ -26,6 +26,10 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Pointers](#pointers)
   - [Async / await](#async--await)
   - [Structs](#structs)
+  - [Arrays](#arrays)
+  - [Type aliases](#type-aliases)
+  - [Macros](#macros)
+  - [sizeof](#sizeof)
   - [Classes](#classes)
   - [Access modifiers & `readonly`](#access-modifiers--readonly)
   - [Auto getters/setters](#auto-getterssetters)
@@ -370,6 +374,96 @@ A struct literal must list **every** field exactly once. A struct may hold class
 references (pointers), but a struct cannot contain itself by value (that would be
 infinitely large — use a class for recursive shapes).
 
+### Arrays
+
+A `T[N]` is a **fixed-length array** of `N` elements of type `T`. Like structs,
+arrays are **value types**: they are copied on assignment and passed / returned by
+value (Grav boxes them in a small C struct so this stays sound — no hidden runtime,
+no heap). The element type may be any type (primitive, struct, class reference…).
+
+```grav
+fn sum(xs: int[3]) -> int {           // arrays pass by value
+    let total = 0
+    for (i in 0..xs.length) {         // `.length` is the compile-time length
+        total += xs[i]                // index to read…
+    }
+    return total
+}
+
+fn main() {
+    let primes: int[4] = [2, 3, 5, 7] // an array literal
+    print(primes.length)              // 4
+    print(primes[2])                  // 5
+    primes[0] = 11                    // …and to write
+    print(primes[0])                  // 11
+
+    let row = [10, 20, 30]            // element type & length inferred -> int[3]
+    print(sum(row))                   // 60
+}
+```
+
+The length is part of the type, so `int[3]` and `int[4]` are distinct types. A
+literal's length must match the declared length, and `[]` (empty) needs an explicit
+`T[N]` annotation. Indexing also works on pointers (`p[i]`), which are **not**
+bounds-checked.
+
+### Type aliases
+
+`type Name = T` introduces a **transparent alias** for an existing type. Aliases are
+fully expanded during type checking, so `Celsius` below *is* `int` everywhere — they
+cost nothing and leave no trace in the generated C.
+
+```grav
+type Celsius = int
+type Row     = int[3]
+type Coord   = Point          // alias any named type, array, or pointer
+
+fn freezing(c: Celsius) -> bool { return c <= 0 }
+
+fn main() {
+    let r: Row = [1, 2, 3]
+    print(freezing(0 as Celsius)) // true
+}
+```
+
+Aliases may be used wherever a type is expected (declarations, parameters, fields,
+return types, `as` casts, `sizeof`). They are transparent, so an alias and its
+target are interchangeable.
+
+### Macros
+
+A C-style preprocessor runs over the token stream before parsing. `#define` supports
+both **object-like** and **function-like** macros; each directive occupies one line
+and disappears from the output.
+
+```grav
+#define SIZE 8
+#define SQUARE(x) ((x) * (x))
+
+fn main() {
+    let buf: int[SIZE] = [0, 0, 0, 0, 0, 0, 0, 0]  // SIZE is usable as a type length
+    print(buf.length)        // 8
+    print(SQUARE(SIZE + 1))  // 81  (parenthesize args defensively, as in C)
+}
+```
+
+Function-like invocations must supply the exact arity; arguments are expanded in the
+caller's context, and a macro will not recursively expand into itself.
+
+### sizeof
+
+`sizeof(T)` (a type) and `sizeof(expr)` (a value) yield the size in bytes as an
+`int`, lowering to C's `sizeof`. For a class or struct it reports the underlying
+object/value size.
+
+```grav
+fn main() {
+    print(sizeof(int) > 0)                       // true
+    let primes: int[4] = [2, 3, 5, 7]
+    print(sizeof(primes) == sizeof(int) * 4)     // true
+}
+```
+
 ### Classes
 
 ```grav
@@ -618,15 +712,18 @@ cmake --build build
 
 ## Roadmap / not yet implemented
 
-`v0.3` added enums, the expanded operator set, ranges, `null` + `??` + `?.`,
-`as`/`is` + C-style casts, pointers, optional `;` terminators, and async/await (see
-the language tour above). The lexer also recognizes a forward-looking token set
-(`[ ]`, `=>`, `::`, `@`, `#`, `...`, `..`) so the following features can be layered
-on without further lexer work. They are **not** implemented yet — using them is a
-parse/type error today:
+`v0.4` added fixed-length [arrays](#arrays) (`T[N]`, literals, indexing, `.length`),
+transparent [type aliases](#type-aliases) (`type Name = T`), a `#define`
+[macro](#macros) preprocessor, and [`sizeof`](#sizeof). `v0.3` added enums, the
+expanded operator set, ranges, `null` + `??` + `?.`, `as`/`is` + C-style casts,
+pointers, optional `;` terminators, and async/await (see the language tour above).
+The lexer also recognizes a forward-looking token set (`=>`, `::`, `@`, `...`) so the
+following features can be layered on. They are **not** implemented yet — using them
+is a parse/type error today:
 
-- **Collections** — `array<T>` / `list<T>` / `map<K,V>` and literals like `#{1, 2, 3}`
-  (needs generics plus a small C runtime).
+- **Dynamic / generic collections** — `list<T>` / `map<K,V>` and set literals like
+  `#{1, 2, 3}` (needs generics plus a small C runtime). Fixed-length `T[N]` arrays
+  *are* implemented — see [Arrays](#arrays).
 - **Generics / monomorphization** — `class Box<T> { … }`.
 - **String interpolation** — `"hello ${name}"`.
 - **Decorators / attributes** — `@Entity class User {}`.
@@ -634,7 +731,7 @@ parse/type error today:
 - **Modules** — `import` / `export` keywords (file-level `import "path"` *does* work
   today via the driver — see [Imports](#imports)).
 - **Exceptions** — `try` / `catch` / `throw`.
-- **`type` aliases & traits/mixins.** (Plain data `struct` types *are* implemented.)
+- **Traits / mixins.** (Transparent `type` aliases *are* implemented.)
 - **Static fields & global `const`** — class-level `static x: T = …` lowered to C
   globals. (Local `const` *is* implemented.)
 - **Multiple class inheritance** — Grav supports a single base class plus multiple

@@ -110,6 +110,12 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         t = checkIncDec(*e);
     } else if (auto *e = dynamic_cast<CastExpr *>(&expr)) {
         t = checkCast(*e);
+    } else if (auto *e = dynamic_cast<SizeofExpr *>(&expr)) {
+        t = checkSizeof(*e);
+    } else if (auto *e = dynamic_cast<ArrayLiteralExpr *>(&expr)) {
+        t = checkArrayLiteral(*e);
+    } else if (auto *e = dynamic_cast<IndexExpr *>(&expr)) {
+        t = checkIndex(*e);
     } else if (auto *e = dynamic_cast<NewExpr *>(&expr)) {
         t = checkNew(*e);
     } else if (auto *e = dynamic_cast<StructLiteralExpr *>(&expr)) {
@@ -198,7 +204,8 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
 bool TypeChecker::isLvalue(const Expr &e) const {
     return dynamic_cast<const NameExpr *>(&e) != nullptr ||
            dynamic_cast<const MemberExpr *>(&e) != nullptr ||
-           dynamic_cast<const DerefExpr *>(&e) != nullptr;
+           dynamic_cast<const DerefExpr *>(&e) != nullptr ||
+           dynamic_cast<const IndexExpr *>(&e) != nullptr;
 }
 
 TypeRef TypeChecker::checkAddrOf(AddrOfExpr &e) {
@@ -278,17 +285,16 @@ TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
 
 TypeRef TypeChecker::checkAs(AsExpr &e) {
     TypeRef src = checkExpr(*e.operand);
-    // Resolve a named target (class / interface / enum) to its FQ form, looking
-    // through any pointer wrappers (e.g. `Point*`).
-    TypeRef *inner = &e.target;
-    while (inner->isPointer() && inner->elem) inner = inner->elem.get();
-    if (inner->isNamed()) {
-        std::string fq = reg_->resolveType(inner->name, currentNs_);
-        if (fq.empty()) {
-            error(e.line, e.col, "unknown type '" + inner->name + "' in cast");
+    // Canonicalize the target (resolving named parts and expanding aliases, looking
+    // through any pointer wrappers like `Point*`).
+    {
+        bool ok = true;
+        TypeRef c = reg_->resolveCanonical(e.target, currentNs_, ok);
+        if (!ok) {
+            error(e.line, e.col, "unknown type '" + typeRefName(e.target) + "' in cast");
             return TypeRef::prim(TypeRef::Kind::Error);
         }
-        *inner = TypeRef::named(fq);
+        e.target = c;
     }
     if (src.isError()) return e.target;
 
@@ -424,6 +430,74 @@ TypeRef TypeChecker::checkCast(CastExpr &e) {
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     return e.target;
+}
+
+TypeRef TypeChecker::checkSizeof(SizeofExpr &e) {
+    // A bare type name (e.g. `sizeof(Point)`) parses as a NameExpr; promote it to
+    // the type form when the name is a type/alias rather than a local variable.
+    if (!e.isType && e.operand) {
+        if (auto chain = flattenNames(e.operand.get())) {
+            if (!lookupLocal((*chain)[0])) {
+                std::string fq = reg_->resolveTypeOrAlias(joinDots(*chain, chain->size()),
+                                                          currentNs_);
+                if (!fq.empty()) {
+                    e.isType = true;
+                    e.target = TypeRef::named(joinDots(*chain, chain->size()));
+                    e.operand.reset();
+                }
+            }
+        }
+    }
+    if (e.isType) {
+        bool ok = true;
+        TypeRef c = reg_->resolveCanonical(e.target, currentNs_, ok);
+        if (!ok) {
+            error(e.line, e.col, "unknown type '" + typeRefName(e.target) + "' in sizeof");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        e.target = c;
+    } else {
+        TypeRef t = checkExpr(*e.operand);
+        if (t.isVoid())
+            error(e.line, e.col, "cannot take sizeof a void value");
+    }
+    return TypeRef::prim(TypeRef::Kind::Int);
+}
+
+TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
+    if (e.elements.empty()) {
+        error(e.line, e.col,
+              "an empty array literal '[]' has no element type; "
+              "give the variable an explicit `T[N]` type");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    TypeRef elem = checkExpr(*e.elements[0]);
+    for (size_t i = 1; i < e.elements.size(); ++i) {
+        TypeRef et = checkExpr(*e.elements[i]);
+        // Unify toward a common element type, allowing upcasts in either direction.
+        if (et.isError() || elem.isError()) continue;
+        if (isAssignable(et, elem)) continue;
+        if (isAssignable(elem, et)) { elem = et; continue; }
+        error(e.elements[i]->line, e.elements[i]->col,
+              "array element " + std::to_string(i + 1) + " has type " +
+                  typeRefName(et) + ", incompatible with " + typeRefName(elem));
+    }
+    if (elem.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    return TypeRef::array(elem, static_cast<int>(e.elements.size()));
+}
+
+TypeRef TypeChecker::checkIndex(IndexExpr &e) {
+    TypeRef base = checkExpr(*e.base);
+    TypeRef idx = checkExpr(*e.index);
+    if (!idx.isError() && idx.kind != TypeRef::Kind::Int)
+        error(e.index->line, e.index->col,
+              "an array index must be int, but got " + typeRefName(idx));
+    if (base.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    if (base.isArray() || base.isPointer()) return *base.elem; // an lvalue of the element type
+    error(e.base->line, e.base->col,
+          "cannot index a value of type " + typeRefName(base) +
+              " (only arrays and pointers are indexable)");
+    return TypeRef::prim(TypeRef::Kind::Error);
 }
 
 TypeRef TypeChecker::checkNew(NewExpr &e) {
@@ -665,6 +739,13 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
     if (auto enumTy = tryEnumValue(e)) return *enumTy;
     TypeRef objType = checkExpr(*e.object);
     if (objType.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // `arr.length` is the fixed length of an array, as an int.
+    if (objType.isArray()) {
+        if (e.member == "length") return TypeRef::prim(TypeRef::Kind::Int);
+        error(e.line, e.col,
+              "an array has no member '" + e.member + "' (only 'length')");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     if (objType.isNamed() && reg_->isStruct(objType.name)) {
         const FieldInfo *f = reg_->findStructField(objType.name, e.member);
         if (!f) {

@@ -29,6 +29,8 @@ enum class TokenType {
     Class,
     Struct,
     Enum,
+    Type,       // `type Name = T;` alias
+    Sizeof,     // sizeof(T) / sizeof(expr)
     Abstract,
     Interface,
     Async,

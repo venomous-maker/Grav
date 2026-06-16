@@ -131,6 +131,25 @@ struct CastExpr : Expr {
     ExprPtr operand;
 };
 
+// `sizeof(T)` (a type) or `sizeof(expr)` (a value), yielding the byte size as int.
+struct SizeofExpr : Expr {
+    bool isType = false;  // sizeof(T) vs sizeof(expr)
+    TypeRef target;       // when isType
+    ExprPtr operand;      // when !isType
+};
+
+// `[a, b, c]` — a fixed-length array literal. Its element type and length are
+// inferred from the elements (length == elements.size()).
+struct ArrayLiteralExpr : Expr {
+    std::vector<ExprPtr> elements;
+};
+
+// `base[index]` — element access on an array (or pointer). An lvalue.
+struct IndexExpr : Expr {
+    ExprPtr base;
+    ExprPtr index;
+};
+
 // `object.member`. Used both as a value (field read) and as the callee of a
 // call (method / static method). The checker tags how it resolved.
 enum class MemberKind {
@@ -362,6 +381,14 @@ struct EnumMember {
 struct EnumDecl : Decl {
     std::string name;
     std::vector<EnumMember> members;
+};
+
+// `type Name = T;` — a transparent alias for an existing type. Aliases are fully
+// expanded to their canonical target during symbol resolution, so they leave no
+// trace in the generated C.
+struct TypeAliasDecl : Decl {
+    std::string name;
+    TypeRef target; // as written; canonicalized by the registry
 };
 
 struct Program {

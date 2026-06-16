@@ -1,0 +1,62 @@
+// datastructures.grav — the v0.4 additions:
+//
+//   * macros            #define (object-like and function-like)
+//   * type aliases      `type Name = T;`
+//   * arrays            `T[N]` value arrays, `[..]` literals, indexing, `.length`
+//   * sizeof            sizeof(Type) and sizeof(expr)
+
+#define SIZE 4
+#define DOUBLE(x) ((x) * 2)
+#define AREA(w, h) ((w) * (h))
+
+// Type aliases are transparent: `Celsius` is just `int`, `Row` is `int[3]`.
+type Celsius = int
+type Row = int[3]
+
+struct Point { x: int  y: int }
+type Coord = Point
+
+// Arrays are value types, so they pass and return by value.
+fn sumRow(r: Row) -> int {
+    let total = 0
+    for (i in 0..r.length) { total += r[i] }
+    return total
+}
+
+fn makeSquares(n: int) -> int[SIZE] {
+    let out: int[SIZE] = [0, 0, 0, 0]
+    for (i in 0..n) { out[i] = i * i }
+    return out
+}
+
+fn main() {
+    // macros
+    print(SIZE)                 // 4
+    print(DOUBLE(SIZE))         // 8
+    print(AREA(3, SIZE))        // 12
+
+    // type aliases
+    let temp: Celsius = 21
+    print(temp)                 // 21
+    let here: Coord = Point { x: 2, y: 5 }
+    print(here.x + here.y)      // 7
+
+    // arrays: literal, length, indexing, mutation
+    let primes: int[SIZE] = [2, 3, 5, 7]
+    print(primes.length)        // 4
+    print(primes[2])            // 5
+    primes[0] = 11
+    print(primes[0])            // 11
+
+    // arrays through functions (by value)
+    let r: Row = [10, 20, 30]
+    print(sumRow(r))            // 60
+    let sq = makeSquares(SIZE)
+    print(sq[3])                // 9
+    print(sq.length)            // 4
+
+    // sizeof a type and an expression
+    print(sizeof(int) > 0)      // true
+    print(sizeof(Point) == sizeof(Coord))   // true (alias)
+    print(sizeof(primes) == sizeof(int) * SIZE)  // true
+}

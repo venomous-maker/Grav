@@ -146,6 +146,28 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
             default: return inner;
         }
     }
+    if (auto *e = dynamic_cast<const SizeofExpr *>(&expr)) {
+        if (e->isType) return "sizeof(" + sizeofSpelling(e->target) + ")";
+        return "sizeof(" + emitExpr(*e->operand) + ")";
+    }
+    if (auto *e = dynamic_cast<const ArrayLiteralExpr *>(&expr)) {
+        // `[a, b, c]` -> a compound literal of the backing array struct.
+        std::string out = "(" + cTy(e->type) + "){ { ";
+        const TypeRef elem = e->type.elem ? *e->type.elem : TypeRef::prim(TypeRef::Kind::Int);
+        for (size_t i = 0; i < e->elements.size(); ++i) {
+            if (i) out += ", ";
+            out += emitAs(*e->elements[i], elem);
+        }
+        return out + " } }";
+    }
+    if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
+        std::string base = emitExpr(*e->base);
+        std::string idx = emitExpr(*e->index);
+        // Arrays index through their `.data` member; pointers index directly.
+        if (e->base->type.isArray())
+            return "(" + base + ").data[" + idx + "]";
+        return "(" + base + ")[" + idx + "]";
+    }
     if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
         std::vector<TypeRef> params;
         if (const ClassInfo *ci = reg_->cls(e->className))
@@ -176,6 +198,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         // `EnumType.Member` lowers to the C enum constant.
         if (e->kind == MemberKind::EnumValue)
             return enumConst(e->qualified, e->member);
+        // `arr.length` is the array's fixed length, a compile-time constant.
+        if (e->object->type.isArray() && e->member == "length")
+            return std::to_string(e->object->type.arrayLen);
         // Field read: structs are values (`.`), class instances are pointers (`->`).
         bool valueObj = e->object->type.isNamed() && reg_->isStruct(e->object->type.name);
         std::string obj = emitExpr(*e->object);

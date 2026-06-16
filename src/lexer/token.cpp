@@ -22,6 +22,8 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::Class: return "'class'";
         case TokenType::Struct: return "'struct'";
         case TokenType::Enum: return "'enum'";
+        case TokenType::Type: return "'type'";
+        case TokenType::Sizeof: return "'sizeof'";
         case TokenType::Abstract: return "'abstract'";
         case TokenType::Interface: return "'interface'";
         case TokenType::Async: return "'async'";

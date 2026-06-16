@@ -68,7 +68,140 @@ std::string CodeGen::cTy(const TypeRef &t) const {
     if (t.isFuture()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void));
     // A pointer is the C pointer to the (interface-aware) pointee spelling.
     if (t.isPointer()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void)) + "*";
+    // A fixed-length array is a generated value struct wrapping a C array.
+    if (t.isArray()) return arrayStructName(t);
     return cType(t);
+}
+
+// Named class/struct/enum types lower to a pointer or value; for sizeof we want
+// the underlying object/value, so spell those as the bare struct/enum.
+std::string CodeGen::sizeofSpelling(const TypeRef &t) const {
+    if (t.isNamed() && (reg_->isClass(t.name) || reg_->isStruct(t.name) ||
+                        reg_->isEnum(t.name)))
+        return structName(t.name);
+    return cTy(t);
+}
+
+// ---------------------------------------------------------------------------
+// Array-type collection (a pre-pass so backing structs are emitted up front)
+// ---------------------------------------------------------------------------
+
+void CodeGen::collectType(const TypeRef &t) {
+    if (t.isArray()) {
+        arrayTypes_[arrayStructName(t)] = t;
+        if (t.elem) collectType(*t.elem); // nested arrays / element structs-of-arrays
+    } else if ((t.isPointer() || t.isFuture()) && t.elem) {
+        collectType(*t.elem);
+    }
+}
+
+void CodeGen::collectInExpr(const Expr &expr) {
+    collectType(expr.type);
+    if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
+        collectInExpr(*e->left); collectInExpr(*e->right);
+    } else if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
+        collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const TernaryExpr *>(&expr)) {
+        collectInExpr(*e->cond); collectInExpr(*e->thenExpr); collectInExpr(*e->elseExpr);
+    } else if (auto *e = dynamic_cast<const AsExpr *>(&expr)) {
+        collectType(e->target); collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
+        collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const AwaitExpr *>(&expr)) {
+        collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const AddrOfExpr *>(&expr)) {
+        collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const DerefExpr *>(&expr)) {
+        collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
+        collectInExpr(*e->left); collectInExpr(*e->right);
+    } else if (auto *e = dynamic_cast<const IncDecExpr *>(&expr)) {
+        collectInExpr(*e->target);
+    } else if (auto *e = dynamic_cast<const CastExpr *>(&expr)) {
+        collectType(e->target); collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const SizeofExpr *>(&expr)) {
+        if (e->isType) collectType(e->target);
+        else if (e->operand) collectInExpr(*e->operand);
+    } else if (auto *e = dynamic_cast<const ArrayLiteralExpr *>(&expr)) {
+        for (const auto &el : e->elements) collectInExpr(*el);
+    } else if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
+        collectInExpr(*e->base); collectInExpr(*e->index);
+    } else if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
+        for (const auto &a : e->args) collectInExpr(*a);
+    } else if (auto *e = dynamic_cast<const StructLiteralExpr *>(&expr)) {
+        for (const auto &f : e->fields) collectInExpr(*f.value);
+    } else if (auto *e = dynamic_cast<const CallExpr *>(&expr)) {
+        if (e->callee) collectInExpr(*e->callee);
+        for (const auto &a : e->args) collectInExpr(*a);
+    } else if (auto *e = dynamic_cast<const MemberExpr *>(&expr)) {
+        if (e->object) collectInExpr(*e->object);
+    }
+}
+
+void CodeGen::collectInStmt(const Stmt &stmt) {
+    if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
+        collectType(s->resolvedType);
+        if (s->init) collectInExpr(*s->init);
+    } else if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
+        collectInExpr(*s->target); collectInExpr(*s->value);
+    } else if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
+        if (s->value) collectInExpr(*s->value);
+    } else if (auto *s = dynamic_cast<const ExprStmt *>(&stmt)) {
+        collectInExpr(*s->expr);
+    } else if (auto *s = dynamic_cast<const BlockStmt *>(&stmt)) {
+        collectInBlock(s->block);
+    } else if (auto *s = dynamic_cast<const IfStmt *>(&stmt)) {
+        collectInExpr(*s->cond); collectInBlock(s->thenBlock);
+        if (s->elseStmt) collectInStmt(*s->elseStmt);
+    } else if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
+        collectInExpr(*s->cond); collectInBlock(s->body);
+    } else if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
+        collectInBlock(s->body); collectInExpr(*s->cond);
+    } else if (auto *s = dynamic_cast<const ForStmt *>(&stmt)) {
+        if (s->init) collectInStmt(*s->init);
+        if (s->cond) collectInExpr(*s->cond);
+        if (s->update) collectInStmt(*s->update);
+        collectInBlock(s->body);
+    } else if (auto *s = dynamic_cast<const ForInStmt *>(&stmt)) {
+        collectInExpr(*s->lo); collectInExpr(*s->hi); collectInBlock(s->body);
+    } else if (auto *s = dynamic_cast<const SwitchStmt *>(&stmt)) {
+        collectInExpr(*s->subject);
+        for (const auto &c : s->cases) {
+            for (const auto &v : c.values) collectInExpr(*v);
+            collectInBlock(c.body);
+        }
+        if (s->hasDefault) collectInBlock(s->defaultBody);
+    }
+}
+
+void CodeGen::collectInBlock(const Block &block) {
+    for (const auto &s : block.statements) collectInStmt(*s);
+}
+
+void CodeGen::collectArrayTypes() {
+    auto sig = [&](const std::vector<Param> &ps, const TypeRef &ret) {
+        for (const auto &p : ps) collectType(p.type);
+        collectType(ret);
+    };
+    for (const auto &declPtr : program_->decls) {
+        Decl *d = declPtr.get();
+        if (auto *st = dynamic_cast<const StructDecl *>(d)) {
+            for (const auto &f : st->fields) collectType(f.type);
+        } else if (auto *c = dynamic_cast<const ClassDecl *>(d)) {
+            for (const auto &f : c->fields) collectType(f.type);
+            if (c->constructor.present) {
+                for (const auto &p : c->constructor.params) collectType(p.type);
+                collectInBlock(c->constructor.body);
+            }
+            for (const auto &m : c->methods) {
+                sig(m.params, m.returnType);
+                if (m.hasBody) collectInBlock(m.body);
+            }
+        } else if (auto *fn = dynamic_cast<const FunctionDecl *>(d)) {
+            sig(fn->params, fn->returnType);
+            collectInBlock(fn->body);
+        }
+    }
 }
 
 // Enums become real C enum typedefs. They have no type dependencies, so they
@@ -102,6 +235,7 @@ std::vector<FieldInfo> CodeGen::collectFields(const std::string &classFq) const 
 }
 
 void CodeGen::emitStructs() {
+    collectArrayTypes(); // discover array types so their backing structs precede use
     // Forward typedefs so class/struct names can appear anywhere. Interfaces have
     // no storage of their own, so they alias the common object header.
     for (const auto &declPtr : program_->decls) {
@@ -127,25 +261,44 @@ void CodeGen::emitStructs() {
     }
 }
 
+// Emits plain value `struct` types *and* the backing structs for fixed-length
+// array types, both by value. A value struct stores struct- and array-typed
+// fields inline, so every such dependency must be fully defined first; this
+// walks the value-containment graph and emits in dependency order.
 void CodeGen::emitValueStructs() {
-    std::unordered_set<std::string> done;
-    std::function<void(const std::string &)> emit = [&](const std::string &fq) {
-        if (done.count(fq)) return;
-        done.insert(fq);
+    std::unordered_set<std::string> done; // keyed by C struct name
+    std::function<void(const TypeRef &)> ensure;
+    std::function<void(const std::string &)> emitStructFq = [&](const std::string &fq) {
+        std::string key = structName(fq);
+        if (done.count(key)) return;
+        done.insert(key);
         const StructInfo *si = reg_->strct(fq);
         if (!si) return;
-        // Emit struct-typed (by-value) dependencies first.
-        for (const auto &f : si->fields)
-            if (f.type.isNamed() && reg_->isStruct(f.type.name)) emit(f.type.name);
-        structs_ += "struct " + structName(fq) + " {\n";
+        for (const auto &f : si->fields) ensure(f.type);
+        structs_ += "struct " + key + " {\n";
         if (si->fields.empty())
             structs_ += "    char __empty; /* C has no zero-size structs */\n";
         for (const auto &f : si->fields)
             structs_ += "    " + cTy(f.type) + " " + f.name + ";\n";
         structs_ += "};\n\n";
     };
+    std::function<void(const TypeRef &)> emitArray = [&](const TypeRef &t) {
+        std::string key = arrayStructName(t);
+        if (done.count(key)) return;
+        done.insert(key);
+        if (t.elem) ensure(*t.elem);
+        structs_ += "typedef struct " + key + " {\n    " + cTy(*t.elem) + " data[" +
+                    std::to_string(t.arrayLen) + "];\n} " + key + ";\n\n";
+    };
+    ensure = [&](const TypeRef &t) {
+        // Only by-value containment forces an ordering: value structs and arrays.
+        // Pointers/classes/interfaces only need the (already-emitted) forward typedef.
+        if (t.isArray()) emitArray(t);
+        else if (t.isNamed() && reg_->isStruct(t.name)) emitStructFq(t.name);
+    };
     for (const auto &declPtr : program_->decls)
-        if (auto *st = dynamic_cast<const StructDecl *>(declPtr.get())) emit(st->fqName);
+        if (auto *st = dynamic_cast<const StructDecl *>(declPtr.get())) emitStructFq(st->fqName);
+    for (const auto &[key, t] : arrayTypes_) emitArray(t);
 }
 
 void CodeGen::emitStruct(const std::string &classFq) {

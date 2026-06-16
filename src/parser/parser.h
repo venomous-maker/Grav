@@ -42,6 +42,7 @@ private:
     DeclPtr parseInterface();
     DeclPtr parseStruct();
     DeclPtr parseEnum();
+    DeclPtr parseTypeAlias();
     DeclPtr parseFunction(bool isAsync);
     MethodDecl parseMethod(bool inInterface);
     ConstructorDecl parseConstructor();
@@ -84,6 +85,9 @@ private:
     ExprPtr parsePostfix();
     ExprPtr parsePrimary();
     ExprPtr parseStructLiteral();
+    // True when the parenthesized content at the current '(' (for sizeof) is a
+    // type rather than an expression.
+    bool looksLikeTypeArg() const;
     bool looksLikeStructLiteral() const;
     bool looksLikeCast() const; // C-style `(Type)value` at the current '('
     std::vector<ExprPtr> parseArguments();

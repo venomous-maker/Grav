@@ -14,6 +14,9 @@ std::string typeRefName(const TypeRef &t) {
             return "Future<" + (t.elem ? typeRefName(*t.elem) : "?") + ">";
         case TypeRef::Kind::Pointer:
             return (t.elem ? typeRefName(*t.elem) : "?") + "*";
+        case TypeRef::Kind::Array:
+            return (t.elem ? typeRefName(*t.elem) : "?") + "[" +
+                   std::to_string(t.arrayLen) + "]";
         case TypeRef::Kind::Null: return "null";
         case TypeRef::Kind::Error: return "<error>";
     }

@@ -1,5 +1,7 @@
 #include "parser/parser.h"
 
+#include <charconv>
+
 #include "common/diagnostics.h"
 
 namespace grav {
@@ -93,6 +95,7 @@ void Parser::parseTopLevel(Program &program) {
         case TokenType::Interface: program.decls.push_back(parseInterface()); return;
         case TokenType::Struct: program.decls.push_back(parseStruct()); return;
         case TokenType::Enum: program.decls.push_back(parseEnum()); return;
+        case TokenType::Type: program.decls.push_back(parseTypeAlias()); return;
         case TokenType::Fn: program.decls.push_back(parseFunction(false)); return;
         case TokenType::Async:
             advance(); // 'async'
@@ -102,7 +105,7 @@ void Parser::parseTopLevel(Program &program) {
             return;
         default:
             fail(peek(), std::string("expected a top-level declaration "
-                                     "(namespace, class, struct, enum, interface, fn, "
+                                     "(namespace, class, struct, enum, type, interface, fn, "
                                      "async fn, or abstract class), but found ") +
                              tokenTypeName(peek().type));
     }
@@ -147,8 +150,24 @@ TypeRef Parser::parseType(const char *context) {
             fail(t, std::string("expected a type ") + context + ", but found " +
                         tokenTypeName(t.type));
     }
-    // Trailing `*` makes a pointer type (`int*`, `Point**`).
-    while (matchToken(TokenType::Star)) base = TypeRef::pointer(base);
+    // Postfix type operators: `*` makes a pointer (`int*`, `Point**`); `[N]` makes
+    // a fixed-length array (`int[8]`, `Point[3]`). They compose left-to-right.
+    for (;;) {
+        if (matchToken(TokenType::Star)) {
+            base = TypeRef::pointer(base);
+        } else if (check(TokenType::LBracket)) {
+            advance(); // '['
+            const Token &n = expect(TokenType::IntLiteral,
+                                    "as the array length in a `T[N]` type");
+            long long len = 0;
+            std::from_chars(n.lexeme.data(), n.lexeme.data() + n.lexeme.size(), len);
+            if (len <= 0) fail(n, "array length must be a positive integer");
+            expect(TokenType::RBracket, "to close the array length");
+            base = TypeRef::array(base, static_cast<int>(len));
+        } else {
+            break;
+        }
+    }
     return base;
 }
 
@@ -235,6 +254,19 @@ DeclPtr Parser::parseEnum() {
     }
     expect(TokenType::RBrace, "to close the enum body");
     return en;
+}
+
+DeclPtr Parser::parseTypeAlias() {
+    const Token &kw = expect(TokenType::Type, "to begin a type alias");
+    auto alias = std::make_unique<TypeAliasDecl>();
+    alias->line = kw.line;
+    alias->col = kw.col;
+    alias->name = expect(TokenType::Identifier, "after 'type'").lexeme;
+    alias->fqName = qualify(alias->name);
+    expect(TokenType::Assign, "after the alias name");
+    alias->target = parseType("as the aliased type");
+    matchToken(TokenType::Semicolon); // optional terminator
+    return alias;
 }
 
 DeclPtr Parser::parseClass(bool isAbstract) {

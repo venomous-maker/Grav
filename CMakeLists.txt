@@ -10,6 +10,7 @@ add_executable(gravc
         src/ast/ast.cpp
         src/lexer/token.cpp
         src/lexer/lexer.cpp
+        src/lexer/preprocess.cpp
         src/parser/parser_core.cpp
         src/parser/parser_stmt.cpp
         src/parser/parser_expr.cpp
