@@ -41,9 +41,14 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Imports](#imports)
   - [Runtime type info (RTTI)](#runtime-type-info-rtti)
   - [Built-ins](#built-ins)
+  - [String interpolation](#string-interpolation)
+  - [Command-line arguments & stdin](#command-line-arguments--stdin)
+  - [Inline C (`%{ … %}`)](#inline-c---)
+  - [Decorators & `export`](#decorators--export)
   - [Comments](#comments)
   - [Diagnostics & warnings](#diagnostics--warnings)
 - [How Grav lowers to C](#how-grav-lowers-to-c)
+- [Editor support (Neovim)](#editor-support-neovim)
 - [Project layout](#project-layout)
 - [Building the compiler](#building-the-compiler)
 - [Roadmap / not yet implemented](#roadmap--not-yet-implemented)
@@ -639,11 +644,74 @@ print(isInstance(a, zoo.Animal)) // true  (walks the base chain)
 
 ### Built-ins
 
-| Built-in                  | Description                                            |
-|---------------------------|--------------------------------------------------------|
-| `print(x)`                | Prints an `int`/`float`/`bool`/`string` and a newline. |
-| `typename(obj)`           | Returns the runtime class name as a `string`.          |
-| `isInstance(obj, Type)`   | `true` if `obj` is a `Type` or a subclass of it.       |
+| Built-in                  | Description                                                  |
+|---------------------------|--------------------------------------------------------------|
+| `print(x)`                | Prints an `int`/`float`/`bool`/`string` and a newline.       |
+| `str(x)`                  | Converts an `int`/`float`/`bool`/`string`/enum to a `string`.|
+| `typename(obj)`           | Returns the runtime class name as a `string`.                |
+| `isInstance(obj, Type)`   | `true` if `obj` is a `Type` or a subclass of it.             |
+| `input()`                 | Reads one line from stdin (without the newline) as a `string`.|
+| `argc()`                  | Number of command-line arguments (incl. the program name).   |
+| `argv(i)`                 | The `i`-th command-line argument as a `string` (`""` if OOB). |
+
+### String interpolation
+
+Inside a string literal, `${ expr }` splices a value, converted with `str()`, so
+any printable type works. Write `\$` for a literal dollar sign.
+
+```grav
+fn main() {
+    let name = "Ada"; let n = 42;
+    print("hello ${name}, answer = ${n}, doubled = ${n * 2}");
+    // hello Ada, answer = 42, doubled = 84
+}
+```
+
+### Command-line arguments & stdin
+
+```grav
+fn main() {
+    print("got ${argc()} args; first is ${argv(0)}");
+    let line = input();              // read a line from stdin
+    print("you said: ${line}");
+}
+```
+
+### Inline C (`%{ … %}`)
+
+An escape hatch for dropping to C. It works in three positions, and Grav values
+and C values flow both ways. (Use sparingly — it shrinks as the language grows.)
+
+- **Top level** — verbatim C for `#include`s, globals, and helper functions.
+- **Statement** — raw C statements that can read/write Grav locals by name.
+- **Expression** — `%{ c_expr %} as T` (or in a typed `let`) yields a value of
+  type `T`, reading C globals/locals or calling C functions.
+
+```grav
+%{
+static int c_total = 0;
+int c_add(int a, int b) { c_total++; return a + b; }
+%}
+
+fn main() {
+    let n = 5;
+    %{ printf("C sees n=%d\n", n); %};       // Grav local -> C
+    let sum: int = %{ c_add(2, 3) %} as int; // C result -> Grav
+    print("sum=${sum} calls=${%{ c_total %} as int}");
+}
+```
+
+### Decorators & `export`
+
+`@Name` decorators and an `export` modifier may precede any top-level declaration.
+They are accepted as metadata (every top-level name is already visible across
+modules), so they document intent without changing behaviour.
+
+```grav
+@Entity
+@table("users")
+export class User { public name: string }
+```
 
 ### Comments
 
@@ -729,30 +797,39 @@ cmake --build build
 
 ---
 
+## Editor support (Neovim)
+
+A LazyVim-ready Neovim integration lives in [`editors/nvim/`](editors/nvim/):
+syntax highlighting (keywords, `${}` interpolation, `%{ %}` C blocks, decorators),
+filetype detection, and `<leader>mr` / `<leader>mc` build-and-run keymaps. It also
+registers the [`gravc` MCP server](mcp_server/) with `mcphub.nvim`. The MCP server
+installs the latest build as `grav` in `~/.local/bin` (override the dir with
+`GRAV_DIR`). See [`editors/nvim/README.md`](editors/nvim/README.md).
+
+---
+
 ## Roadmap / not yet implemented
 
-`v0.4` added fixed-length [arrays](#arrays) (`T[N]`, literals, indexing, `.length`),
-transparent [type aliases](#type-aliases) (`type Name = T`), a `#define`
+`v0.5` added [string interpolation](#string-interpolation), the
+[`str`/`input`/`argc`/`argv`](#built-ins) built-ins, an
+[inline-C escape hatch](#inline-c---) (`%{ … %}`), and
+[decorators + `export`](#decorators--export). `v0.4` added fixed-length
+[arrays](#arrays), transparent [type aliases](#type-aliases), a `#define`
 [macro](#macros) preprocessor, and [`sizeof`](#sizeof). `v0.3` added enums, the
 expanded operator set, ranges, `null` + `??` + `?.`, `as`/`is` + C-style casts,
-pointers, optional `;` terminators, and async/await (see the language tour above).
-The lexer also recognizes a forward-looking token set (`=>`, `::`, `@`, `...`) so the
-following features can be layered on. They are **not** implemented yet — using them
-is a parse/type error today:
+pointers, optional `;` terminators, and async/await. The following are **not**
+implemented yet — using them is a parse/type error today:
 
+- **Generics / monomorphization** — `class Box<T> { … }`. This is the keystone for
+  the next group, and the recommended next milestone.
 - **Dynamic / generic collections** — `list<T>` / `map<K,V>` and set literals like
   `#{1, 2, 3}` (needs generics plus a small C runtime). Fixed-length `T[N]` arrays
   *are* implemented — see [Arrays](#arrays).
-- **Generics / monomorphization** — `class Box<T> { … }`.
-- **String interpolation** — `"hello ${name}"`.
-- **Decorators / attributes** — `@Entity class User {}`.
-- **Variadics** — `fn print(...args)`.
-- **Modules** — `import` / `export` keywords (file-level `import "path"` *does* work
-  today via the driver — see [Imports](#imports)).
-- **Exceptions** — `try` / `catch` / `throw`.
+- **Variadics** — `fn sum(...args)` (lowers naturally onto arrays).
+- **Exceptions** — `try` / `catch` / `throw` (needs a small unwinding runtime).
 - **Traits / mixins.** (Transparent `type` aliases *are* implemented.)
 - **Static fields & global `const`** — class-level `static x: T = …` lowered to C
-  globals. (Local `const` *is* implemented.)
+  globals. (Local `const` *is* implemented; inline C globals are a workaround.)
 - **Multiple class inheritance** — Grav supports a single base class plus multiple
   interfaces. True multiple *class* inheritance doesn't map cleanly onto C's struct
   prefix / single-vtable model; use interfaces (or composition) for multiple supertypes.
