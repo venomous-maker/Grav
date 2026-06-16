@@ -17,13 +17,19 @@ std::string CodeGen::generate(const Program &program, const Registry &reg) {
     emitStructs();
     emitVTableTypes();
     emitPrototypes(program);
+    // Top-level inline C (`%{ ... %}`): emitted after prototypes so it can use
+    // generated types and declare globals/helpers the rest of the program shares.
+    for (const auto &declPtr : program.decls)
+        if (auto *cb = dynamic_cast<const CBlockDecl *>(declPtr.get()))
+            cblocks_ += "/* inline C */\n" + cb->code + "\n";
+    if (!cblocks_.empty()) cblocks_ += "\n";
     emitVTableInstances();
     emitTypeInfos();
     emitInterfaceTables();
     emitDefinitions(program);
     emitMainWrapper();
 
-    return typedefs_ + structs_ + vtableTypes_ + protos_ + vtables_ + defs_;
+    return typedefs_ + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ + defs_;
 }
 
 void CodeGen::emitPrelude() {
@@ -55,6 +61,28 @@ void CodeGen::emitPrelude() {
         "    const GravTypeInfo* t = ((const struct GravObject*)obj)->__type;\n"
         "    while (t) { if (t == want) return true; t = t->base; }\n"
         "    return false;\n"
+        "}\n\n"
+        "/* Value-to-string helpers (used by string interpolation / str()). */\n"
+        "static const char* grav_int_to_str(int v) {\n"
+        "    char* b = (char*)malloc(16); snprintf(b, 16, \"%d\", v); return b;\n"
+        "}\n"
+        "static const char* grav_float_to_str(double v) {\n"
+        "    char* b = (char*)malloc(32); snprintf(b, 32, \"%g\", v); return b;\n"
+        "}\n\n"
+        "/* Command-line arguments and stdin. */\n"
+        "static int grav_argc = 0;\n"
+        "static char** grav_argv = 0;\n"
+        "static const char* grav_argv_at(int i) {\n"
+        "    return (i >= 0 && i < grav_argc) ? grav_argv[i] : \"\";\n"
+        "}\n"
+        "static const char* grav_input(void) {\n"
+        "    size_t cap = 128, n = 0; char* b = (char*)malloc(cap); int c;\n"
+        "    while ((c = getchar()) != EOF && c != '\\n') {\n"
+        "        if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }\n"
+        "        b[n++] = (char)c;\n"
+        "    }\n"
+        "    if (c == EOF && n == 0) { free(b); return \"\"; }\n"
+        "    b[n] = 0; return b;\n"
         "}\n\n";
 }
 
