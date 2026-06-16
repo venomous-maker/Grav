@@ -1,0 +1,23 @@
+// 02 — functions: parameters, return types, and recursion.
+
+fn square(n: int) -> int { return n * n; }
+
+fn max(a: int, b: int) -> int {
+    if (a > b) { return a; }
+    return b;
+}
+
+// no return type means it returns void
+fn banner(title: string) { print("== ${title} =="); }
+
+fn factorial(n: int) -> int {
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
+}
+
+fn main() {
+    banner("functions");
+    print(square(6));        // 36
+    print(max(4, 9));        // 9
+    print(factorial(5));     // 120
+}
