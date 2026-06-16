@@ -1,0 +1,118 @@
+// comprehensive.grav — a tour of (almost) every Grav feature in one program.
+// Build & run:  gravc examples/comprehensive.grav --emit bin -o /tmp/comp && /tmp/comp
+//
+// Covers: macros, type aliases, enums, structs/classes/interfaces/abstract,
+// inheritance + interface dispatch, static methods, auto getters, arrays + sizeof,
+// the full operator set, ternary, ranges, null/??/?., pointers, as/is + casts,
+// async/await, string interpolation, str()/argc()/argv(), decorators + export,
+// and the inline-C escape hatch.
+
+// ---- macros (preprocessor) ----
+#define LANES 4
+#define SQUARE(x) ((x) * (x))
+
+// ---- top-level inline C: helpers + state usable from Grav (no extra libs) ----
+%{
+static int c_calls = 0;
+int c_isqrt(int n) { c_calls++; int r = 0; while ((r + 1) * (r + 1) <= n) r++; return r; }
+%}
+
+// ---- type aliases (transparent) ----
+type Score = int
+type Lane  = int[LANES]
+
+// ---- enums ----
+enum Suit { Clubs, Diamonds, Hearts, Spades }
+
+fn suitName(s: Suit) -> string {
+    switch (s) {
+        case Suit.Clubs:    { return "clubs"; }
+        case Suit.Diamonds: { return "diamonds"; }
+        case Suit.Hearts:   { return "hearts"; }
+        default:            { return "spades"; }
+    }
+}
+
+// ---- value struct + pointer helper ----
+struct Point { x: int  y: int }
+
+fn shift(p: Point*, dx: int) { p->x = p->x + dx; }
+
+// ---- interface + abstract base + concrete subclasses ----
+interface Greeter { fn greet() -> string }
+
+abstract class Animal implements Greeter {
+    protected name: string
+    constructor(name: string) { self.name = name; }
+    public fn greet() -> string { return "I am ${self.name}"; }
+    abstract fn sound() -> string
+}
+
+class Dog extends Animal {
+    constructor(name: string) { self.name = name; }
+    public fn sound() -> string { return "woof"; }
+}
+
+@Entity
+export class Counter {
+    private n: int
+    constructor() { self.n = 0; }
+    public fn bump(by: int) { self.n = self.n + by; }
+    static fn zero() -> Counter { return new Counter(); }
+}
+
+// ---- async (eager futures) ----
+async fn area(w: int, h: int) -> int { return w * h; }
+
+async fn main() {
+    // macros + arithmetic + bitwise + shifts + compound + ternary
+    let s = SQUARE(6);                       // 36
+    let bits = 0;
+    bits |= 1; bits |= 4;                     // 5
+    bits <<= 1;                               // 10
+    let parity = s % 2 == 0 ? "even" : "odd";
+    print("square=${s} bits=${bits} mod=${17 % 5} parity=${parity}");
+
+    // arrays + indexing + .length + sizeof
+    let lane: Lane = [10, 20, 30, 40];
+    lane[1] = 25;
+    let total = 0;
+    for (i in 0..lane.length) { total += lane[i]; }
+    print("lane total=${total} sizeof(Lane)=${sizeof(Lane)}");
+
+    // enums + switch
+    print("suit=${suitName(Suit.Hearts)} ordinal=${int(Suit.Spades)}");
+
+    // pointers: address-of, write-through, arrow access
+    let p = Point { x: 3, y: 4 };
+    shift(&p, 7);
+    print("point=(${p.x}, ${p.y})");          // (10, 4)
+
+    // null + ?? + ?.
+    let g: Greeter = null;
+    let who = g ?? new Dog("Rex");
+    print(who.greet());                       // I am Rex
+    let maybe: Dog = null;
+    print("maybe sound=${maybe?.sound()}");   // (empty: null-guarded)
+
+    // inheritance / interface dispatch / as / is
+    let a: Animal = new Dog("Fido");
+    print("${a.greet()} says ${a.sound()}");
+    print("is Dog? ${(a as Dog) is Dog}");
+
+    // static method + auto getter + mutation
+    let c = Counter.zero();
+    c.bump(40); c.bump(2);
+    print("counter=${c.get_n()}");            // 42
+
+    // inline C expression: value flows C -> Grav (sequenced so c_calls updates first)
+    let root: int = %{ c_isqrt(144) %} as int;
+    let calls = %{ c_calls %} as int;
+    print("isqrt(144)=${root} c_calls=${calls}");   // 12, 1
+
+    // async pipeline
+    print("area=${await area(6, 7)}");        // 42
+
+    // command-line arguments
+    print("argc=${argc()} arg0=${argv(0)}");
+}
