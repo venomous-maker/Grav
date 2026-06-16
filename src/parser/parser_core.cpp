@@ -307,6 +307,7 @@ DeclPtr Parser::parseInterface() {
     iface->col = kw.col;
     iface->name = expect(TokenType::Identifier, "after 'interface'").lexeme;
     iface->fqName = qualify(iface->name);
+    iface->typeParams = parseTypeParams(); // optional <T, ...>
     expect(TokenType::LBrace, "to open the interface body");
     while (!check(TokenType::RBrace) && !atEnd()) {
         iface->methods.push_back(parseMethod(/*inInterface=*/true));
@@ -377,10 +378,13 @@ DeclPtr Parser::parseClass(bool isAbstract) {
 
     if (matchToken(TokenType::Extends)) {
         cls->baseName = parseQualifiedName("after 'extends'");
+        if (check(TokenType::Less)) cls->baseArgs = parseTypeArgs(); // extends Base<T>
     }
     if (matchToken(TokenType::Implements)) {
         do {
             cls->interfaceNames.push_back(parseQualifiedName("after 'implements'"));
+            cls->interfaceArgs.push_back(check(TokenType::Less) ? parseTypeArgs()
+                                                                : std::vector<TypeRef>{});
         } while (matchToken(TokenType::Comma));
     }
 
