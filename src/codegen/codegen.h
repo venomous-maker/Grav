@@ -65,6 +65,9 @@ private:
     void emitBlock(const Block &block);
     void emitStmt(const Stmt &stmt);
     void emitIf(const IfStmt &s);        // if / else-if / else chain
+    void emitTry(const TryStmt &s);      // try / catch / finally via setjmp
+    int tryCounter_ = 0;
+    std::vector<std::string> tryTops_;   // enclosing try jmp-top var names (for returns)
     std::string emitAssign(const AssignStmt &s) const; // plain or compound assignment
     void emitBraced(const Block &block); // "{\n …\n}" at the current indent
     std::string inlineSimple(const Stmt *s) const; // render a for-header clause
