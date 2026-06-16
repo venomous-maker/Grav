@@ -29,6 +29,8 @@ StmtPtr Parser::parseStatement() {
         case TokenType::For: return parseFor();
         case TokenType::Switch:
         case TokenType::Match: return parseSwitch();
+        case TokenType::Try: return parseTry();
+        case TokenType::Throw: return parseThrow();
         case TokenType::Break: {
             const Token &t = advance();
             auto s = std::make_unique<BreakStmt>();
@@ -50,6 +52,38 @@ StmtPtr Parser::parseStatement() {
         }
         default: return parseExprOrAssign();
     }
+}
+
+StmtPtr Parser::parseThrow() {
+    const Token &kw = advance(); // 'throw'
+    auto s = std::make_unique<ThrowStmt>();
+    s->line = kw.line; s->col = kw.col;
+    s->value = parseExpression();
+    matchToken(TokenType::Semicolon);
+    return s;
+}
+
+StmtPtr Parser::parseTry() {
+    const Token &kw = advance(); // 'try'
+    auto s = std::make_unique<TryStmt>();
+    s->line = kw.line; s->col = kw.col;
+    s->tryBlock = parseBlock();
+    if (matchToken(TokenType::Catch)) {
+        s->hasCatch = true;
+        expect(TokenType::LParen, "after 'catch'");
+        s->catchVar = expect(TokenType::Identifier, "as the caught variable").lexeme;
+        expect(TokenType::Colon, "after the caught variable");
+        s->catchType = parseType("for the caught exception");
+        expect(TokenType::RParen, "after the catch type");
+        s->catchBlock = parseBlock();
+    }
+    if (matchToken(TokenType::Finally)) {
+        s->hasFinally = true;
+        s->finallyBlock = parseBlock();
+    }
+    if (!s->hasCatch && !s->hasFinally)
+        fail(kw, "'try' requires a 'catch' or 'finally' clause");
+    return s;
 }
 
 StmtPtr Parser::parseIf() {
