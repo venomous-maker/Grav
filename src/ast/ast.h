@@ -41,6 +41,14 @@ struct StringLiteralExpr : Expr {
 // `null` — the null reference, assignable to any class/interface type.
 struct NullLiteralExpr : Expr {};
 
+// `%{ ... %}` — an inline C escape hatch. As an expression it emits the raw C
+// verbatim; its type comes from context (a typed `let` or an `as Type`). As a
+// statement (an ExprStmt wrapping it) it emits raw C statements that can read and
+// write Grav locals by name. At top level it becomes a CBlockDecl.
+struct CBlockExpr : Expr {
+    std::string code;
+};
+
 // A bare name: a local variable, parameter, or the leading segment of a
 // qualified reference (class / namespace) that the checker resolves later.
 struct NameExpr : Expr {
@@ -340,6 +348,10 @@ struct ConstructorDecl {
 struct Decl {
     int line = 0, col = 0;
     std::string fqName; // fully-qualified, filled during parse from namespace
+    // `@Name` decorators and `export` modifier (metadata; no runtime effect —
+    // every top-level name is already visible across modules).
+    std::vector<std::string> decorators;
+    bool exported = false;
     virtual ~Decl() = default;
 };
 using DeclPtr = std::unique_ptr<Decl>;
@@ -389,6 +401,12 @@ struct EnumDecl : Decl {
 struct TypeAliasDecl : Decl {
     std::string name;
     TypeRef target; // as written; canonicalized by the registry
+};
+
+// A top-level `%{ ... %}` block: verbatim C emitted into the translation unit
+// (for #includes, globals, and helper functions/macros).
+struct CBlockDecl : Decl {
+    std::string code;
 };
 
 struct Program {
