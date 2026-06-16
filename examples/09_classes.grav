@@ -1,0 +1,28 @@
+// 09 — classes: constructors, methods, access modifiers, auto getters,
+// static fields, and module-level globals.
+
+const BONUS: int = 10
+
+class Account {
+    private balance: int          // private -> auto get_balance() / set_balance()
+    readonly owner: string
+    static opened: int = 0
+    constructor(owner: string) {
+        self.owner = owner;
+        self.balance = 0;
+        Account.opened = Account.opened + 1;
+    }
+    public fn deposit(n: int) { self.balance = self.balance + n; }
+    public fn bonus() { self.balance = self.balance + BONUS; }
+}
+
+fn main() {
+    let a = new Account("Ada");
+    a.deposit(50);
+    a.bonus();
+    print(a.get_balance());        // 60 (auto getter for private balance)
+    print(a.owner);                // Ada (readonly public field)
+
+    let b = new Account("Babbage");
+    print(Account.opened);         // 2 (static field shared across instances)
+}
