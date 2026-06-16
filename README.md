@@ -30,6 +30,8 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Type aliases](#type-aliases)
   - [Macros](#macros)
   - [sizeof](#sizeof)
+  - [Generics](#generics)
+  - [Globals & static fields](#globals--static-fields)
   - [Classes](#classes)
   - [Access modifiers & `readonly`](#access-modifiers--readonly)
   - [Auto getters/setters](#auto-getterssetters)
@@ -479,6 +481,51 @@ fn main() {
 }
 ```
 
+### Generics
+
+`struct` and `fn` may take type parameters `<T, …>`. Each distinct instantiation is
+**monomorphized** into its own concrete struct/function in the generated C (no
+runtime type erasure). Type arguments are explicit: `Box<int>` in type positions,
+and the turbofish `id::<int>(x)` on a call. See
+[generics.grav](examples/generics.grav).
+
+```grav
+struct Box<T> { value: T }
+struct Pair<K, V> { key: K  value: V }
+
+fn identity<T>(x: T) -> T { return x; }
+
+fn main() {
+    let b = Box<int> { value: 42 };
+    print(b.value);                       // 42
+    let p = Pair<string, int> { key: "age", value: 30 };
+    print(identity::<string>(p.key));     // age
+}
+```
+
+(Generic *classes* — methods + per-instantiation vtables — are not yet supported.)
+
+### Globals & static fields
+
+A module-level `const`/`let` is a global; a class `static x: T = value` is a
+class-level field accessed as `Class.x`. Both need an explicit type and a constant
+initializer, and lower to C globals. `const`/`readonly` ones are immutable. See
+[globals.grav](examples/globals.grav).
+
+```grav
+const PI: float = 3.14159
+let hits: int = 0
+
+class Config { static version: int = 1 }
+
+fn main() {
+    hits += 1;
+    print(PI * 2.0);
+    Config.version = 2;
+    print(Config.version);                // 2
+}
+```
+
 ### Classes
 
 ```grav
@@ -810,9 +857,11 @@ installs the latest build as `grav` in `~/.local/bin` (override the dir with
 
 ## Roadmap / not yet implemented
 
-`v0.5` added [string interpolation](#string-interpolation), the
-[`str`/`input`/`argc`/`argv`](#built-ins) built-ins, an
-[inline-C escape hatch](#inline-c---) (`%{ … %}`), and
+`v0.6` added **generic structs and functions** (monomorphized — see
+[generics.grav](examples/generics.grav)) and **module-level globals + class static
+fields** (see [globals.grav](examples/globals.grav)). `v0.5` added [string
+interpolation](#string-interpolation), the [`str`/`input`/`argc`/`argv`](#built-ins)
+built-ins, an [inline-C escape hatch](#inline-c---) (`%{ … %}`), and
 [decorators + `export`](#decorators--export). `v0.4` added fixed-length
 [arrays](#arrays), transparent [type aliases](#type-aliases), a `#define`
 [macro](#macros) preprocessor, and [`sizeof`](#sizeof). `v0.3` added enums, the
@@ -820,16 +869,16 @@ expanded operator set, ranges, `null` + `??` + `?.`, `as`/`is` + C-style casts,
 pointers, optional `;` terminators, and async/await. The following are **not**
 implemented yet — using them is a parse/type error today:
 
-- **Generics / monomorphization** — `class Box<T> { … }`. This is the keystone for
-  the next group, and the recommended next milestone.
+- **Generic classes** — `class Box<T> { … }` (methods + per-instantiation vtables).
+  Generic *structs* and *functions* `fn id<T>(x: T)` *are* implemented (via
+  turbofish `id::<int>(x)`); generic classes are the remaining piece and the
+  keystone for collections.
 - **Dynamic / generic collections** — `list<T>` / `map<K,V>` and set literals like
-  `#{1, 2, 3}` (needs generics plus a small C runtime). Fixed-length `T[N]` arrays
-  *are* implemented — see [Arrays](#arrays).
+  `#{1, 2, 3}` (need generic classes plus a small C runtime). Fixed-length `T[N]`
+  arrays *are* implemented — see [Arrays](#arrays).
 - **Variadics** — `fn sum(...args)` (lowers naturally onto arrays).
 - **Exceptions** — `try` / `catch` / `throw` (needs a small unwinding runtime).
 - **Traits / mixins.** (Transparent `type` aliases *are* implemented.)
-- **Static fields & global `const`** — class-level `static x: T = …` lowered to C
-  globals. (Local `const` *is* implemented; inline C globals are a workaround.)
 - **Multiple class inheritance** — Grav supports a single base class plus multiple
   interfaces. True multiple *class* inheritance doesn't map cleanly onto C's struct
   prefix / single-vtable model; use interfaces (or composition) for multiple supertypes.
