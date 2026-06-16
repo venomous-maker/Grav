@@ -81,7 +81,10 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
         if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
             checkFunction(*fn);
         } else if (auto *cls = dynamic_cast<ClassDecl *>(d)) {
+            checkStaticFields(*cls);
             checkClass(*cls);
+        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
+            checkGlobal(*g);
         }
         // interfaces have no bodies to check
     }
@@ -92,6 +95,39 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
     std::sort(errors_.begin(), errors_.end(), byLoc);
     std::sort(warnings_.begin(), warnings_.end(), byLoc);
     return errors_;
+}
+
+void TypeChecker::checkGlobal(GlobalVarDecl &g) {
+    currentClass_.clear();
+    currentNs_ = Registry::namespaceOf(g.fqName);
+    inConstructor_ = false; inStatic_ = true; inAsync_ = false;
+    const GlobalInfo *gi = reg_->global(g.fqName);
+    TypeRef declared = gi ? gi->type : g.declaredType;
+    g.resolvedType = declared;
+    pushScope();
+    TypeRef initT = checkExpr(*g.init);
+    popScope();
+    if (!isAssignable(initT, declared))
+        error(g.init->line, g.init->col, "cannot initialize global '" + g.name +
+                                             "' of type " + typeRefName(declared) +
+                                             " with a value of type " + typeRefName(initT));
+}
+
+void TypeChecker::checkStaticFields(ClassDecl &cls) {
+    currentClass_ = cls.fqName;
+    currentNs_ = Registry::namespaceOf(cls.fqName);
+    inConstructor_ = false; inStatic_ = true; inAsync_ = false;
+    for (auto &sf : cls.staticFields) {
+        const GlobalInfo *gi = reg_->global(cls.fqName + "." + sf.name);
+        TypeRef declared = gi ? gi->type : sf.type;
+        pushScope();
+        TypeRef initT = checkExpr(*sf.init);
+        popScope();
+        if (!isAssignable(initT, declared))
+            error(sf.init->line, sf.init->col, "cannot initialize static field '" +
+                                                   sf.name + "' of type " + typeRefName(declared) +
+                                                   " with a value of type " + typeRefName(initT));
+    }
 }
 
 void TypeChecker::checkFunction(FunctionDecl &fn) {
@@ -318,6 +354,21 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     if (auto *name = dynamic_cast<NameExpr *>(s.target.get())) {
         LocalVar *local = lookupLocal(name->name);
         if (!local) {
+            // Maybe a (mutable) module-level global.
+            std::string gfq = reg_->resolveGlobal(name->name, currentNs_);
+            if (!gfq.empty()) {
+                const GlobalInfo *gi = reg_->global(gfq);
+                name->resolvedGlobal = gi->cName;
+                name->type = gi->type;
+                if (gi->isConst)
+                    error(name->line, name->col, "cannot assign to constant '" + name->name + "'");
+                if (s.isCompound) checkCompound(s, gi->type, valueType);
+                else if (!isAssignable(valueType, gi->type))
+                    error(s.value->line, s.value->col,
+                          "cannot assign a value of type " + typeRefName(valueType) +
+                              " to '" + name->name + "' of type " + typeRefName(gi->type));
+                return;
+            }
             error(name->line, name->col,
                   "assignment to undeclared variable '" + name->name + "'");
             return;
@@ -338,6 +389,34 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
 
     if (auto *mem = dynamic_cast<MemberExpr *>(s.target.get())) {
+        // Static field assignment: `Class.field = value`.
+        if (auto chain = flattenNames(mem); chain && chain->size() >= 2 &&
+            lookupLocal((*chain)[0]) == nullptr) {
+            std::string prefix;
+            for (size_t i = 0; i + 1 < chain->size(); ++i)
+                prefix += (i ? "." : "") + (*chain)[i];
+            std::string clsFq = reg_->resolveType(prefix, currentNs_);
+            if (!clsFq.empty() && reg_->isClass(clsFq)) {
+                if (const GlobalInfo *gi = reg_->findStaticField(clsFq, chain->back())) {
+                    mem->kind = MemberKind::StaticField;
+                    mem->qualified = gi->cName;
+                    mem->type = gi->type;
+                    if (gi->isConst)
+                        error(mem->line, mem->col, "cannot assign to constant static field '" +
+                                                       chain->back() + "'");
+                    if (!checkAccess(gi->access, gi->ownerClass))
+                        error(mem->line, mem->col, "static field '" + chain->back() + "' is " +
+                                                       accessName(gi->access));
+                    if (s.isCompound) checkCompound(s, gi->type, valueType);
+                    else if (!isAssignable(valueType, gi->type))
+                        error(s.value->line, s.value->col,
+                              "cannot assign a value of type " + typeRefName(valueType) +
+                                  " to static field '" + chain->back() + "' of type " +
+                                  typeRefName(gi->type));
+                    return;
+                }
+            }
+        }
         TypeRef objType = checkExpr(*mem->object);
         if (objType.isNamed() && reg_->isStruct(objType.name)) {
             const FieldInfo *f = reg_->findStructField(objType.name, mem->member);
