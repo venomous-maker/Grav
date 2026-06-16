@@ -254,6 +254,12 @@ void TypeChecker::checkLet(LetStmt &s) {
             s.declaredType = c;
         }
     }
+    // An inline C expression adopts the declared type of the binding it feeds.
+    bool isCBlock = dynamic_cast<CBlockExpr *>(s.init.get()) != nullptr;
+    if (isCBlock && s.hasDeclaredType && !s.declaredType.isError()) {
+        s.init->type = s.declaredType;
+        initType = s.declaredType;
+    }
     if (s.hasDeclaredType) {
         if (!isAssignable(initType, s.declaredType)) {
             error(s.init->line, s.init->col,
@@ -263,7 +269,12 @@ void TypeChecker::checkLet(LetStmt &s) {
         }
         s.resolvedType = s.declaredType;
     } else {
-        if (initType.isVoid()) {
+        if (isCBlock) {
+            error(s.init->line, s.init->col,
+                  "an inline C expression needs a type: write `let " + s.name +
+                      ": T = %{ ... %}` or `%{ ... %} as T`");
+            s.resolvedType = TypeRef::prim(TypeRef::Kind::Error);
+        } else if (initType.isVoid()) {
             error(s.init->line, s.init->col,
                   "cannot infer the type of '" + s.name + "' from a void value");
             s.resolvedType = TypeRef::prim(TypeRef::Kind::Error);
