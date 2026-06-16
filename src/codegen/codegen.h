@@ -79,6 +79,10 @@ private:
     void emitArgs(std::string &out, const CallExpr &call,
                   const std::vector<TypeRef> &params, bool leadingSelf,
                   const std::string &self) const;
+    // Emits args for a variadic call: fixed args, then the trailing count and an
+    // element-pointer (a C compound literal, or null when there are none).
+    void emitVariadicArgs(std::string &out, const CallExpr &call,
+                          const std::vector<TypeRef> &params) const;
     static std::string escapeC(const std::string &s);
 
     const Registry *reg_ = nullptr;
