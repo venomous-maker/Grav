@@ -241,6 +241,9 @@ private:
     std::unordered_map<std::string, FunctionDecl *> fnTpl_;
     std::unordered_map<std::string, ClassDecl *> classTpl_;
     std::unordered_map<std::string, InterfaceDecl *> ifaceTpl_;
+    std::unordered_map<std::string, TypeAliasDecl *> aliasTpl_;
+    // class simple-name -> (base name, implemented interface names) for constraints.
+    std::unordered_map<std::string, std::pair<std::string, std::vector<std::string>>> classImpl_;
     std::unordered_map<std::string, bool> done_;
     std::vector<DeclPtr> instances_;
 
@@ -259,6 +262,11 @@ private:
     void rewriteSuper(std::string &name, std::vector<TypeRef> &args, const Subst &subst,
                       bool isClass, int line, int col);
     std::string instName(const std::string &name, const std::vector<TypeRef> &args) const;
+    bool satisfies(const TypeRef &arg, const std::string &bound) const;
+    void checkBounds(const std::vector<std::string> &params,
+                     const std::vector<std::string> &bounds,
+                     const std::vector<TypeRef> &args, const std::string &what,
+                     int line, int col);
     void walkBlock(Block &b, const Subst &subst);
     void walkStmt(Stmt *s, const Subst &subst);
     void walkExpr(Expr *e, const Subst &subst);
@@ -269,6 +277,36 @@ std::string Mono::instName(const std::string &name, const std::vector<TypeRef> &
     std::string inst = name;
     for (const auto &a : args) inst += "$" + typeMangle(a);
     return inst;
+}
+
+// Does the concrete `arg` satisfy a `T: Bound` constraint? `arg` must be (a
+// subclass of) the bound class, or a class implementing the bound interface.
+bool Mono::satisfies(const TypeRef &arg, const std::string &bound) const {
+    if (bound.empty()) return true;
+    if (!arg.isNamed()) return false;
+    std::string cur = arg.name;
+    int guard = 0;
+    while (!cur.empty() && guard++ < 100) {
+        if (cur == bound) return true;
+        auto it = classImpl_.find(cur);
+        if (it == classImpl_.end()) return false;
+        for (const auto &i : it->second.second) if (i == bound) return true;
+        cur = it->second.first; // walk up the base chain
+    }
+    return false;
+}
+
+void Mono::checkBounds(const std::vector<std::string> &params,
+                       const std::vector<std::string> &bounds,
+                       const std::vector<TypeRef> &args, const std::string &what,
+                       int line, int col) {
+    for (size_t i = 0; i < params.size() && i < bounds.size() && i < args.size(); ++i) {
+        if (bounds[i].empty()) continue;
+        if (!satisfies(args[i], bounds[i]))
+            error(line, col, "type argument '" + typeMangle(args[i]) + "' for '" +
+                                 params[i] + "' in " + what +
+                                 " does not satisfy the bound '" + bounds[i] + "'");
+    }
 }
 
 void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
@@ -285,6 +323,24 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
     for (auto &a : t.args) rewriteType(a, subst, line, col);
 
     if (t.kind == TypeRef::Kind::Named && !t.args.empty()) {
+        // A generic alias expands transparently: `Vec<int>` -> the target with
+        // its type parameters substituted (no instance declaration emitted).
+        if (aliasTpl_.count(t.name)) {
+            TypeAliasDecl *tpl = aliasTpl_[t.name];
+            if (tpl->typeParams.size() != t.args.size()) {
+                error(line, col, "generic alias '" + t.name + "' expects " +
+                                     std::to_string(tpl->typeParams.size()) +
+                                     " type argument(s), got " + std::to_string(t.args.size()));
+                t.args.clear();
+                return;
+            }
+            Subst inner;
+            for (size_t i = 0; i < t.args.size(); ++i) inner[tpl->typeParams[i]] = t.args[i];
+            TypeRef expanded = tpl->target;
+            rewriteType(expanded, inner, line, col);
+            t = expanded;
+            return;
+        }
         if (structTpl_.count(t.name)) {
             t.name = instantiateStruct(t.name, t.args, line, col);
             t.args.clear();
@@ -319,6 +375,7 @@ std::string Mono::instantiateStruct(const std::string &name, const std::vector<T
     }
     Subst subst;
     for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
+    checkBounds(tpl->typeParams, tpl->typeParamBounds, args, "struct '" + name + "'", line, col);
 
     auto out = std::make_unique<StructDecl>();
     out->line = tpl->line; out->col = tpl->col;
@@ -348,6 +405,7 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
     }
     Subst subst;
     for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
+    checkBounds(tpl->typeParams, tpl->typeParamBounds, args, "function '" + name + "'", line, col);
 
     auto out = std::make_unique<FunctionDecl>();
     out->line = tpl->line; out->col = tpl->col;
@@ -417,6 +475,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     }
     Subst subst;
     for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
+    checkBounds(tpl->typeParams, tpl->typeParamBounds, args, "class '" + name + "'", line, col);
 
     auto out = std::make_unique<ClassDecl>();
     out->line = tpl->line; out->col = tpl->col;
@@ -594,10 +653,17 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
     } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
         if (g->hasDeclaredType) rewriteType(g->declaredType, subst, g->line, g->col);
         walkExpr(g->init.get(), subst);
+    } else if (auto *al = dynamic_cast<TypeAliasDecl *>(d)) {
+        rewriteType(al->target, subst, al->line, al->col);
     }
 }
 
 void Mono::run() {
+    // 0) Record class inheritance/implements (by simple name) for constraint checks.
+    for (auto &d : program_.decls)
+        if (auto *cd = dynamic_cast<ClassDecl *>(d.get()))
+            classImpl_[cd->name] = {cd->baseName, cd->interfaceNames};
+
     // 1) Split templates from concrete decls (templates kept alive in templates_).
     std::vector<DeclPtr> kept;
     for (auto &d : program_.decls) {
@@ -609,6 +675,8 @@ void Mono::run() {
             classTpl_[cd->name] = cd; templates_.push_back(std::move(d));
         } else if (auto *id = dynamic_cast<InterfaceDecl *>(d.get()); id && !id->typeParams.empty()) {
             ifaceTpl_[id->name] = id; templates_.push_back(std::move(d));
+        } else if (auto *al = dynamic_cast<TypeAliasDecl *>(d.get()); al && !al->typeParams.empty()) {
+            aliasTpl_[al->name] = al; templates_.push_back(std::move(d));
         } else {
             kept.push_back(std::move(d));
         }
