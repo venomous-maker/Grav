@@ -57,3 +57,25 @@ printf '%s\n%s\n' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"grav_run","arguments":{"source":"fn main(){ print(21 + 21) }"}}}' \
   | python3 mcp_server/server.py
 ```
+
+## Use from Neovim (LazyVim + mcphub.nvim)
+
+The repo ships a Neovim integration under [`editors/nvim/`](../editors/nvim/)
+(syntax, filetype, build/run keymaps) and registers this server with
+[mcphub.nvim](https://github.com/ravitemer/mcphub.nvim). A global server registry
+is written to `~/.config/mcphub/servers.json`:
+
+```json
+{
+  "mcpServers": {
+    "gravc": {
+      "command": "python3",
+      "args": ["/abs/path/to/mcp_server/server.py"],
+      "env": { "GRAVC": "/abs/path/to/build/gravc" }
+    }
+  }
+}
+```
+
+Open Neovim and run `:MCPHub` to see the `gravc` tools (`grav_run`, `grav_to_c`,
+`grav_check`). The `GRAVC` env var points the server at your built compiler.
