@@ -90,6 +90,7 @@ struct AliasInfo {
 struct FunctionInfo {
     std::string fqName;
     bool isAsync = false; // callers receive Future<returnType>
+    bool isVariadic = false; // last param collects trailing args (its elem type)
     std::vector<TypeRef> paramTypes;
     std::vector<std::string> paramNames;
     TypeRef returnType;
