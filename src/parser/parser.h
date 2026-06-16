@@ -54,7 +54,7 @@ private:
     // Generics: `<T, U>` param lists on declarations, `<int, string>` argument
     // lists in type/call positions, and the `>`-splitting close that lets
     // `Box<Box<int>>` work despite the `>>` token.
-    std::vector<std::string> parseTypeParams();
+    std::vector<std::string> parseTypeParams(std::vector<std::string> *bounds = nullptr);
     std::vector<TypeRef> parseTypeArgs();
     void expectGenericClose();
     std::string qualify(const std::string &simpleName) const;
