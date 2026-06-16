@@ -1,0 +1,24 @@
+// 04 — operators: arithmetic, modulo, bitwise, shifts, compound, ternary.
+
+fn main() {
+    print(7 + 2 * 3);          // 13
+    print(17 % 5);             // 2   (modulo, ints only)
+
+    // bitwise & shifts (ints)
+    print(6 & 3);              // 2
+    print(6 | 1);              // 7
+    print(5 ^ 1);              // 4
+    print(~0);                 // -1
+    print(1 << 4);             // 16
+    print(255 >> 4);           // 15
+
+    // compound assignment
+    let flags = 0;
+    flags |= 4; flags |= 1;    // 5
+    flags &= 5;
+    print(flags);              // 5
+
+    // comparison + logical (short-circuit) + ternary
+    print(3 < 5 && !(2 > 9));  // true
+    print(10 % 2 == 0 ? "even" : "odd");  // even
+}
