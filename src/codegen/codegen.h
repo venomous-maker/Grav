@@ -91,6 +91,7 @@ private:
     std::string structs_;
     std::string vtableTypes_;
     std::string protos_;
+    std::string cblocks_; // verbatim top-level `%{ ... %}` C
     std::string vtables_;
     std::string defs_;
 
