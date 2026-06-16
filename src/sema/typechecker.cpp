@@ -193,6 +193,8 @@ void TypeChecker::checkStmt(Stmt &stmt) {
     if (auto *s = dynamic_cast<ForStmt *>(&stmt)) return checkFor(*s);
     if (auto *s = dynamic_cast<ForInStmt *>(&stmt)) return checkForIn(*s);
     if (auto *s = dynamic_cast<SwitchStmt *>(&stmt)) return checkSwitch(*s);
+    if (auto *s = dynamic_cast<ThrowStmt *>(&stmt)) return checkThrow(*s);
+    if (auto *s = dynamic_cast<TryStmt *>(&stmt)) return checkTry(*s);
     if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) return checkBlock(s->block);
     if (dynamic_cast<BreakStmt *>(&stmt) || dynamic_cast<ContinueStmt *>(&stmt)) {
         if (loopDepth_ == 0)
@@ -241,6 +243,32 @@ void TypeChecker::checkFor(ForStmt &s) {
     checkBlock(s.body);
     loopDepth_--;
     popScope();
+}
+
+void TypeChecker::checkThrow(ThrowStmt &s) {
+    TypeRef t = checkExpr(*s.value);
+    if (!t.isError() && !(t.isNamed() && reg_->isClass(t.name)))
+        error(s.value->line, s.value->col,
+              "can only throw a class instance, but got " + typeRefName(t));
+}
+
+void TypeChecker::checkTry(TryStmt &s) {
+    checkBlock(s.tryBlock);
+    if (s.hasCatch) {
+        bool ok = true;
+        TypeRef ct = reg_->resolveCanonical(s.catchType, currentNs_, ok);
+        if (!ok || !(ct.isNamed() && reg_->isClass(ct.name))) {
+            error(s.line, s.col, "'catch' type must be a class, but got " +
+                                     typeRefName(s.catchType));
+            ct = TypeRef::prim(TypeRef::Kind::Error);
+        }
+        s.catchType = ct;
+        pushScope();
+        declareLocal(s.catchVar, ct, true, false, s.line, s.col);
+        checkBlock(s.catchBlock);
+        popScope();
+    }
+    if (s.hasFinally) checkBlock(s.finallyBlock);
 }
 
 void TypeChecker::checkForIn(ForInStmt &s) {
