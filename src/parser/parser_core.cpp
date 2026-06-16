@@ -85,29 +85,60 @@ Program Parser::parseProgram() {
 }
 
 void Parser::parseTopLevel(Program &program) {
+    // Optional leading `@Decorator`s and an `export` modifier. These are metadata
+    // only (every top-level name is already visible); they attach to the decl.
+    std::vector<std::string> decorators;
+    bool exported = false;
+    while (check(TokenType::At) || check(TokenType::Export)) {
+        if (matchToken(TokenType::Export)) { exported = true; continue; }
+        advance(); // '@'
+        decorators.push_back(parseQualifiedName("after '@'"));
+        // Optional decorator argument list, e.g. `@route("/x")` — parsed and
+        // discarded so the syntax is accepted.
+        if (check(TokenType::LParen)) parseArguments();
+    }
+    bool decorated = !decorators.empty() || exported;
+
+    size_t before = program.decls.size();
     switch (peek().type) {
-        case TokenType::Namespace: parseNamespace(program); return;
-        case TokenType::Class: program.decls.push_back(parseClass(false)); return;
+        case TokenType::Namespace:
+            if (decorated) fail(peek(), "decorators/'export' cannot be applied to a namespace");
+            parseNamespace(program);
+            return;
+        case TokenType::Class: program.decls.push_back(parseClass(false)); break;
         case TokenType::Abstract:
             advance(); // 'abstract'
             program.decls.push_back(parseClass(true));
-            return;
-        case TokenType::Interface: program.decls.push_back(parseInterface()); return;
-        case TokenType::Struct: program.decls.push_back(parseStruct()); return;
-        case TokenType::Enum: program.decls.push_back(parseEnum()); return;
-        case TokenType::Type: program.decls.push_back(parseTypeAlias()); return;
-        case TokenType::Fn: program.decls.push_back(parseFunction(false)); return;
+            break;
+        case TokenType::Interface: program.decls.push_back(parseInterface()); break;
+        case TokenType::Struct: program.decls.push_back(parseStruct()); break;
+        case TokenType::Enum: program.decls.push_back(parseEnum()); break;
+        case TokenType::Type: program.decls.push_back(parseTypeAlias()); break;
+        case TokenType::Fn: program.decls.push_back(parseFunction(false)); break;
+        case TokenType::CBlock: {
+            const Token &t = advance();
+            auto cb = std::make_unique<CBlockDecl>();
+            cb->line = t.line; cb->col = t.col;
+            cb->code = t.lexeme;
+            program.decls.push_back(std::move(cb));
+            break;
+        }
         case TokenType::Async:
             advance(); // 'async'
             if (!check(TokenType::Fn))
                 fail(peek(), "expected 'fn' after 'async'");
             program.decls.push_back(parseFunction(true));
-            return;
+            break;
         default:
             fail(peek(), std::string("expected a top-level declaration "
                                      "(namespace, class, struct, enum, type, interface, fn, "
                                      "async fn, or abstract class), but found ") +
                              tokenTypeName(peek().type));
+    }
+    if (program.decls.size() > before) {
+        Decl *d = program.decls.back().get();
+        d->decorators = std::move(decorators);
+        d->exported = exported;
     }
 }
 
