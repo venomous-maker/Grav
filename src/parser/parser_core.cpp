@@ -238,16 +238,25 @@ std::vector<TypeRef> Parser::parseTypeArgs() {
     return args;
 }
 
-std::vector<Param> Parser::parseParams() {
+std::vector<Param> Parser::parseParams(bool allowVariadic) {
     std::vector<Param> params;
     expect(TokenType::LParen, "to begin the parameter list");
     if (!check(TokenType::RParen)) {
         do {
             Param p;
+            if (check(TokenType::Ellipsis)) {
+                if (!allowVariadic)
+                    fail(peek(), "variadic parameters are only allowed on free functions");
+                advance(); // '...'
+                p.variadic = true;
+            }
             p.name = expect(TokenType::Identifier, "as a parameter name").lexeme;
             expect(TokenType::Colon, "after the parameter name");
             p.type = parseType("for the parameter");
+            bool isVar = p.variadic;
             params.push_back(std::move(p));
+            if (isVar && check(TokenType::Comma))
+                fail(peek(), "a variadic parameter must be the last parameter");
         } while (matchToken(TokenType::Comma));
     }
     expect(TokenType::RParen, "to end the parameter list");
@@ -281,7 +290,7 @@ DeclPtr Parser::parseFunction(bool isAsync) {
     fn->name = expect(TokenType::Identifier, "after 'fn'").lexeme;
     fn->fqName = qualify(fn->name);
     fn->typeParams = parseTypeParams(); // optional <T, ...>
-    fn->params = parseParams();
+    fn->params = parseParams(/*allowVariadic=*/true);
     if (matchToken(TokenType::Arrow)) {
         fn->returnType = parseType("as the return type");
     } else {
