@@ -443,6 +443,10 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         walkBlock(fn->body, subst);
     } else if (auto *cd = dynamic_cast<ClassDecl *>(d)) {
         for (auto &f : cd->fields) rewriteType(f.type, subst, f.line, f.col);
+        for (auto &sf : cd->staticFields) {
+            rewriteType(sf.type, subst, sf.line, sf.col);
+            walkExpr(sf.init.get(), subst);
+        }
         for (auto &p : cd->constructor.params) rewriteType(p.type, subst, cd->line, cd->col);
         if (cd->constructor.present) walkBlock(cd->constructor.body, subst);
         for (auto &m : cd->methods) {
@@ -450,6 +454,9 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             rewriteType(m.returnType, subst, m.line, m.col);
             if (m.hasBody) walkBlock(m.body, subst);
         }
+    } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
+        if (g->hasDeclaredType) rewriteType(g->declaredType, subst, g->line, g->col);
+        walkExpr(g->init.get(), subst);
     }
 }
 
