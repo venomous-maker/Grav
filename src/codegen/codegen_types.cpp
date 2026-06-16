@@ -117,7 +117,8 @@ std::string CodeGen::cTy(const TypeRef &t) const {
     if (t.isFuture()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void));
     // A pointer is the C pointer to the (interface-aware) pointee spelling.
     if (t.isPointer()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void)) + "*";
-    // A fixed-length array is a generated value struct wrapping a C array.
+    // A slice (variadic) is a bare pointer; a fixed-length array is a value struct.
+    if (t.isSlice()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void)) + "*";
     if (t.isArray()) return arrayStructName(t);
     return cType(t);
 }
@@ -136,7 +137,9 @@ std::string CodeGen::sizeofSpelling(const TypeRef &t) const {
 // ---------------------------------------------------------------------------
 
 void CodeGen::collectType(const TypeRef &t) {
-    if (t.isArray()) {
+    if (t.isSlice()) {
+        if (t.elem) collectType(*t.elem); // a slice is a pointer, no backing struct
+    } else if (t.isArray()) {
         arrayTypes_[arrayStructName(t)] = t;
         if (t.elem) collectType(*t.elem); // nested arrays / element structs-of-arrays
     } else if ((t.isPointer() || t.isFuture()) && t.elem) {
