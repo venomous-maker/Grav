@@ -1,0 +1,18 @@
+// 01 — basics: main, printing, variables, and primitive types.
+// Build & run:  grav examples/01_basics.grav --emit bin -o /tmp/01 && /tmp/01
+
+fn main() {
+    // `let` is mutable, `const` is immutable. Types are inferred or annotated.
+    let count = 3;
+    const pi: float = 3.14159;
+    let name: string = "Grav";
+    let ready: bool = true;
+
+    print(count);          // 3
+    print(pi);             // 3.141590
+    print(name);           // Grav
+    print(ready);          // true
+
+    count = count + 1;
+    print(count);          // 4
+}
