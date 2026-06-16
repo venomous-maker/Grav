@@ -14,6 +14,7 @@ add_executable(gravc
         src/parser/parser_core.cpp
         src/parser/parser_stmt.cpp
         src/parser/parser_expr.cpp
+        src/sema/monomorph.cpp
         src/sema/symbols.cpp
         src/sema/typechecker.cpp
         src/sema/typechecker_expr.cpp
