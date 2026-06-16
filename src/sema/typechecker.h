@@ -90,6 +90,11 @@ private:
     void checkArgs(const std::vector<ExprPtr> &args,
                    const std::vector<TypeRef> &params, int line, int col,
                    const std::string &what);
+    // Like checkArgs but the last `params` entry is a variadic element type that
+    // accepts zero or more trailing arguments.
+    void checkVariadicArgs(const std::vector<ExprPtr> &args,
+                           const std::vector<TypeRef> &params, int line, int col,
+                           const std::string &what);
 
     // A local binding tracked for type, const-ness, and use (for warnings).
     struct LocalVar {
