@@ -1,0 +1,43 @@
+// generics.grav — generic structs and functions (monomorphized to concrete C).
+//
+//   * generic structs:    struct Box<T> { value: T }
+//   * multiple params:    struct Pair<K, V> { ... }
+//   * nested generics:    Box<Box<int>>
+//   * generic functions:  fn id<T>(x: T) -> T   (called with turbofish `id::<int>(..)`)
+//
+// Each distinct instantiation (Box<int>, Box<string>, …) becomes its own concrete
+// struct/function in the generated C — there is no runtime type erasure.
+
+struct Box<T> { value: T }
+
+struct Pair<K, V> { key: K  value: V }
+
+fn identity<T>(x: T) -> T { return x; }
+
+fn boxOf<T>(x: T) -> Box<T> { return Box<T> { value: x }; }
+
+fn keyOf<K, V>(p: Pair<K, V>) -> K { return p.key; }
+
+fn main() {
+    let bi = Box<int> { value: 42 };
+    let bs = Box<string> { value: "hello" };
+    print("box int    = ${bi.value}");        // 42
+    print("box string = ${bs.value}");        // hello
+
+    // a generic function returning a generic struct
+    let made = boxOf::<int>(7);
+    print("boxOf(7)   = ${made.value}");      // 7
+
+    // nested instantiation
+    let nested = Box<Box<int>> { value: Box<int> { value: 99 } };
+    print("nested     = ${nested.value.value}"); // 99
+
+    // multi-parameter generic + a function over it
+    let p = Pair<string, int> { key: "age", value: 30 };
+    print("pair key   = ${keyOf::<string, int>(p)}"); // age
+    print("pair value = ${p.value}");                 // 30
+
+    // generic functions on primitives
+    print("id int     = ${identity::<int>(123)}");     // 123
+    print("id bool    = ${identity::<bool>(true)}");    // true
+}
