@@ -63,7 +63,8 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         return "\"" + escapeC(e->value) + "\"";
     if (dynamic_cast<const NullLiteralExpr *>(&expr)) return "0";
     if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return e->code; // verbatim C
-    if (auto *e = dynamic_cast<const NameExpr *>(&expr)) return e->name;
+    if (auto *e = dynamic_cast<const NameExpr *>(&expr))
+        return e->resolvedGlobal.empty() ? e->name : e->resolvedGlobal;
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
 
     if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
@@ -199,6 +200,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         // `EnumType.Member` lowers to the C enum constant.
         if (e->kind == MemberKind::EnumValue)
             return enumConst(e->qualified, e->member);
+        // `Class.staticField` lowers to the static global's C name.
+        if (e->kind == MemberKind::StaticField)
+            return e->qualified;
         // `arr.length` is the array's fixed length, a compile-time constant.
         if (e->object->type.isArray() && e->member == "length")
             return std::to_string(e->object->type.arrayLen);
