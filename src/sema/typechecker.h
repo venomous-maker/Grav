@@ -46,6 +46,8 @@ private:
     void checkFor(ForStmt &s);
     void checkSwitch(SwitchStmt &s);
     void checkForIn(ForInStmt &s);
+    void checkThrow(ThrowStmt &s);
+    void checkTry(TryStmt &s);
     void requireBool(Expr &cond, const char *ctx);
 
     // expressions (typechecker_expr.cpp)
