@@ -91,6 +91,10 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         if (local) {
             local->used = true;
             t = local->type;
+        } else if (std::string gfq = reg_->resolveGlobal(e->name, currentNs_); !gfq.empty()) {
+            const GlobalInfo *gi = reg_->global(gfq);
+            e->resolvedGlobal = gi->cName;
+            t = gi->type;
         } else {
             error(e->line, e->col, "use of undeclared variable '" + e->name + "'");
             t = TypeRef::prim(TypeRef::Kind::Error);
@@ -793,9 +797,30 @@ void TypeChecker::checkOptionalResult(int line, int col, const TypeRef &t,
                              " (a value-type or interface); use '.' instead");
 }
 
+// `Class.field` where `field` is a static field — resolved like an enum value
+// (a name chain whose head is not a local).
+std::optional<TypeRef> TypeChecker::tryStaticField(MemberExpr &e) {
+    auto chain = flattenNames(&e);
+    if (!chain || chain->size() < 2) return std::nullopt;
+    if (lookupLocal((*chain)[0]) != nullptr) return std::nullopt;
+    std::string member = chain->back();
+    std::string prefix = joinDots(*chain, chain->size() - 1);
+    std::string clsFq = reg_->resolveType(prefix, currentNs_);
+    if (clsFq.empty() || !reg_->isClass(clsFq)) return std::nullopt;
+    const GlobalInfo *gi = reg_->findStaticField(clsFq, member);
+    if (!gi) return std::nullopt;
+    if (!checkAccess(gi->access, gi->ownerClass))
+        error(e.line, e.col, "static field '" + member + "' is " +
+                                 accessName(gi->access) + " in '" + gi->ownerClass + "'");
+    e.kind = MemberKind::StaticField;
+    e.qualified = gi->cName;
+    return gi->type;
+}
+
 TypeRef TypeChecker::checkMember(MemberExpr &e) {
     // `EnumType.Member` is a constant, not a field access on a value.
     if (auto enumTy = tryEnumValue(e)) return *enumTy;
+    if (auto sf = tryStaticField(e)) return *sf;
     TypeRef objType = checkExpr(*e.object);
     if (objType.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     // `arr.length` is the fixed length of an array, as an int.
