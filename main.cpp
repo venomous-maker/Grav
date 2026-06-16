@@ -20,6 +20,7 @@
 #include "lexer/lexer.h"
 #include "lexer/preprocess.h"
 #include "parser/parser.h"
+#include "sema/monomorph.h"
 #include "sema/symbols.h"
 #include "sema/typechecker.h"
 
@@ -151,8 +152,12 @@ int main(int argc, char **argv) {
         grav::Parser parser(std::move(tokens));
         grav::Program program = parser.parseProgram();
 
+        // Expand generic structs/functions into concrete instances before symbols.
+        std::vector<grav::GravError> errors = grav::monomorphize(program);
+
         grav::Registry registry;
-        std::vector<grav::GravError> errors = registry.build(program);
+        auto buildErrors = registry.build(program);
+        errors.insert(errors.end(), buildErrors.begin(), buildErrors.end());
 
         grav::TypeChecker checker;
         const auto &typeErrors = checker.check(program, registry);
