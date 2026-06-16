@@ -65,6 +65,25 @@ void TypeChecker::checkArgs(const std::vector<ExprPtr> &args,
     }
 }
 
+void TypeChecker::checkVariadicArgs(const std::vector<ExprPtr> &args,
+                                    const std::vector<TypeRef> &params, int line, int col,
+                                    const std::string &what) {
+    size_t fixed = params.empty() ? 0 : params.size() - 1;
+    TypeRef elem = params.empty() ? TypeRef::prim(TypeRef::Kind::Error) : params.back();
+    if (args.size() < fixed) {
+        error(line, col, what + " expects at least " + std::to_string(fixed) +
+                             " argument(s), but got " + std::to_string(args.size()));
+    }
+    for (size_t i = 0; i < args.size(); ++i) {
+        TypeRef at = checkExpr(*args[i]);
+        const TypeRef &want = i < fixed ? params[i] : elem;
+        if (!isAssignable(at, want))
+            error(args[i]->line, args[i]->col,
+                  "argument " + std::to_string(i + 1) + " to " + what + " expects " +
+                      typeRefName(want) + ", but got " + typeRefName(at));
+    }
+}
+
 TypeRef TypeChecker::checkExpr(Expr &expr) {
     TypeRef t = TypeRef::prim(TypeRef::Kind::Error);
     if (dynamic_cast<IntLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Int);
@@ -679,7 +698,10 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         const FunctionInfo *fi = reg_->func(fnFq);
         e.kind = CallKind::FreeFunction;
         e.targetName = fnFq;
-        checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
+        if (fi->isVariadic)
+            checkVariadicArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
+        else
+            checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
         return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
     }
 
@@ -722,7 +744,10 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             const FunctionInfo *fi = reg_->func(fnFq);
             e.kind = CallKind::FreeFunction;
             e.targetName = fnFq;
-            checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
+            if (fi->isVariadic)
+                checkVariadicArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
+            else
+                checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
             return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
         }
         error(e.line, e.col, "unknown function or static method '" +
