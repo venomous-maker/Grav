@@ -1,0 +1,37 @@
+// 10 — inheritance, abstract classes, interfaces, and polymorphism.
+
+interface Drawable { fn describe() -> string }
+
+abstract class Shape implements Drawable {
+    public fn describe() -> string { return "a " + self.name(); }
+    abstract fn name() -> string
+    abstract fn area() -> int
+}
+
+class Circle extends Shape {
+    private r: int
+    constructor(r: int) { self.r = r; }
+    public fn name() -> string { return "circle"; }
+    public fn area() -> int { return 3 * self.r * self.r; }
+}
+
+class Square extends Shape {
+    private s: int
+    constructor(s: int) { self.s = s; }
+    public fn name() -> string { return "square"; }
+    public fn area() -> int { return self.s * self.s; }
+}
+
+fn main() {
+    let s: Shape = new Circle(10);
+    print(s.area());                    // 300 (virtual dispatch)
+    print(s.describe());                // a circle
+
+    let d: Drawable = new Square(5);
+    print(d.describe());                // a square (interface dispatch)
+
+    // as / is
+    print(s is Circle);                 // true
+    let sq = new Square(4);
+    print((sq as Shape).area());        // 16
+}
