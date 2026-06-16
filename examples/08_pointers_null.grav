@@ -1,0 +1,29 @@
+// 08 — pointers, null, ?? (coalesce), and ?. (optional chaining).
+
+struct Counter { n: int }
+
+fn bump(c: Counter*, by: int) { c->n = c->n + by; }  // write through a pointer
+
+class Greeter {
+    public name: string
+    constructor(n: string) { self.name = n; }
+    public fn hello() -> string { return "hi " + self.name; }
+}
+
+fn main() {
+    // pointers to a value type
+    let c = Counter { n: 40 };
+    let p: Counter* = &c;
+    bump(p, 2);
+    *p = Counter { n: c.n + 1 };   // write through deref
+    print(c.n);                    // 43
+
+    // null + ?? + ?.
+    let g: Greeter = null;
+    print(g == null);              // true
+    let who = g ?? new Greeter("grav");
+    print(who.hello());            // hi grav
+
+    let maybe: Greeter = null;
+    print(maybe?.hello());         // (empty: null-guarded)
+}
