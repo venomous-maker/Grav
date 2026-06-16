@@ -114,6 +114,8 @@ void Parser::parseTopLevel(Program &program) {
         case TokenType::Struct: program.decls.push_back(parseStruct()); break;
         case TokenType::Enum: program.decls.push_back(parseEnum()); break;
         case TokenType::Type: program.decls.push_back(parseTypeAlias()); break;
+        case TokenType::Const:
+        case TokenType::Let: program.decls.push_back(parseGlobalVar()); break;
         case TokenType::Fn: program.decls.push_back(parseFunction(false)); break;
         case TokenType::CBlock: {
             const Token &t = advance();
@@ -252,6 +254,24 @@ std::vector<Param> Parser::parseParams() {
     return params;
 }
 
+DeclPtr Parser::parseGlobalVar() {
+    const Token &kw = advance(); // 'const' or 'let'
+    auto g = std::make_unique<GlobalVarDecl>();
+    g->line = kw.line;
+    g->col = kw.col;
+    g->isConst = (kw.type == TokenType::Const);
+    g->name = expect(TokenType::Identifier, "after a global 'const'/'let'").lexeme;
+    g->fqName = qualify(g->name);
+    if (matchToken(TokenType::Colon)) {
+        g->hasDeclaredType = true;
+        g->declaredType = parseType("in the global declaration");
+    }
+    expect(TokenType::Assign, "after the global name");
+    g->init = parseExpression();
+    matchToken(TokenType::Semicolon); // optional terminator
+    return g;
+}
+
 DeclPtr Parser::parseFunction(bool isAsync) {
     const Token &kw = advance(); // 'fn'
     auto fn = std::make_unique<FunctionDecl>();
@@ -385,8 +405,24 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
             cls->methods.push_back(std::move(m));
         } else if (check(TokenType::Identifier)) {
-            if (isStatic) fail(peek(), "static fields are not supported in core v0.2");
-            cls->fields.push_back(parseField(access, isReadonly));
+            if (isStatic) {
+                // `static name: T = value` — a class-level field (a C global).
+                StaticFieldDecl sf;
+                sf.access = access;
+                sf.isConst = isReadonly;
+                const Token &nm = expect(TokenType::Identifier, "as a static field name");
+                sf.name = nm.lexeme;
+                sf.line = nm.line;
+                sf.col = nm.col;
+                expect(TokenType::Colon, "after the static field name");
+                sf.type = parseType("for the static field");
+                expect(TokenType::Assign, "a static field requires an initializer");
+                sf.init = parseExpression();
+                matchToken(TokenType::Semicolon);
+                cls->staticFields.push_back(std::move(sf));
+            } else {
+                cls->fields.push_back(parseField(access, isReadonly));
+            }
         } else {
             fail(peek(), std::string("expected a field or method in the class "
                                      "body, but found ") +
