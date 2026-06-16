@@ -214,6 +214,15 @@ StmtPtr cloneStmt(const Stmt *s) {
     return nullptr;
 }
 
+MethodDecl cloneMethod(const MethodDecl &m) {
+    MethodDecl n;
+    n.access = m.access; n.isStatic = m.isStatic; n.isAbstract = m.isAbstract;
+    n.name = m.name; n.params = m.params; n.returnType = m.returnType;
+    n.hasBody = m.hasBody; n.line = m.line; n.col = m.col;
+    n.body = cloneBlock(m.body);
+    return n;
+}
+
 // ---------------------------------------------------------------------------
 // The monomorphizer.
 // ---------------------------------------------------------------------------
@@ -230,6 +239,7 @@ private:
     std::vector<DeclPtr> templates_;                 // owned generic templates
     std::unordered_map<std::string, StructDecl *> structTpl_;
     std::unordered_map<std::string, FunctionDecl *> fnTpl_;
+    std::unordered_map<std::string, ClassDecl *> classTpl_;
     std::unordered_map<std::string, bool> done_;
     std::vector<DeclPtr> instances_;
 
@@ -240,11 +250,20 @@ private:
                                   int line, int col);
     std::string instantiateFn(const std::string &name, const std::vector<TypeRef> &args,
                               int line, int col);
+    std::string instantiateClass(const std::string &name, const std::vector<TypeRef> &args,
+                                 int line, int col);
+    std::string instName(const std::string &name, const std::vector<TypeRef> &args) const;
     void walkBlock(Block &b, const Subst &subst);
     void walkStmt(Stmt *s, const Subst &subst);
     void walkExpr(Expr *e, const Subst &subst);
     void walkDeclTypes(Decl *d, const Subst &subst);
 };
+
+std::string Mono::instName(const std::string &name, const std::vector<TypeRef> &args) const {
+    std::string inst = name;
+    for (const auto &a : args) inst += "$" + typeMangle(a);
+    return inst;
+}
 
 void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
     if (t.kind == TypeRef::Kind::Named) {
@@ -261,8 +280,11 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
 
     if (t.kind == TypeRef::Kind::Named && !t.args.empty()) {
         if (structTpl_.count(t.name)) {
-            std::string inst = instantiateStruct(t.name, t.args, line, col);
-            t.name = inst; t.args.clear();
+            t.name = instantiateStruct(t.name, t.args, line, col);
+            t.args.clear();
+        } else if (classTpl_.count(t.name)) {
+            t.name = instantiateClass(t.name, t.args, line, col);
+            t.args.clear();
         } else if (fnTpl_.count(t.name)) {
             error(line, col, "'" + t.name + "' is a generic function, not a type");
         } else {
@@ -334,6 +356,59 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
     return inst;
 }
 
+std::string Mono::instantiateClass(const std::string &name, const std::vector<TypeRef> &args,
+                                   int line, int col) {
+    std::string inst = instName(name, args);
+    if (done_.count(inst)) return inst;
+    done_[inst] = true;
+
+    ClassDecl *tpl = classTpl_[name];
+    if (tpl->typeParams.size() != args.size()) {
+        error(line, col, "generic class '" + name + "' expects " +
+                             std::to_string(tpl->typeParams.size()) + " type argument(s), got " +
+                             std::to_string(args.size()));
+        return inst;
+    }
+    Subst subst;
+    for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
+
+    auto out = std::make_unique<ClassDecl>();
+    out->line = tpl->line; out->col = tpl->col;
+    out->name = inst; out->fqName = inst;
+    out->isAbstract = tpl->isAbstract;
+    out->baseName = tpl->baseName;          // non-generic base (generic base TBD)
+    out->interfaceNames = tpl->interfaceNames;
+    for (const auto &f : tpl->fields) {
+        FieldDecl nf = f;
+        rewriteType(nf.type, subst, f.line, f.col);
+        out->fields.push_back(std::move(nf));
+    }
+    for (const auto &sf : tpl->staticFields) {
+        StaticFieldDecl ns;
+        ns.access = sf.access; ns.isConst = sf.isConst; ns.name = sf.name;
+        ns.type = sf.type; ns.line = sf.line; ns.col = sf.col;
+        ns.init = cloneExpr(sf.init.get());
+        rewriteType(ns.type, subst, sf.line, sf.col);
+        walkExpr(ns.init.get(), subst);
+        out->staticFields.push_back(std::move(ns));
+    }
+    out->constructor.present = tpl->constructor.present;
+    out->constructor.line = tpl->constructor.line; out->constructor.col = tpl->constructor.col;
+    out->constructor.params = tpl->constructor.params;
+    for (auto &p : out->constructor.params) rewriteType(p.type, subst, tpl->constructor.line, tpl->constructor.col);
+    out->constructor.body = cloneBlock(tpl->constructor.body);
+    walkBlock(out->constructor.body, subst);
+    for (const auto &m : tpl->methods) {
+        MethodDecl nm = cloneMethod(m);
+        for (auto &p : nm.params) rewriteType(p.type, subst, m.line, m.col);
+        rewriteType(nm.returnType, subst, m.line, m.col);
+        if (nm.hasBody) walkBlock(nm.body, subst);
+        out->methods.push_back(std::move(nm));
+    }
+    instances_.push_back(std::move(out));
+    return inst;
+}
+
 void Mono::walkBlock(Block &b, const Subst &subst) {
     for (auto &s : b.statements) walkStmt(s.get(), subst);
 }
@@ -387,9 +462,13 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         for (auto &f : x->fields) walkExpr(f.value.get(), subst);
     } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
         for (auto &a : x->typeArgs) rewriteType(a, subst, e->line, e->col);
-        if (!x->typeArgs.empty())
-            error(e->line, e->col, "generic classes are not yet supported "
-                                   "(use a generic struct or free functions)");
+        if (!x->typeArgs.empty()) {
+            if (classTpl_.count(x->className))
+                x->className = instantiateClass(x->className, x->typeArgs, e->line, e->col);
+            else
+                error(e->line, e->col, "unknown generic class '" + x->className + "'");
+            x->typeArgs.clear();
+        }
         for (auto &a : x->args) walkExpr(a.get(), subst);
     } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
         for (auto &a : x->typeArgs) rewriteType(a, subst, e->line, e->col);
@@ -469,9 +548,7 @@ void Mono::run() {
         } else if (auto *fn = dynamic_cast<FunctionDecl *>(d.get()); fn && !fn->typeParams.empty()) {
             fnTpl_[fn->name] = fn; templates_.push_back(std::move(d));
         } else if (auto *cd = dynamic_cast<ClassDecl *>(d.get()); cd && !cd->typeParams.empty()) {
-            error(cd->line, cd->col, "generic classes are not yet supported "
-                                     "(use a generic struct or free functions)");
-            templates_.push_back(std::move(d)); // drop it from output
+            classTpl_[cd->name] = cd; templates_.push_back(std::move(d));
         } else {
             kept.push_back(std::move(d));
         }
