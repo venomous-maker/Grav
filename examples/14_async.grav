@@ -1,0 +1,16 @@
+// 14 — async / await (eager futures): an async call returns a resolved Future<T>;
+// `await` unwraps it. Type-checked, zero-overhead at the C level.
+
+async fn square(x: int) -> int { return x * x; }
+
+async fn sumOfSquares(n: int) -> int {
+    let total = 0;
+    for (i in 1..=n) { total += await square(i); }
+    return total;
+}
+
+async fn main() {
+    let f = square(9);                   // f : Future<int>
+    print(await f);                      // 81
+    print(await sumOfSquares(4));        // 1+4+9+16 = 30
+}
