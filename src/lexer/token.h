@@ -11,6 +11,7 @@ enum class TokenType {
     IntLiteral,
     FloatLiteral,
     StringLiteral,
+    CBlock,     // %{ ... %} verbatim C escape hatch
 
     // type / value keywords
     KwInt,
@@ -61,6 +62,7 @@ enum class TokenType {
     In,         // for-in ranges
     As,         // value cast: expr as int
     Is,         // RTTI test: expr is Shape
+    Export,     // `export` decl modifier (parsed; no-op)
 
     // punctuation
     Colon,
