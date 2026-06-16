@@ -31,6 +31,8 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Macros](#macros)
   - [sizeof](#sizeof)
   - [Generics](#generics)
+  - [Variadics](#variadics)
+  - [Exceptions](#exceptions)
   - [Globals & static fields](#globals--static-fields)
   - [Classes](#classes)
   - [Access modifiers & `readonly`](#access-modifiers--readonly)
@@ -483,27 +485,77 @@ fn main() {
 
 ### Generics
 
-`struct` and `fn` may take type parameters `<T, …>`. Each distinct instantiation is
-**monomorphized** into its own concrete struct/function in the generated C (no
-runtime type erasure). Type arguments are explicit: `Box<int>` in type positions,
-and the turbofish `id::<int>(x)` on a call. See
-[generics.grav](examples/generics.grav).
+`struct`, `class`, `interface`, `fn`, and `type` may take type parameters `<T, …>`.
+Each distinct instantiation is **monomorphized** into its own concrete declaration
+in the generated C (no runtime type erasure). Type arguments are explicit: `Box<int>`
+in type positions and the turbofish `id::<int>(x)` on a call. Generic inheritance
+(`extends Base<T>`, `implements Iface<T>`), generic aliases (`type Vec<T> = T[3]`),
+and `T: Bound` constraints are all supported. See
+[generics.grav](examples/generics.grav) and
+[generic_classes.grav](examples/generic_classes.grav).
 
 ```grav
-struct Box<T> { value: T }
-struct Pair<K, V> { key: K  value: V }
+class Box<T> {
+    private value: T
+    constructor(v: T) { self.value = v; }
+    public fn get() -> T { return self.value; }
+}
+
+interface Named { fn name() -> string }
+fn greet<T: Named>(x: T) -> string { return x.name(); }  // constrained
 
 fn identity<T>(x: T) -> T { return x; }
+type Vec<T> = T[3]
 
 fn main() {
-    let b = Box<int> { value: 42 };
-    print(b.value);                       // 42
-    let p = Pair<string, int> { key: "age", value: 30 };
-    print(identity::<string>(p.key));     // age
+    let b = new Box<int>(42);
+    print(b.get());                       // 42
+    print(identity::<string>("hi"));      // hi
+    let v: Vec<int> = [1, 2, 3];
+    print(v.length);                      // 3
 }
 ```
 
-(Generic *classes* — methods + per-instantiation vtables — are not yet supported.)
+### Variadics
+
+A function's last parameter may be variadic (`...name: T`), collecting the trailing
+arguments into a runtime-length slice: `name.length` is the count and `name[i]`
+indexes elements. It lowers to a `(int count, T* ptr)` pair with a C compound
+literal at each call — no heap allocation. See [variadics.grav](examples/variadics.grav).
+
+```grav
+fn sum(...nums: int) -> int {
+    let total = 0;
+    for (i in 0..nums.length) { total += nums[i]; }
+    return total;
+}
+
+fn main() {
+    print(sum());            // 0
+    print(sum(1, 2, 3, 4));  // 10
+}
+```
+
+### Exceptions
+
+`throw` raises a class instance; `try { } catch (e: Type) { }` catches it (matching
+the type or any subclass); `finally { }` runs on the normal and handled paths. It
+lowers to a `setjmp`/`longjmp` runtime; an uncaught exception prints a message and
+exits. See [exceptions.grav](examples/exceptions.grav).
+
+```grav
+class AppError { public msg: string  constructor(m: string) { self.msg = m; } }
+
+fn main() {
+    try {
+        throw new AppError("boom");
+    } catch (e: AppError) {
+        print("caught: ${e.msg}");        // caught: boom
+    } finally {
+        print("cleanup");                 // cleanup
+    }
+}
+```
 
 ### Globals & static fields
 
@@ -857,11 +909,15 @@ installs the latest build as `grav` in `~/.local/bin` (override the dir with
 
 ## Roadmap / not yet implemented
 
-`v0.6` added **generic structs and functions** (monomorphized — see
-[generics.grav](examples/generics.grav)) and **module-level globals + class static
-fields** (see [globals.grav](examples/globals.grav)). `v0.5` added [string
-interpolation](#string-interpolation), the [`str`/`input`/`argc`/`argv`](#built-ins)
-built-ins, an [inline-C escape hatch](#inline-c---) (`%{ … %}`), and
+`v0.7` completed **generics** — generic classes/interfaces, generic inheritance
+(`extends Base<T>`), generic type aliases, and `T: Bound` constraints (see
+[generic_classes.grav](examples/generic_classes.grav)) — and added **variadics**
+(`fn f(...xs: T)`, see [variadics.grav](examples/variadics.grav)) and **exceptions**
+(`try`/`catch`/`throw`/`finally`, see [exceptions.grav](examples/exceptions.grav)).
+`v0.6` added generic structs/functions and **globals + static fields**. `v0.5`
+added [string interpolation](#string-interpolation), the
+[`str`/`input`/`argc`/`argv`](#built-ins) built-ins, an
+[inline-C escape hatch](#inline-c---) (`%{ … %}`), and
 [decorators + `export`](#decorators--export). `v0.4` added fixed-length
 [arrays](#arrays), transparent [type aliases](#type-aliases), a `#define`
 [macro](#macros) preprocessor, and [`sizeof`](#sizeof). `v0.3` added enums, the
@@ -869,16 +925,13 @@ expanded operator set, ranges, `null` + `??` + `?.`, `as`/`is` + C-style casts,
 pointers, optional `;` terminators, and async/await. The following are **not**
 implemented yet — using them is a parse/type error today:
 
-- **Generic classes** — `class Box<T> { … }` (methods + per-instantiation vtables).
-  Generic *structs* and *functions* `fn id<T>(x: T)` *are* implemented (via
-  turbofish `id::<int>(x)`); generic classes are the remaining piece and the
-  keystone for collections.
-- **Dynamic / generic collections** — `list<T>` / `map<K,V>` and set literals like
-  `#{1, 2, 3}` (need generic classes plus a small C runtime). Fixed-length `T[N]`
-  arrays *are* implemented — see [Arrays](#arrays).
-- **Variadics** — `fn sum(...args)` (lowers naturally onto arrays).
-- **Exceptions** — `try` / `catch` / `throw` (needs a small unwinding runtime).
-- **Traits / mixins.** (Transparent `type` aliases *are* implemented.)
+- **Dynamic collections** — a `list<T>` / `map<K,V>` standard library and set/map
+  literals like `#{1, 2, 3}`. The generics needed for these now exist (generic
+  classes); what remains is the library types plus a small C runtime (growable
+  buffers, hashing) and the literal syntax. Fixed-length `T[N]` arrays *are*
+  implemented — see [Arrays](#arrays).
+- **Traits / mixins** — interfaces with default method bodies, copied into
+  implementers. (Interfaces and transparent `type` aliases *are* implemented.)
 - **Multiple class inheritance** — Grav supports a single base class plus multiple
   interfaces. True multiple *class* inheritance doesn't map cleanly onto C's struct
   prefix / single-vtable model; use interfaces (or composition) for multiple supertypes.
