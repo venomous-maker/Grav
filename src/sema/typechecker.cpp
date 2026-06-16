@@ -138,7 +138,11 @@ void TypeChecker::checkFunction(FunctionDecl &fn) {
     inStatic_ = false;
     inAsync_ = fn.isAsync;
     pushScope();
-    for (auto &p : fn.params) declareLocal(p.name, p.type, true, false, fn.line, fn.col);
+    for (auto &p : fn.params) {
+        // A variadic parameter is bound as a slice (runtime-length sequence).
+        TypeRef pt = p.variadic ? TypeRef::array(p.type, -1) : p.type;
+        declareLocal(p.name, pt, true, false, fn.line, fn.col);
+    }
     checkBlock(fn.body);
     popScope();
     inAsync_ = false;
