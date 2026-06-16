@@ -1,0 +1,22 @@
+// 12 — variadic functions: `...name: T` collects trailing args into a slice.
+
+fn sum(...nums: int) -> int {
+    let total = 0;
+    for (i in 0..nums.length) { total += nums[i]; }
+    return total;
+}
+
+fn join(sep: string, ...parts: string) -> string {
+    let s = "";
+    for (i in 0..parts.length) {
+        if (i > 0) { s += sep; }
+        s += parts[i];
+    }
+    return s;
+}
+
+fn main() {
+    print(sum());                       // 0
+    print(sum(1, 2, 3, 4, 5));          // 15
+    print(join(", ", "a", "b", "c"));   // a, b, c
+}
