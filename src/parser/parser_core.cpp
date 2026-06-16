@@ -218,11 +218,15 @@ void Parser::expectGenericClose() {
                 tokenTypeName(t.type));
 }
 
-std::vector<std::string> Parser::parseTypeParams() {
+std::vector<std::string> Parser::parseTypeParams(std::vector<std::string> *bounds) {
     std::vector<std::string> params;
     if (!matchToken(TokenType::Less)) return params;
     do {
         params.push_back(expect(TokenType::Identifier, "as a type parameter").lexeme);
+        // Optional constraint: `T: Bound`.
+        std::string b;
+        if (matchToken(TokenType::Colon)) b = parseQualifiedName("as a type-parameter bound");
+        if (bounds) bounds->push_back(b);
     } while (matchToken(TokenType::Comma));
     expectGenericClose();
     return params;
@@ -289,7 +293,7 @@ DeclPtr Parser::parseFunction(bool isAsync) {
     fn->isAsync = isAsync;
     fn->name = expect(TokenType::Identifier, "after 'fn'").lexeme;
     fn->fqName = qualify(fn->name);
-    fn->typeParams = parseTypeParams(); // optional <T, ...>
+    fn->typeParams = parseTypeParams(&fn->typeParamBounds); // optional <T, ...>
     fn->params = parseParams(/*allowVariadic=*/true);
     if (matchToken(TokenType::Arrow)) {
         fn->returnType = parseType("as the return type");
@@ -307,7 +311,7 @@ DeclPtr Parser::parseInterface() {
     iface->col = kw.col;
     iface->name = expect(TokenType::Identifier, "after 'interface'").lexeme;
     iface->fqName = qualify(iface->name);
-    iface->typeParams = parseTypeParams(); // optional <T, ...>
+    iface->typeParams = parseTypeParams(&iface->typeParamBounds); // optional <T, ...>
     expect(TokenType::LBrace, "to open the interface body");
     while (!check(TokenType::RBrace) && !atEnd()) {
         iface->methods.push_back(parseMethod(/*inInterface=*/true));
@@ -323,7 +327,7 @@ DeclPtr Parser::parseStruct() {
     st->col = kw.col;
     st->name = expect(TokenType::Identifier, "after 'struct'").lexeme;
     st->fqName = qualify(st->name);
-    st->typeParams = parseTypeParams(); // optional <T, ...>
+    st->typeParams = parseTypeParams(&st->typeParamBounds); // optional <T, ...>
     expect(TokenType::LBrace, "to open the struct body");
     while (!check(TokenType::RBrace) && !atEnd()) {
         // Structs hold plain data: `name: type` fields only (always public).
@@ -360,6 +364,7 @@ DeclPtr Parser::parseTypeAlias() {
     alias->col = kw.col;
     alias->name = expect(TokenType::Identifier, "after 'type'").lexeme;
     alias->fqName = qualify(alias->name);
+    alias->typeParams = parseTypeParams(); // optional <T, ...>
     expect(TokenType::Assign, "after the alias name");
     alias->target = parseType("as the aliased type");
     matchToken(TokenType::Semicolon); // optional terminator
@@ -374,7 +379,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
     cls->isAbstract = isAbstract;
     cls->name = expect(TokenType::Identifier, "after 'class'").lexeme;
     cls->fqName = qualify(cls->name);
-    cls->typeParams = parseTypeParams(); // optional <T, ...>
+    cls->typeParams = parseTypeParams(&cls->typeParamBounds); // optional <T, ...>
 
     if (matchToken(TokenType::Extends)) {
         cls->baseName = parseQualifiedName("after 'extends'");
