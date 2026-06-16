@@ -1,0 +1,19 @@
+// 05 — strings: concatenation, interpolation, and str().
+
+fn main() {
+    let first = "Ada";
+    let last = "Lovelace";
+
+    // `+` concatenates strings
+    print(first + " " + last);              // Ada Lovelace
+
+    // `${ ... }` interpolation converts any printable value with str()
+    let n = 42;
+    print("hello ${first}, n=${n}, doubled=${n * 2}");  // hello Ada, n=42, doubled=84
+
+    // str() explicitly, and \$ for a literal dollar sign
+    print("price: \$" + str(99));           // price: $99
+
+    // command-line arguments are available too
+    print("argc=${argc()} arg0=${argv(0)}");
+}
