@@ -1,118 +1,77 @@
-// comprehensive.grav — a tour of (almost) every Grav feature in one program.
-// Build & run:  gravc examples/comprehensive.grav --emit bin -o /tmp/comp && /tmp/comp
-//
-// Covers: macros, type aliases, enums, structs/classes/interfaces/abstract,
-// inheritance + interface dispatch, static methods, auto getters, arrays + sizeof,
-// the full operator set, ternary, ranges, null/??/?., pointers, as/is + casts,
-// async/await, string interpolation, str()/argc()/argv(), decorators + export,
-// and the inline-C escape hatch.
+// comprehensive.grav — a broad tour touching most language features at once.
 
-// ---- macros (preprocessor) ----
-#define LANES 4
-#define SQUARE(x) ((x) * (x))
+#define LANES 3
+#define SQ(x) ((x) * (x))
 
-// ---- top-level inline C: helpers + state usable from Grav (no extra libs) ----
 %{
-static int c_calls = 0;
-int c_isqrt(int n) { c_calls++; int r = 0; while ((r + 1) * (r + 1) <= n) r++; return r; }
+static int c_seed = 41;
+int c_next() { return ++c_seed; }
 %}
 
-// ---- type aliases (transparent) ----
-type Score = int
-type Lane  = int[LANES]
+const TITLE: string = "Grav"
+type Lane = int[LANES]
 
-// ---- enums ----
-enum Suit { Clubs, Diamonds, Hearts, Spades }
+enum Mode { Fast, Slow }
 
-fn suitName(s: Suit) -> string {
-    switch (s) {
-        case Suit.Clubs:    { return "clubs"; }
-        case Suit.Diamonds: { return "diamonds"; }
-        case Suit.Hearts:   { return "hearts"; }
-        default:            { return "spades"; }
-    }
-}
+struct Vec { x: int  y: int }
 
-// ---- value struct + pointer helper ----
-struct Point { x: int  y: int }
-
-fn shift(p: Point*, dx: int) { p->x = p->x + dx; }
-
-// ---- interface + abstract base + concrete subclasses ----
 interface Greeter { fn greet() -> string }
 
-abstract class Animal implements Greeter {
+abstract class Being implements Greeter {
     protected name: string
-    constructor(name: string) { self.name = name; }
+    constructor(n: string) { self.name = n; }
     public fn greet() -> string { return "I am ${self.name}"; }
     abstract fn sound() -> string
 }
 
-class Dog extends Animal {
-    constructor(name: string) { self.name = name; }
-    public fn sound() -> string { return "woof"; }
+class Robot extends Being {
+    constructor(n: string) { self.name = n; }
+    public fn sound() -> string { return "beep"; }
 }
 
-@Entity
-export class Counter {
-    private n: int
-    constructor() { self.n = 0; }
-    public fn bump(by: int) { self.n = self.n + by; }
-    static fn zero() -> Counter { return new Counter(); }
+class Box<T> {
+    private v: T
+    constructor(v: T) { self.v = v; }
+    public fn get() -> T { return self.v; }
 }
 
-// ---- async (eager futures) ----
-async fn area(w: int, h: int) -> int { return w * h; }
+async fn doubler(x: int) -> int { return x * 2; }
+
+fn sum(...xs: int) -> int {
+    let t = 0;
+    for (i in 0..xs.length) { t += xs[i]; }
+    return t;
+}
 
 async fn main() {
-    // macros + arithmetic + bitwise + shifts + compound + ternary
-    let s = SQUARE(6);                       // 36
-    let bits = 0;
-    bits |= 1; bits |= 4;                     // 5
-    bits <<= 1;                               // 10
-    let parity = s % 2 == 0 ? "even" : "odd";
-    print("square=${s} bits=${bits} mod=${17 % 5} parity=${parity}");
+    // macros, operators, ternary
+    print("${TITLE}: ${SQ(6)} ${17 % 5} ${(1 << 4) ^ 3} ${7 % 2 == 0 ? "e" : "o"}");
 
-    // arrays + indexing + .length + sizeof
-    let lane: Lane = [10, 20, 30, 40];
-    lane[1] = 25;
-    let total = 0;
-    for (i in 0..lane.length) { total += lane[i]; }
-    print("lane total=${total} sizeof(Lane)=${sizeof(Lane)}");
+    // arrays + ranges + variadics
+    let lane: Lane = [3, 4, 5];
+    print("lane sum = ${sum(lane[0], lane[1], lane[2])}");   // 12
 
-    // enums + switch
-    print("suit=${suitName(Suit.Hearts)} ordinal=${int(Suit.Spades)}");
+    // enums + pointers
+    print("mode = ${int(Mode.Slow)}");                       // 1
+    let v = Vec { x: 1, y: 2 };
+    let vp: Vec* = &v;
+    vp->x = 10;
+    print("vec = (${v.x}, ${v.y})");                         // (10, 2)
 
-    // pointers: address-of, write-through, arrow access
-    let p = Point { x: 3, y: 4 };
-    shift(&p, 7);
-    print("point=(${p.x}, ${p.y})");          // (10, 4)
-
-    // null + ?? + ?.
+    // OOP + null/?? + as/is
     let g: Greeter = null;
-    let who = g ?? new Dog("Rex");
-    print(who.greet());                       // I am Rex
-    let maybe: Dog = null;
-    print("maybe sound=${maybe?.sound()}");   // (empty: null-guarded)
+    let who = g ?? new Robot("R2");        // interface-typed fallback
+    print(who.greet());                    // I am R2  (interface dispatch)
+    let r = new Robot("C3");
+    print("${r.greet()} says ${r.sound()}"); // I am C3 says beep
+    print("is Robot? ${r is Robot}");        // is Robot? true
 
-    // inheritance / interface dispatch / as / is
-    let a: Animal = new Dog("Fido");
-    print("${a.greet()} says ${a.sound()}");
-    print("is Dog? ${(a as Dog) is Dog}");
+    // generics + async + inline C
+    let b = new Box<int>(await doubler(21));
+    print("box = ${b.get()}");                               // 42
+    print("c_next = ${%{ c_next() %} as int}");              // 42
 
-    // static method + auto getter + mutation
-    let c = Counter.zero();
-    c.bump(40); c.bump(2);
-    print("counter=${c.get_n()}");            // 42
-
-    // inline C expression: value flows C -> Grav (sequenced so c_calls updates first)
-    let root: int = %{ c_isqrt(144) %} as int;
-    let calls = %{ c_calls %} as int;
-    print("isqrt(144)=${root} c_calls=${calls}");   // 12, 1
-
-    // async pipeline
-    print("area=${await area(6, 7)}");        // 42
-
-    // command-line arguments
-    print("argc=${argc()} arg0=${argv(0)}");
+    // exceptions
+    try { throw new Robot("oops"); }
+    catch (e: Robot) { print("caught ${e.greet()}"); }       // caught I am oops
 }
