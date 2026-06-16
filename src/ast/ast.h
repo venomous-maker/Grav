@@ -379,7 +379,9 @@ struct ClassDecl : Decl {
     std::vector<std::string> typeParams; // generic params, e.g. <T, U>
     bool isAbstract = false;
     std::string baseName;      // as written, empty if none
+    std::vector<TypeRef> baseArgs; // generic args on the base, e.g. extends Stack<T>
     std::vector<std::string> interfaceNames;
+    std::vector<std::vector<TypeRef>> interfaceArgs; // parallel to interfaceNames
     std::vector<FieldDecl> fields;
     std::vector<StaticFieldDecl> staticFields;
     ConstructorDecl constructor;
@@ -388,6 +390,7 @@ struct ClassDecl : Decl {
 
 struct InterfaceDecl : Decl {
     std::string name;
+    std::vector<std::string> typeParams; // generic params, e.g. <T>
     std::vector<MethodDecl> methods; // signatures (hasBody == false)
 };
 
