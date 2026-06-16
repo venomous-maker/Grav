@@ -410,6 +410,7 @@ void Registry::registerDecls(Program &program) {
             for (auto &p : fn->params) {
                 info.paramTypes.push_back(p.type);
                 info.paramNames.push_back(p.name);
+                if (p.variadic) info.isVariadic = true;
             }
             functions_[fn->fqName] = std::move(info);
         } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
