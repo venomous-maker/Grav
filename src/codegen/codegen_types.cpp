@@ -59,7 +59,8 @@ void CodeGen::emitPrelude() {
         "#include <stdbool.h>\n"
         "#include <stdio.h>\n"
         "#include <stdlib.h>\n"
-        "#include <string.h>\n\n"
+        "#include <string.h>\n"
+        "#include <setjmp.h>\n\n"
         "typedef struct GravTypeInfo {\n"
         "    const char* name;\n"
         "    const struct GravTypeInfo* base;\n"
@@ -104,6 +105,17 @@ void CodeGen::emitPrelude() {
         "    }\n"
         "    if (c == EOF && n == 0) { free(b); return \"\"; }\n"
         "    b[n] = 0; return b;\n"
+        "}\n\n"
+        "/* Exceptions: a jmp_buf stack and the in-flight exception. */\n"
+        "typedef struct GravExc { void* value; const GravTypeInfo* type; } GravExc;\n"
+        "static jmp_buf grav_jmp_stack[64];\n"
+        "static int grav_jmp_top = 0;\n"
+        "static GravExc grav_current_exc;\n"
+        "static void grav_throw(void* v, const GravTypeInfo* t) {\n"
+        "    grav_current_exc.value = v; grav_current_exc.type = t;\n"
+        "    if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);\n"
+        "    fprintf(stderr, \"grav: uncaught exception '%s'\\n\", t ? t->name : \"?\");\n"
+        "    exit(1);\n"
         "}\n\n";
 }
 
