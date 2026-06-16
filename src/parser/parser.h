@@ -70,6 +70,8 @@ private:
     StmtPtr parseDoWhile();
     StmtPtr parseFor();
     StmtPtr parseSwitch(); // also handles 'match'
+    StmtPtr parseTry();
+    StmtPtr parseThrow();
     StmtPtr parseSimpleStmt(); // for-loop init/update: let / assign / expr
 
     // --- expressions (parser_expr.cpp) ---
