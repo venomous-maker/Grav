@@ -53,6 +53,9 @@ struct CBlockExpr : Expr {
 // qualified reference (class / namespace) that the checker resolves later.
 struct NameExpr : Expr {
     std::string name;
+    // Set by the checker when the name resolves to a global / static value: the
+    // C identifier to emit (otherwise the local `name` is used verbatim).
+    std::string resolvedGlobal;
 };
 
 // `self` (or `this`) inside a method body.
@@ -161,7 +164,8 @@ struct IndexExpr : Expr {
 // `object.member`. Used both as a value (field read) and as the callee of a
 // call (method / static method). The checker tags how it resolved.
 enum class MemberKind {
-    Unresolved, InstanceField, StaticTarget, NamespaceTarget, MethodRef, EnumValue
+    Unresolved, InstanceField, StaticTarget, NamespaceTarget, MethodRef, EnumValue,
+    StaticField // `Class.field` — a class-level static value
 };
 struct MemberExpr : Expr {
     ExprPtr object;
@@ -359,6 +363,16 @@ struct Decl {
 };
 using DeclPtr = std::unique_ptr<Decl>;
 
+// A class-level `static x: T = value` field — lowered to a C global.
+struct StaticFieldDecl {
+    Access access = Access::Public;
+    bool isConst = false;
+    std::string name;
+    TypeRef type;
+    ExprPtr init;
+    int line = 0, col = 0;
+};
+
 struct ClassDecl : Decl {
     std::string name;          // simple name
     std::vector<std::string> typeParams; // generic params, e.g. <T, U>
@@ -366,6 +380,7 @@ struct ClassDecl : Decl {
     std::string baseName;      // as written, empty if none
     std::vector<std::string> interfaceNames;
     std::vector<FieldDecl> fields;
+    std::vector<StaticFieldDecl> staticFields;
     ConstructorDecl constructor;
     std::vector<MethodDecl> methods;
 };
@@ -389,6 +404,17 @@ struct FunctionDecl : Decl {
     std::vector<Param> params;
     TypeRef returnType;
     Block body;
+};
+
+// A top-level `const NAME: T = value;` (or `let`) — a module-level global,
+// lowered to a C global variable.
+struct GlobalVarDecl : Decl {
+    std::string name;
+    bool isConst = false;
+    bool hasDeclaredType = false;
+    TypeRef declaredType;
+    TypeRef resolvedType;
+    ExprPtr init;
 };
 
 // A C-style enumeration: a named set of integer constants.
