@@ -72,6 +72,13 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
     else if (dynamic_cast<BoolLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Bool);
     else if (dynamic_cast<StringLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::String);
     else if (dynamic_cast<NullLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Null);
+    else if (dynamic_cast<CBlockExpr *>(&expr)) {
+        // Inline C may reference any in-scope local by name; mark them all used so
+        // we don't warn about "unused" variables consumed only by the C escape.
+        for (auto &scope : scopes_)
+            for (auto &[n, v] : scope) v.used = true;
+        t = TypeRef::prim(TypeRef::Kind::Void); // typed by context
+    }
     else if (auto *e = dynamic_cast<SelfExpr *>(&expr)) {
         if (currentClass_.empty() || inStatic_) {
             error(e->line, e->col, "'self' is only valid inside an instance method or constructor");
@@ -284,6 +291,17 @@ TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
 }
 
 TypeRef TypeChecker::checkAs(AsExpr &e) {
+    // `%{ c_expr %} as Type` — an inline C value adopts the annotated type.
+    if (dynamic_cast<CBlockExpr *>(e.operand.get())) {
+        TypeRef *inner = &e.target;
+        while (inner->isPointer() && inner->elem) inner = inner->elem.get();
+        if (inner->isNamed()) {
+            std::string fq = reg_->resolveType(inner->name, currentNs_);
+            if (!fq.empty()) *inner = TypeRef::named(fq);
+        }
+        e.operand->type = e.target;
+        return e.target;
+    }
     TypeRef src = checkExpr(*e.operand);
     // Canonicalize the target (resolving named parts and expanding aliases, looking
     // through any pointer wrappers like `Point*`).
@@ -606,6 +624,47 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             }
             e.ownerClass = typeFq; // stash resolved class for codegen
             return TypeRef::prim(TypeRef::Kind::Bool);
+        }
+        if (name->name == "str") {
+            e.kind = CallKind::Builtin;
+            e.targetName = "str";
+            if (e.args.size() != 1) {
+                error(e.line, e.col, "str expects exactly 1 argument");
+            } else {
+                TypeRef t = checkExpr(*e.args[0]);
+                bool ok = isPrintable(t) || (t.isNamed() && reg_->isEnum(t.name));
+                if (!t.isError() && !ok)
+                    error(e.args[0]->line, e.args[0]->col,
+                          "str cannot convert a value of type " + typeRefName(t));
+            }
+            return TypeRef::prim(TypeRef::Kind::String);
+        }
+        if (name->name == "input") {
+            e.kind = CallKind::Builtin;
+            e.targetName = "input";
+            if (!e.args.empty())
+                error(e.line, e.col, "input expects no arguments");
+            return TypeRef::prim(TypeRef::Kind::String);
+        }
+        if (name->name == "argc") {
+            e.kind = CallKind::Builtin;
+            e.targetName = "argc";
+            if (!e.args.empty())
+                error(e.line, e.col, "argc expects no arguments");
+            return TypeRef::prim(TypeRef::Kind::Int);
+        }
+        if (name->name == "argv") {
+            e.kind = CallKind::Builtin;
+            e.targetName = "argv";
+            if (e.args.size() != 1) {
+                error(e.line, e.col, "argv expects exactly 1 argument (an index)");
+            } else {
+                TypeRef t = checkExpr(*e.args[0]);
+                if (!t.isError() && t.kind != TypeRef::Kind::Int)
+                    error(e.args[0]->line, e.args[0]->col,
+                          "argv expects an int index, got " + typeRefName(t));
+            }
+            return TypeRef::prim(TypeRef::Kind::String);
         }
         std::string fnFq = reg_->resolveFunc(name->name, currentNs_);
         if (fnFq.empty()) {
