@@ -446,6 +446,12 @@ bool Parser::looksLikeTypeArg() const {
 ExprPtr Parser::parsePrimary() {
     const Token &t = peek();
     switch (t.type) {
+        case TokenType::CBlock: { // `%{ ... %}` inline C as an expression
+            advance();
+            auto e = at<CBlockExpr>(t);
+            e->code = t.lexeme;
+            return e;
+        }
         case TokenType::Sizeof: {
             advance(); // 'sizeof'
             expect(TokenType::LParen, "after 'sizeof'");
