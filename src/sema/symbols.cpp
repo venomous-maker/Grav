@@ -25,6 +25,12 @@ std::string joinDots(const std::vector<std::string> &parts, size_t count) {
     }
     return out;
 }
+// FQ name -> C identifier (dots become double underscores), matching codegen.
+std::string cmangle(const std::string &fq) {
+    std::string out;
+    for (char c : fq) { if (c == '.') out += "__"; else out += c; }
+    return out;
+}
 } // namespace
 
 void Registry::error(int line, int col, const std::string &msg) {
@@ -63,6 +69,35 @@ bool Registry::hasEnumMember(const std::string &enumFq,
 const FunctionInfo *Registry::func(const std::string &fq) const {
     auto it = functions_.find(fq);
     return it == functions_.end() ? nullptr : &it->second;
+}
+const GlobalInfo *Registry::global(const std::string &fq) const {
+    auto it = globals_.find(fq);
+    return it == globals_.end() ? nullptr : &it->second;
+}
+
+std::string Registry::resolveGlobal(const std::string &name,
+                                    const std::string &nsContext) const {
+    auto parts = splitDots(nsContext);
+    for (size_t i = parts.size() + 1; i-- > 0;) {
+        std::string prefix = joinDots(parts, i);
+        std::string cand = prefix.empty() ? name : prefix + "." + name;
+        if (globals_.count(cand)) return cand;
+    }
+    return "";
+}
+
+const GlobalInfo *Registry::findStaticField(const std::string &classFq,
+                                            const std::string &name) const {
+    std::string cur = classFq;
+    int guard = 0;
+    while (!cur.empty() && guard++ < 100) {
+        auto it = globals_.find(cur + "." + name);
+        if (it != globals_.end() && !it->second.ownerClass.empty()) return &it->second;
+        const ClassInfo *ci = cls(cur);
+        if (!ci) break;
+        cur = ci->baseClass;
+    }
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +337,20 @@ void Registry::registerDecls(Program &program) {
                 info.methods.push_back(std::move(mi));
             }
             classes_[c->fqName] = std::move(info);
+            // Static fields lower to C globals named Class.field.
+            for (auto &sf : c->staticFields) {
+                std::string fq = c->fqName + "." + sf.name;
+                if (globals_.count(fq)) { error(sf.line, sf.col, "duplicate static field '" + fq + "'"); continue; }
+                GlobalInfo gi;
+                gi.fqName = fq;
+                gi.type = sf.type; // canonicalized later
+                gi.isConst = sf.isConst;
+                gi.access = sf.access;
+                gi.ownerClass = c->fqName;
+                gi.cName = cmangle(c->fqName) + "_s_" + sf.name;
+                gi.line = sf.line; gi.col = sf.col;
+                globals_[fq] = gi;
+            }
         } else if (auto *st = dynamic_cast<StructDecl *>(d)) {
             if (isType(st->fqName) || isAlias(st->fqName)) { error(st->line, st->col, "duplicate type '" + st->fqName + "'"); continue; }
             StructInfo info;
@@ -363,6 +412,21 @@ void Registry::registerDecls(Program &program) {
                 info.paramNames.push_back(p.name);
             }
             functions_[fn->fqName] = std::move(info);
+        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
+            if (globals_.count(g->fqName)) { error(g->line, g->col, "duplicate global '" + g->fqName + "'"); continue; }
+            if (!g->hasDeclaredType) {
+                error(g->line, g->col, "a top-level '" + std::string(g->isConst ? "const" : "let") +
+                                           "' needs an explicit type, e.g. `" +
+                                           (g->isConst ? "const " : "let ") + g->name + ": int = ...`");
+                continue;
+            }
+            GlobalInfo gi;
+            gi.fqName = g->fqName;
+            gi.type = g->declaredType; // canonicalized later
+            gi.isConst = g->isConst;
+            gi.cName = "gv_" + cmangle(g->fqName);
+            gi.line = g->line; gi.col = g->col;
+            globals_[g->fqName] = gi;
         }
     }
 }
@@ -518,6 +582,12 @@ void Registry::canonicalize() {
             fd->params[j].type = canonType(fd->params[j].type, ns, fd->line, fd->col);
             fi.paramTypes[j] = fd->params[j].type;
         }
+    }
+    // Globals and static fields: canonicalize their declared types (the namespace
+    // context is the global's own, or its owning class's).
+    for (auto &[fq, gi] : globals_) {
+        std::string ns = namespaceOf(gi.ownerClass.empty() ? fq : gi.ownerClass);
+        gi.type = canonType(gi.type, ns, gi.line, gi.col);
     }
 }
 
