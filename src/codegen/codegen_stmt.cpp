@@ -25,6 +25,8 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
+        // Returning out of an enclosing `try` must restore the jmp_buf stack top.
+        if (!tryTops_.empty()) line("grav_jmp_top = " + tryTops_.front() + ";");
         if (s->value) line("return " + emitAs(*s->value, currentReturnType_) + ";");
         else line("return;");
         return;
@@ -103,6 +105,15 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         line("}");
         return;
     }
+    if (auto *s = dynamic_cast<const ThrowStmt *>(&stmt)) {
+        const std::string &ty = s->value->type.name;
+        line("grav_throw((void*)(" + emitExpr(*s->value) + "), &" + mangle(ty) + "_typeinfo);");
+        return;
+    }
+    if (auto *s = dynamic_cast<const TryStmt *>(&stmt)) {
+        emitTry(*s);
+        return;
+    }
     if (dynamic_cast<const BreakStmt *>(&stmt)) { line("break;"); return; }
     if (dynamic_cast<const ContinueStmt *>(&stmt)) { line("continue;"); return; }
 }
@@ -128,6 +139,46 @@ void CodeGen::emitIf(const IfStmt &s) {
             e = nullptr;
         }
     }
+    line("}");
+}
+
+void CodeGen::emitTry(const TryStmt &s) {
+    std::string t = "__try" + std::to_string(tryCounter_++);
+    std::string exc = "grav_current_exc";
+    line("{");
+    indent_++;
+    line("int " + t + " = grav_jmp_top++;");
+    line("if (setjmp(grav_jmp_stack[" + t + "]) == 0) {");
+    indent_++;
+    tryTops_.push_back(t);
+    emitBlock(s.tryBlock);
+    tryTops_.pop_back();
+    line("grav_jmp_top = " + t + ";"); // normal completion: pop
+    indent_--;
+    line("} else {");
+    indent_++;
+    line("grav_jmp_top = " + t + ";"); // exception in flight: pop, then handle
+    if (s.hasCatch) {
+        std::string ct = structName(s.catchType.name);
+        line("if (grav_is_instance(" + exc + ".value, &" + mangle(s.catchType.name) + "_typeinfo)) {");
+        indent_++;
+        line(ct + "* " + s.catchVar + " = (" + ct + "*)" + exc + ".value;");
+        emitBlock(s.catchBlock);
+        indent_--;
+        line("} else {");
+        indent_++;
+        if (s.hasFinally) emitBlock(s.finallyBlock);
+        line("grav_throw(" + exc + ".value, " + exc + ".type);"); // rethrow
+        indent_--;
+        line("}");
+    } else {
+        if (s.hasFinally) emitBlock(s.finallyBlock);
+        line("grav_throw(" + exc + ".value, " + exc + ".type);"); // propagate
+    }
+    indent_--;
+    line("}");
+    if (s.hasFinally) emitBlock(s.finallyBlock); // normal + handled paths
+    indent_--;
     line("}");
 }
 
