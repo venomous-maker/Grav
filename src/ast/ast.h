@@ -177,6 +177,7 @@ struct MemberExpr : Expr {
 // `new ClassName(args)`.
 struct NewExpr : Expr {
     std::string className;   // as written; checker rewrites to FQ name
+    std::vector<TypeRef> typeArgs; // generic args, e.g. `new Box<int>(...)`
     std::vector<ExprPtr> args;
 };
 
@@ -190,6 +191,7 @@ struct StructFieldInit {
 // `Point { x: 1, y: 2 }` — a value of a plain struct type.
 struct StructLiteralExpr : Expr {
     std::string typeName;   // as written; checker rewrites to FQ name
+    std::vector<TypeRef> typeArgs; // generic args, e.g. `Box<int> { value: 5 }`
     std::vector<StructFieldInit> fields;
 };
 
@@ -202,6 +204,7 @@ enum class CallKind {
 };
 struct CallExpr : Expr {
     ExprPtr callee;
+    std::vector<TypeRef> typeArgs; // turbofish generic args: `id::<int>(x)`
     std::vector<ExprPtr> args;
 
     CallKind kind = CallKind::Unresolved;
@@ -358,6 +361,7 @@ using DeclPtr = std::unique_ptr<Decl>;
 
 struct ClassDecl : Decl {
     std::string name;          // simple name
+    std::vector<std::string> typeParams; // generic params, e.g. <T, U>
     bool isAbstract = false;
     std::string baseName;      // as written, empty if none
     std::vector<std::string> interfaceNames;
@@ -374,11 +378,13 @@ struct InterfaceDecl : Decl {
 // A plain data type: named fields, value semantics, no methods/vtable/RTTI.
 struct StructDecl : Decl {
     std::string name;
+    std::vector<std::string> typeParams; // generic params, e.g. <T>
     std::vector<FieldDecl> fields;
 };
 
 struct FunctionDecl : Decl {
     std::string name;
+    std::vector<std::string> typeParams; // generic params, e.g. <T>
     bool isAsync = false; // callers receive a Future<returnType>
     std::vector<Param> params;
     TypeRef returnType;
