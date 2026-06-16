@@ -1,0 +1,5 @@
+program: /tmp/gravtest_16_input, args: 2
+What is your name?
+Hello, Ada!
+Pick a number:
+You typed: 7
