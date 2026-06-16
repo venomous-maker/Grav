@@ -1,0 +1,42 @@
+// 11 — generics: structs, functions, classes, interfaces, inheritance,
+// constraints, and type aliases. Each instantiation is monomorphized.
+
+struct Pair<A, B> { first: A  second: B }
+
+fn identity<T>(x: T) -> T { return x; }          // generic function (turbofish call)
+
+interface Named { fn name() -> string }
+
+class Box<T> {                                   // generic class
+    private value: T
+    constructor(v: T) { self.value = v; }
+    public fn get() -> T { return self.value; }
+}
+
+class Stack<T> extends Box<T> {                  // generic inheritance
+    constructor(v: T) { self.value = v; }
+}
+
+fn greet<T: Named>(x: T) -> string { return x.name(); }   // T: Named constraint
+
+class Dog implements Named {
+    constructor() {}
+    public fn name() -> string { return "Rex"; }
+}
+
+type Vec<T> = T[3]                               // generic alias
+
+fn main() {
+    let p = Pair<string, int> { first: "age", second: 30 };
+    print("${p.first} = ${p.second}");           // age = 30
+
+    print(identity::<int>(42));                  // 42
+
+    let b = new Box<string>("hi");
+    print(b.get());                              // hi
+
+    print(greet::<Dog>(new Dog()));              // Rex
+
+    let v: Vec<int> = [1, 2, 3];
+    print(v[2]);                                 // 3
+}
