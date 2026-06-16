@@ -617,6 +617,15 @@ import "shapes.grav"
 fn main() { let s: Shape = new Square(6)  print(s.area()) }
 ```
 
+A runnable, multi-file example lives in
+[`examples/import_demo/`](examples/import_demo): `app.grav` imports `geometry.grav`,
+which in turn imports `mathutil.grav` (a transitive import), and `app.grav` also
+re-imports `mathutil.grav` to show that duplicate imports are a safe no-op.
+
+```bash
+./build/gravc examples/import_demo/app.grav --emit bin -o /tmp/app && /tmp/app
+```
+
 ### Runtime type info (RTTI)
 
 Every object carries a type descriptor. Two built-ins query it:

@@ -1,0 +1,20 @@
+// app.grav — the program. Imports bring in declarations *before* this file.
+//
+//   ./build/gravc examples/import_demo/app.grav --emit bin -o /tmp/app && /tmp/app
+//
+// `geometry.grav` already imports `mathutil.grav`, so importing it again here is
+// a no-op: every module is included at most once, which makes imports both
+// duplicate-safe and cycle-safe.
+
+import "geometry.grav"
+import "mathutil.grav"
+
+fn main() {
+    let p = Point { x: 3, y: 4 }
+    print(distSq(p))                          // 25
+
+    let s: Shape = new Square(6)
+    print(s.area())                           // 36
+
+    print(mathx.max(distSq(p), s.area()))     // 36
+}

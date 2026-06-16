@@ -1,0 +1,9 @@
+// mathutil.grav — a tiny utility module (a "library": no `main`).
+//
+// Files without a `main` are meant to be imported. `import "mathutil.grav"`
+// textually pulls these declarations into the importing file before its own.
+
+namespace mathx {
+    fn square(n: int) -> int { return n * n }
+    fn max(a: int, b: int) -> int { return a > b ? a : b }
+}

@@ -1,0 +1,21 @@
+// geometry.grav — geometry types built on top of the mathx helpers.
+//
+// This module imports another module: paths are resolved relative to *this*
+// file, so "mathutil.grav" means the one sitting next to it.
+
+import "mathutil.grav"
+
+struct Point { x: int  y: int }
+
+// Squared distance from the origin, reusing the imported helper.
+fn distSq(p: Point) -> int {
+    return mathx.square(p.x) + mathx.square(p.y)
+}
+
+interface Shape { fn area() -> int }
+
+class Square implements Shape {
+    private side: int
+    constructor(side: int) { self.side = side }
+    public fn area() -> int { return mathx.square(self.side) }
+}
