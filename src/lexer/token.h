@@ -59,6 +59,10 @@ enum class TokenType {
     Match,
     Break,
     Continue,
+    Try,
+    Catch,
+    Finally,
+    Throw,
     In,         // for-in ranges
     As,         // value cast: expr as int
     Is,         // RTTI test: expr is Shape
