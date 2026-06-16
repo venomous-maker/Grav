@@ -1,0 +1,17 @@
+// 15 — the inline-C escape hatch `%{ ... %}` (values flow both ways).
+
+%{
+static int c_calls = 0;
+int c_triple(int x) { c_calls++; return x * 3; }
+%}
+
+fn main() {
+    let n = 7;
+    %{ printf("C sees n=%d\n", n); %};            // Grav local -> C
+
+    let tripled: int = %{ c_triple(n) %} as int;  // C result -> Grav
+    print("tripled = ${tripled}");                // 21
+
+    let calls = %{ c_calls %} as int;             // read a C global
+    print("calls = ${calls}");                    // 1
+}
