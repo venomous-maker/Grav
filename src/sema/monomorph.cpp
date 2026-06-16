@@ -209,6 +209,17 @@ StmtPtr cloneStmt(const Stmt *s) {
         auto n = mkS<ForInStmt>(s); n->var = x->var; n->inclusive = x->inclusive;
         n->lo = cloneExpr(x->lo.get()); n->hi = cloneExpr(x->hi.get()); n->body = cloneBlock(x->body); return n;
     }
+    if (auto *x = dynamic_cast<const ThrowStmt *>(s)) {
+        auto n = mkS<ThrowStmt>(s); n->value = cloneExpr(x->value.get()); return n;
+    }
+    if (auto *x = dynamic_cast<const TryStmt *>(s)) {
+        auto n = mkS<TryStmt>(s);
+        n->tryBlock = cloneBlock(x->tryBlock);
+        n->hasCatch = x->hasCatch; n->catchVar = x->catchVar; n->catchType = x->catchType;
+        n->catchBlock = cloneBlock(x->catchBlock);
+        n->hasFinally = x->hasFinally; n->finallyBlock = cloneBlock(x->finallyBlock);
+        return n;
+    }
     if (dynamic_cast<const BreakStmt *>(s)) return mkS<BreakStmt>(s);
     if (dynamic_cast<const ContinueStmt *>(s)) return mkS<ContinueStmt>(s);
     return nullptr;
@@ -553,6 +564,12 @@ void Mono::walkStmt(Stmt *s, const Subst &subst) {
         walkStmt(x->update.get(), subst); walkBlock(x->body, subst);
     } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
         walkExpr(x->lo.get(), subst); walkExpr(x->hi.get(), subst); walkBlock(x->body, subst);
+    } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) {
+        walkExpr(x->value.get(), subst);
+    } else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+        walkBlock(x->tryBlock, subst);
+        if (x->hasCatch) { rewriteType(x->catchType, subst, x->line, x->col); walkBlock(x->catchBlock, subst); }
+        if (x->hasFinally) walkBlock(x->finallyBlock, subst);
     }
 }
 
