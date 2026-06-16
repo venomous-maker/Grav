@@ -26,10 +26,31 @@ std::string CodeGen::generate(const Program &program, const Registry &reg) {
     emitVTableInstances();
     emitTypeInfos();
     emitInterfaceTables();
+    emitGlobals();
     emitDefinitions(program);
     emitMainWrapper();
 
-    return typedefs_ + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ + defs_;
+    return typedefs_ + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ +
+           globals_ + defs_;
+}
+
+void CodeGen::emitGlobals() {
+    auto one = [&](const std::string &fq, const Expr *init) {
+        const GlobalInfo *gi = reg_->global(fq);
+        if (!gi) return;
+        globals_ += "static ";
+        if (gi->isConst) globals_ += "const ";
+        globals_ += cTy(gi->type) + " " + gi->cName + " = " + emitAs(*init, gi->type) + ";\n";
+    };
+    for (const auto &declPtr : program_->decls) {
+        if (auto *g = dynamic_cast<const GlobalVarDecl *>(declPtr.get())) {
+            one(g->fqName, g->init.get());
+        } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
+            for (const auto &sf : c->staticFields)
+                one(c->fqName + "." + sf.name, sf.init.get());
+        }
+    }
+    if (!globals_.empty()) globals_ += "\n";
 }
 
 void CodeGen::emitPrelude() {
