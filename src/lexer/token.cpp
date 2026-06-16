@@ -8,6 +8,7 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::IntLiteral: return "int literal";
         case TokenType::FloatLiteral: return "float literal";
         case TokenType::StringLiteral: return "string literal";
+        case TokenType::CBlock: return "inline C block";
         case TokenType::KwInt: return "'int'";
         case TokenType::KwFloat: return "'float'";
         case TokenType::KwBool: return "'bool'";
@@ -54,6 +55,7 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::In: return "'in'";
         case TokenType::As: return "'as'";
         case TokenType::Is: return "'is'";
+        case TokenType::Export: return "'export'";
         case TokenType::Colon: return "':'";
         case TokenType::ColonColon: return "'::'";
         case TokenType::Semicolon: return "';'";
