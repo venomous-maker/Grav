@@ -9,7 +9,15 @@ std::string typeRefName(const TypeRef &t) {
         case TypeRef::Kind::Bool: return "bool";
         case TypeRef::Kind::String: return "string";
         case TypeRef::Kind::Void: return "void";
-        case TypeRef::Kind::Named: return t.name;
+        case TypeRef::Kind::Named: {
+            if (t.args.empty()) return t.name;
+            std::string s = t.name + "<";
+            for (size_t i = 0; i < t.args.size(); ++i) {
+                if (i) s += ", ";
+                s += typeRefName(t.args[i]);
+            }
+            return s + ">";
+        }
         case TypeRef::Kind::Future:
             return "Future<" + (t.elem ? typeRefName(*t.elem) : "?") + ">";
         case TypeRef::Kind::Pointer:
