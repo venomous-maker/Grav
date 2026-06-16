@@ -1,0 +1,23 @@
+// 07 — fixed arrays, type aliases, macros, and sizeof.
+
+#define SIZE 4                  // object-like macro
+#define DOUBLE(x) ((x) * 2)     // function-like macro
+
+type Row = int[SIZE]            // transparent type alias
+
+fn total(r: Row) -> int {
+    let sum = 0;
+    for (i in 0..r.length) { sum += r[i]; }
+    return sum;
+}
+
+fn main() {
+    let xs: Row = [10, 20, 30, 40];
+    xs[1] = DOUBLE(xs[1]);                       // 40
+    print(xs[1]);                                // 40
+    print(xs.length);                            // 4
+    print(total(xs));                            // 120
+
+    print(sizeof(int));                          // 4 (typically)
+    print(sizeof(xs) == sizeof(int) * SIZE);     // true
+}
