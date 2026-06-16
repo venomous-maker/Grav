@@ -377,6 +377,7 @@ struct StaticFieldDecl {
 struct ClassDecl : Decl {
     std::string name;          // simple name
     std::vector<std::string> typeParams; // generic params, e.g. <T, U>
+    std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     bool isAbstract = false;
     std::string baseName;      // as written, empty if none
     std::vector<TypeRef> baseArgs; // generic args on the base, e.g. extends Stack<T>
@@ -391,6 +392,7 @@ struct ClassDecl : Decl {
 struct InterfaceDecl : Decl {
     std::string name;
     std::vector<std::string> typeParams; // generic params, e.g. <T>
+    std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     std::vector<MethodDecl> methods; // signatures (hasBody == false)
 };
 
@@ -398,12 +400,14 @@ struct InterfaceDecl : Decl {
 struct StructDecl : Decl {
     std::string name;
     std::vector<std::string> typeParams; // generic params, e.g. <T>
+    std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     std::vector<FieldDecl> fields;
 };
 
 struct FunctionDecl : Decl {
     std::string name;
     std::vector<std::string> typeParams; // generic params, e.g. <T>
+    std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     bool isAsync = false; // callers receive a Future<returnType>
     std::vector<Param> params;
     TypeRef returnType;
@@ -436,6 +440,7 @@ struct EnumDecl : Decl {
 // trace in the generated C.
 struct TypeAliasDecl : Decl {
     std::string name;
+    std::vector<std::string> typeParams; // generic params, e.g. type Vec<T> = T[3]
     TypeRef target; // as written; canonicalized by the registry
 };
 
