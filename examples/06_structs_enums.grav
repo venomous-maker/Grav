@@ -1,0 +1,35 @@
+// 06 — value types: structs and enums.
+
+struct Point { x: int  y: int }
+struct Rect { origin: Point  w: int  h: int }   // structs nest by value
+
+enum Direction { North, East, South, West }
+
+fn area(r: Rect) -> int { return r.w * r.h; }
+
+fn turn(d: Direction) -> Direction {
+    switch (d) {
+        case Direction.North: { return Direction.East; }
+        case Direction.East:  { return Direction.South; }
+        case Direction.South: { return Direction.West; }
+        default:              { return Direction.North; }
+    }
+}
+
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    print(p.x + p.y);                       // 7
+
+    let r = Rect { origin: p, w: 5, h: 6 };
+    print(area(r));                         // 30
+
+    // structs are copied by value
+    let p2 = p;
+    p2.x = 100;
+    print(p.x);                             // 3 (unchanged)
+
+    // enums: members, equality, switch, ordinal via int()
+    let d = Direction.North;
+    print(d == turn(turn(turn(turn(d)))));  // true (full circle)
+    print(int(Direction.West));             // 3
+}
