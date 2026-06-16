@@ -23,6 +23,7 @@ private:
     // codegen_types.cpp
     void emitPrelude();
     void emitEnums();
+    void emitGlobals(); // module-level const/let and class static fields
     void emitStructs();
     void emitStruct(const std::string &classFq);
     void emitValueStructs();              // plain `struct` + array types, dependency-ordered
@@ -91,6 +92,7 @@ private:
     std::string structs_;
     std::string vtableTypes_;
     std::string protos_;
+    std::string globals_;  // module-level const/let and static fields
     std::string cblocks_; // verbatim top-level `%{ ... %}` C
     std::string vtables_;
     std::string defs_;
