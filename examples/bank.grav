@@ -1,0 +1,92 @@
+// bank.grav — a small banking app combining many features:
+// enums, interfaces, abstract classes, inheritance, generics, a generic
+// container, static fields, exceptions, and string interpolation.
+
+enum Currency { USD, EUR, GBP }
+
+class InsufficientFunds {
+    public needed: int
+    constructor(n: int) { self.needed = n; }
+}
+
+interface Account {
+    fn balance() -> int
+    fn deposit(n: int)
+    fn withdraw(n: int)
+}
+
+abstract class BaseAccount implements Account {
+    protected bal: int
+    public owner: string
+    static count: int = 0
+    constructor(owner: string) { self.owner = owner; self.bal = 0; }
+    public fn balance() -> int { return self.bal; }
+    public fn deposit(n: int) { self.bal = self.bal + n; }
+    public fn withdraw(n: int) {
+        if (n > self.bal) { throw new InsufficientFunds(n - self.bal); }
+        self.bal = self.bal - n;
+    }
+    abstract fn kind() -> string
+}
+
+class Checking extends BaseAccount {
+    constructor(owner: string) {
+        self.owner = owner; self.bal = 0;
+        BaseAccount.count = BaseAccount.count + 1;
+    }
+    public fn kind() -> string { return "checking"; }
+}
+
+class Savings extends BaseAccount {
+    private rate: int
+    constructor(owner: string, rate: int) {
+        self.owner = owner; self.bal = 0; self.rate = rate;
+        BaseAccount.count = BaseAccount.count + 1;
+    }
+    public fn kind() -> string { return "savings"; }
+    public fn addInterest() { self.bal = self.bal + (self.bal * self.rate) / 100; }
+}
+
+// a generic fixed-capacity ledger of account references
+class Ledger<T> {
+    private items: T[4]
+    private n: int
+    // class instances are zero-initialized, so `items` starts as 4 null slots.
+    constructor() { self.n = 0; }
+    public fn add(x: T) { self.items[self.n] = x; self.n = self.n + 1; }
+    public fn at(i: int) -> T { return self.items[i]; }
+    public fn size() -> int { return self.n; }
+}
+
+fn describe(a: Account) -> string {
+    return "balance = ${a.balance()}";
+}
+
+fn main() {
+    let c = new Checking("Ada");
+    c.deposit(100);
+    c.withdraw(30);
+    print("${c.kind()}: ${describe(c)}");        // checking: balance = 70
+
+    let s = new Savings("Babbage", 10);
+    s.deposit(200);
+    s.addInterest();
+    print("${s.kind()}: ${describe(s)}");        // savings: balance = 220
+
+    print("accounts opened = ${BaseAccount.count}");  // 2
+
+    // generic ledger holding the accounts via the interface
+    let book = new Ledger<Account>();
+    book.add(c);
+    book.add(s);
+    let grand = 0;
+    for (i in 0..book.size()) { grand += book.at(i).balance(); }
+    print("total holdings = ${grand}");          // 290
+
+    // exception handling
+    try {
+        c.withdraw(1000);
+    } catch (e: InsufficientFunds) {
+        print("declined, short by ${e.needed}"); // declined, short by 930
+    }
+}
