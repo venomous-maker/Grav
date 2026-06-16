@@ -48,7 +48,7 @@ private:
     MethodDecl parseMethod(bool inInterface);
     ConstructorDecl parseConstructor();
     FieldDecl parseField(Access access, bool readonly);
-    std::vector<Param> parseParams();
+    std::vector<Param> parseParams(bool allowVariadic = false);
     TypeRef parseType(const char *context);
     std::string parseQualifiedName(const char *context);
     // Generics: `<T, U>` param lists on declarations, `<int, string>` argument
