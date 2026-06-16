@@ -54,6 +54,30 @@ void CodeGen::emitArgs(std::string &out, const CallExpr &call,
     }
 }
 
+void CodeGen::emitVariadicArgs(std::string &out, const CallExpr &call,
+                               const std::vector<TypeRef> &params) const {
+    size_t fixed = params.empty() ? 0 : params.size() - 1;
+    TypeRef elem = params.empty() ? TypeRef::prim(TypeRef::Kind::Int) : params.back();
+    std::string elemTy = cTy(elem);
+    for (size_t i = 0; i < fixed; ++i) {
+        if (i) out += ", ";
+        out += emitAs(*call.args[i], params[i]);
+    }
+    if (fixed) out += ", ";
+    size_t count = call.args.size() - fixed;
+    out += std::to_string(count) + ", ";
+    if (count == 0) {
+        out += "(" + elemTy + "*)0"; // no variadic args
+    } else {
+        out += "(" + elemTy + "[]){ ";
+        for (size_t i = fixed; i < call.args.size(); ++i) {
+            if (i > fixed) out += ", ";
+            out += emitAs(*call.args[i], elem);
+        }
+        out += " }";
+    }
+}
+
 std::string CodeGen::emitExpr(const Expr &expr) const {
     if (auto *e = dynamic_cast<const IntLiteralExpr *>(&expr)) return e->raw;
     if (auto *e = dynamic_cast<const FloatLiteralExpr *>(&expr)) return e->raw;
@@ -165,8 +189,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
         std::string base = emitExpr(*e->base);
         std::string idx = emitExpr(*e->index);
-        // Arrays index through their `.data` member; pointers index directly.
-        if (e->base->type.isArray())
+        // Fixed arrays index through their `.data` member; slices and pointers
+        // index directly.
+        if (e->base->type.isArray() && !e->base->type.isSlice())
             return "(" + base + ").data[" + idx + "]";
         return "(" + base + ")[" + idx + "]";
     }
@@ -203,6 +228,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         // `Class.staticField` lowers to the static global's C name.
         if (e->kind == MemberKind::StaticField)
             return e->qualified;
+        // `slice.length` is the runtime count passed alongside the pointer.
+        if (e->object->type.isSlice() && e->member == "length")
+            return emitExpr(*e->object) + "__n";
         // `arr.length` is the array's fixed length, a compile-time constant.
         if (e->object->type.isArray() && e->member == "length")
             return std::to_string(e->object->type.arrayLen);
@@ -263,11 +291,14 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             }
         }
         case CallKind::FreeFunction: {
-            std::vector<TypeRef> params;
-            if (const FunctionInfo *fi = reg_->func(call.targetName))
-                params = fi->paramTypes;
+            const FunctionInfo *fi = reg_->func(call.targetName);
+            std::vector<TypeRef> params = fi ? fi->paramTypes : std::vector<TypeRef>{};
             std::string out = funcCName(call.targetName) + "(";
-            emitArgs(out, call, params, false, "");
+            if (fi && fi->isVariadic) {
+                emitVariadicArgs(out, call, params);
+            } else {
+                emitArgs(out, call, params, false, "");
+            }
             return out + ")";
         }
         case CallKind::StaticMethod: {
