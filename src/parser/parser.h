@@ -43,6 +43,7 @@ private:
     DeclPtr parseStruct();
     DeclPtr parseEnum();
     DeclPtr parseTypeAlias();
+    DeclPtr parseGlobalVar(); // top-level `const`/`let`
     DeclPtr parseFunction(bool isAsync);
     MethodDecl parseMethod(bool inInterface);
     ConstructorDecl parseConstructor();
