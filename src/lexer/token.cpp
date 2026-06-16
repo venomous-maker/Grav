@@ -52,6 +52,10 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::Match: return "'match'";
         case TokenType::Break: return "'break'";
         case TokenType::Continue: return "'continue'";
+        case TokenType::Try: return "'try'";
+        case TokenType::Catch: return "'catch'";
+        case TokenType::Finally: return "'finally'";
+        case TokenType::Throw: return "'throw'";
         case TokenType::In: return "'in'";
         case TokenType::As: return "'as'";
         case TokenType::Is: return "'is'";
