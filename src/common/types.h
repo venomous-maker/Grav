@@ -62,6 +62,9 @@ struct TypeRef {
     bool isFuture() const { return kind == Kind::Future; }
     bool isPointer() const { return kind == Kind::Pointer; }
     bool isArray() const { return kind == Kind::Array; }
+    // A "slice": a runtime-length sequence (a variadic parameter), spelled in C as
+    // a bare pointer plus a separate length. Marked by a negative array length.
+    bool isSlice() const { return kind == Kind::Array && arrayLen < 0; }
 
     bool hasArgs() const { return !args.empty(); }
 
