@@ -323,6 +323,7 @@ const char *accessName(Access a);
 struct Param {
     std::string name;
     TypeRef type;
+    bool variadic = false; // `...name: T` — collects trailing args (last param only)
 };
 
 struct FieldDecl {
