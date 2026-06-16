@@ -28,6 +28,11 @@ private:
     void checkClass(ClassDecl &cls);
     void checkBlock(Block &block);
     void checkStmt(Stmt &stmt);
+    void checkGlobal(GlobalVarDecl &g);
+    void checkStaticFields(ClassDecl &cls);
+    // Resolves `Class.field` to a static field if it is one; returns its type, or
+    // nullopt to fall through to ordinary member handling.
+    std::optional<TypeRef> tryStaticField(MemberExpr &e);
     void checkLet(LetStmt &s);
     void checkAssign(AssignStmt &s);
     // Validates the operator of a compound assignment (`x += y`) against the
