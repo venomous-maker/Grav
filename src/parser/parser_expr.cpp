@@ -347,6 +347,16 @@ ExprPtr Parser::parsePostfix() {
             member->object = std::move(deref);
             member->member = name.lexeme;
             expr = std::move(member);
+        } else if (check(TokenType::ColonColon)) {
+            // Turbofish: `id::<int>(x)` — explicit generic arguments on a call.
+            advance(); // '::'
+            std::vector<TypeRef> targs = parseTypeArgs();
+            const Token &lp = peek();
+            auto call = at<CallExpr>(lp);
+            call->typeArgs = std::move(targs);
+            call->args = parseArguments();
+            call->callee = std::move(expr);
+            expr = std::move(call);
         } else if (check(TokenType::LParen)) {
             const Token &lp = peek();
             auto call = at<CallExpr>(lp);
@@ -385,6 +395,19 @@ bool Parser::looksLikeStructLiteral() const {
     while (i + 1 < tokens_.size() && tokens_[i].type == TokenType::Dot &&
            tokens_[i + 1].type == TokenType::Identifier)
         i += 2;
+    // Skip a balanced generic argument list `<...>` (a `>>` closes two levels).
+    if (i < tokens_.size() && tokens_[i].type == TokenType::Less) {
+        int depth = 0;
+        while (i < tokens_.size()) {
+            TokenType tt = tokens_[i].type;
+            if (tt == TokenType::Less) depth += 1;
+            else if (tt == TokenType::Greater) depth -= 1;
+            else if (tt == TokenType::ShiftRight) depth -= 2;
+            ++i;
+            if (depth <= 0) break;
+        }
+        if (depth > 0) return false;
+    }
     if (i >= tokens_.size() || tokens_[i].type != TokenType::LBrace) return false;
     size_t b = i + 1;
     if (b >= tokens_.size()) return false;
@@ -397,6 +420,7 @@ ExprPtr Parser::parseStructLiteral() {
     const Token &t = peek();
     auto e = at<StructLiteralExpr>(t);
     e->typeName = parseQualifiedName("for a struct literal");
+    if (check(TokenType::Less)) e->typeArgs = parseTypeArgs(); // `Box<int> { ... }`
     expect(TokenType::LBrace, "to open the struct literal");
     if (!check(TokenType::RBrace)) {
         do {
@@ -524,6 +548,7 @@ ExprPtr Parser::parsePrimary() {
             advance();
             auto e = at<NewExpr>(t);
             e->className = parseQualifiedName("after 'new'");
+            if (check(TokenType::Less)) e->typeArgs = parseTypeArgs(); // `new Box<int>(...)`
             e->args = parseArguments();
             return e;
         }
