@@ -174,9 +174,12 @@ TypeRef Parser::parseType(const char *context) {
         case TokenType::KwBool: advance(); base = TypeRef::prim(TypeRef::Kind::Bool); break;
         case TokenType::KwString: advance(); base = TypeRef::prim(TypeRef::Kind::String); break;
         case TokenType::KwVoid: advance(); base = TypeRef::prim(TypeRef::Kind::Void); break;
-        case TokenType::Identifier:
+        case TokenType::Identifier: {
             base = TypeRef::named(parseQualifiedName(context));
+            // Generic arguments: `Box<int>`, `Pair<int, string>`.
+            if (check(TokenType::Less)) base.args = parseTypeArgs();
             break;
+        }
         default:
             fail(t, std::string("expected a type ") + context + ", but found " +
                         tokenTypeName(t.type));
@@ -200,6 +203,37 @@ TypeRef Parser::parseType(const char *context) {
         }
     }
     return base;
+}
+
+// Closes a `<...>` list. A `>` closes directly; a `>>`/`>=` token is split so the
+// first `>` closes this list and the remainder stays for an enclosing list.
+void Parser::expectGenericClose() {
+    Token &t = tokens_[pos_];
+    if (t.type == TokenType::Greater) { advance(); return; }
+    if (t.type == TokenType::ShiftRight) { t.type = TokenType::Greater; t.lexeme = ">"; return; }
+    if (t.type == TokenType::GreaterEq) { t.type = TokenType::Assign; t.lexeme = "="; return; }
+    fail(t, std::string("expected '>' to close type arguments, but found ") +
+                tokenTypeName(t.type));
+}
+
+std::vector<std::string> Parser::parseTypeParams() {
+    std::vector<std::string> params;
+    if (!matchToken(TokenType::Less)) return params;
+    do {
+        params.push_back(expect(TokenType::Identifier, "as a type parameter").lexeme);
+    } while (matchToken(TokenType::Comma));
+    expectGenericClose();
+    return params;
+}
+
+std::vector<TypeRef> Parser::parseTypeArgs() {
+    std::vector<TypeRef> args;
+    expect(TokenType::Less, "to begin type arguments");
+    do {
+        args.push_back(parseType("as a type argument"));
+    } while (matchToken(TokenType::Comma));
+    expectGenericClose();
+    return args;
 }
 
 std::vector<Param> Parser::parseParams() {
@@ -226,6 +260,7 @@ DeclPtr Parser::parseFunction(bool isAsync) {
     fn->isAsync = isAsync;
     fn->name = expect(TokenType::Identifier, "after 'fn'").lexeme;
     fn->fqName = qualify(fn->name);
+    fn->typeParams = parseTypeParams(); // optional <T, ...>
     fn->params = parseParams();
     if (matchToken(TokenType::Arrow)) {
         fn->returnType = parseType("as the return type");
@@ -258,6 +293,7 @@ DeclPtr Parser::parseStruct() {
     st->col = kw.col;
     st->name = expect(TokenType::Identifier, "after 'struct'").lexeme;
     st->fqName = qualify(st->name);
+    st->typeParams = parseTypeParams(); // optional <T, ...>
     expect(TokenType::LBrace, "to open the struct body");
     while (!check(TokenType::RBrace) && !atEnd()) {
         // Structs hold plain data: `name: type` fields only (always public).
@@ -308,6 +344,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
     cls->isAbstract = isAbstract;
     cls->name = expect(TokenType::Identifier, "after 'class'").lexeme;
     cls->fqName = qualify(cls->name);
+    cls->typeParams = parseTypeParams(); // optional <T, ...>
 
     if (matchToken(TokenType::Extends)) {
         cls->baseName = parseQualifiedName("after 'extends'");
