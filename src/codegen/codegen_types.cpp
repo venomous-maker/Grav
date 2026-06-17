@@ -67,7 +67,9 @@ void CodeGen::emitPrelude() {
         "#include <setjmp.h>\n\n"
         "typedef struct GravTypeInfo {\n"
         "    const char* name;\n"
-        "    const struct GravTypeInfo* base;\n"
+        "    const struct GravTypeInfo* base;            /* primary base */\n"
+        "    const struct GravTypeInfo* const* extra;    /* secondary bases (MI) */\n"
+        "    int nextra;\n"
         "} GravTypeInfo;\n\n"
         "/* Common object header: vtable pointer + runtime type descriptor. */\n"
         "struct GravObject { const void* __vt; const GravTypeInfo* __type; };\n\n"
@@ -83,10 +85,17 @@ void CodeGen::emitPrelude() {
         "static const char* grav_typename(const void* obj) {\n"
         "    return ((const struct GravObject*)obj)->__type->name;\n"
         "}\n\n"
-        "static bool grav_is_instance(const void* obj, const GravTypeInfo* want) {\n"
-        "    const GravTypeInfo* t = ((const struct GravObject*)obj)->__type;\n"
-        "    while (t) { if (t == want) return true; t = t->base; }\n"
+        "static bool grav_type_is(const GravTypeInfo* t, const GravTypeInfo* want) {\n"
+        "    while (t) {\n"
+        "        if (t == want) return true;\n"
+        "        for (int i = 0; i < t->nextra; i++)\n"
+        "            if (grav_type_is(t->extra[i], want)) return true;\n"
+        "        t = t->base;\n"
+        "    }\n"
         "    return false;\n"
+        "}\n"
+        "static bool grav_is_instance(const void* obj, const GravTypeInfo* want) {\n"
+        "    return grav_type_is(((const struct GravObject*)obj)->__type, want);\n"
         "}\n\n"
         "/* Value-to-string helpers (used by string interpolation / str()). */\n"
         "static const char* grav_int_to_str(int v) {\n"
@@ -436,8 +445,24 @@ void CodeGen::emitTypeInfos() {
             emit(ci->baseClass); // base descriptor must precede derived
             base = "&" + mangle(ci->baseClass) + "_typeinfo";
         }
+        // Secondary bases (multiple inheritance) -> a static array of descriptors.
+        std::string extra = "0";
+        int nextra = 0;
+        for (const auto &eb : ci->extraBases) if (!eb.empty()) ++nextra;
+        if (nextra > 0) {
+            std::string arr = mangle(fq) + "_extra";
+            std::string elems;
+            for (const auto &eb : ci->extraBases) {
+                if (eb.empty()) continue;
+                emit(eb); // ensure base descriptor precedes this one
+                elems += (elems.empty() ? "" : ", ") + std::string("&") + mangle(eb) + "_typeinfo";
+            }
+            vtables_ += "static const GravTypeInfo* const " + arr + "[] = { " + elems + " };\n";
+            extra = arr;
+        }
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
-                    "_typeinfo = { \"" + fq + "\", " + base + " };\n";
+                    "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
+                    std::to_string(nextra) + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
