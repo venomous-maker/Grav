@@ -30,6 +30,18 @@ for f in examples/*.grav; do
   esac
 done
 
+# Multi-file QA program (imports, shared globals, inline-C sharing, every feature).
+if "$GRAV" examples/qa/main.grav --emit bin -o /tmp/grav_qa >/tmp/gravtest.err 2>&1; then
+  /tmp/grav_qa one two >/tmp/gravtest.out 2>&1
+  if diff -q tests/qa_main.expected /tmp/gravtest.out >/dev/null 2>&1; then
+    echo "ok   examples/qa/main.grav (multi-file golden)"; pass=$((pass+1))
+  else
+    echo "FAIL examples/qa golden mismatch:"; diff tests/qa_main.expected /tmp/gravtest.out | sed 's/^/    /'; fail=$((fail+1))
+  fi
+else
+  echo "FAIL (compile) examples/qa/main.grav"; sed 's/^/    /' /tmp/gravtest.err; fail=$((fail+1))
+fi
+
 # Golden-output check for the stdin example (verifies input() reads correctly).
 bin="/tmp/gravtest_16_input"
 if [ -x "$bin" ]; then
