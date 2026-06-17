@@ -2,10 +2,11 @@
 // variadics, exceptions, async/await, pointers, null/??/?., casts, interpolation,
 // command-line args, and inline-C variable sharing.
 //
-//   grav qa/main.grav --run -- alpha beta
+//   printf 'Ada\n7\n' | grav examples/qa/main.grav --run -- alpha beta
 
 import "creatures.grav"
 import "runtime.grav"          // duplicate import is a safe no-op
+import "../../lib/std.grav"    // the basic library: io, convert, exceptions
 
 struct Point { x: int  y: int }
 
@@ -71,12 +72,21 @@ async fn main() {
     // async / await
     print("tally = ${await tally(cage)}");
 
-    // exceptions
+    // exceptions, using the library Exception hierarchy
     try {
-        if (cage.size() > 2) { throw new TooMany(cage.size()); }
-    } catch (e: TooMany) {
-        print("too many! count=${e.n}");
+        if (cage.size() > 2) { throw new ValueError("cage overfull (${cage.size()})"); }
+    } catch (e: Exception) {
+        print(e.describe());                 // ValueError: cage overfull (3)
     }
+
+    // input via the io lib (readLine/prompt/readInt), plus convert + free
+    let who = prompt("Your name? ");
+    print("hello, ${who}!");
+    let years = readInt();
+    print("next year: ${years + 1}, parseBool(\"yes\") = ${parseBool("yes")}");
+    let scratch = new TooMany(99);
+    print("scratch = ${scratch.n}");
+    free(scratch);                            // release the heap object (no GC)
 
     // inline-C variable sharing: roll() reads the C PRNG; share the raw state too
     print("roll d6: ${roll(6) + 1}");
