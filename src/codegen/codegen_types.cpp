@@ -124,6 +124,8 @@ void CodeGen::emitPrelude() {
 }
 
 std::string CodeGen::cTy(const TypeRef &t) const {
+    // `Self` only survives in an interface's itable type; spell it as a void*.
+    if (t.isNamed() && t.name == "Self") return "void*";
     if (t.isNamed() && reg_->isInterface(t.name)) return "struct GravIface";
     // Structs are value types: spelled as the bare struct, never a pointer.
     if (t.isNamed() && reg_->isStruct(t.name)) return structName(t.name);
