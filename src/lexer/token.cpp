@@ -34,6 +34,7 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::Constructor: return "'constructor'";
         case TokenType::Extends: return "'extends'";
         case TokenType::Implements: return "'implements'";
+        case TokenType::Uses: return "'uses'";
         case TokenType::New: return "'new'";
         case TokenType::Return: return "'return'";
         case TokenType::Static: return "'static'";
