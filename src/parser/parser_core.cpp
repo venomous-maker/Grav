@@ -389,6 +389,12 @@ DeclPtr Parser::parseClass(bool isAbstract) {
     if (matchToken(TokenType::Extends)) {
         cls->baseName = parseQualifiedName("after 'extends'");
         if (check(TokenType::Less)) cls->baseArgs = parseTypeArgs(); // extends Base<T>
+        // `extends A, B, C` — additional bases are flattened (multiple inheritance).
+        while (matchToken(TokenType::Comma)) {
+            cls->extraBases.push_back(parseQualifiedName("after ','"));
+            cls->extraBaseArgs.push_back(check(TokenType::Less) ? parseTypeArgs()
+                                                                : std::vector<TypeRef>{});
+        }
     }
     if (matchToken(TokenType::Implements)) {
         do {
