@@ -765,6 +765,7 @@ print(isInstance(a, zoo.Animal)) // true  (walks the base chain)
 | `input()`                 | Reads one line from stdin (without the newline) as a `string`.|
 | `argc()`                  | Number of command-line arguments (incl. the program name).   |
 | `argv(i)`                 | The `i`-th command-line argument as a `string` (`""` if OOB). |
+| `free(obj)`               | Releases a heap object created with `new` (no GC; use with care).|
 
 ### String interpolation
 
@@ -875,6 +876,7 @@ See [`src/codegen/README.md`](src/codegen/README.md) for the gory details.
 ├── main.cpp                 # gravc driver: args, imports, pipeline, --emit
 ├── CMakeLists.txt
 ├── examples/                # numbered feature tour + comprehensive/ qa/ programs
+├── lib/                     # basic standard library (exception, convert, io)
 ├── tests/run.sh             # compile + run every example with golden checks
 ├── editors/nvim/            # Neovim syntax, filetype, go-to-definition, keymaps
 ├── mcp_server/              # dependency-free MCP server wrapping gravc
