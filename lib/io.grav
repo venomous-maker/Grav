@@ -1,0 +1,14 @@
+// lib/io.grav — input helpers built on the `input()` builtin.
+
+import "convert.grav"
+
+fn readLine() -> string { return input(); }
+
+fn prompt(message: string) -> string {
+    print(message);
+    return input();
+}
+
+fn readInt() -> int { return parseInt(input()); }
+
+fn readFloat() -> float { return parseFloat(input()); }
