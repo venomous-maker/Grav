@@ -13,7 +13,7 @@ tally = 3
 ValueError: cage overfull (3)
 Your name? 
 hello, Ada!
-next year: 8, parseBool("yes") = false
+next year: 8, Format.toBool("yes") = false
 scratch = 99
 roll d6: 2
 rng touched: 1
