@@ -131,6 +131,13 @@ as `cc -std=c11 [opts] <file>.c -o <out>`.
 > ```bash
 > ./build/gravc examples/comprehensive.grav --emit bin -o /tmp/comp && /tmp/comp
 > ```
+>
+> For a **multi-file** program (imports, module-shared globals, inline-C variable
+> sharing, and every OOP/generics/exception feature together) see
+> [`examples/qa/`](examples/qa/) — run it with
+> `grav examples/qa/main.grav --run`. The numbered `examples/NN_*.grav` files are a
+> growing, one-feature-at-a-time tour; [`tests/run.sh`](tests/run.sh) compiles and
+> runs them all with golden checks.
 
 ### Primitive types & variables
 
@@ -867,7 +874,9 @@ See [`src/codegen/README.md`](src/codegen/README.md) for the gory details.
 .
 ├── main.cpp                 # gravc driver: args, imports, pipeline, --emit
 ├── CMakeLists.txt
-├── examples/                # sample .grav programs
+├── examples/                # numbered feature tour + comprehensive/ qa/ programs
+├── tests/run.sh             # compile + run every example with golden checks
+├── editors/nvim/            # Neovim syntax, filetype, go-to-definition, keymaps
 ├── mcp_server/              # dependency-free MCP server wrapping gravc
 └── src/
     ├── common/   # shared types (TypeRef) and diagnostics
