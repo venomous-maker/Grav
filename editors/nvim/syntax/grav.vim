@@ -12,7 +12,8 @@ syn region  gravBlockComment start="/\*" end="\*/" contains=gravTodo
 
 " Declaration / structure keywords
 syn keyword gravKeyword fn class struct enum type interface abstract namespace
-syn keyword gravKeyword constructor extends implements new return import export
+syn keyword gravKeyword constructor extends implements uses new return import export
+syn keyword gravKeyword trait
 syn keyword gravStorage  let const static readonly public private protected
 syn keyword gravKeyword async await
 
@@ -28,7 +29,7 @@ syn keyword gravType int float bool string void
 
 " Constants
 syn keyword gravBoolean true false
-syn keyword gravConstant null self this
+syn keyword gravConstant null self this Self
 
 " Built-in functions
 syn keyword gravBuiltin print typename isInstance str input argc argv len
