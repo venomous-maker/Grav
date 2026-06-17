@@ -87,6 +87,9 @@ private:
     void emitVariadicArgs(std::string &out, const CallExpr &call,
                           const std::vector<TypeRef> &params) const;
     static std::string escapeC(const std::string &s);
+    // Moves `#include`/`#pragma` lines from an inline-C block to file scope
+    // (`hoisted_`) and returns the remaining code for in-place emission.
+    std::string hoistIncludes(const std::string &code) const;
 
     const Registry *reg_ = nullptr;
     const Program *program_ = nullptr;
@@ -96,6 +99,8 @@ private:
 
     // Output sections, concatenated in order by generate().
     std::string typedefs_;
+    // `#include`/`#pragma` lines hoisted out of inline-C blocks to file scope.
+    mutable std::string hoisted_;
     std::string structs_;
     std::string vtableTypes_;
     std::string protos_;
