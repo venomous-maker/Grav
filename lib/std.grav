@@ -1,4 +1,6 @@
 // lib/std.grav — umbrella module: import this to get the whole basic library.
 import "exception.grav"
 import "convert.grav"
+import "string.grav"
+import "math.grav"
 import "io.grav"
