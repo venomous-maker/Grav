@@ -20,6 +20,7 @@ syn keyword gravKeyword async await
 syn keyword gravConditional if else switch case default match
 syn keyword gravRepeat     while for do in
 syn keyword gravStatement  break continue
+syn keyword gravException  try catch finally throw
 syn keyword gravOperatorKw as is sizeof
 
 " Built-in types
@@ -74,6 +75,7 @@ hi def link gravStorage       StorageClass
 hi def link gravConditional   Conditional
 hi def link gravRepeat        Repeat
 hi def link gravStatement     Statement
+hi def link gravException     Exception
 hi def link gravOperatorKw    Operator
 hi def link gravType          Type
 hi def link gravBoolean       Boolean
