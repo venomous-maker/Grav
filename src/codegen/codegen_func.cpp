@@ -62,15 +62,30 @@ std::string CodeGen::accessorSig(const std::string &classFq,
     std::string sig = cTy(m.returnType) + " " + methodCName(classFq, m.name) + "(" + S + "* self";
     if (m.accessor == AccessorKind::Setter)
         sig += ", " + cTy(m.paramTypes[0]) + " value";
+    else if (m.accessor == AccessorKind::Delegate)
+        for (size_t i = 0; i < m.paramTypes.size(); ++i)
+            sig += ", " + cTy(m.paramTypes[i]) + " " + m.paramNames[i];
     return sig + ")";
 }
 
 void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) {
     defs_ += accessorSig(classFq, m) + " {\n";
-    if (m.accessor == AccessorKind::Getter)
+    if (m.accessor == AccessorKind::Getter) {
         defs_ += "    return self->" + m.accessorField + ";\n";
-    else
+    } else if (m.accessor == AccessorKind::Setter) {
         defs_ += "    self->" + m.accessorField + " = value;\n";
+    } else { // Delegate: forward to self->field's method via its vtable
+        std::string slotOwner = m.delegateClass;
+        if (const ClassInfo *ac = reg_->cls(m.delegateClass))
+            for (const auto &s : ac->slots)
+                if (s.name == m.name) { slotOwner = s.slotOwner; break; }
+        std::string obj = "self->" + m.accessorField;
+        std::string disp = "((" + vtableType(slotOwner) + "*)((struct GravObject*)(" +
+                           obj + "))->__vt)->" + m.name;
+        std::string args = "(" + structName(slotOwner) + "*)(" + obj + ")";
+        for (const auto &p : m.paramNames) args += ", " + p;
+        defs_ += (m.returnType.isVoid() ? "    " : "    return ") + disp + "(" + args + ");\n";
+    }
     defs_ += "}\n\n";
 }
 
