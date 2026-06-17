@@ -27,6 +27,7 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::Sizeof: return "'sizeof'";
         case TokenType::Abstract: return "'abstract'";
         case TokenType::Interface: return "'interface'";
+        case TokenType::Trait: return "'trait'";
         case TokenType::Async: return "'async'";
         case TokenType::Await: return "'await'";
         case TokenType::Namespace: return "'namespace'";
