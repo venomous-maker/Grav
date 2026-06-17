@@ -361,6 +361,7 @@ void Registry::registerDecls(Program &program) {
             info.fqName = c->fqName;
             info.isAbstract = c->isAbstract;
             info.baseClass = c->baseName;        // raw, canonicalized later
+            info.extraBases = c->extraBases;     // raw, canonicalized later
             info.interfaces = c->interfaceNames; // raw
             info.decl = c;
             info.hasConstructor = c->constructor.present;
@@ -577,6 +578,15 @@ void Registry::canonicalize() {
                 ci.baseClass.clear();
             } else {
                 ci.baseClass = b;
+            }
+        }
+        for (auto &eb : ci.extraBases) {
+            std::string b = resolveType(eb, ns);
+            if (b.empty() || !isClass(b)) {
+                error(line, col, "unknown base class '" + eb + "'");
+                eb.clear();
+            } else {
+                eb = b;
             }
         }
         for (auto &in : ci.interfaces) {
