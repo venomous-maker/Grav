@@ -1,0 +1,18 @@
+=== Grav QA v1.0 ===
+twice(21) = 42, sum = 10
+Buddy (hp 100)
+dog beats cat? true
+point (10, 4)
+chosen says woof
+maybe sound: 
+Ada's buddy: Rex (hp 100)
+walk swim -> 1/1
+frog is Walker & Swimmer: true true
+cage size = 3, first = Buddy (hp 100)
+tally = 3
+too many! count=3
+roll d6: 2
+rng touched: 1
+births recorded = 4
+pi as int = 3
+argc = 3, arg0 = /tmp/grav_qa
