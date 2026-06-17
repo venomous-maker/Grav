@@ -452,6 +452,9 @@ TypeRef Registry::resolveCanonical(const TypeRef &t, const std::string &nsContex
     if (t.isFuture())
         return TypeRef::future(resolveCanonical(*t.elem, nsContext, ok));
     if (!t.isNamed()) return t;
+    // `Self` is a placeholder for the implementing type inside a trait; it stays
+    // a sentinel here and is matched/substituted where the concrete class is known.
+    if (t.name == "Self") return t;
     std::string fq = resolveTypeOrAlias(t.name, nsContext);
     if (fq.empty()) {
         ok = false;
@@ -709,10 +712,15 @@ void Registry::checkHierarchies() {
                                          want.name + "' required by interface '" + ifq + "'");
                     continue;
                 }
-                bool ok = have->returnType == want.returnType &&
+                // An interface type of `Self` is satisfied by the class's own type.
+                auto matches = [&](const TypeRef &h, TypeRef w) {
+                    if (w.isNamed() && w.name == "Self") w = TypeRef::named(fq);
+                    return h == w;
+                };
+                bool ok = matches(have->returnType, want.returnType) &&
                           have->paramTypes.size() == want.paramTypes.size();
                 for (size_t i = 0; ok && i < want.paramTypes.size(); ++i)
-                    ok = have->paramTypes[i] == want.paramTypes[i];
+                    ok = matches(have->paramTypes[i], want.paramTypes[i]);
                 if (!ok) {
                     error(line, col, "method '" + want.name + "' in '" + fq +
                                          "' does not match interface '" + ifq + "'");
