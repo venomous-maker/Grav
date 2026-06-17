@@ -231,7 +231,7 @@ bool Parser::looksLikeCast() const {
         case TokenType::FloatLiteral: case TokenType::StringLiteral:
         case TokenType::True: case TokenType::False: case TokenType::Null:
         case TokenType::Self: case TokenType::New: case TokenType::LParen:
-        case TokenType::Bang: case TokenType::Tilde:
+        case TokenType::Bang: case TokenType::Tilde: case TokenType::CBlock:
             return true;
         // `-`, `*`, `&` are also binary ops; only a primitive type disambiguates
         // them (a value can't be named `int`), so `(Foo) - x` stays a subtraction.
