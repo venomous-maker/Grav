@@ -10,7 +10,11 @@ walk swim -> 1/1
 frog is Walker & Swimmer: true true
 cage size = 3, first = Buddy (hp 100)
 tally = 3
-too many! count=3
+ValueError: cage overfull (3)
+Your name? 
+hello, Ada!
+next year: 8, parseBool("yes") = false
+scratch = 99
 roll d6: 2
 rng touched: 1
 births recorded = 4
