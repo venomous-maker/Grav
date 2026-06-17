@@ -2,6 +2,9 @@
 // enums, interfaces, abstract classes, inheritance, generics, a generic
 // container, static fields, exceptions, and string interpolation.
 
+// Top-level inline C: includes/helpers shared by the whole program.
+%{ #include <stdlib.h> %}
+
 enum Currency { USD, EUR, GBP }
 
 class InsufficientFunds {
@@ -69,7 +72,9 @@ fn main() {
     print("${c.kind()}: ${describe(c)}");        // checking: balance = 70
 
     let s = new Savings("Babbage", 10);
-    s.deposit(200);
+    print("How much do you want to deposit?");
+    let deposit = input();
+    s.deposit((int)%{ atoi(deposit) %});         // parse the input via C's atoi
     s.addInterest();
     print("${s.kind()}: ${describe(s)}");        // savings: balance = 220
 
