@@ -86,7 +86,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     if (auto *e = dynamic_cast<const StringLiteralExpr *>(&expr))
         return "\"" + escapeC(e->value) + "\"";
     if (dynamic_cast<const NullLiteralExpr *>(&expr)) return "0";
-    if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return e->code; // verbatim C
+    if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return hoistIncludes(e->code);
     if (auto *e = dynamic_cast<const NameExpr *>(&expr))
         return e->resolvedGlobal.empty() ? e->name : e->resolvedGlobal;
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
@@ -246,6 +246,27 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         return access;
     }
     return "/*?*/ 0";
+}
+
+std::string CodeGen::hoistIncludes(const std::string &code) const {
+    std::string kept;
+    size_t i = 0, n = code.size();
+    while (i < n) {
+        size_t eol = code.find('\n', i);
+        if (eol == std::string::npos) eol = n;
+        std::string ln = code.substr(i, eol - i);
+        size_t s = 0;
+        while (s < ln.size() && (ln[s] == ' ' || ln[s] == '\t')) s++;
+        bool directive = ln.compare(s, 8, "#include") == 0 || ln.compare(s, 7, "#pragma") == 0;
+        if (directive) {
+            hoisted_ += ln.substr(s) + "\n";
+        } else {
+            kept += ln;
+            if (eol < n) kept += "\n";
+        }
+        i = (eol < n) ? eol + 1 : n;
+    }
+    return kept;
 }
 
 std::string CodeGen::emitCall(const CallExpr &call) const {
