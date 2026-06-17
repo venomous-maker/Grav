@@ -83,7 +83,7 @@ async fn main() {
     let who = prompt("Your name? ");
     print("hello, ${who}!");
     let years = readInt();
-    print("next year: ${years + 1}, parseBool(\"yes\") = ${parseBool("yes")}");
+    print("next year: ${years + 1}, Format.toBool(\"yes\") = ${Format.toBool("yes")}");
     let scratch = new TooMany(99);
     print("scratch = ${scratch.n}");
     free(scratch);                            // release the heap object (no GC)
