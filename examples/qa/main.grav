@@ -1,0 +1,89 @@
+// qa/main.grav — ties the modules together and exercises the rest of the language:
+// variadics, exceptions, async/await, pointers, null/??/?., casts, interpolation,
+// command-line args, and inline-C variable sharing.
+//
+//   grav qa/main.grav --run -- alpha beta
+
+import "creatures.grav"
+import "runtime.grav"          // duplicate import is a safe no-op
+
+struct Point { x: int  y: int }
+
+class TooMany {
+    public n: int
+    constructor(n: int) { self.n = n; }
+}
+
+fn sum(...xs: int) -> int {
+    let t = 0;
+    for (i in 0..xs.length) { t += xs[i]; }
+    return t;
+}
+
+fn addToCage(cage: Cage<Describable>, ...animals: Describable) {
+    for (i in 0..animals.length) { cage.add(animals[i]); }
+}
+
+async fn tally(c: Cage<Describable>) -> int {
+    let total = 0;
+    for (i in 0..c.size()) { total += 1; }
+    return total;
+}
+
+async fn main() {
+    print("=== Grav QA v${VERSION} ===");
+
+    // macros + variadics + shared global mutation
+    print("twice(21) = ${TWICE(21)}, sum = ${sum(1, 2, 3, 4)}");
+
+    // domain model + traits + interface dispatch
+    let d = new Dog("Buddy");
+    let c = new Cat("Mia");
+    print(d.describe());                 // Buddy (hp 100)
+    print("dog beats cat? ${d.beats(c)}");  // true (hp 100 vs 80) via Ranked default
+
+    // pointers + structs
+    let p = Point { x: 3, y: 4 };
+    let pp: Point* = &p;
+    pp->x = 10;
+    print("point (${p.x}, ${p.y})");     // (10, 4)
+
+    // null + ?? + ?.
+    let maybe: Dog = null;
+    let chosen = maybe ?? new Dog("Spot");
+    print("chosen says ${chosen.sound()}");   // woof
+    print("maybe sound: ${maybe?.sound()}");  // (empty)
+
+    // composition + multiple inheritance
+    let t = new Trainer("Ada");
+    print("${t.who}'s buddy: ${t.describe()}");  // forwarded to the Dog
+    let f = new Frog();
+    let w = f.walk();           // sequence the calls (one interpolation = unspecified order)
+    let sw = f.swim();
+    print("${w} ${sw} -> ${f.steps}/${f.laps}");  // walk swim -> 1/1
+    print("frog is Walker & Swimmer: ${f is Walker} ${f is Swimmer}");
+
+    // generics: a cage of Describable, filled variadically
+    let cage = new Cage<Describable>();
+    addToCage(cage, d, c, chosen);
+    print("cage size = ${cage.size()}, first = ${cage.at(0).describe()}");
+
+    // async / await
+    print("tally = ${await tally(cage)}");
+
+    // exceptions
+    try {
+        if (cage.size() > 2) { throw new TooMany(cage.size()); }
+    } catch (e: TooMany) {
+        print("too many! count=${e.n}");
+    }
+
+    // inline-C variable sharing: roll() reads the C PRNG; share the raw state too
+    print("roll d6: ${roll(6) + 1}");
+    print("rng touched: ${%{ (int)(rng_state & 1) %} as int}");  // C global read in Grav
+
+    // casts + command-line args + the shared births counter
+    print("births recorded = ${births}");
+    print("pi as int = ${(int)3.9}");
+    print("argc = ${argc()}, arg0 = ${argv(0)}");
+}
