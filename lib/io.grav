@@ -1,4 +1,4 @@
-// lib/io.grav — input helpers built on the `input()` builtin.
+// lib/io.grav — input/output helpers built on the `input()`/`print` builtins.
 
 import "convert.grav"
 
@@ -9,6 +9,21 @@ fn prompt(message: string) -> string {
     return input();
 }
 
-fn readInt() -> int { return parseInt(input()); }
+fn readInt() -> int { return Format.toInt(input()); }
+fn readFloat() -> float { return Format.toFloat(input()); }
+fn readBool() -> bool { return Format.toBool(input()); }
 
-fn readFloat() -> float { return parseFloat(input()); }
+fn promptInt(message: string) -> int {
+    print(message);
+    return Format.toInt(input());
+}
+
+// Print to standard error (diagnostics) instead of stdout.
+fn eprint(message: string) {
+    %{ fprintf(stderr, "%s\n", message); %};
+}
+
+// Print without a trailing newline.
+fn printRaw(message: string) {
+    %{ fputs(message, stdout); %};
+}
