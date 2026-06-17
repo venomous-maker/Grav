@@ -28,7 +28,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-enum class EmitMode { C, Bin, Both };
+enum class EmitMode { C, Asm, Bin, Both };
 
 std::string readStream(std::istream &in) {
     std::ostringstream ss;
@@ -84,9 +84,28 @@ bool loadModule(const fs::path &path, std::set<std::string> &visited,
 }
 
 int usage(const char *prog) {
-    std::cerr << "usage: " << prog
-              << " <input.grav> [-o out] [--emit c|bin|both] [-Werror]\n"
-              << "       " << prog << " -    (read stdin, write C to stdout)\n";
+    std::cerr <<
+        "usage: " << prog << " <input.grav> [options] [-- args...]\n"
+        "       " << prog << " -                 read stdin, write C to stdout\n"
+        "\n"
+        "output:\n"
+        "  -o <path>            output path (binary, .c, or .s)\n"
+        "  --emit c|asm|bin|both   what to produce (default: c)\n"
+        "  -c                   emit C            (alias for --emit c)\n"
+        "  -S                   emit assembly     (alias for --emit asm)\n"
+        "  -b, --bin            emit a binary     (alias for --emit bin)\n"
+        "  -r, --run            build a binary and run it (args after `--`)\n"
+        "  --keep-c             keep the generated .c when building a binary\n"
+        "\n"
+        "codegen (passed to the C compiler):\n"
+        "  -O0|-O1|-O2|-O3|-Os  optimization level (default: none)\n"
+        "  -g | -g3             include debug info\n"
+        "  --cc <compiler>      C compiler to use (default: $CC or cc)\n"
+        "\n"
+        "diagnostics:\n"
+        "  -Werror              treat warnings as errors\n"
+        "  -v, --verbose        print the C compiler command\n"
+        "  -h, --help           show this help\n";
     return 2;
 }
 
@@ -98,24 +117,54 @@ std::string stem(const std::string &input) {
 } // namespace
 
 int main(int argc, char **argv) {
-    std::string inputPath, outputPath;
+    std::string inputPath, outputPath, ccOverride, optFlag, debugFlag;
     bool useStdin = false, toStdout = false, werror = false;
+    bool runAfter = false, keepC = false, verbose = false;
+    std::vector<std::string> runArgs;
     EmitMode emit = EmitMode::C;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "-o") {
+        if (arg == "--") {                       // remaining args go to the program
+            for (int j = i + 1; j < argc; ++j) runArgs.emplace_back(argv[j]);
+            break;
+        } else if (arg == "-h" || arg == "--help") {
+            usage(argv[0]);
+            return 0;
+        } else if (arg == "-o") {
             if (i + 1 >= argc) return usage(argv[0]);
             outputPath = argv[++i];
         } else if (arg == "--emit") {
             if (i + 1 >= argc) return usage(argv[0]);
             std::string m = argv[++i];
             if (m == "c") emit = EmitMode::C;
+            else if (m == "asm") emit = EmitMode::Asm;
             else if (m == "bin") emit = EmitMode::Bin;
             else if (m == "both") emit = EmitMode::Both;
             else { std::cerr << "gravc: unknown --emit mode '" << m << "'\n"; return usage(argv[0]); }
+        } else if (arg == "-c") {
+            emit = EmitMode::C;
+        } else if (arg == "-S") {
+            emit = EmitMode::Asm;
+        } else if (arg == "-b" || arg == "--bin") {
+            emit = EmitMode::Bin;
+        } else if (arg == "-r" || arg == "--run") {
+            runAfter = true;
+            if (emit == EmitMode::C) emit = EmitMode::Bin;
+        } else if (arg == "--keep-c") {
+            keepC = true;
+        } else if (arg == "--cc") {
+            if (i + 1 >= argc) return usage(argv[0]);
+            ccOverride = argv[++i];
+        } else if (arg == "-O0" || arg == "-O1" || arg == "-O2" || arg == "-O3" ||
+                   arg == "-Os" || arg == "-Ofast") {
+            optFlag = arg;
+        } else if (arg == "-g" || arg == "-g3" || arg == "-g0" || arg == "-g1" || arg == "-g2") {
+            debugFlag = arg;
         } else if (arg == "-Werror") {
             werror = true;
+        } else if (arg == "-v" || arg == "--verbose") {
+            verbose = true;
         } else if (arg == "-") {
             useStdin = true;
             toStdout = true;
@@ -185,16 +234,17 @@ int main(int argc, char **argv) {
 
         // Decide output paths.
         std::string base = stem(inputPath);
-        std::string cPath = outputPath;
-        std::string exePath = outputPath;
+        std::string cPath, exePath = outputPath;
+        bool tempC = false; // the .c is an intermediate to delete afterward
         if (emit == EmitMode::C) {
-            if (cPath.empty()) cPath = base + ".c";
-        } else if (emit == EmitMode::Bin) {
-            if (exePath.empty()) exePath = base;
-            cPath = exePath + ".gen.c"; // temporary
-        } else { // Both
+            cPath = outputPath.empty() ? base + ".c" : outputPath;
+        } else if (emit == EmitMode::Both) {
             if (exePath.empty()) exePath = base;
             cPath = base + ".c";
+        } else { // Asm or Bin: the .c is intermediate unless --keep-c
+            if (exePath.empty()) exePath = (emit == EmitMode::Asm) ? base + ".s" : base;
+            cPath = base + ".gen.c";
+            tempC = !keepC;
         }
 
         std::ofstream out(cPath);
@@ -207,22 +257,37 @@ int main(int argc, char **argv) {
             return 0;
         }
 
-        // Compile the generated C with the system compiler.
+        // Invoke the system C compiler with any optimization/debug flags.
         const char *ccEnv = std::getenv("CC");
-        std::string cc = ccEnv ? ccEnv : "cc";
-        std::string cmd = cc + " -std=c11 \"" + cPath + "\" -o \"" + exePath + "\"";
+        std::string cc = !ccOverride.empty() ? ccOverride : (ccEnv ? ccEnv : "cc");
+        std::string flags = " -std=c11";
+        if (!optFlag.empty()) flags += " " + optFlag;
+        if (!debugFlag.empty()) flags += " " + debugFlag;
+        std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
+                          " \"" + cPath + "\" -o \"" + exePath + "\"";
+        if (verbose) std::cerr << "gravc: " << cmd << "\n";
         int rc = std::system(cmd.c_str());
-        if (emit == EmitMode::Bin) {
-            std::error_code ec;
-            fs::remove(cPath, ec); // drop the temporary C file
-        }
+        if (tempC) { std::error_code ec; fs::remove(cPath, ec); }
         if (rc != 0) {
             std::cerr << "gravc: C compilation failed (" << cc << ")\n";
             return 1;
         }
+        if (emit == EmitMode::Asm) {
+            std::cerr << "gravc: wrote " << exePath << "\n";
+            return 0;
+        }
         std::cerr << "gravc: built " << exePath
                   << (emit == EmitMode::Both ? (" (and wrote " + cPath + ")") : "")
                   << "\n";
+
+        // --run: execute the freshly built binary, forwarding any `-- args`.
+        if (runAfter) {
+            std::string runCmd = "\"" + exePath + "\"";
+            for (const auto &a : runArgs) runCmd += " \"" + a + "\"";
+            int prc = std::system(runCmd.c_str());
+            if (emit == EmitMode::Bin && tempC) { /* binary kept; nothing to clean */ }
+            return prc == 0 ? 0 : 1;
+        }
         return 0;
     } catch (const grav::GravError &e) {
         std::cerr << "gravc: " << e.what() << "\n";
