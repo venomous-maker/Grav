@@ -1,0 +1,50 @@
+// lib/string.grav — string utilities as static methods (backed by C string.h).
+
+%{
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+static const char* grav_str_upper(const char* s) {
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++) r[i] = (char)toupper((unsigned char)s[i]);
+    r[n] = 0; return r;
+}
+static const char* grav_str_lower(const char* s) {
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++) r[i] = (char)tolower((unsigned char)s[i]);
+    r[n] = 0; return r;
+}
+static const char* grav_str_repeat(const char* s, int k) {
+    if (k < 0) k = 0;
+    size_t n = strlen(s); char* r = (char*)malloc(n * (size_t)k + 1);
+    char* p = r;
+    for (int i = 0; i < k; i++) { memcpy(p, s, n); p += n; }
+    *p = 0; return r;
+}
+static const char* grav_str_sub(const char* s, int start, int len) {
+    int n = (int)strlen(s);
+    if (start < 0) start = 0;
+    if (start > n) start = n;
+    if (len < 0 || start + len > n) len = n - start;
+    char* r = (char*)malloc((size_t)len + 1);
+    memcpy(r, s + start, (size_t)len); r[len] = 0; return r;
+}
+%}
+
+class Str {
+    static fn length(s: string) -> int { return %{ (int)strlen(s) %} as int; }
+    static fn isEmpty(s: string) -> bool { return %{ (s[0] == 0) %} as bool; }
+    static fn equals(a: string, b: string) -> bool { return %{ (strcmp(a, b) == 0) %} as bool; }
+    static fn contains(s: string, sub: string) -> bool { return %{ (strstr(s, sub) != 0) %} as bool; }
+    static fn startsWith(s: string, prefix: string) -> bool {
+        return %{ (strncmp(s, prefix, strlen(prefix)) == 0) %} as bool;
+    }
+    static fn charAt(s: string, i: int) -> int { return %{ (int)(unsigned char)s[i] %} as int; }
+    static fn concat(a: string, b: string) -> string { return a + b; }
+    static fn upper(s: string) -> string { return %{ grav_str_upper(s) %} as string; }
+    static fn lower(s: string) -> string { return %{ grav_str_lower(s) %} as string; }
+    static fn repeat(s: string, n: int) -> string { return %{ grav_str_repeat(s, n) %} as string; }
+    static fn substring(s: string, start: int, len: int) -> string {
+        return %{ grav_str_sub(s, start, len) %} as string;
+    }
+}
