@@ -21,7 +21,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg) {
     // generated types and declare globals/helpers the rest of the program shares.
     for (const auto &declPtr : program.decls)
         if (auto *cb = dynamic_cast<const CBlockDecl *>(declPtr.get()))
-            cblocks_ += "/* inline C */\n" + cb->code + "\n";
+            cblocks_ += "/* inline C */\n" + hoistIncludes(cb->code) + "\n";
     if (!cblocks_.empty()) cblocks_ += "\n";
     emitVTableInstances();
     emitTypeInfos();
@@ -30,7 +30,11 @@ std::string CodeGen::generate(const Program &program, const Registry &reg) {
     emitDefinitions(program);
     emitMainWrapper();
 
-    return typedefs_ + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ +
+    // `hoisted_` (includes pulled out of inline-C blocks) goes right after the
+    // prelude's own includes so every block can rely on them.
+    std::string head = typedefs_;
+    if (!hoisted_.empty()) head += "/* hoisted includes */\n" + hoisted_ + "\n";
+    return head + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ +
            globals_ + defs_;
 }
 
