@@ -399,6 +399,9 @@ struct ClassDecl : Decl {
     std::vector<TypeRef> baseArgs; // generic args on the base, e.g. extends Stack<T>
     std::vector<std::string> interfaceNames;
     std::vector<std::vector<TypeRef>> interfaceArgs; // parallel to interfaceNames
+    // `uses field: Type` — composition: `field` is a delegate the class forwards
+    // the public methods of `Type` to (no `is-a` subtyping).
+    std::vector<Param> delegates;
     std::vector<FieldDecl> fields;
     std::vector<StaticFieldDecl> staticFields;
     ConstructorDecl constructor;
