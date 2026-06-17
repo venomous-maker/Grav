@@ -21,7 +21,7 @@ local SKIP = {
   ["try"] = true, ["catch"] = true, ["finally"] = true, ["throw"] = true,
   ["sizeof"] = true, ["str"] = true, ["input"] = true, ["argc"] = true,
   ["argv"] = true, ["typename"] = true, ["isInstance"] = true,
-  ["trait"] = true, ["uses"] = true, ["Self"] = true,
+  ["trait"] = true, ["uses"] = true, ["Self"] = true, ["free"] = true,
 }
 
 -- Returns the identifier under the cursor and whether it is a member access.
