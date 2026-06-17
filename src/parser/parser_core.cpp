@@ -110,7 +110,8 @@ void Parser::parseTopLevel(Program &program) {
             advance(); // 'abstract'
             program.decls.push_back(parseClass(true));
             break;
-        case TokenType::Interface: program.decls.push_back(parseInterface()); break;
+        case TokenType::Interface:
+        case TokenType::Trait: program.decls.push_back(parseInterface()); break;
         case TokenType::Struct: program.decls.push_back(parseStruct()); break;
         case TokenType::Enum: program.decls.push_back(parseEnum()); break;
         case TokenType::Type: program.decls.push_back(parseTypeAlias()); break;
@@ -176,6 +177,10 @@ TypeRef Parser::parseType(const char *context) {
         case TokenType::KwBool: advance(); base = TypeRef::prim(TypeRef::Kind::Bool); break;
         case TokenType::KwString: advance(); base = TypeRef::prim(TypeRef::Kind::String); break;
         case TokenType::KwVoid: advance(); base = TypeRef::prim(TypeRef::Kind::Void); break;
+        case TokenType::Self: // `Self` — the implementing type, inside a trait
+            advance();
+            base = TypeRef::named("Self");
+            break;
         case TokenType::Identifier: {
             base = TypeRef::named(parseQualifiedName(context));
             // Generic arguments: `Box<int>`, `Pair<int, string>`.
@@ -488,7 +493,10 @@ MethodDecl Parser::parseMethod(bool inInterface) {
         m.returnType = TypeRef::prim(TypeRef::Kind::Void);
     }
     if (inInterface) {
-        m.hasBody = false;
+        // An interface/trait method with a `{ ... }` body is a *default* method
+        // that implementers inherit unless they override it.
+        if (check(TokenType::LBrace)) { m.hasBody = true; m.body = parseBlock(); }
+        else m.hasBody = false;
     } else {
         m.hasBody = true;
         m.body = parseBlock();
