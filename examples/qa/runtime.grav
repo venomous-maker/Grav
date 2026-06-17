@@ -1,0 +1,22 @@
+// qa/runtime.grav — shared runtime: macros, globals, and inline-C helpers.
+// Imported by the other modules; everything here is visible program-wide.
+
+#define MAX_HP 100
+#define TWICE(x) ((x) * 2)
+
+const VERSION: string = "1.0"
+let births: int = 0            // a MUTABLE global shared across every module
+
+// Top-level inline C: a tiny PRNG whose state is a C global. Grav reads it back
+// through `%{ ... %}`, so the same variable is shared between Grav and C.
+%{
+static unsigned int rng_state = 2463534242u;
+int rng_next(int mod) {
+    rng_state ^= rng_state << 13; rng_state ^= rng_state >> 17; rng_state ^= rng_state << 5;
+    return (int)(rng_state % (unsigned)mod);
+}
+%}
+
+fn roll(sides: int) -> int { return %{ rng_next(sides) %} as int; }
+
+fn recordBirth() { births = births + 1; }   // mutates the shared global
