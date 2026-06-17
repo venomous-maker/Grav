@@ -32,7 +32,7 @@ done
 
 # Multi-file QA program (imports, shared globals, inline-C sharing, every feature).
 if "$GRAV" examples/qa/main.grav --emit bin -o /tmp/grav_qa >/tmp/gravtest.err 2>&1; then
-  /tmp/grav_qa one two >/tmp/gravtest.out 2>&1
+  printf '%b' 'Ada\n7\n' | /tmp/grav_qa one two >/tmp/gravtest.out 2>&1
   if diff -q tests/qa_main.expected /tmp/gravtest.out >/dev/null 2>&1; then
     echo "ok   examples/qa/main.grav (multi-file golden)"; pass=$((pass+1))
   else
