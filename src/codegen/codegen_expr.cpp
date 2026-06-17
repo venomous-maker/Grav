@@ -279,6 +279,8 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return "grav_is_instance(" + emitExpr(*call.args[0]) + ", &" +
                        mangle(call.ownerClass) + "_typeinfo)";
             }
+            if (call.targetName == "free")
+                return "free((void*)(" + emitExpr(*call.args[0]) + "))";
             if (call.targetName == "input") return "grav_input()";
             if (call.targetName == "argc") return "grav_argc";
             if (call.targetName == "argv")
