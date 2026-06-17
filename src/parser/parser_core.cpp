@@ -397,6 +397,22 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                                                                 : std::vector<TypeRef>{});
         } while (matchToken(TokenType::Comma));
     }
+    // Composition: `uses field: Type, ...` — each becomes a private delegate field.
+    if (matchToken(TokenType::Uses)) {
+        do {
+            Param d;
+            d.name = expect(TokenType::Identifier, "as a delegate field name").lexeme;
+            expect(TokenType::Colon, "after the delegate field name");
+            d.type = parseType("for the delegate");
+            FieldDecl f;
+            f.access = Access::Private;
+            f.name = d.name;
+            f.type = d.type;
+            f.line = cls->line; f.col = cls->col;
+            cls->fields.push_back(std::move(f));
+            cls->delegates.push_back(std::move(d));
+        } while (matchToken(TokenType::Comma));
+    }
 
     expect(TokenType::LBrace, "to open the class body");
     while (!check(TokenType::RBrace) && !atEnd()) {
