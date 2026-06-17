@@ -3,6 +3,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 namespace grav {
 
@@ -282,6 +283,7 @@ private:
     void walkStmt(Stmt *s, const Subst &subst);
     void walkExpr(Expr *e, const Subst &subst);
     void walkDeclTypes(Decl *d, const Subst &subst);
+    void synthesizeTraits(); // copy interface/trait default methods into implementers
 };
 
 std::string Mono::instName(const std::string &name, const std::vector<TypeRef> &args) const {
@@ -705,6 +707,58 @@ void Mono::run() {
     // 3) Emit: concrete decls first, then the generated instances.
     program_.decls = std::move(kept);
     for (auto &inst : instances_) program_.decls.push_back(std::move(inst));
+
+    // 4) Trait/interface default methods are copied into each implementer.
+    synthesizeTraits();
+}
+
+void Mono::synthesizeTraits() {
+    std::unordered_map<std::string, InterfaceDecl *> ifaces;
+    std::unordered_map<std::string, ClassDecl *> classes;
+    for (auto &d : program_.decls) {
+        if (auto *i = dynamic_cast<InterfaceDecl *>(d.get())) ifaces[i->name] = i;
+        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) classes[c->name] = c;
+    }
+    auto classHasMethod = [&](ClassDecl *c, const std::string &name) {
+        std::string cur = c->name;
+        for (int g = 0; !cur.empty() && g < 100; ++g) {
+            auto it = classes.find(cur);
+            if (it == classes.end()) break;
+            for (auto &m : it->second->methods) if (m.name == name) return true;
+            cur = it->second->baseName;
+        }
+        return false;
+    };
+    for (auto &d : program_.decls) {
+        auto *c = dynamic_cast<ClassDecl *>(d.get());
+        if (!c) continue;
+        // Implemented interfaces across the whole base chain.
+        std::vector<std::string> names;
+        std::string cur = c->name;
+        for (int g = 0; !cur.empty() && g < 100; ++g) {
+            auto it = classes.find(cur);
+            if (it == classes.end()) break;
+            for (auto &in : it->second->interfaceNames)
+                if (std::find(names.begin(), names.end(), in) == names.end()) names.push_back(in);
+            cur = it->second->baseName;
+        }
+        Subst selfSubst;
+        selfSubst["Self"] = TypeRef::named(c->fqName);
+        for (const auto &in : names) {
+            auto it = ifaces.find(in);
+            if (it == ifaces.end()) continue;
+            for (const auto &m : it->second->methods) {
+                if (!m.hasBody) continue;             // abstract: class must provide it
+                if (classHasMethod(c, m.name)) continue; // overridden / already present
+                MethodDecl nm = cloneMethod(m);
+                nm.access = Access::Public;
+                for (auto &p : nm.params) rewriteType(p.type, selfSubst, m.line, m.col);
+                rewriteType(nm.returnType, selfSubst, m.line, m.col);
+                walkBlock(nm.body, selfSubst);
+                c->methods.push_back(std::move(nm));
+            }
+        }
+    }
 }
 
 } // namespace
