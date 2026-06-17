@@ -316,6 +316,7 @@ TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
 TypeRef TypeChecker::checkAs(AsExpr &e) {
     // `%{ c_expr %} as Type` — an inline C value adopts the annotated type.
     if (dynamic_cast<CBlockExpr *>(e.operand.get())) {
+        checkExpr(*e.operand); // marks in-scope locals used (inline C may read them)
         TypeRef *inner = &e.target;
         while (inner->isPointer() && inner->elem) inner = inner->elem.get();
         if (inner->isNamed()) {
