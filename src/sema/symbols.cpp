@@ -239,6 +239,7 @@ const std::vector<GravError> &Registry::build(Program &program) {
     canonicalizeAliases();
     canonicalize();
     synthesizeAccessors();
+    synthesizeDelegates();
     computeSlots();
     checkHierarchies();
     checkStructCycles();
@@ -285,6 +286,54 @@ void Registry::synthesizeAccessors() {
                 s.accessor = AccessorKind::Setter;
                 s.accessorField = f.name;
                 added.push_back(std::move(s));
+            }
+        }
+        for (auto &m : added) ci.methods.push_back(std::move(m));
+    }
+}
+
+// For each `uses field: A` delegate, forward A's public, non-static methods that
+// the class does not already define to `self.field.method(...)`.
+void Registry::synthesizeDelegates() {
+    for (auto &[fq, ci] : classes_) {
+        if (!ci.decl) continue;
+        std::string ns = namespaceOf(fq);
+        std::vector<MethodInfo> added;
+        auto hasMethod = [&](const std::string &n) {
+            for (const auto &m : ci.methods) if (m.name == n) return true;
+            for (const auto &m : added) if (m.name == n) return true;
+            return findMethod(ci.baseClass, n) != nullptr;
+        };
+        for (const auto &d : ci.decl->delegates) {
+            std::string aFq = resolveType(d.type.name, ns);
+            if (aFq.empty() || !isClass(aFq)) {
+                error(ci.decl->line, ci.decl->col,
+                      "'uses " + d.name + ": " + d.type.name + "' requires a class type");
+                continue;
+            }
+            // Walk the delegate class hierarchy collecting forwardable methods.
+            std::string cur = aFq;
+            int guard = 0;
+            while (!cur.empty() && guard++ < 100) {
+                const ClassInfo *ac = cls(cur);
+                if (!ac) break;
+                for (const auto &m : ac->methods) {
+                    if (m.isStatic || m.access != Access::Public) continue;
+                    if (hasMethod(m.name)) continue;
+                    MethodInfo fwd;
+                    fwd.name = m.name;
+                    fwd.access = Access::Public;
+                    fwd.returnType = m.returnType;
+                    fwd.paramTypes = m.paramTypes;
+                    fwd.paramNames = m.paramNames;
+                    fwd.definingClass = fq;
+                    fwd.hasBody = true;
+                    fwd.accessor = AccessorKind::Delegate;
+                    fwd.accessorField = d.name;
+                    fwd.delegateClass = aFq;
+                    added.push_back(std::move(fwd));
+                }
+                cur = ac->baseClass;
             }
         }
         for (auto &m : added) ci.methods.push_back(std::move(m));
