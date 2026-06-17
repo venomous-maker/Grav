@@ -39,14 +39,18 @@ return {
           local map = function(lhs, cmd, desc)
             vim.keymap.set("n", lhs, cmd, { buffer = ev.buf, desc = desc })
           end
-          -- <leader>mr : compile to a binary and run it
+          -- <leader>mr : build and run
           map("<leader>mr", function()
-            run(string.format("%s %q --emit bin -o /tmp/grav_out && /tmp/grav_out", gravc, file))
+            run(string.format("%s %q --run", gravc, file))
           end, "Grav: run")
           -- <leader>mc : transpile to C and show it
           map("<leader>mc", function()
             run(string.format("%s %q --emit c -o /dev/stdout", gravc, file))
           end, "Grav: emit C")
+          -- <leader>ms : emit assembly (optimized)
+          map("<leader>ms", function()
+            run(string.format("%s %q -S -O2 -o /dev/stdout", gravc, file))
+          end, "Grav: emit asm")
         end,
       })
     end,
