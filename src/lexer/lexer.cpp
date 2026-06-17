@@ -35,6 +35,7 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"constructor", TokenType::Constructor},
         {"extends", TokenType::Extends},
         {"implements", TokenType::Implements},
+        {"uses", TokenType::Uses},
         {"new", TokenType::New},
         {"return", TokenType::Return},
         {"static", TokenType::Static},
