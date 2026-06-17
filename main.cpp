@@ -282,7 +282,10 @@ int main(int argc, char **argv) {
 
         // --run: execute the freshly built binary, forwarding any `-- args`.
         if (runAfter) {
-            std::string runCmd = "\"" + exePath + "\"";
+            // A relative path with no directory needs a `./` so the shell finds it.
+            std::string runPath = exePath;
+            if (runPath.find('/') == std::string::npos) runPath = "./" + runPath;
+            std::string runCmd = "\"" + runPath + "\"";
             for (const auto &a : runArgs) runCmd += " \"" + a + "\"";
             int prc = std::system(runCmd.c_str());
             if (emit == EmitMode::Bin && tempC) { /* binary kept; nothing to clean */ }
