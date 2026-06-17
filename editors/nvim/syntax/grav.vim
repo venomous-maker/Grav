@@ -32,7 +32,7 @@ syn keyword gravBoolean true false
 syn keyword gravConstant null self this Self
 
 " Built-in functions
-syn keyword gravBuiltin print typename isInstance str input argc argv len
+syn keyword gravBuiltin print typename isInstance str input argc argv len free
 
 " Numbers
 syn match gravNumber "\<\d\+\>"
