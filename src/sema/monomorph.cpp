@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
+#include <functional>
 
 namespace grav {
 
@@ -284,6 +285,7 @@ private:
     void walkExpr(Expr *e, const Subst &subst);
     void walkDeclTypes(Decl *d, const Subst &subst);
     void synthesizeTraits(); // copy interface/trait default methods into implementers
+    void flattenBases();     // copy secondary bases' fields+methods (multiple inheritance)
 };
 
 std::string Mono::instName(const std::string &name, const std::vector<TypeRef> &args) const {
@@ -497,6 +499,11 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     out->baseName = tpl->baseName;
     out->baseArgs = tpl->baseArgs;
     rewriteSuper(out->baseName, out->baseArgs, subst, /*isClass=*/true, tpl->line, tpl->col);
+    out->extraBases = tpl->extraBases;
+    out->extraBaseArgs = tpl->extraBaseArgs;
+    for (size_t i = 0; i < out->extraBases.size(); ++i)
+        if (i < out->extraBaseArgs.size())
+            rewriteSuper(out->extraBases[i], out->extraBaseArgs[i], subst, true, tpl->line, tpl->col);
     out->interfaceNames = tpl->interfaceNames;
     out->interfaceArgs = tpl->interfaceArgs;
     for (size_t i = 0; i < out->interfaceNames.size(); ++i)
@@ -653,6 +660,10 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         walkBlock(fn->body, subst);
     } else if (auto *cd = dynamic_cast<ClassDecl *>(d)) {
         rewriteSuper(cd->baseName, cd->baseArgs, subst, /*isClass=*/true, cd->line, cd->col);
+        for (size_t i = 0; i < cd->extraBases.size(); ++i)
+            if (i < cd->extraBaseArgs.size())
+                rewriteSuper(cd->extraBases[i], cd->extraBaseArgs[i], subst,
+                             /*isClass=*/true, cd->line, cd->col);
         for (size_t i = 0; i < cd->interfaceNames.size(); ++i)
             if (i < cd->interfaceArgs.size())
                 rewriteSuper(cd->interfaceNames[i], cd->interfaceArgs[i], subst,
@@ -709,8 +720,55 @@ void Mono::run() {
     program_.decls = std::move(kept);
     for (auto &inst : instances_) program_.decls.push_back(std::move(inst));
 
-    // 4) Trait/interface default methods are copied into each implementer.
+    // 4) Multiple inheritance: flatten secondary bases into each class.
+    flattenBases();
+    // 5) Trait/interface default methods are copied into each implementer.
     synthesizeTraits();
+}
+
+void Mono::flattenBases() {
+    std::unordered_map<std::string, ClassDecl *> classes;
+    for (auto &d : program_.decls)
+        if (auto *c = dynamic_cast<ClassDecl *>(d.get())) classes[c->name] = c;
+
+    // Does `c` already provide a field/method `name` (own or via the primary chain)?
+    std::function<bool(ClassDecl *, const std::string &, bool)> has =
+        [&](ClassDecl *c, const std::string &name, bool field) -> bool {
+        std::string cur = c->name;
+        for (int g = 0; !cur.empty() && g < 100; ++g) {
+            auto it = classes.find(cur);
+            if (it == classes.end()) break;
+            if (field) { for (auto &f : it->second->fields) if (f.name == name) return true; }
+            else { for (auto &m : it->second->methods) if (m.name == name) return true; }
+            cur = it->second->baseName;
+        }
+        return false;
+    };
+    for (auto &d : program_.decls) {
+        auto *c = dynamic_cast<ClassDecl *>(d.get());
+        if (!c || c->extraBases.empty()) continue;
+        // Collect each secondary base's full inheritance chain (deduped).
+        std::vector<ClassDecl *> chain;
+        std::vector<std::string> seen;
+        std::function<void(const std::string &)> collect = [&](const std::string &nm) {
+            if (std::find(seen.begin(), seen.end(), nm) != seen.end()) return;
+            seen.push_back(nm);
+            auto it = classes.find(nm);
+            if (it == classes.end()) return;
+            ClassDecl *b = it->second;
+            chain.push_back(b);
+            if (!b->baseName.empty()) collect(b->baseName);
+            for (auto &eb : b->extraBases) collect(eb);
+        };
+        for (const auto &bn : c->extraBases) collect(bn);
+        for (ClassDecl *b : chain) {
+            for (const auto &f : b->fields)
+                if (!has(c, f.name, /*field=*/true)) c->fields.push_back(f);
+            for (const auto &m : b->methods)
+                if (!m.isStatic && !has(c, m.name, /*field=*/false))
+                    c->methods.push_back(cloneMethod(m));
+        }
+    }
 }
 
 void Mono::synthesizeTraits() {
