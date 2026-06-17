@@ -66,15 +66,15 @@ binary). The compiler — `gravc` — is written in C++20.
 cmake -S . -B build && cmake --build build
 
 # transpile a program to C
-./build/gravc examples/shapes.grav            # writes examples/shapes.c
+./build/gravc examples/10_inheritance.grav            # writes examples/shapes.c
 
 # …or compile straight to a native binary and run it
-./build/gravc examples/animals.grav --emit bin -o /tmp/animals
+./build/gravc examples/bank.grav --emit bin -o /tmp/animals
 /tmp/animals
 ```
 
 ```grav
-// examples/shapes.grav
+// examples/10_inheritance.grav
 interface Shape {
     fn area() -> int
 }
@@ -96,34 +96,40 @@ fn main() {
 ## The compiler (`gravc`)
 
 ```
-gravc <input.grav> [-o out] [--emit c|bin|both] [-Werror]
+gravc <input.grav> [options] [-- args...]
 gravc -                       # read source from stdin, write C to stdout
 ```
 
-| Flag            | Meaning                                                              |
-|-----------------|---------------------------------------------------------------------|
-| `-o <out>`      | Output path (the `.c` file, or the executable for `bin`/`both`).     |
-| `--emit c`      | **(default)** Emit C only.                                          |
-| `--emit bin`    | Compile the generated C to a native executable (C file is removed). |
-| `--emit both`   | Emit the `.c` **and** the executable.                              |
-| `-Werror`       | Treat warnings (e.g. unused variables) as fatal errors.            |
-| `-`             | Read from stdin and print C to stdout.                             |
+| Flag                         | Meaning                                                        |
+|------------------------------|----------------------------------------------------------------|
+| `-o <out>`                   | Output path (`.c`, `.s`, or the executable).                   |
+| `--emit c\|asm\|bin\|both`   | What to produce (default `c`).                                 |
+| `-c` / `-S` / `-b`,`--bin`   | Aliases for `--emit c` / `asm` / `bin`.                        |
+| `-r`, `--run`                | Build a binary and run it (args after `--` go to the program). |
+| `--keep-c`                   | Keep the generated `.c` when building a binary.                |
+| `-O0`…`-O3`, `-Os`           | Optimization level (passed to the C compiler).                 |
+| `-g`, `-g3`                  | Include debug info.                                            |
+| `--cc <compiler>`            | C compiler to use (default `$CC`, else `cc`).                  |
+| `-Werror`                    | Treat warnings (e.g. unused variables) as fatal.              |
+| `-v`, `--verbose`            | Print the C compiler command.                                  |
+| `-h`, `--help`               | Show usage.                                                    |
+| `-`                          | Read from stdin and print C to stdout.                         |
 
-For `bin`/`both`, `gravc` invokes the system C compiler (`$CC`, default `cc`) as
-`cc -std=c11 <file>.c -o <out>`.
+For `asm`/`bin`/`both`, `gravc` invokes the system C compiler (`$CC`, default `cc`)
+as `cc -std=c11 [opts] <file>.c -o <out>`.
 
 ---
 
 ## Language tour
 
-> **See it all at once:** [`examples/all_features.grav`](examples/all_features.grav)
+> **See it all at once:** [`examples/comprehensive.grav`](examples/comprehensive.grav)
 > is a single runnable program that exercises (almost) every feature below —
 > macros, type aliases, enums, structs, arrays, pointers, classes/interfaces,
 > the full operator set, control flow, `null`/`??`/`?.`, `as`/`is`, async/await,
 > and `sizeof`. Build and run it with:
 >
 > ```bash
-> ./build/gravc examples/all_features.grav --emit bin -o /tmp/all && /tmp/all
+> ./build/gravc examples/comprehensive.grav --emit bin -o /tmp/comp && /tmp/comp
 > ```
 
 ### Primitive types & variables
@@ -491,8 +497,8 @@ in the generated C (no runtime type erasure). Type arguments are explicit: `Box<
 in type positions and the turbofish `id::<int>(x)` on a call. Generic inheritance
 (`extends Base<T>`, `implements Iface<T>`), generic aliases (`type Vec<T> = T[3]`),
 and `T: Bound` constraints are all supported. See
-[generics.grav](examples/generics.grav) and
-[generic_classes.grav](examples/generic_classes.grav).
+[generics.grav](examples/11_generics.grav) and
+[generic_classes.grav](examples/11_generics.grav).
 
 ```grav
 class Box<T> {
@@ -521,7 +527,7 @@ fn main() {
 A function's last parameter may be variadic (`...name: T`), collecting the trailing
 arguments into a runtime-length slice: `name.length` is the count and `name[i]`
 indexes elements. It lowers to a `(int count, T* ptr)` pair with a C compound
-literal at each call — no heap allocation. See [variadics.grav](examples/variadics.grav).
+literal at each call — no heap allocation. See [variadics.grav](examples/12_variadics.grav).
 
 ```grav
 fn sum(...nums: int) -> int {
@@ -541,7 +547,7 @@ fn main() {
 `throw` raises a class instance; `try { } catch (e: Type) { }` catches it (matching
 the type or any subclass); `finally { }` runs on the normal and handled paths. It
 lowers to a `setjmp`/`longjmp` runtime; an uncaught exception prints a message and
-exits. See [exceptions.grav](examples/exceptions.grav).
+exits. See [exceptions.grav](examples/13_exceptions.grav).
 
 ```grav
 class AppError { public msg: string  constructor(m: string) { self.msg = m; } }
@@ -562,7 +568,7 @@ fn main() {
 A module-level `const`/`let` is a global; a class `static x: T = value` is a
 class-level field accessed as `Class.x`. Both need an explicit type and a constant
 initializer, and lower to C globals. `const`/`readonly` ones are immutable. See
-[globals.grav](examples/globals.grav).
+[globals.grav](examples/09_classes.grav).
 
 ```grav
 const PI: float = 3.14159
@@ -909,11 +915,16 @@ installs the latest build as `grav` in `~/.local/bin` (override the dir with
 
 ## Roadmap / not yet implemented
 
-`v0.7` completed **generics** — generic classes/interfaces, generic inheritance
-(`extends Base<T>`), generic type aliases, and `T: Bound` constraints (see
-[generic_classes.grav](examples/generic_classes.grav)) — and added **variadics**
-(`fn f(...xs: T)`, see [variadics.grav](examples/variadics.grav)) and **exceptions**
-(`try`/`catch`/`throw`/`finally`, see [exceptions.grav](examples/exceptions.grav)).
+`v0.8` added the three multiple-inheritance forms (see
+[17_multiple_inheritance.grav](examples/17_multiple_inheritance.grav)): **traits**
+(`trait` interfaces with default method bodies + `Self`), **composition** (`uses
+field: T`, auto-forwarding), and **true multiple inheritance** (`extends A, B`,
+flattening fields/methods with multi-base RTTI). `v0.7` completed **generics** —
+generic classes/interfaces, generic inheritance (`extends Base<T>`), generic type
+aliases, and `T: Bound` constraints (see
+[generic_classes.grav](examples/11_generics.grav)) — and added **variadics**
+(`fn f(...xs: T)`, see [variadics.grav](examples/12_variadics.grav)) and **exceptions**
+(`try`/`catch`/`throw`/`finally`, see [exceptions.grav](examples/13_exceptions.grav)).
 `v0.6` added generic structs/functions and **globals + static fields**. `v0.5`
 added [string interpolation](#string-interpolation), the
 [`str`/`input`/`argc`/`argv`](#built-ins) built-ins, an
@@ -930,9 +941,10 @@ implemented yet — using them is a parse/type error today:
   classes); what remains is the library types plus a small C runtime (growable
   buffers, hashing) and the literal syntax. Fixed-length `T[N]` arrays *are*
   implemented — see [Arrays](#arrays).
-- **Traits / mixins** — interfaces with default method bodies, copied into
-  implementers. (Interfaces and transparent `type` aliases *are* implemented.)
-- **Multiple class inheritance** — Grav supports a single base class plus multiple
-  interfaces. True multiple *class* inheritance doesn't map cleanly onto C's struct
-  prefix / single-vtable model; use interfaces (or composition) for multiple supertypes.
+
+A note on [multiple inheritance](examples/17_multiple_inheritance.grav): the primary
+base in `extends A, B` keeps prefix layout (full polymorphism through `A`), while
+secondary bases are flattened (fields + methods copied in) with multi-base RTTI. For
+polymorphism through a *secondary* base, use an interface or `trait`.
+
 Contributions and design notes welcome — start from the per-folder `README.md` files.
