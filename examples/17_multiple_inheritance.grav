@@ -1,0 +1,63 @@
+// 17 — three ways to inherit from multiple sources.
+//
+//   1. trait  — interfaces with default method bodies (behavior, no state)
+//   2. uses   — composition: forward methods to embedded delegates (no is-a)
+//   3. extends A, B — true multiple inheritance: fields + methods flattened in,
+//                     with `is`/isInstance true for every base (RTTI)
+
+// --- 1) traits ---------------------------------------------------------------
+trait Comparable {
+    fn compareTo(o: Self) -> int
+    fn lessThan(o: Self) -> bool { return self.compareTo(o) < 0; }  // default
+}
+
+class Coin implements Comparable {
+    public value: int
+    constructor(v: int) { self.value = v; }
+    public fn compareTo(o: Coin) -> int { return self.value - o.value; }
+}
+
+// --- 2) composition (uses) ---------------------------------------------------
+class Logger {
+    constructor() {}
+    public fn log(msg: string) -> string { return "[log] " + msg; }
+}
+
+class Service uses logger: Logger {
+    constructor() { self.logger = new Logger(); }
+    public fn run() -> string { return self.log("running"); }   // forwarded to logger
+}
+
+// --- 3) true multiple inheritance (extends A, B) -----------------------------
+class Walker {
+    public steps: int
+    constructor() { self.steps = 0; }
+    public fn walk() -> string { self.steps = self.steps + 1; return "walk"; }
+}
+class Swimmer {
+    public laps: int
+    constructor() { self.laps = 0; }
+    public fn swim() -> string { self.laps = self.laps + 1; return "swim"; }
+}
+class Amphibian extends Walker, Swimmer {
+    constructor() { self.steps = 0; self.laps = 0; }
+}
+
+fn main() {
+    // traits
+    let a = new Coin(10);
+    let b = new Coin(25);
+    print(a.lessThan(b));            // true  (default method)
+
+    // composition
+    let s = new Service();
+    print(s.run());                  // [log] running  (forwarded)
+
+    // multiple inheritance
+    let f = new Amphibian();
+    print(f.walk());                 // walk   (from Walker)
+    print(f.swim());                 // swim   (from Swimmer)
+    print("${f.steps} steps, ${f.laps} laps");  // 1 steps, 1 laps
+    print(f is Walker);              // true
+    print(f is Swimmer);             // true   (multi-base RTTI)
+}
