@@ -658,6 +658,7 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
                 rewriteSuper(cd->interfaceNames[i], cd->interfaceArgs[i], subst,
                              /*isClass=*/false, cd->line, cd->col);
         for (auto &f : cd->fields) rewriteType(f.type, subst, f.line, f.col);
+        for (auto &d : cd->delegates) rewriteType(d.type, subst, cd->line, cd->col);
         for (auto &sf : cd->staticFields) {
             rewriteType(sf.type, subst, sf.line, sf.col);
             walkExpr(sf.init.get(), subst);
