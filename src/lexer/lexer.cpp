@@ -28,6 +28,7 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"sizeof", TokenType::Sizeof},
         {"abstract", TokenType::Abstract},
         {"interface", TokenType::Interface},
+        {"trait", TokenType::Trait},
         {"async", TokenType::Async},
         {"await", TokenType::Await},
         {"namespace", TokenType::Namespace},
