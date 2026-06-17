@@ -1,0 +1,19 @@
+// lib/convert.grav — type conversions between strings and primitives.
+// (Numeric casts `int(x)` / `float(x)` / `bool(x)` and `str(x)` are built in;
+// these add string parsing.)
+
+%{
+#include <stdlib.h>
+#include <string.h>
+%}
+
+fn parseInt(s: string) -> int { return %{ atoi(s) %} as int; }
+
+fn parseFloat(s: string) -> float { return %{ atof(s) %} as float; }
+
+fn parseBool(s: string) -> bool {
+    return %{ (strcmp(s, "true") == 0 || strcmp(s, "1") == 0) %} as bool;
+}
+
+// `str(x)` already converts any printable value to a string; this is a readable alias.
+fn intToStr(n: int) -> string { return str(n); }
