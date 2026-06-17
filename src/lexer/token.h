@@ -34,6 +34,7 @@ enum class TokenType {
     Sizeof,     // sizeof(T) / sizeof(expr)
     Abstract,
     Interface,
+    Trait,
     Async,
     Await,
     Namespace,
