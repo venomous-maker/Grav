@@ -11,16 +11,16 @@ class Resource {
 }
 
 fn parsePositive(s: string) -> int {
-    let n = parseInt(s);                 // convert lib: string -> int
+    let n = Format.toInt(s);                 // convert lib: string -> int
     if (n < 0) { throw new ValueError("expected >= 0, got ${s}"); }
     return n;
 }
 
 fn main() {
     // convert lib
-    print("parseInt('42') = ${parseInt("42")}");
-    print("parseFloat('3.5') = ${parseFloat("3.5")}");
-    print("parseBool('true') = ${parseBool("true")}");
+    print("Format.toInt('42') = ${Format.toInt("42")}");
+    print("Format.toFloat('3.5') = ${Format.toFloat("3.5")}");
+    print("Format.toBool('true') = ${Format.toBool("true")}");
 
     // exception lib: a subclass caught by the base type, with a virtual describe()
     try {
