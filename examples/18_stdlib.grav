@@ -1,0 +1,40 @@
+// 18 — the basic library (lib/) and the free() builtin.
+//
+// Imports pull in reusable modules. Paths are relative to this file, so from
+// examples/ the library at the repo root is `../lib/...`.
+
+import "../lib/std.grav"     // exception + convert + io
+
+class Resource {
+    public id: int
+    constructor(id: int) { self.id = id; }
+}
+
+fn parsePositive(s: string) -> int {
+    let n = parseInt(s);                 // convert lib: string -> int
+    if (n < 0) { throw new ValueError("expected >= 0, got ${s}"); }
+    return n;
+}
+
+fn main() {
+    // convert lib
+    print("parseInt('42') = ${parseInt("42")}");
+    print("parseFloat('3.5') = ${parseFloat("3.5")}");
+    print("parseBool('true') = ${parseBool("true")}");
+
+    // exception lib: a subclass caught by the base type, with a virtual describe()
+    try {
+        print("ok: ${parsePositive("10")}");      // ok: 10
+        print("bad: ${parsePositive("-1")}");      // throws ValueError
+    } catch (e: Exception) {
+        print(e.describe());                        // ValueError: expected >= 0, got -1
+    }
+
+    // free() builtin: release a heap object created with `new` (no GC)
+    let r = new Resource(7);
+    print("resource ${r.id}");
+    free(r);
+    print("released");
+
+    // io lib also offers readLine()/prompt()/readInt() over the input() builtin
+}
