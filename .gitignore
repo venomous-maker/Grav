@@ -4,3 +4,11 @@ cmake-build-debug
 .claude
 __pycache__
 *.pyc
+# Compiled example binaries / generated C (keep .grav sources)
+examples/*.c
+examples/*.s
+!examples/import_demo/*.c
+examples/[0-9][0-9]_*
+!examples/[0-9][0-9]_*.grav
+examples/bank
+examples/comprehensive
