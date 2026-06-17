@@ -41,6 +41,7 @@ enum class TokenType {
     Constructor,
     Extends,
     Implements,
+    Uses,
     New,
     Return,
     Static,
