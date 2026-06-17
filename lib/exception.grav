@@ -1,0 +1,31 @@
+// lib/exception.grav — a small exception hierarchy for `throw` / `catch`.
+//
+//   import "../../lib/exception.grav"
+//   try { throw new ValueError("bad"); } catch (e: Exception) { print(e.message()); }
+
+class Exception {
+    protected msg: string
+    constructor(m: string) { self.msg = m; }
+    public fn message() -> string { return self.msg; }
+    public fn describe() -> string { return "Exception: ${self.msg}"; }
+}
+
+class ValueError extends Exception {
+    constructor(m: string) { self.msg = m; }
+    public fn describe() -> string { return "ValueError: ${self.msg}"; }
+}
+
+class RuntimeError extends Exception {
+    constructor(m: string) { self.msg = m; }
+    public fn describe() -> string { return "RuntimeError: ${self.msg}"; }
+}
+
+class IndexError extends Exception {
+    constructor(m: string) { self.msg = m; }
+    public fn describe() -> string { return "IndexError: ${self.msg}"; }
+}
+
+class NotFound extends Exception {
+    constructor(m: string) { self.msg = m; }
+    public fn describe() -> string { return "NotFound: ${self.msg}"; }
+}
