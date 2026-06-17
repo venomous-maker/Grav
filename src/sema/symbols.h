@@ -19,7 +19,7 @@ struct FieldInfo {
     std::string definingClass; // FQ
 };
 
-enum class AccessorKind { None, Getter, Setter };
+enum class AccessorKind { None, Getter, Setter, Delegate };
 
 struct MethodInfo {
     std::string name;
@@ -34,7 +34,8 @@ struct MethodInfo {
     bool hasBody = false;
     // Synthetic accessor info (auto-generated getter/setter for a private field).
     AccessorKind accessor = AccessorKind::None;
-    std::string accessorField;       // the field this accessor reads/writes
+    std::string accessorField;       // the field this accessor reads/writes (or delegates to)
+    std::string delegateClass;       // FQ class whose method a Delegate forwards to
 };
 
 // One virtual-dispatch slot in a class hierarchy. `slotOwner` is the class that
@@ -181,6 +182,7 @@ private:
     void canonicalizeAliases();
     TypeRef resolveAlias(const std::string &fq); // expands one alias (cycle-guarded)
     void synthesizeAccessors();
+    void synthesizeDelegates(); // forwarders for `uses` composition
     TypeRef canonType(const TypeRef &t, const std::string &nsContext, int line, int col);
     void computeSlots();
     void checkHierarchies();
