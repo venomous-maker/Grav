@@ -1,0 +1,58 @@
+// qa/creatures.grav — the domain model: enums, structs, interfaces, traits,
+// abstract classes, inheritance, composition, multiple inheritance, and generics.
+
+import "runtime.grav"
+
+enum Diet { Herbivore, Carnivore, Omnivore }
+
+type HpBar = int[3]                       // generic-free alias
+
+// A trait: behavior with a default method (+ Self).
+trait Ranked {
+    fn score() -> int
+    fn beats(o: Self) -> bool { return self.score() > o.score(); }
+}
+
+// A plain interface.
+interface Describable { fn describe() -> string }
+
+// An abstract base with shared state/behavior.
+abstract class Creature implements Describable, Ranked {
+    protected name: string
+    protected hp: int
+    constructor(name: string) { self.name = name; self.hp = MAX_HP; recordBirth(); }
+    public fn describe() -> string { return "${self.name} (hp ${self.hp})"; }
+    public fn score() -> int { return self.hp; }
+    abstract fn sound() -> string
+}
+
+class Dog extends Creature {
+    constructor(name: string) { self.name = name; self.hp = MAX_HP; recordBirth(); }
+    public fn sound() -> string { return "woof"; }
+}
+
+class Cat extends Creature {
+    constructor(name: string) { self.name = name; self.hp = TWICE(40); recordBirth(); }
+    public fn sound() -> string { return "meow"; }
+}
+
+// Composition: a Trainer delegates to an embedded Dog (no is-a).
+class Trainer uses buddy: Dog {
+    public who: string
+    constructor(who: string) { self.who = who; self.buddy = new Dog("Rex"); }
+}
+
+// True multiple inheritance: Amphibian gets fields + methods from both bases.
+class Walker { public steps: int  constructor() { self.steps = 0; } public fn walk() -> string { self.steps = self.steps + 1; return "walk"; } }
+class Swimmer { public laps: int  constructor() { self.laps = 0; } public fn swim() -> string { self.laps = self.laps + 1; return "swim"; } }
+class Frog extends Walker, Swimmer { constructor() { self.steps = 0; self.laps = 0; } }
+
+// A generic container.
+class Cage<T> {
+    private items: T[4]
+    private n: int
+    constructor() { self.n = 0; }
+    public fn add(x: T) { self.items[self.n] = x; self.n = self.n + 1; }
+    public fn at(i: int) -> T { return self.items[i]; }
+    public fn size() -> int { return self.n; }
+}
