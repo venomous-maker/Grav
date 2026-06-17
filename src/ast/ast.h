@@ -395,8 +395,12 @@ struct ClassDecl : Decl {
     std::vector<std::string> typeParams; // generic params, e.g. <T, U>
     std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     bool isAbstract = false;
-    std::string baseName;      // as written, empty if none
+    std::string baseName;      // primary base (prefix layout), empty if none
     std::vector<TypeRef> baseArgs; // generic args on the base, e.g. extends Stack<T>
+    // Additional bases in `extends A, B, C`: their fields and methods are flattened
+    // into this class (multiple inheritance). The primary base keeps prefix layout.
+    std::vector<std::string> extraBases;
+    std::vector<std::vector<TypeRef>> extraBaseArgs; // parallel to extraBases
     std::vector<std::string> interfaceNames;
     std::vector<std::vector<TypeRef>> interfaceArgs; // parallel to interfaceNames
     // `uses field: Type` — composition: `field` is a delegate the class forwards
