@@ -50,6 +50,7 @@ struct ClassInfo {
     std::string fqName;
     bool isAbstract = false;
     std::string baseClass;                 // FQ, empty if none
+    std::vector<std::string> extraBases;   // FQ secondary bases (multiple inheritance)
     std::vector<std::string> interfaces;   // FQ
     std::vector<FieldInfo> fields;         // own fields only (declared order)
     std::vector<MethodInfo> methods;       // own methods only
