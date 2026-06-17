@@ -677,6 +677,21 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 error(e.line, e.col, "argc expects no arguments");
             return TypeRef::prim(TypeRef::Kind::Int);
         }
+        if (name->name == "free") {
+            // Frees a heap object created with `new` (or a pointer). Use with care.
+            e.kind = CallKind::Builtin;
+            e.targetName = "free";
+            if (e.args.size() != 1) {
+                error(e.line, e.col, "free expects exactly 1 argument");
+            } else {
+                TypeRef t = checkExpr(*e.args[0]);
+                bool ok = t.isPointer() || (t.isNamed() && reg_->isClass(t.name));
+                if (!t.isError() && !ok)
+                    error(e.args[0]->line, e.args[0]->col,
+                          "free expects a class instance or pointer, got " + typeRefName(t));
+            }
+            return TypeRef::prim(TypeRef::Kind::Void);
+        }
         if (name->name == "argv") {
             e.kind = CallKind::Builtin;
             e.targetName = "argv";
