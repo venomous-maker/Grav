@@ -1,0 +1,28 @@
+<idea-plugin>
+    <id>dev.grav.lang</id>
+    <name>Grav</name>
+    <vendor email="" url="https://github.com/venomous-maker">Grav</vendor>
+
+    <description><![CDATA[
+        Language support for <b>Grav</b> (.grav) — a statically typed,
+        TypeScript-inspired language that compiles to C.
+        Provides syntax highlighting and file-type recognition.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+            name="Grav file"
+            implementationClass="dev.grav.GravFileType"
+            fieldName="INSTANCE"
+            language="Grav"
+            extensions="grav"/>
+        <lang.syntaxHighlighterFactory
+            language="Grav"
+            implementationClass="dev.grav.GravSyntaxHighlighterFactory"/>
+        <lang.commenter
+            language="Grav"
+            implementationClass="dev.grav.GravCommenter"/>
+    </extensions>
+</idea-plugin>
