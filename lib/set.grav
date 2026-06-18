@@ -1,0 +1,28 @@
+// lib/set.grav — a generic Set over Array<T> (linear membership).
+import "array.grav"
+
+class Set<T> {
+    private items: Array<T>
+    constructor() { self.items = new Array<T>(); }
+
+    public fn add(item: T) { if (!self.items.contains(item)) { self.items.push(item); } }
+    public fn contains(item: T) -> bool { return self.items.contains(item); }
+    public fn remove(item: T) {
+        let i = self.items.indexOf(item);
+        if (i >= 0) { self.items.removeAt(i); }
+    }
+    public fn size() -> int { return self.items.length(); }
+    public fn at(index: int) -> T { return self.items.get(index); }
+
+    public fn union(other: Set<T>) -> Set<T> {
+        let r = new Set<T>();
+        for (i in 0..self.size()) { r.add(self.at(i)); }
+        for (i in 0..other.size()) { r.add(other.at(i)); }
+        return r;
+    }
+    public fn intersect(other: Set<T>) -> Set<T> {
+        let r = new Set<T>();
+        for (i in 0..self.size()) { if (other.contains(self.at(i))) { r.add(self.at(i)); } }
+        return r;
+    }
+}
