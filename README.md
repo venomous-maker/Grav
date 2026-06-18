@@ -52,7 +52,7 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Comments](#comments)
   - [Diagnostics & warnings](#diagnostics--warnings)
 - [How Grav lowers to C](#how-grav-lowers-to-c)
-- [Editor support (Neovim)](#editor-support-neovim)
+- [Editor support](#editor-support)
 - [Project layout](#project-layout)
 - [Building the compiler](#building-the-compiler)
 - [Roadmap / not yet implemented](#roadmap--not-yet-implemented)
@@ -879,7 +879,7 @@ See [`src/codegen/README.md`](src/codegen/README.md) for the gory details.
 ├── examples/                # numbered feature tour + comprehensive/ qa/ programs
 ├── lib/                     # standard library (collections, strings, math, fs, datetime, …)
 ├── tests/run.sh             # compile + run every example with golden checks
-├── editors/nvim/            # Neovim syntax, filetype, go-to-definition, keymaps
+├── editors/                 # Neovim, VS Code, and JetBrains/CLion integrations
 ├── mcp_server/              # dependency-free MCP server wrapping gravc
 └── src/
     ├── common/   # shared types (TypeRef) and diagnostics
@@ -914,14 +914,27 @@ cmake --build build
 
 ---
 
-## Editor support (Neovim)
+## Editor support
 
-A LazyVim-ready Neovim integration lives in [`editors/nvim/`](editors/nvim/):
-syntax highlighting (keywords, `${}` interpolation, `%{ %}` C blocks, decorators),
-filetype detection, and `<leader>mr` / `<leader>mc` build-and-run keymaps. It also
-registers the [`gravc` MCP server](mcp_server/) with `mcphub.nvim`. The MCP server
-installs the latest build as `grav` in `~/.local/bin` (override the dir with
-`GRAV_DIR`). See [`editors/nvim/README.md`](editors/nvim/README.md).
+Integrations for three editors live under [`editors/`](editors/):
+
+- **Neovim** ([`editors/nvim/`](editors/nvim/)) — a LazyVim-ready setup: syntax
+  highlighting (keywords, `${}` interpolation, `%{ %}` C blocks, decorators),
+  filetype detection, go-to-definition, and `<leader>mr` / `<leader>mc`
+  build-and-run keymaps. It also registers the [`gravc` MCP server](mcp_server/)
+  with `mcphub.nvim`, which installs the latest build as `grav` in `~/.local/bin`
+  (override with `GRAV_DIR`). See [`editors/nvim/README.md`](editors/nvim/README.md).
+- **VS Code** ([`editors/vscode/`](editors/vscode/)) — a full extension: TextMate
+  grammar, language configuration, snippets, and *compile / compile&run* commands.
+  Install locally with a symlink into `~/.vscode/extensions/`, or package a `.vsix`
+  with `vsce`. See [`editors/vscode/README.md`](editors/vscode/README.md).
+- **JetBrains / CLion** ([`editors/jetbrains/`](editors/jetbrains/)) — a TextMate
+  bundle for instant highlighting (Settings → Editor → TextMate Bundles → add the
+  `textmate/` folder), plus a complete Gradle IntelliJ-Platform plugin project
+  (JDK 17+) for a distributable plugin. See
+  [`editors/jetbrains/README.md`](editors/jetbrains/README.md).
+
+All three reuse the same TextMate grammar, so highlighting stays consistent.
 
 ---
 
