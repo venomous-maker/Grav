@@ -27,3 +27,31 @@ fn eprint(message: string) {
 fn printRaw(message: string) {
     %{ fputs(message, stdout); %};
 }
+
+// IO — the same helpers grouped as static methods, the OOP-style entry point.
+//
+//   IO.print("hello")
+//   let name = IO.prompt("Name? ")
+//   let n = IO.readInt()
+//
+// `print`/`write` take a `string`; format other values first with `str(x)` or
+// string interpolation (e.g. `IO.print("x = ${x}")`).
+class IO {
+    static fn print(message: string) { print(message); }       // line + newline
+    static fn write(message: string) { %{ fputs(message, stdout); %}; } // no newline
+    static fn eprint(message: string) { %{ fprintf(stderr, "%s\n", message); %}; }
+    static fn flush() { %{ fflush(stdout); %}; }
+
+    static fn input() -> string { return input(); }
+    static fn readLine() -> string { return input(); }
+    static fn prompt(message: string) -> string { IO.write(message); return input(); }
+
+    static fn readInt() -> int { return Format.toInt(input()); }
+    static fn readLong() -> long { return Format.toLong(input()); }
+    static fn readFloat() -> float { return Format.toFloat(input()); }
+    static fn readDouble() -> double { return Format.toDouble(input()); }
+    static fn readBool() -> bool { return Format.toBool(input()); }
+
+    static fn promptInt(message: string) -> int { IO.write(message); return Format.toInt(input()); }
+    static fn promptFloat(message: string) -> float { IO.write(message); return Format.toFloat(input()); }
+}
