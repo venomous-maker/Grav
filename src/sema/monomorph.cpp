@@ -325,6 +325,9 @@ void Mono::checkBounds(const std::vector<std::string> &params,
 }
 
 void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
+    // `elem` is a shared_ptr, so a copied TypeRef aliases the template's inner
+    // type. Clone it before mutating so instantiations never corrupt the template.
+    if (t.elem) t.elem = std::make_shared<TypeRef>(*t.elem);
     if (t.kind == TypeRef::Kind::Named) {
         // A bare type parameter -> its concrete argument (then re-process it).
         auto it = subst.find(t.name);
@@ -589,6 +592,15 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
     } else if (auto *x = dynamic_cast<AsExpr *>(e)) {
         rewriteType(x->target, subst, e->line, e->col); walkExpr(x->operand.get(), subst);
     } else if (auto *x = dynamic_cast<SizeofExpr *>(e)) {
+        // `sizeof(T)` parses T as a name; if T is a type parameter, treat it as a type.
+        if (!x->isType) {
+            if (auto *nm = dynamic_cast<NameExpr *>(x->operand.get());
+                nm && subst.count(nm->name)) {
+                x->isType = true;
+                x->target = TypeRef::named(nm->name);
+                x->operand.reset();
+            }
+        }
         if (x->isType) rewriteType(x->target, subst, e->line, e->col);
         else walkExpr(x->operand.get(), subst);
     } else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) {
