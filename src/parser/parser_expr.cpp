@@ -230,7 +230,8 @@ bool Parser::looksLikeCast() const {
         case TokenType::Identifier: case TokenType::IntLiteral:
         case TokenType::FloatLiteral: case TokenType::StringLiteral:
         case TokenType::True: case TokenType::False: case TokenType::Null:
-        case TokenType::Self: case TokenType::New: case TokenType::LParen:
+        case TokenType::Self: case TokenType::Super: case TokenType::New:
+        case TokenType::LParen:
         case TokenType::Bang: case TokenType::Tilde: case TokenType::CBlock:
             return true;
         // `-`, `*`, `&` are also binary ops; only a primitive type disambiguates
@@ -534,6 +535,10 @@ ExprPtr Parser::parsePrimary() {
         case TokenType::Self: {
             advance();
             return at<SelfExpr>(t);
+        }
+        case TokenType::Super: {
+            advance();
+            return at<SuperExpr>(t);
         }
         case TokenType::Identifier: {
             // `Type { field: value, ... }` — a struct literal. Disambiguated from

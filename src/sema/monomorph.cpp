@@ -88,6 +88,7 @@ ExprPtr cloneExpr(const Expr *e) {
         auto n = mkE<NameExpr>(e); n->name = x->name; return n;
     }
     if (dynamic_cast<const SelfExpr *>(e)) return mkE<SelfExpr>(e);
+    if (dynamic_cast<const SuperExpr *>(e)) return mkE<SuperExpr>(e);
     if (auto *x = dynamic_cast<const BinaryExpr *>(e)) {
         auto n = mkE<BinaryExpr>(e); n->op = x->op; n->stringConcat = x->stringConcat;
         n->left = cloneExpr(x->left.get()); n->right = cloneExpr(x->right.get()); return n;

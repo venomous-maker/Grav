@@ -60,6 +60,9 @@ struct NameExpr : Expr {
 
 // `self` (or `this`) inside a method body.
 struct SelfExpr : Expr {};
+// `super` — the current instance viewed as its parent class. Only valid as the
+// callee of `super(...)` (parent constructor) or `super.method(...)`.
+struct SuperExpr : Expr {};
 
 enum class BinaryOp {
     Add, Sub, Mul, Div, Mod,
@@ -205,6 +208,8 @@ enum class CallKind {
     Builtin,        // print(...)
     InstanceMethod, // obj.m(...)  -> virtual dispatch
     StaticMethod,   // Class.m(...)
+    SuperConstructor, // super(...)        -> run the parent constructor on self
+    SuperMethod,    // super.m(...)        -> parent's method impl, non-virtual
 };
 struct CallExpr : Expr {
     ExprPtr callee;

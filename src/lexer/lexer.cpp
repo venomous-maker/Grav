@@ -46,6 +46,7 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"protected", TokenType::Protected},
         {"self", TokenType::Self},
         {"this", TokenType::Self},
+        {"super", TokenType::Super},
         {"if", TokenType::If},
         {"else", TokenType::Else},
         {"while", TokenType::While},

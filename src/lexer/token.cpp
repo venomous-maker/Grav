@@ -43,6 +43,7 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::Private: return "'private'";
         case TokenType::Protected: return "'protected'";
         case TokenType::Self: return "'self'";
+        case TokenType::Super: return "'super'";
         case TokenType::If: return "'if'";
         case TokenType::Else: return "'else'";
         case TokenType::While: return "'while'";

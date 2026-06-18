@@ -50,6 +50,7 @@ enum class TokenType {
     Private,
     Protected,
     Self,   // self / this
+    Super,  // super (parent constructor / parent method)
     If,
     Else,
     While,
