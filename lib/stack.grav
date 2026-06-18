@@ -1,0 +1,22 @@
+// lib/stack.grav — LIFO Stack and FIFO Queue over Array<T>.
+import "array.grav"
+
+class Stack<T> {
+    private items: Array<T>
+    constructor() { self.items = new Array<T>(); }
+    public fn push(item: T) { self.items.push(item); }
+    public fn pop() -> T { return self.items.pop(); }
+    public fn peek() -> T { return self.items.last(); }
+    public fn size() -> int { return self.items.length(); }
+    public fn isEmpty() -> bool { return self.items.isEmpty(); }
+}
+
+class Queue<T> {
+    private items: Array<T>
+    constructor() { self.items = new Array<T>(); }
+    public fn enqueue(item: T) { self.items.push(item); }
+    public fn dequeue() -> T { let x = self.items.first(); self.items.removeAt(0); return x; }
+    public fn peek() -> T { return self.items.first(); }
+    public fn size() -> int { return self.items.length(); }
+    public fn isEmpty() -> bool { return self.items.isEmpty(); }
+}
