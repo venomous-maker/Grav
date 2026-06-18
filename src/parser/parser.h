@@ -50,6 +50,7 @@ private:
     FieldDecl parseField(Access access, bool readonly);
     std::vector<Param> parseParams(bool allowVariadic = false);
     TypeRef parseType(const char *context);
+    static const TypeRef *builtinTypeName(const std::string &name);
     std::string parseQualifiedName(const char *context);
     // Generics: `<T, U>` param lists on declarations, `<int, string>` argument
     // lists in type/call positions, and the `>`-splitting close that lets
