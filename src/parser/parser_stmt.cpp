@@ -217,8 +217,8 @@ StmtPtr Parser::parseReturn() {
     auto stmt = std::make_unique<ReturnStmt>();
     stmt->line = kw.line;
     stmt->col = kw.col;
-    // A return is bare when the next token closes the block.
-    if (!check(TokenType::RBrace)) {
+    // A return is bare when the next token closes the block or ends the statement.
+    if (!check(TokenType::RBrace) && !check(TokenType::Semicolon)) {
         stmt->value = parseExpression();
     }
     return stmt;
