@@ -71,15 +71,15 @@ std::string CodeGen::accessorSig(const std::string &classFq,
 void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) {
     defs_ += accessorSig(classFq, m) + " {\n";
     if (m.accessor == AccessorKind::Getter) {
-        defs_ += "    return self->" + m.accessorField + ";\n";
+        defs_ += "    return self->" + memberCName(m.accessorField) + ";\n";
     } else if (m.accessor == AccessorKind::Setter) {
-        defs_ += "    self->" + m.accessorField + " = value;\n";
+        defs_ += "    self->" + memberCName(m.accessorField) + " = value;\n";
     } else { // Delegate: forward to self->field's method via its vtable
         std::string slotOwner = m.delegateClass;
         if (const ClassInfo *ac = reg_->cls(m.delegateClass))
             for (const auto &s : ac->slots)
                 if (s.name == m.name) { slotOwner = s.slotOwner; break; }
-        std::string obj = "self->" + m.accessorField;
+        std::string obj = "self->" + memberCName(m.accessorField);
         std::string disp = "((" + vtableType(slotOwner) + "*)((struct GravObject*)(" +
                            obj + "))->__vt)->" + memberCName(m.name);
         std::string args = "(" + structName(slotOwner) + "*)(" + obj + ")";

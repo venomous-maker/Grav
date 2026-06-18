@@ -367,7 +367,7 @@ void CodeGen::emitValueStructs() {
         if (si->fields.empty())
             structs_ += "    char __empty; /* C has no zero-size structs */\n";
         for (const auto &f : si->fields)
-            structs_ += "    " + cTy(f.type) + " " + f.name + ";\n";
+            structs_ += "    " + cTy(f.type) + " " + memberCName(f.name) + ";\n";
         structs_ += "};\n\n";
     };
     std::function<void(const TypeRef &)> emitArray = [&](const TypeRef &t) {
@@ -395,7 +395,7 @@ void CodeGen::emitStruct(const std::string &classFq) {
     structs_ += "    const void* __vt;\n";
     structs_ += "    const GravTypeInfo* __type;\n";
     for (const auto &f : collectFields(classFq)) {
-        structs_ += "    " + cTy(f.type) + " " + f.name + ";\n";
+        structs_ += "    " + cTy(f.type) + " " + memberCName(f.name) + ";\n";
     }
     structs_ += "};\n\n";
 }

@@ -221,7 +221,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
             const FieldInfo *f = reg_->findStructField(e->typeName, e->fields[i].name);
             std::string v = f ? emitAs(*e->fields[i].value, f->type)
                               : emitExpr(*e->fields[i].value);
-            out += "." + e->fields[i].name + " = " + v;
+            out += "." + memberCName(e->fields[i].name) + " = " + v;
         }
         return out + " }";
     }
@@ -242,7 +242,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         // Field read: structs are values (`.`), class instances are pointers (`->`).
         bool valueObj = e->object->type.isNamed() && reg_->isStruct(e->object->type.name);
         std::string obj = emitExpr(*e->object);
-        std::string access = "(" + obj + (valueObj ? ")." : ")->") + e->member;
+        std::string access = "(" + obj + (valueObj ? ")." : ")->") + memberCName(e->member);
         // `a?.field` guards against a null object, yielding a zero value when null.
         if (e->optional) {
             std::string nul = e->type.kind == TypeRef::Kind::String ? "\"\"" : "0";
