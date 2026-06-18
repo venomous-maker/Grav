@@ -199,24 +199,23 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
                                      typeRefName(lt) + " and " + typeRefName(rt));
             return TypeRef::prim(TypeRef::Kind::Error);
         }
-        if (lt != rt) {
-            error(e.line, e.col, std::string("operator '") + sym +
-                                     "' requires matching types, but got " +
-                                     typeRefName(lt) + " and " + typeRefName(rt) +
-                                     " (use int()/float() to convert)");
-            return TypeRef::prim(TypeRef::Kind::Error);
-        }
         // '%', bitwise and shift operators are integer-only in C.
-        if (isIntOnly(e.op) && lt.kind != TypeRef::Kind::Int) {
+        if (isIntOnly(e.op) &&
+            (lt.kind != TypeRef::Kind::Int || rt.kind != TypeRef::Kind::Int)) {
             error(e.line, e.col, std::string("operator '") + sym +
                                      "' requires int operands, but got " +
-                                     typeRefName(lt));
+                                     typeRefName(lt) + " and " + typeRefName(rt));
             return TypeRef::prim(TypeRef::Kind::Error);
         }
-        return lt;
+        // Mixed numeric operands promote to the wider/float type, like C.
+        return numericPromote(lt, rt);
     }
 
     bool ordered = e.op != BinaryOp::Eq && e.op != BinaryOp::NotEq;
+    // Numeric comparisons allow mixed widths/signedness; otherwise types must match.
+    if (lt.isNumeric() && rt.isNumeric()) {
+        return TypeRef::prim(TypeRef::Kind::Bool);
+    }
     if (lt != rt) {
         error(e.line, e.col, std::string("operator '") + sym +
                                  "' requires matching types, but got " +
@@ -357,7 +356,10 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
             if (src.isNumeric() || src.kind == TypeRef::Kind::Bool) return e.target;
             break;
         case TypeRef::Kind::String:
-            if (src.kind == TypeRef::Kind::String) return e.target;
+            if (src.kind == TypeRef::Kind::String || src.isBinary()) return e.target;
+            break;
+        case TypeRef::Kind::Binary:
+            if (src.isBinary() || src.kind == TypeRef::Kind::String) return e.target;
             break;
         case TypeRef::Kind::Named: {
             // Class<->class within one hierarchy, or class -> interface it implements.
@@ -461,7 +463,10 @@ TypeRef TypeChecker::checkCast(CastExpr &e) {
             ok = src.isNumeric() || src.kind == TypeRef::Kind::Bool;
             break;
         case TypeRef::Kind::String:
-            ok = src.kind == TypeRef::Kind::String;
+            ok = src.kind == TypeRef::Kind::String || src.isBinary();
+            break;
+        case TypeRef::Kind::Binary:
+            ok = src.isBinary() || src.kind == TypeRef::Kind::String;
             break;
         default:
             ok = false;
@@ -907,6 +912,13 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
         if (e.member == "length") return TypeRef::prim(TypeRef::Kind::Int);
         error(e.line, e.col,
               "an array has no member '" + e.member + "' (only 'length')");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    // `bytes.length` is the runtime byte count of a binary value, as an int.
+    if (objType.isBinary()) {
+        if (e.member == "length") return TypeRef::prim(TypeRef::Kind::Int);
+        error(e.line, e.col,
+              "a binary value has no member '" + e.member + "' (only 'length')");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     if (objType.isNamed() && reg_->isStruct(objType.name)) {

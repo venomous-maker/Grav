@@ -83,6 +83,7 @@ private:
     void error(int line, int col, const std::string &msg);
     void warn(int line, int col, const std::string &msg);
     bool isAssignable(const TypeRef &from, const TypeRef &to) const;
+    static TypeRef numericPromote(const TypeRef &a, const TypeRef &b);
     bool checkAccess(Access a, const std::string &definingClass) const;
     void pushScope();
     void popScope(); // emits "unused variable" warnings for the scope

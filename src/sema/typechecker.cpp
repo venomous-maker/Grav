@@ -43,9 +43,28 @@ TypeChecker::LocalVar *TypeChecker::lookupLocal(const std::string &name) {
     return nullptr;
 }
 
+// The result type of an arithmetic op on two numeric operands, following C-like
+// promotion: any float wins (widest float bits); otherwise the wider integer,
+// unsigned if either side is unsigned.
+TypeRef TypeChecker::numericPromote(const TypeRef &a, const TypeRef &b) {
+    if (a.kind == TypeRef::Kind::Float || b.kind == TypeRef::Kind::Float) {
+        int fa = a.kind == TypeRef::Kind::Float ? a.numBits() : 0;
+        int fb = b.kind == TypeRef::Kind::Float ? b.numBits() : 0;
+        return TypeRef::floating(fa > fb ? fa : fb);
+    }
+    int bits = a.numBits() > b.numBits() ? a.numBits() : b.numBits();
+    return TypeRef::integer(bits, a.isUnsigned || b.isUnsigned);
+}
+
 bool TypeChecker::isAssignable(const TypeRef &from, const TypeRef &to) const {
     if (from.isError() || to.isError()) return true; // suppress cascades
     if (from == to) return true;
+    // Numeric conversions follow C-like rules: any integer flows into any integer
+    // or float (widening); float -> integer is narrowing and needs an explicit cast.
+    if (from.isNumeric() && to.isNumeric()) {
+        if (from.kind == TypeRef::Kind::Float && to.kind == TypeRef::Kind::Int) return false;
+        return true;
+    }
     // `null` flows into any class, interface, or pointer (reference) type.
     if (from.kind == TypeRef::Kind::Null &&
         (to.isPointer() ||

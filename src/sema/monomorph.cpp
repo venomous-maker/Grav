@@ -15,10 +15,15 @@ namespace {
 // ---------------------------------------------------------------------------
 std::string typeMangle(const TypeRef &t) {
     switch (t.kind) {
-        case TypeRef::Kind::Int: return "int";
-        case TypeRef::Kind::Float: return "float";
+        case TypeRef::Kind::Int: {
+            int b = t.numBits();
+            if (!t.isUnsigned && b == 32) return "int";
+            return (t.isUnsigned ? "u" : "i") + std::to_string(b);
+        }
+        case TypeRef::Kind::Float: return t.numBits() == 32 ? "float32" : "float";
         case TypeRef::Kind::Bool: return "bool";
         case TypeRef::Kind::String: return "string";
+        case TypeRef::Kind::Binary: return "binary";
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Null: return "null";
         case TypeRef::Kind::Pointer:
