@@ -97,6 +97,7 @@ struct FunctionInfo {
     std::vector<std::string> paramNames;
     TypeRef returnType;
     FunctionDecl *decl = nullptr;
+    int overloadIndex = 0; // 0 first; >0 distinguishes later overloads of the name
 };
 
 // A module-level global (`const`/`let`) or a class `static` field. Both lower to
@@ -133,6 +134,8 @@ public:
     const StructInfo *strct(const std::string &fq) const;
     const EnumInfo *en(const std::string &fq) const;
     const FunctionInfo *func(const std::string &fq) const;
+    // All overloads registered under one fully-qualified name (declaration order).
+    const std::vector<FunctionInfo> &funcOverloads(const std::string &fq) const;
     const GlobalInfo *global(const std::string &fq) const;
 
     // Is `member` a constant of enum `enumFq`?
@@ -195,7 +198,8 @@ private:
     std::unordered_map<std::string, StructInfo> structs_;
     std::unordered_map<std::string, EnumInfo> enums_;
     std::unordered_map<std::string, AliasInfo> aliases_;
-    std::unordered_map<std::string, FunctionInfo> functions_;
+    std::unordered_map<std::string, FunctionInfo> functions_; // first overload per name
+    std::unordered_map<std::string, std::vector<FunctionInfo>> funcOverloads_; // all overloads
     std::unordered_map<std::string, GlobalInfo> globals_; // by FQ name
     std::vector<std::string> namespaces_; // known namespace prefixes
     std::vector<GravError> errors_;

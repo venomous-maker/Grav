@@ -70,6 +70,11 @@ const FunctionInfo *Registry::func(const std::string &fq) const {
     auto it = functions_.find(fq);
     return it == functions_.end() ? nullptr : &it->second;
 }
+const std::vector<FunctionInfo> &Registry::funcOverloads(const std::string &fq) const {
+    static const std::vector<FunctionInfo> empty;
+    auto it = funcOverloads_.find(fq);
+    return it == funcOverloads_.end() ? empty : it->second;
+}
 const GlobalInfo *Registry::global(const std::string &fq) const {
     auto it = globals_.find(fq);
     return it == globals_.end() ? nullptr : &it->second;
@@ -451,7 +456,6 @@ void Registry::registerDecls(Program &program) {
             info.decl = ta;
             aliases_[ta->fqName] = std::move(info);
         } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
-            if (functions_.count(fn->fqName)) { error(fn->line, fn->col, "duplicate function '" + fn->fqName + "'"); continue; }
             FunctionInfo info;
             info.fqName = fn->fqName;
             info.isAsync = fn->isAsync;
@@ -462,7 +466,23 @@ void Registry::registerDecls(Program &program) {
                 info.paramNames.push_back(p.name);
                 if (p.variadic) info.isVariadic = true;
             }
-            functions_[fn->fqName] = std::move(info);
+            // Overloading: a repeated name is allowed as long as the parameter
+            // signature differs; an identical signature is a true duplicate.
+            auto &set = funcOverloads_[fn->fqName];
+            bool dup = false;
+            for (const auto &prev : set)
+                if (prev.paramTypes == info.paramTypes) { dup = true; break; }
+            if (dup) {
+                error(fn->line, fn->col, "duplicate function '" + fn->fqName +
+                                             "' with the same parameter types");
+                continue;
+            }
+            // First overload keeps index 0 (plain name); later ones get an index
+            // so codegen can give each a distinct C symbol.
+            info.overloadIndex = static_cast<int>(set.size());
+            fn->overloadIndex = info.overloadIndex;
+            if (set.empty()) functions_[fn->fqName] = info; // back-compat single lookup
+            set.push_back(std::move(info));
         } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
             if (globals_.count(g->fqName)) { error(g->line, g->col, "duplicate global '" + g->fqName + "'"); continue; }
             if (!g->hasDeclaredType) {
@@ -636,15 +656,18 @@ void Registry::canonicalize() {
             }
         }
     }
-    for (auto &[fq, fi] : functions_) {
+    for (auto &[fq, set] : funcOverloads_) {
         std::string ns = namespaceOf(fq);
-        FunctionDecl *fd = fi.decl;
-        fd->returnType = canonType(fd->returnType, ns, fd->line, fd->col);
-        fi.returnType = fd->returnType;
-        for (size_t j = 0; j < fd->params.size(); ++j) {
-            fd->params[j].type = canonType(fd->params[j].type, ns, fd->line, fd->col);
-            fi.paramTypes[j] = fd->params[j].type;
+        for (auto &fi : set) {
+            FunctionDecl *fd = fi.decl;
+            fd->returnType = canonType(fd->returnType, ns, fd->line, fd->col);
+            fi.returnType = fd->returnType;
+            for (size_t j = 0; j < fd->params.size(); ++j) {
+                fd->params[j].type = canonType(fd->params[j].type, ns, fd->line, fd->col);
+                fi.paramTypes[j] = fd->params[j].type;
+            }
         }
+        functions_[fq] = set[0]; // keep the single-lookup copy in sync
     }
     // Globals and static fields: canonicalize their declared types (the namespace
     // context is the global's own, or its owning class's).
