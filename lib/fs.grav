@@ -1,15 +1,42 @@
-// lib/fs.grav — filesystem access (backed by C <stdio.h>).
+// lib/fs.grav — filesystem access through a File object (backed by C <stdio.h>).
+//
+//   let f = new File("notes.txt")
+//   f.write("hello")
+//   if (f.exists()) { print(f.read()) }
+//
+// A File is bound to a path; the OS file is opened per operation, so there's no
+// handle to close. Text helpers work on `string`; `readBinary`/`writeBinary`
+// move raw `binary` blobs (NUL-safe).
+
+import "string.grav"
+import "array.grav"
+
 %{
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
 static const char* grav_file_read(const char* path) {
     FILE* f = fopen(path, "rb"); if (!f) return "";
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
     char* b = (char*)malloc((size_t)n + 1);
     size_t got = fread(b, 1, (size_t)n, f); b[got] = 0; fclose(f); return b;
 }
+static GravBytes grav_file_read_bytes(const char* path) {
+    GravBytes out; out.data = 0; out.len = 0;
+    FILE* f = fopen(path, "rb"); if (!f) return out;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    unsigned char* b = (unsigned char*)malloc((size_t)n + 1);
+    size_t got = fread(b, 1, (size_t)n, f); b[got] = 0; fclose(f);
+    out.data = b; out.len = (long long)got; return out;
+}
 static int grav_file_write(const char* path, const char* data, const char* mode) {
     FILE* f = fopen(path, mode); if (!f) return 0; fputs(data, f); fclose(f); return 1;
+}
+static int grav_file_write_bytes(const char* path, GravBytes b, const char* mode) {
+    FILE* f = fopen(path, mode); if (!f) return 0;
+    if (b.data && b.len > 0) fwrite(b.data, 1, (size_t)b.len, f);
+    fclose(f); return 1;
 }
 static int grav_file_size(const char* path) {
     FILE* f = fopen(path, "rb"); if (!f) return -1;
@@ -21,10 +48,35 @@ static int grav_file_exists(const char* path) {
 %}
 
 class File {
-    static fn exists(path: string) -> bool { return %{ grav_file_exists(path) %} as bool; }
-    static fn read(path: string) -> string { return %{ grav_file_read(path) %} as string; }
-    static fn write(path: string, data: string) { %{ grav_file_write(path, data, "wb"); %}; }
-    static fn append(path: string, data: string) { %{ grav_file_write(path, data, "ab"); %}; }
-    static fn delete(path: string) { %{ remove(path); %}; }
-    static fn size(path: string) -> int { return %{ grav_file_size(path) %} as int; }
+    private path: string
+    constructor(path: string) { self.path = path; }
+
+    public fn name() -> string { return self.path; }
+    public fn exists() -> bool { return %{ grav_file_exists(self->path) %} as bool; }
+    public fn size() -> int { return %{ grav_file_size(self->path) %} as int; }
+
+    // Text I/O.
+    public fn read() -> string { return %{ grav_file_read(self->path) %} as string; }
+    public fn write(data: string) { %{ grav_file_write(self->path, data, "wb"); %}; }
+    public fn append(data: string) { %{ grav_file_write(self->path, data, "ab"); %}; }
+    public fn writeLine(line: string) { self.append(line + "\n"); }
+
+    // Whole-file binary I/O (NUL-safe).
+    public fn readBinary() -> binary { return %{ grav_file_read_bytes(self->path) %} as binary; }
+    public fn writeBinary(data: binary) { %{ grav_file_write_bytes(self->path, data, "wb"); %}; }
+    public fn appendBinary(data: binary) { %{ grav_file_write_bytes(self->path, data, "ab"); %}; }
+
+    // Read the file split into lines (a single trailing newline is trimmed first).
+    public fn readLines() -> Array<string> {
+        let text = self.read();
+        if (Str.length(text) > 0 && Str.endsWith(text, "\n")) {
+            text = Str.substring(text, 0, Str.length(text) - 1);
+        }
+        return Str.split(text, "\n");
+    }
+
+    public fn delete() { %{ remove(self->path); %}; }
+    public fn copyTo(dest: string) {
+        %{ grav_file_write(dest, grav_file_read(self->path), "wb"); %};
+    }
 }
