@@ -11,7 +11,7 @@ syn match   gravLineComment "//.*$" contains=gravTodo
 syn region  gravBlockComment start="/\*" end="\*/" contains=gravTodo
 
 " Declaration / structure keywords
-syn keyword gravKeyword fn class struct enum type interface abstract namespace
+syn keyword gravKeyword fn class struct enum type typedef interface abstract namespace
 syn keyword gravKeyword constructor extends implements uses new return import export
 syn keyword gravKeyword trait
 syn keyword gravStorage  let const static readonly public private protected
@@ -24,15 +24,21 @@ syn keyword gravStatement  break continue
 syn keyword gravException  try catch finally throw
 syn keyword gravOperatorKw as is sizeof
 
-" Built-in types
-syn keyword gravType int float bool string void
+" Built-in types: the core set plus the widened numeric / binary types. These are
+" only types in type position (resolved by the parser), so they are matched, not
+" reserved — but highlighting them as types reads well.
+syn keyword gravType int float bool string void binary
+syn keyword gravType long int64 int32 int16 int8 signed
+syn keyword gravType uint unsigned uint64 ulong uint32 uint16 uint8 byte
+syn keyword gravType double float64 float32
 
 " Constants
 syn keyword gravBoolean true false
-syn keyword gravConstant null self this Self
+syn keyword gravConstant null self this Self super
 
 " Built-in functions
-syn keyword gravBuiltin print typename isInstance str input argc argv len free
+syn keyword gravBuiltin print println typename isInstance str input argc argv len
+syn keyword gravBuiltin free panic assert exit cwd env
 
 " Numbers
 syn match gravNumber "\<\d\+\>"
@@ -63,7 +69,7 @@ syn match gravField       "\%(\.\|->\)\zs\w\+"                  " obj.field / pt
 syn match gravMethodCall  "\%(\.\|->\)\zs\w\+\ze\s*("           " obj.method(
 syn match gravEnumMember  "\<\u\w*\.\zs\u\w*"                   " Enum.Member
 syn match gravFuncDef     "\<fn\s\+\zs\w\+"                     " fn name
-syn match gravTypeDef     "\<\%(class\|struct\|enum\|interface\|type\|namespace\)\s\+\zs\w\+"
+syn match gravTypeDef     "\<\%(class\|struct\|enum\|interface\|type\|typedef\|namespace\)\s\+\zs\w\+"
 
 " Operators
 syn match gravOperator "[-+*/%<>=!&|^~?:.]"
