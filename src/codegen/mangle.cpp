@@ -42,10 +42,15 @@ std::string enumConst(const std::string &enumFq, const std::string &member) {
 
 static std::string arrayTag(const TypeRef &t) {
     switch (t.kind) {
-        case TypeRef::Kind::Int: return "int";
-        case TypeRef::Kind::Float: return "flt";
+        case TypeRef::Kind::Int: {
+            int b = t.numBits();
+            if (!t.isUnsigned && b == 32) return "int"; // canonical, keep stable
+            return (t.isUnsigned ? "u" : "i") + std::to_string(b);
+        }
+        case TypeRef::Kind::Float: return t.numBits() == 32 ? "f32" : "flt";
         case TypeRef::Kind::Bool: return "bool";
         case TypeRef::Kind::String: return "str";
+        case TypeRef::Kind::Binary: return "bytes";
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Named: return mangle(t.name);
         case TypeRef::Kind::Pointer: return "ptr_" + (t.elem ? arrayTag(*t.elem) : "void");
@@ -63,10 +68,20 @@ std::string arrayStructName(const TypeRef &arrayType) {
 
 std::string cType(const TypeRef &t) {
     switch (t.kind) {
-        case TypeRef::Kind::Int: return "int";
-        case TypeRef::Kind::Float: return "double";
+        case TypeRef::Kind::Int: {
+            int b = t.numBits();
+            const char *u = t.isUnsigned ? "unsigned " : "";
+            switch (b) {
+                case 8:  return t.isUnsigned ? "unsigned char" : "signed char";
+                case 16: return std::string(u) + "short";
+                case 64: return std::string(u) + "long long";
+                default: return std::string(u) + "int";
+            }
+        }
+        case TypeRef::Kind::Float: return t.numBits() == 32 ? "float" : "double";
         case TypeRef::Kind::Bool: return "bool";
         case TypeRef::Kind::String: return "const char*";
+        case TypeRef::Kind::Binary: return "GravBytes";
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Named: return structName(t.name) + "*";
         case TypeRef::Kind::Null: return "void*";

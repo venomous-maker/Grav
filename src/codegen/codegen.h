@@ -45,6 +45,8 @@ private:
     void emitInterfaceTables();   // itable types + per-class instances
     // C type spelling, interface-aware (interfaces become a fat pointer struct).
     std::string cTy(const TypeRef &t) const;
+    std::string emitPrimCast(const TypeRef &target, const Expr &operand,
+                             const std::string &inner) const;
     std::vector<FieldInfo> collectFields(const std::string &classFq) const;
     std::string slotFnType(const VTableSlot &slot) const;
 

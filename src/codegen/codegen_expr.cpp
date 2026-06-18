@@ -4,6 +4,28 @@
 
 namespace grav {
 
+// Lowers a cast to a primitive target (`as T` and `(T)x`). Integer/float targets
+// spell out the full C type so widths are preserved; binary<->string convert
+// through the runtime helpers.
+std::string CodeGen::emitPrimCast(const TypeRef &target, const Expr &operand,
+                                  const std::string &inner) const {
+    switch (target.kind) {
+        case TypeRef::Kind::Int:
+        case TypeRef::Kind::Float:
+            return "((" + cTy(target) + ")(" + inner + "))";
+        case TypeRef::Kind::Bool:
+            return "((" + inner + ") != 0)";
+        case TypeRef::Kind::Binary:
+            return operand.type.kind == TypeRef::Kind::String
+                       ? "grav_bytes_from_str(" + inner + ")"
+                       : inner;
+        case TypeRef::Kind::String:
+            return operand.type.isBinary() ? "grav_bytes_to_str(" + inner + ")" : inner;
+        default:
+            return inner;
+    }
+}
+
 std::string CodeGen::escapeC(const std::string &s) {
     std::string out;
     for (char c : s) {
@@ -131,12 +153,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         // Named targets reuse the upcast/box logic; primitives do a C cast.
         if (e->target.isNamed()) return emitAs(*e->operand, e->target);
         std::string inner = emitExpr(*e->operand);
-        switch (e->target.kind) {
-            case TypeRef::Kind::Int: return "((int)(" + inner + "))";
-            case TypeRef::Kind::Float: return "((double)(" + inner + "))";
-            case TypeRef::Kind::Bool: return "((" + inner + ") != 0)";
-            default: return inner;
-        }
+        return emitPrimCast(e->target, *e->operand, inner);
     }
     if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
         return "grav_is_instance(" + emitExpr(*e->operand) + ", &" +
@@ -170,12 +187,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     }
     if (auto *e = dynamic_cast<const CastExpr *>(&expr)) {
         std::string inner = emitExpr(*e->operand);
-        switch (e->target.kind) {
-            case TypeRef::Kind::Int: return "((int)(" + inner + "))";
-            case TypeRef::Kind::Float: return "((double)(" + inner + "))";
-            case TypeRef::Kind::Bool: return "((" + inner + ") != 0)";
-            default: return inner;
-        }
+        return emitPrimCast(e->target, *e->operand, inner);
     }
     if (auto *e = dynamic_cast<const SizeofExpr *>(&expr)) {
         if (e->isType) return "sizeof(" + sizeofSpelling(e->target) + ")";
@@ -239,6 +251,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         // `arr.length` is the array's fixed length, a compile-time constant.
         if (e->object->type.isArray() && e->member == "length")
             return std::to_string(e->object->type.arrayLen);
+        // `bytes.length` is the runtime byte count stored alongside the buffer.
+        if (e->object->type.isBinary() && e->member == "length")
+            return "(int)((" + emitExpr(*e->object) + ").len)";
         // Field read: structs are values (`.`), class instances are pointers (`->`).
         bool valueObj = e->object->type.isNamed() && reg_->isStruct(e->object->type.name);
         std::string obj = emitExpr(*e->object);
@@ -306,13 +321,17 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 const TypeRef &t = call.args[0]->type;
                 switch (t.kind) {
                     case TypeRef::Kind::String: return a;
-                    case TypeRef::Kind::Int: return "grav_int_to_str(" + a + ")";
+                    case TypeRef::Kind::Int:
+                        return t.isUnsigned
+                                   ? "grav_uint_to_str((unsigned long long)(" + a + "))"
+                                   : "grav_int_to_str((long long)(" + a + "))";
                     case TypeRef::Kind::Float: return "grav_float_to_str(" + a + ")";
                     case TypeRef::Kind::Bool:
                         return "((" + a + ") ? \"true\" : \"false\")";
+                    case TypeRef::Kind::Binary: return "grav_bytes_to_str(" + a + ")";
                     default:
                         if (t.isNamed() && reg_->isEnum(t.name))
-                            return "grav_int_to_str((int)(" + a + "))";
+                            return "grav_int_to_str((long long)(" + a + "))";
                         return "\"\"";
                 }
             }
@@ -321,11 +340,16 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             TypeRef t = call.args.empty() ? TypeRef::prim(TypeRef::Kind::Int)
                                           : call.args[0]->type;
             switch (t.kind) {
-                case TypeRef::Kind::Int: return "printf(\"%d\\n\", " + a + ")";
+                case TypeRef::Kind::Int:
+                    return t.isUnsigned
+                               ? "printf(\"%llu\\n\", (unsigned long long)(" + a + "))"
+                               : "printf(\"%lld\\n\", (long long)(" + a + "))";
                 case TypeRef::Kind::Float: return "printf(\"%f\\n\", " + a + ")";
                 case TypeRef::Kind::Bool:
                     return "printf(\"%s\\n\", (" + a + ") ? \"true\" : \"false\")";
                 case TypeRef::Kind::String: return "printf(\"%s\\n\", " + a + ")";
+                case TypeRef::Kind::Binary:
+                    return "printf(\"%s\\n\", grav_bytes_to_str(" + a + "))";
                 default: return "printf(\"\\n\")";
             }
         }
