@@ -944,9 +944,12 @@ navigation stay consistent.
 
 ### Install & test locally
 
-- **VS Code** — symlink the extension and reload:
+- **VS Code** — package and install the extension (modern VS Code ignores
+  unregistered folders/symlinks in `~/.vscode/extensions/`):
   ```bash
-  ln -s "$PWD/editors/vscode" ~/.vscode/extensions/grav-lang-0.9.0
+  cd editors/vscode
+  npx --yes @vscode/vsce package --no-dependencies
+  code --install-extension grav-lang-0.9.0.vsix
   ```
   Reload the window (`Ctrl+Shift+P → Developer: Reload Window`), open a `.grav`
   file, and try `F12` (definition), `Shift+F12` (references), `F2` (rename), and

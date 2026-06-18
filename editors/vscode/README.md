@@ -20,29 +20,27 @@ Syntax highlighting, snippets, and build/run commands for the
   *Grav: Compile Current File to C*, run through the `grav` compiler. Point
   `grav.compilerPath` at your binary if it isn't on `PATH`.
 
-## Install locally (no packaging needed)
+## Install locally
 
-VS Code loads any folder under its extensions directory, so a symlink or copy is
-enough to test:
+> Modern VS Code (1.74+) only loads extensions that are **registered** (it no
+> longer auto-scans `~/.vscode/extensions/`), so dropping a folder or symlink there
+> does nothing. Package a `.vsix` and install it — that's the reliable path:
 
 ```bash
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/grav-lang-0.9.0
+cd editors/vscode
+npx --yes @vscode/vsce package --no-dependencies   # -> grav-lang-0.9.0.vsix
+code --install-extension grav-lang-0.9.0.vsix
 # then reload VS Code  (Cmd/Ctrl+Shift+P -> "Developer: Reload Window")
 ```
 
-## Package a `.vsix` (for sharing / Marketplace)
+The extension is self-contained: `grav-index.js` (the shared symbol index) is
+bundled into this folder, so the `.vsix` works on its own. It mirrors
+[`../lsp/grav-index.js`](../lsp/grav-index.js) — keep the two in sync if you edit
+the indexer.
 
-```bash
-cp ../lsp/grav-index.js .   # bundle the shared indexer for packaging
-npm install -g @vscode/vsce
-cd editors/vscode
-vsce package            # produces grav-lang-0.9.0.vsix
-code --install-extension grav-lang-0.9.0.vsix
-```
-
-> The symlink install above resolves `../lsp/grav-index.js` directly, so it needs
-> no copy. A packaged `.vsix` can't reference files outside the extension folder,
-> so copy `grav-index.js` in first (and change the `require` to `"./grav-index"`).
+For iterating on the extension itself, the fastest loop is to open this folder in
+VS Code and press **F5** (*Run Extension* — launches an Extension Development Host),
+which loads the in-tree source directly with no packaging.
 
 The grammar in [`syntaxes/grav.tmLanguage.json`](syntaxes/grav.tmLanguage.json) is
 also reused by the CLion/JetBrains TextMate bundle — see
