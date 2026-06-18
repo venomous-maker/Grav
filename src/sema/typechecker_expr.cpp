@@ -614,6 +614,92 @@ TypeRef TypeChecker::checkStructLiteral(StructLiteralExpr &e) {
     return TypeRef::named(fq);
 }
 
+// Validates already-evaluated argument types against a parameter list (no second
+// pass over the argument expressions, so overload resolution doesn't double-report).
+void TypeChecker::validateArgTypes(const std::vector<ExprPtr> &args,
+                                   const std::vector<TypeRef> &argTypes,
+                                   const std::vector<TypeRef> &params, bool variadic,
+                                   int line, int col, const std::string &what) {
+    if (variadic) {
+        size_t fixed = params.empty() ? 0 : params.size() - 1;
+        TypeRef elem = params.empty() ? TypeRef::prim(TypeRef::Kind::Error) : params.back();
+        if (argTypes.size() < fixed)
+            error(line, col, what + " expects at least " + std::to_string(fixed) +
+                                 " argument(s), but got " + std::to_string(argTypes.size()));
+        for (size_t i = 0; i < argTypes.size(); ++i) {
+            const TypeRef &want = i < fixed ? params[i] : elem;
+            if (!isAssignable(argTypes[i], want))
+                error(args[i]->line, args[i]->col, "argument " + std::to_string(i + 1) +
+                          " to " + what + " expects " + typeRefName(want) + ", but got " +
+                          typeRefName(argTypes[i]));
+        }
+        return;
+    }
+    if (argTypes.size() != params.size())
+        error(line, col, what + " expects " + std::to_string(params.size()) +
+                             " argument(s), but got " + std::to_string(argTypes.size()));
+    size_t n = std::min(argTypes.size(), params.size());
+    for (size_t i = 0; i < n; ++i)
+        if (!isAssignable(argTypes[i], params[i]))
+            error(args[i]->line, args[i]->col, "argument " + std::to_string(i + 1) + " to " +
+                      what + " expects " + typeRefName(params[i]) + ", but got " +
+                      typeRefName(argTypes[i]));
+}
+
+// Chooses the best overload for the given argument types: an exact-match wins;
+// otherwise a unique assignable candidate. Returns null if none or ambiguous.
+const FunctionInfo *TypeChecker::pickOverload(const std::vector<FunctionInfo> &cands,
+                                              const std::vector<TypeRef> &argTypes) const {
+    const FunctionInfo *exact = nullptr;
+    const FunctionInfo *assignable = nullptr;
+    int assignableCount = 0;
+    for (const auto &c : cands) {
+        size_t fixed = c.isVariadic && !c.paramTypes.empty() ? c.paramTypes.size() - 1
+                                                             : c.paramTypes.size();
+        bool arityOk = c.isVariadic ? argTypes.size() >= fixed
+                                    : argTypes.size() == c.paramTypes.size();
+        if (!arityOk) continue;
+        bool allAssignable = true, allExact = true;
+        for (size_t i = 0; i < argTypes.size(); ++i) {
+            const TypeRef &want =
+                (c.isVariadic && i >= fixed) ? c.paramTypes.back() : c.paramTypes[i];
+            if (!isAssignable(argTypes[i], want)) { allAssignable = false; break; }
+            if (!(argTypes[i] == want)) allExact = false;
+        }
+        if (!allAssignable) continue;
+        if (allExact) exact = &c;
+        assignable = &c;
+        assignableCount++;
+    }
+    if (exact) return exact;
+    return assignableCount == 1 ? assignable : nullptr;
+}
+
+// Resolves a call to a free function, choosing among overloads of the name.
+TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
+    std::vector<TypeRef> argTypes;
+    argTypes.reserve(e.args.size());
+    for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
+
+    const std::vector<FunctionInfo> &cands = reg_->funcOverloads(fnFq);
+    const FunctionInfo *fi = pickOverload(cands, argTypes);
+    if (!fi) {
+        if (cands.size() == 1) {
+            fi = &cands[0]; // single overload: fall through to a precise mismatch error
+        } else {
+            error(e.line, e.col, "no overload of '" + fnFq +
+                                     "' matches the given argument types");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+    }
+    e.kind = CallKind::FreeFunction;
+    e.targetName = fnFq;
+    e.resolvedOverload = fi->overloadIndex;
+    validateArgTypes(e.args, argTypes, fi->paramTypes, fi->isVariadic, e.line, e.col,
+                     "function '" + fnFq + "'");
+    return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
+}
+
 // Resolves `super(...)` and `super.method(...)`. Returns nullopt when the call
 // is not a super-call (so the normal resolution path runs).
 std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
@@ -817,14 +903,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             return TypeRef::prim(TypeRef::Kind::Error);
         }
-        const FunctionInfo *fi = reg_->func(fnFq);
-        e.kind = CallKind::FreeFunction;
-        e.targetName = fnFq;
-        if (fi->isVariadic)
-            checkVariadicArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
-        else
-            checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
-        return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
+        return resolveFreeCall(e, fnFq);
     }
 
     auto *mem = dynamic_cast<MemberExpr *>(e.callee.get());
@@ -863,14 +942,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         }
         std::string fnFq = reg_->resolveFunc(joinDots(*chain, chain->size()), currentNs_);
         if (!fnFq.empty()) {
-            const FunctionInfo *fi = reg_->func(fnFq);
-            e.kind = CallKind::FreeFunction;
-            e.targetName = fnFq;
-            if (fi->isVariadic)
-                checkVariadicArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
-            else
-                checkArgs(e.args, fi->paramTypes, e.line, e.col, "function '" + fnFq + "'");
-            return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
+            return resolveFreeCall(e, fnFq);
         }
         error(e.line, e.col, "unknown function or static method '" +
                                  joinDots(*chain, chain->size()) + "'");

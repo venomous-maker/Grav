@@ -74,6 +74,13 @@ private:
     TypeRef checkStructLiteral(StructLiteralExpr &e);
     TypeRef checkCall(CallExpr &e);
     std::optional<TypeRef> checkSuperCall(CallExpr &e);
+    TypeRef resolveFreeCall(CallExpr &e, const std::string &fnFq);
+    const FunctionInfo *pickOverload(const std::vector<FunctionInfo> &cands,
+                                     const std::vector<TypeRef> &argTypes) const;
+    void validateArgTypes(const std::vector<ExprPtr> &args,
+                          const std::vector<TypeRef> &argTypes,
+                          const std::vector<TypeRef> &params, bool variadic,
+                          int line, int col, const std::string &what);
     TypeRef checkMember(MemberExpr &e); // value position (field read)
     bool isLvalue(const Expr &e) const;
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
