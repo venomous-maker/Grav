@@ -13,6 +13,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <algorithm>
 #include <vector>
 
 #include "codegen/codegen.h"
@@ -43,11 +44,15 @@ std::string ltrim(const std::string &s) {
     return s.substr(i);
 }
 
+// Where a line of the combined source originally came from.
+struct SrcLoc { std::string file; int line; };
+
 // Recursively load a module, expanding `import "path"` lines (relative to the
 // importing file) before the rest of the file. De-duplicates by canonical path
-// so a module is included at most once, which also breaks import cycles.
+// so a module is included at most once, which also breaks import cycles. Fills
+// `srcMap` so combined line N (1-based) maps to its original file:line.
 bool loadModule(const fs::path &path, std::set<std::string> &visited,
-                std::string &out, std::string &err) {
+                std::string &out, std::vector<SrcLoc> &srcMap, std::string &err) {
     std::error_code ec;
     fs::path canon = fs::weakly_canonical(path, ec);
     std::string key = ec ? path.string() : canon.string();
@@ -61,7 +66,9 @@ bool loadModule(const fs::path &path, std::set<std::string> &visited,
     }
 
     std::string lineText;
+    int lineNo = 0;
     while (std::getline(file, lineText)) {
+        ++lineNo;
         std::string t = ltrim(lineText);
         if (t.rfind("import", 0) == 0 &&
             (t.size() == 6 || t[6] == ' ' || t[6] == '\t')) {
@@ -73,14 +80,39 @@ bool loadModule(const fs::path &path, std::set<std::string> &visited,
             }
             std::string rel = t.substr(q1 + 1, q2 - q1 - 1);
             fs::path imported = path.parent_path() / rel;
-            if (!loadModule(imported, visited, out, err)) return false;
+            if (!loadModule(imported, visited, out, srcMap, err)) return false;
             out += "\n"; // keep imported decls separated
+            srcMap.push_back({path.string(), lineNo});
         } else {
             out += lineText;
             out += '\n';
+            srcMap.push_back({path.string(), lineNo});
         }
     }
     return true;
+}
+
+// Print a diagnostic, mapping its combined-source line back to the real file:line
+// and showing the offending source line with a caret.
+void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
+    std::string label = (d.stage() == "warning") ? "warning" : d.stage() + " error";
+    int combined = d.line();
+    SrcLoc loc;
+    bool mapped = combined >= 1 && combined <= (int)srcMap.size();
+    if (mapped) loc = srcMap[combined - 1];
+    std::string where = mapped ? (loc.file + ":" + std::to_string(loc.line))
+                               : ("line " + std::to_string(combined));
+    std::cerr << "gravc: " << where << ":" << d.col() << ": " << label << ": "
+              << d.message() << "\n";
+    if (mapped) {
+        std::ifstream f(loc.file);
+        std::string ln;
+        for (int i = 0; i < loc.line && std::getline(f, ln); ++i) {}
+        if (!ln.empty() || loc.line > 0) {
+            std::cerr << "    " << ln << "\n";
+            std::cerr << "    " << std::string(std::max(0, d.col() - 1), ' ') << "^\n";
+        }
+    }
 }
 
 int usage(const char *prog) {
@@ -182,12 +214,13 @@ int main(int argc, char **argv) {
 
     // ---- load source (with imports) ----
     std::string source;
+    std::vector<SrcLoc> srcMap; // combined line -> original file:line
     if (useStdin) {
         source = readStream(std::cin);
     } else {
         std::set<std::string> visited;
         std::string err;
-        if (!loadModule(inputPath, visited, source, err)) {
+        if (!loadModule(inputPath, visited, source, srcMap, err)) {
             std::cerr << "gravc: " << err << "\n";
             return 1;
         }
@@ -214,11 +247,10 @@ int main(int argc, char **argv) {
 
         // Warnings (e.g. unused variables). With -Werror they are fatal.
         const auto &warnings = checker.warnings();
-        for (const auto &w : warnings)
-            std::cerr << "gravc: " << w.what() << "\n";
+        for (const auto &w : warnings) printDiag(w, srcMap);
 
         if (!errors.empty() || (werror && !warnings.empty())) {
-            for (const auto &err : errors) std::cerr << "gravc: " << err.what() << "\n";
+            for (const auto &err : errors) printDiag(err, srcMap);
             size_t n = errors.size() + (werror ? warnings.size() : 0);
             std::cerr << "gravc: " << n << " error(s); aborting\n";
             return 1;
@@ -296,7 +328,7 @@ int main(int argc, char **argv) {
         }
         return 0;
     } catch (const grav::GravError &e) {
-        std::cerr << "gravc: " << e.what() << "\n";
+        printDiag(e, srcMap);
         return 1;
     }
 }
