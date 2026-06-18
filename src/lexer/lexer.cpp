@@ -25,6 +25,7 @@ const std::unordered_map<std::string, TokenType> &keywords() {
         {"struct", TokenType::Struct},
         {"enum", TokenType::Enum},
         {"type", TokenType::Type},
+        {"typedef", TokenType::Type}, // `typedef` is an alias for `type`
         {"sizeof", TokenType::Sizeof},
         {"abstract", TokenType::Abstract},
         {"interface", TokenType::Interface},
