@@ -222,6 +222,7 @@ struct CallExpr : Expr {
     std::string ownerClass;  // FQ class (or interface, if ifaceDispatch) of the method
     std::string slotOwner;   // FQ class that introduced the vtable slot
     bool ifaceDispatch = false; // dispatch through an interface itable (fat pointer)
+    int resolvedOverload = 0;   // chosen free-function overload index (see FunctionDecl)
 };
 
 // ===========================================================================
@@ -440,6 +441,9 @@ struct FunctionDecl : Decl {
     std::vector<Param> params;
     TypeRef returnType;
     Block body;
+    // 0 for the first (or only) function of this name; 1, 2, ... for later
+    // overloads, so each gets a distinct C symbol. Set during symbol registration.
+    int overloadIndex = 0;
 };
 
 // A top-level `const NAME: T = value;` (or `let`) — a module-level global,
