@@ -876,7 +876,7 @@ See [`src/codegen/README.md`](src/codegen/README.md) for the gory details.
 ├── main.cpp                 # gravc driver: args, imports, pipeline, --emit
 ├── CMakeLists.txt
 ├── examples/                # numbered feature tour + comprehensive/ qa/ programs
-├── lib/                     # basic standard library (exception, convert, io)
+├── lib/                     # standard library (collections, strings, math, fs, datetime, …)
 ├── tests/run.sh             # compile + run every example with golden checks
 ├── editors/nvim/            # Neovim syntax, filetype, go-to-definition, keymaps
 ├── mcp_server/              # dependency-free MCP server wrapping gravc
@@ -947,11 +947,25 @@ expanded operator set, ranges, `null` + `??` + `?.`, `as`/`is` + C-style casts,
 pointers, optional `;` terminators, and async/await. The following are **not**
 implemented yet — using them is a parse/type error today:
 
-- **Dynamic collections** — a `list<T>` / `map<K,V>` standard library and set/map
-  literals like `#{1, 2, 3}`. The generics needed for these now exist (generic
-  classes); what remains is the library types plus a small C runtime (growable
-  buffers, hashing) and the literal syntax. Fixed-length `T[N]` arrays *are*
-  implemented — see [Arrays](#arrays).
+- **Collection literals** — set/map literals like `#{1, 2, 3}` are not parsed yet.
+  The collection *types* now ship in [`lib/`](lib/): growable `Array<T>`, `List<T>`,
+  `Stack<T>` / `Queue<T>`, `Set<T>` (union/intersect), and `Map<K,V>` — built on
+  generic classes plus a small inline-C runtime (`realloc` buffers). Construct them
+  with `new Array<int>()` etc.; only the literal syntax is outstanding. Fixed-length
+  `T[N]` arrays *are* implemented — see [Arrays](#arrays).
+- **Functional iteration & first-class functions** — `map` / `filter` / `reduce`,
+  lambdas, and `Iterator` / `Generator` / `Stream` are not implemented; they need
+  first-class function values, which the type system does not model yet.
+- **`Dynamic` / `any` and reflection** — and the libraries that depend on them (JSON,
+  a general-purpose serializer) are not implemented. `Option<T>` / `Result<T,E>` exist
+  only as much as plain generics allow — there is no pattern-match binding (`match`).
+- **Concurrency & networking** — `async`/`await` lower to synchronous calls today;
+  real threads, channels, HTTP, and sockets are not implemented.
+
+What *is* in the standard library now (see [lib/README.md](lib/README.md)): the
+collections above, an expanded `Str` (trim/replace/split/join/pad/…), integer `Math`
+and floating-point `MathF` (`<math.h>`), `Random`, `DateTime` (`<time.h>`), `File`
+(`fs`), `Path`, and `Process` (`popen`/`system`).
 
 A note on [multiple inheritance](examples/17_multiple_inheritance.grav): the primary
 base in `extends A, B` keeps prefix layout (full polymorphism through `A`), while
