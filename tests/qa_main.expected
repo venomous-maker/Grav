@@ -17,6 +17,17 @@ next year: 8, Format.toBool("yes") = false
 scratch = 99
 roll d6: 2
 rng touched: 1
+array: len=3 first=2 has2=true
+str: parts=3 join=a-b-c pad=007 rep=a/b
+math: sqrt2=1.41421 floor=3 pow=256
+stack: pop=2 peek=1 | queue: dq=x size=1
+set: size=2 inter=1
+map: ada=36 getOr=-1
+random: in-range=true fixed=5
+datetime: yearOk=true +1day=86400
+file: read=grav size=4
+path: base=z.txt dir=/x/y ext=.txt
+process: echo=hi pid>0=true
 births recorded = 4
 pi as int = 3
 argc = 3, arg0 = /tmp/grav_qa

@@ -92,6 +92,59 @@ async fn main() {
     print("roll d6: ${roll(6) + 1}");
     print("rng touched: ${%{ (int)(rng_state & 1) %} as int}");  // C global read in Grav
 
+    // ── standard library tour (lib/std.grav) ──────────────────────────────
+    // Array<T>: growable buffer — push / reverse / first / contains.
+    let nums = new Array<int>();
+    nums.push(3); nums.push(1); nums.push(2);
+    nums.reverse();                              // [2, 1, 3]
+    print("array: len=${nums.length()} first=${nums.first()} has2=${nums.contains(2)}");
+
+    // Str: trim / split → Array<string> / join / padLeft / replace.
+    let parts = Str.split(Str.trim("  a,b,c  "), ",");
+    print("str: parts=${parts.length()} join=${Str.join(parts, "-")} pad=${Str.padLeft("7", 3, "0")} rep=${Str.replace("a.b", ".", "/")}");
+
+    // Math: floating point over <math.h>.
+    print("math: sqrt2=${Math.sqrt(2.0)} floor=${Math.floor(3.7)} pow=${Math.pow(2.0, 8.0)}");
+
+    // Stack (LIFO) and Queue (FIFO) — pull mutating calls out so order is fixed.
+    let st = new Stack<int>();
+    st.push(1); st.push(2);
+    let popped = st.pop();                        // 2, leaving [1]
+    let q = new Queue<string>();
+    q.enqueue("x"); q.enqueue("y");
+    let dq = q.dequeue();                         // "x", leaving ["y"]
+    print("stack: pop=${popped} peek=${st.peek()} | queue: dq=${dq} size=${q.size()}");
+
+    // Set (dedup + intersect) and Map<K,V>.
+    let s1 = new Set<int>();
+    s1.add(1); s1.add(2); s1.add(2);             // {1, 2}
+    let s2 = new Set<int>();
+    s2.add(2); s2.add(3);                         // {2, 3}
+    print("set: size=${s1.size()} inter=${s1.intersect(s2).size()}");
+    let ages = new Map<string, int>();
+    ages.put("ada", 36);
+    print("map: ada=${ages.get("ada")} getOr=${ages.getOr("none", -1)}");
+
+    // Random — seeded, so the demo stays deterministic.
+    Random.seed(7);
+    let dice = Random.nextInt(1, 7);
+    print("random: in-range=${dice >= 1 && dice < 7} fixed=${Random.nextInt(5, 5)}");
+
+    // DateTime over <time.h>, from a fixed unix instant.
+    let dt = DateTime.fromUnix(1700000000);
+    print("datetime: yearOk=${dt.year() > 2000} +1day=${dt.addDays(1).unix() - dt.unix()}");
+
+    // File: write / read / size / delete a scratch file.
+    File.write("/tmp/grav_qa_io.txt", "grav");
+    print("file: read=${File.read("/tmp/grav_qa_io.txt")} size=${File.size("/tmp/grav_qa_io.txt")}");
+    File.delete("/tmp/grav_qa_io.txt");
+
+    // Path string utilities.
+    print("path: base=${Path.basename("/x/y/z.txt")} dir=${Path.dirname("/x/y/z.txt")} ext=${Path.extension("/x/y/z.txt")}");
+
+    // Process: run a shell command and capture its stdout.
+    print("process: echo=${Str.trim(Process.execOutput("echo hi"))} pid>0=${Process.pid() > 0}");
+
     // casts + command-line args + the shared births counter
     print("births recorded = ${births}");
     print("pi as int = ${(int)3.9}");

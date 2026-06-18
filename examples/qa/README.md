@@ -7,7 +7,7 @@ multiple files. Driven by [`tests/run.sh`](../../tests/run.sh) with a golden che
 | --------------- | ---------------------------------------------------------------------- |
 | `runtime.grav`  | macros, a `const` + a **mutable global** shared across modules, and a top-level inline-C PRNG whose state is read back from Grav (variable sharing). |
 | `creatures.grav`| enums, type aliases, a `trait` (+ `Self`), an interface, an abstract class, inheritance, **composition** (`uses`), **multiple inheritance** (`extends A, B`), and a **generic** class. |
-| `main.grav`     | imports the modules and ties everything together: variadics, exceptions, async/await, pointers, `null`/`??`/`?.`, casts, string interpolation, command-line args, and inline-C value sharing. |
+| `main.grav`     | imports the modules and ties everything together: variadics, exceptions, async/await, pointers, `null`/`??`/`?.`, casts, string interpolation, command-line args, and inline-C value sharing — plus a **standard-library tour** (`Array`, `Str`, `Math`, `Stack`/`Queue`, `Set`, `Map`, `Random`, `DateTime`, `File`, `Path`, `Process`). |
 
 ```bash
 grav examples/qa/main.grav --run -- alpha beta
