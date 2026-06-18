@@ -257,7 +257,11 @@ int main(int argc, char **argv) {
         }
 
         grav::CodeGen codegen;
-        std::string c = codegen.generate(program, registry);
+        // Hand the line map to codegen so runtime stack traces show real file:line.
+        std::vector<grav::SourceMapEntry> cgMap;
+        cgMap.reserve(srcMap.size());
+        for (const auto &s : srcMap) cgMap.push_back({s.file, s.line});
+        std::string c = codegen.generate(program, registry, cgMap);
 
         if (toStdout) {
             std::cout << c;
