@@ -6,7 +6,7 @@ file). Import the umbrella `std.grav`, or individual modules.
 | Module           | Provides                                                              |
 | ---------------- | -------------------------------------------------------------------- |
 | `exception.grav` | `Exception` base class + `ValueError` / `RuntimeError` / `IndexError` / `NotFound`, each with `message()` / `describe()`. |
-| `convert.grav`   | **`Format`** class — `toInt` / `toFloat` / `toBool` / `toIntOr` (string → value). The reverse is the built-in `str(x)`. |
+| `convert.grav`   | **`Format`** class — string→value (`toInt` / `toLong` / `toUInt` / `toByte` / `toFloat` / `toDouble` / `toBool` / `toIntOr`), numeric conversions (`intToFloat` / `floatToInt` / `intToLong` / `longToInt` / `intToByte` / `intToDouble`), `hex`, and string↔binary (`toBinary` / `fromBinary`). The general value→string is the built-in `str(x)`. |
 | `string.grav`    | **`Str`** class — `length`, `isEmpty`, `equals`, `contains`, `count`, `indexOf`, `startsWith`, `endsWith`, `charAt`, `concat`, `upper`, `lower`, `reverse`, `repeat`, `substring`, `remove`, `trim` / `trimStart` / `trimEnd`, `replace`, `padLeft` / `padRight`, `split` → `Array<string>`, `join`. |
 | `math.grav`      | **`Math`** class — floating-point `sqrt`, `cbrt`, `pow`, `abs`, `sin`, `cos`, `tan`, `atan2`, `floor`, `ceil`, `round`, `log`, `log10`, `exp`, `min`, `max`, `pi()`, `e()` (over `<math.h>`). |
 | `array.grav`     | **`Array<T>`** — growable list: `length`, `isEmpty`, `push`, `pop`, `get`, `set`, `first`, `last`, `clear`, `insert`, `removeAt`, `indexOf`, `contains`, `reverse`, `dispose`. |
@@ -16,10 +16,10 @@ file). Import the umbrella `std.grav`, or individual modules.
 | `map.grav`       | **`Map<K,V>`** — `put`, `get`, `getOr`, `containsKey`, `remove`, `size`, `keys`, `values`. |
 | `random.grav`    | **`Random`** — `seed`, `seedTime`, `nextInt`, `nextFloat`, `nextBool`. |
 | `datetime.grav`  | **`DateTime`** — `now`, `fromUnix`, `unix`, `year`/`month`/`day`/`hour`/`minute`/`second`, `format`, `addDays`, `addHours` (over `<time.h>`). |
-| `fs.grav`        | **`File`** — `exists`, `read`, `write`, `append`, `delete`, `size`. |
+| `fs.grav`        | **`File`** object (`new File(path)`) — `exists`, `size`, `name`, `read`, `write`, `append`, `writeLine`, `readLines` → `Array<string>`, `readBinary`/`writeBinary`/`appendBinary` (`binary`), `copyTo`, `delete`. |
 | `path.grav`      | **`Path`** — `basename`, `dirname`, `extension`, `join`. |
 | `process.grav`   | **`Process`** — `exec`, `execOutput`, `pid`, `sleepMs` (over `popen`/`system`). |
-| `io.grav`        | `readLine`, `prompt`, `readInt`, `readFloat`, `readBool`, `promptInt`, `eprint`, `printRaw` (over `input()`/`print`). |
+| `io.grav`        | free functions `readLine`/`prompt`/`readInt`/`readFloat`/`readBool`/`promptInt`/`eprint`/`printRaw`, plus an **`IO`** class grouping them as static methods (`IO.print`, `IO.write`, `IO.eprint`, `IO.input`, `IO.prompt`, `IO.readInt`/`readLong`/`readFloat`/`readDouble`/`readBool`, `IO.promptInt`). |
 | `std.grav`       | imports all of the above.                                            |
 
 Conversions live in **one** place: `Format` parses strings into values, and the
