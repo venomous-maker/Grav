@@ -10,12 +10,21 @@
 %{
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+static const char* grav_to_hex(int n) {
+    char* b = (char*)malloc(20); snprintf(b, 20, "0x%x", (unsigned)n); return b;
+}
 %}
 
 // Parses strings into primitive values.
 class Format {
+    // ---- string -> value ----
     static fn toInt(s: string) -> int { return %{ atoi(s) %} as int; }
+    static fn toLong(s: string) -> long { return %{ (long long)atoll(s) %} as long; }
+    static fn toUInt(s: string) -> uint { return %{ (unsigned)strtoul(s, 0, 10) %} as uint; }
+    static fn toByte(s: string) -> byte { return %{ (unsigned char)atoi(s) %} as byte; }
     static fn toFloat(s: string) -> float { return %{ atof(s) %} as float; }
+    static fn toDouble(s: string) -> double { return %{ atof(s) %} as double; }
     static fn toBool(s: string) -> bool {
         return %{ (strcmp(s, "true") == 0 || strcmp(s, "1") == 0) %} as bool;
     }
@@ -24,4 +33,20 @@ class Format {
         let valid = %{ (s[0] != 0) %} as bool;
         return valid ? Format.toInt(s) : fallback;
     }
+
+    // ---- value -> string ---- (str(x) is the general builtin; these read nicely)
+    static fn toStr(n: int) -> string { return str(n); }
+    static fn hex(n: int) -> string { return %{ grav_to_hex(n) %} as string; }
+
+    // ---- numeric type conversions ----
+    static fn intToFloat(n: int) -> float { return n as float; }
+    static fn floatToInt(f: float) -> int { return f as int; }
+    static fn intToLong(n: int) -> long { return n as long; }
+    static fn longToInt(n: long) -> int { return n as int; }
+    static fn intToByte(n: int) -> byte { return n as byte; }
+    static fn intToDouble(n: int) -> double { return n as double; }
+
+    // ---- string <-> binary ----
+    static fn toBinary(s: string) -> binary { return s as binary; }
+    static fn fromBinary(b: binary) -> string { return b as string; }
 }
