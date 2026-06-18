@@ -38,6 +38,9 @@ void CodeGen::emitPrototypes(const Program &program) {
                                          : std::vector<Param>{};
             protos_ += S + "* " + ctorCName(c->fqName) +
                        paramList(ctorParams, "") + ";\n";
+            if (c->constructor.present)
+                protos_ += "void " + ctorInitCName(c->fqName) +
+                           paramList(ctorParams, S) + ";\n";
             for (const auto &m : c->methods) {
                 if (!m.hasBody) continue;
                 std::string self = m.isStatic ? "" : S;
@@ -127,6 +130,20 @@ void CodeGen::emitConstructor(const ClassDecl &cls) {
     std::string S = structName(cls.fqName);
     const auto &params = cls.constructor.present ? cls.constructor.params
                                                 : std::vector<Param>{};
+
+    // The constructor body runs as a separate `_init(self, ...)` so a subclass can
+    // delegate to it through `super(...)` without re-allocating the object.
+    if (cls.constructor.present) {
+        defs_ += "void " + ctorInitCName(cls.fqName) + paramList(params, S) + " {\n";
+        cur_ = &defs_;
+        indent_ = 1;
+        currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
+        emitBlock(cls.constructor.body);
+        indent_ = 0;
+        defs_ += "}\n\n";
+    }
+
+    // `_new(...)` allocates, installs the vtable / type info, then runs `_init`.
     defs_ += S + "* " + ctorCName(cls.fqName) + paramList(params, "") + " {\n";
     defs_ += "    " + S + "* self = (" + S + "*)calloc(1, sizeof(" + S + "));\n";
 
@@ -139,11 +156,9 @@ void CodeGen::emitConstructor(const ClassDecl &cls) {
     defs_ += "    self->__type = &" + mangle(cls.fqName) + "_typeinfo;\n";
 
     if (cls.constructor.present) {
-        cur_ = &defs_;
-        indent_ = 1;
-        currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
-        emitBlock(cls.constructor.body);
-        indent_ = 0;
+        defs_ += "    " + ctorInitCName(cls.fqName) + "(self";
+        for (const auto &p : params) defs_ += ", " + p.name;
+        defs_ += ");\n";
     }
     defs_ += "    return self;\n}\n\n";
 }

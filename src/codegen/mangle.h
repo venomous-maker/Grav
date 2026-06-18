@@ -18,6 +18,7 @@ std::string vtableInstance(const std::string &classFq);// geometry__Circle_vtabl
 std::string methodCName(const std::string &classFq, const std::string &method);
 std::string memberCName(const std::string &name); // method name, C-keyword-safe
 std::string ctorCName(const std::string &classFq);     // geometry__Circle_new
+std::string ctorInitCName(const std::string &classFq); // geometry__Circle_init (ctor body on self)
 std::string funcCName(const std::string &fnFq);        // vf_geometry__area
 std::string enumConst(const std::string &enumFq, const std::string &member); // Color_Red
 

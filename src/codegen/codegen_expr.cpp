@@ -112,6 +112,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     if (auto *e = dynamic_cast<const NameExpr *>(&expr))
         return e->resolvedGlobal.empty() ? e->name : e->resolvedGlobal;
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
+    if (dynamic_cast<const SuperExpr *>(&expr)) return "self"; // viewed as parent in calls
 
     if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
         // Comparing an interface value against null tests its object pointer.
@@ -411,6 +412,25 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return "(" + guard + " ? " + out + " : " + nul + ")";
             }
             return out;
+        }
+        case CallKind::SuperConstructor: {
+            const ClassInfo *pc = reg_->cls(call.ownerClass);
+            if (!pc || !pc->constructor) return "((void)0)"; // parent has no ctor body
+            std::vector<TypeRef> params;
+            for (const auto &p : pc->constructor->params) params.push_back(p.type);
+            std::string self = "(" + structName(call.ownerClass) + "*)self";
+            std::string out = ctorInitCName(call.ownerClass) + "(";
+            emitArgs(out, call, params, true, self);
+            return out + ")";
+        }
+        case CallKind::SuperMethod: {
+            std::vector<TypeRef> params;
+            if (const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName))
+                params = mi->paramTypes;
+            std::string self = "(" + structName(call.ownerClass) + "*)self";
+            std::string out = methodCName(call.ownerClass, call.methodName) + "(";
+            emitArgs(out, call, params, true, self);
+            return out + ")";
         }
         default:
             return "/*unresolved call*/ 0";

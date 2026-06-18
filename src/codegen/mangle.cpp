@@ -33,6 +33,7 @@ std::string memberCName(const std::string &name) {
 }
 
 std::string ctorCName(const std::string &classFq) { return mangle(classFq) + "_new"; }
+std::string ctorInitCName(const std::string &classFq) { return mangle(classFq) + "_init"; }
 
 std::string funcCName(const std::string &fnFq) { return "vf_" + mangle(fnFq); }
 
