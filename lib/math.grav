@@ -1,44 +1,30 @@
-// lib/math.grav — integer math helpers as static methods (no libm needed).
+// lib/math.grav — floating-point math (backed by C <math.h>; needs libm, which
+// gravc links automatically).
+
+%{ #include <math.h> %}
 
 class Math {
-    static fn abs(n: int) -> int { return n < 0 ? 0 - n : n; }
-    static fn min(a: int, b: int) -> int { return a < b ? a : b; }
-    static fn max(a: int, b: int) -> int { return a > b ? a : b; }
-    static fn sign(n: int) -> int { return n > 0 ? 1 : (n < 0 ? -1 : 0); }
+    static fn sqrt(x: float) -> float { return %{ sqrt(x) %} as float; }
+    static fn cbrt(x: float) -> float { return %{ cbrt(x) %} as float; }
+    static fn pow(base: float, exp: float) -> float { return %{ pow(base, exp) %} as float; }
+    static fn abs(x: float) -> float { return %{ fabs(x) %} as float; }
 
-    static fn clamp(x: int, lo: int, hi: int) -> int {
-        return x < lo ? lo : (x > hi ? hi : x);
-    }
+    static fn sin(x: float) -> float { return %{ sin(x) %} as float; }
+    static fn cos(x: float) -> float { return %{ cos(x) %} as float; }
+    static fn tan(x: float) -> float { return %{ tan(x) %} as float; }
+    static fn atan2(y: float, x: float) -> float { return %{ atan2(y, x) %} as float; }
 
-    static fn pow(base: int, exp: int) -> int {
-        let r = 1;
-        for (i in 0..exp) { r = r * base; }
-        return r;
-    }
+    static fn floor(x: float) -> float { return %{ floor(x) %} as float; }
+    static fn ceil(x: float) -> float { return %{ ceil(x) %} as float; }
+    static fn round(x: float) -> float { return %{ round(x) %} as float; }
 
-    // Integer square root (floor).
-    static fn isqrt(n: int) -> int {
-        if (n < 0) { return 0; }
-        let r = 0;
-        while ((r + 1) * (r + 1) <= n) { r = r + 1; }
-        return r;
-    }
+    static fn log(x: float) -> float { return %{ log(x) %} as float; }
+    static fn log10(x: float) -> float { return %{ log10(x) %} as float; }
+    static fn exp(x: float) -> float { return %{ exp(x) %} as float; }
 
-    static fn gcd(a: int, b: int) -> int {
-        let x = Math.abs(a);
-        let y = Math.abs(b);
-        while (y != 0) { let t = y; y = x % y; x = t; }
-        return x;
-    }
+    static fn min(a: float, b: float) -> float { return a < b ? a : b; }
+    static fn max(a: float, b: float) -> float { return a > b ? a : b; }
 
-    static fn lcm(a: int, b: int) -> int {
-        let g = Math.gcd(a, b);
-        return g == 0 ? 0 : Math.abs(a / g * b);
-    }
-
-    static fn factorial(n: int) -> int {
-        let r = 1;
-        for (i in 2..=n) { r = r * i; }
-        return r;
-    }
+    static fn pi() -> float { return 3.141592653589793; }
+    static fn e() -> float { return 2.718281828459045; }
 }

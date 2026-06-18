@@ -963,8 +963,8 @@ implemented yet — using them is a parse/type error today:
   real threads, channels, HTTP, and sockets are not implemented.
 
 What *is* in the standard library now (see [lib/README.md](lib/README.md)): the
-collections above, an expanded `Str` (trim/replace/split/join/pad/…), integer `Math`
-and floating-point `MathF` (`<math.h>`), `Random`, `DateTime` (`<time.h>`), `File`
+collections above, an expanded `Str` (trim/replace/split/join/pad/…), floating-point
+`Math` (`<math.h>`), `Random`, `DateTime` (`<time.h>`), `File`
 (`fs`), `Path`, and `Process` (`popen`/`system`).
 
 A note on [multiple inheritance](examples/17_multiple_inheritance.grav): the primary
