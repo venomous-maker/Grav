@@ -1,5 +1,7 @@
 // lib/string.grav — string utilities as static methods (backed by C string.h).
 
+import "array.grav"
+
 %{
 #include <string.h>
 #include <stdlib.h>
@@ -29,22 +31,119 @@ static const char* grav_str_sub(const char* s, int start, int len) {
     char* r = (char*)malloc((size_t)len + 1);
     memcpy(r, s + start, (size_t)len); r[len] = 0; return r;
 }
+static int grav_str_indexof(const char* s, const char* sub, int from) {
+    if (from < 0) from = 0;
+    if (from > (int)strlen(s)) return -1;
+    const char* p = strstr(s + from, sub);
+    return p ? (int)(p - s) : -1;
+}
+static const char* grav_str_reverse(const char* s) {
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i < n; i++) r[i] = s[n - 1 - i];
+    r[n] = 0; return r;
+}
+static const char* grav_str_trim(const char* s, int left, int right) {
+    const char* a = s; const char* b = s + strlen(s);
+    if (left)  while (*a && isspace((unsigned char)*a)) a++;
+    if (right) while (b > a && isspace((unsigned char)b[-1])) b--;
+    size_t n = (size_t)(b - a); char* r = (char*)malloc(n + 1);
+    memcpy(r, a, n); r[n] = 0; return r;
+}
+static const char* grav_str_pad(const char* s, int len, char c, int left) {
+    int n = (int)strlen(s);
+    if (n >= len) { char* r = (char*)malloc((size_t)n + 1); memcpy(r, s, n + 1); return r; }
+    char* r = (char*)malloc((size_t)len + 1);
+    int pad = len - n;
+    if (left)  { memset(r, c, pad); memcpy(r + pad, s, n); }
+    else       { memcpy(r, s, n); memset(r + n, c, pad); }
+    r[len] = 0; return r;
+}
+static char* grav_str_dup(const char* s) {
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1); memcpy(r, s, n + 1); return r;
+}
+static const char* grav_str_replace(const char* s, const char* o, const char* n) {
+    size_t ol = strlen(o); if (ol == 0) return grav_str_dup(s);
+    size_t nl = strlen(n), cnt = 0;
+    for (const char* p = s; (p = strstr(p, o)); p += ol) cnt++;
+    char* r = (char*)malloc(strlen(s) + cnt * (nl > ol ? nl - ol : 0) + 1);
+    char* w = r; const char* p = s; const char* q;
+    while ((q = strstr(p, o))) { memcpy(w, p, q - p); w += q - p; memcpy(w, n, nl); w += nl; p = q + ol; }
+    strcpy(w, p); return r;
+}
+static int grav_str_count(const char* s, const char* sub) {
+    size_t l = strlen(sub); if (l == 0) return 0;
+    int c = 0; for (const char* p = s; (p = strstr(p, sub)); p += l) c++;
+    return c;
+}
 %}
 
 class Str {
     static fn length(s: string) -> int { return %{ (int)strlen(s) %} as int; }
     static fn isEmpty(s: string) -> bool { return %{ (s[0] == 0) %} as bool; }
-    static fn equals(a: string, b: string) -> bool { return %{ (strcmp(a, b) == 0) %} as bool; }
-    static fn contains(s: string, sub: string) -> bool { return %{ (strstr(s, sub) != 0) %} as bool; }
+    static fn equals(a: string, b: string) -> bool { return a == b; }
+    static fn charAt(s: string, i: int) -> int { return %{ (int)(unsigned char)s[i] %} as int; }
+    static fn concat(a: string, b: string) -> string { return a + b; }
+
+    static fn indexOf(s: string, sub: string) -> int { return %{ grav_str_indexof(s, sub, 0) %} as int; }
+    static fn indexFrom(s: string, sub: string, from: int) -> int { return %{ grav_str_indexof(s, sub, from) %} as int; }
+    static fn contains(s: string, sub: string) -> bool { return Str.indexOf(s, sub) >= 0; }
+    static fn count(s: string, sub: string) -> int { return %{ grav_str_count(s, sub) %} as int; }
+
     static fn startsWith(s: string, prefix: string) -> bool {
         return %{ (strncmp(s, prefix, strlen(prefix)) == 0) %} as bool;
     }
-    static fn charAt(s: string, i: int) -> int { return %{ (int)(unsigned char)s[i] %} as int; }
-    static fn concat(a: string, b: string) -> string { return a + b; }
+    static fn endsWith(s: string, suffix: string) -> bool {
+        let n = Str.length(s);
+        let m = Str.length(suffix);
+        return m <= n && Str.substring(s, n - m, m) == suffix;
+    }
+
     static fn upper(s: string) -> string { return %{ grav_str_upper(s) %} as string; }
     static fn lower(s: string) -> string { return %{ grav_str_lower(s) %} as string; }
+    static fn reverse(s: string) -> string { return %{ grav_str_reverse(s) %} as string; }
     static fn repeat(s: string, n: int) -> string { return %{ grav_str_repeat(s, n) %} as string; }
     static fn substring(s: string, start: int, len: int) -> string {
         return %{ grav_str_sub(s, start, len) %} as string;
+    }
+    static fn remove(s: string, start: int, len: int) -> string {
+        return Str.substring(s, 0, start) + Str.substring(s, start + len, Str.length(s));
+    }
+
+    static fn trim(s: string) -> string { return %{ grav_str_trim(s, 1, 1) %} as string; }
+    static fn trimStart(s: string) -> string { return %{ grav_str_trim(s, 1, 0) %} as string; }
+    static fn trimEnd(s: string) -> string { return %{ grav_str_trim(s, 0, 1) %} as string; }
+
+    static fn replace(s: string, old: string, repl: string) -> string {
+        return %{ grav_str_replace(s, old, repl) %} as string;
+    }
+
+    static fn padLeft(s: string, len: int, ch: string) -> string {
+        return %{ grav_str_pad(s, len, ch[0], 1) %} as string;
+    }
+    static fn padRight(s: string, len: int, ch: string) -> string {
+        return %{ grav_str_pad(s, len, ch[0], 0) %} as string;
+    }
+
+    static fn split(s: string, delim: string) -> Array<string> {
+        let out = new Array<string>();
+        let dl = Str.length(delim);
+        if (dl == 0) { out.push(s); return out; }
+        let start = 0;
+        while (true) {
+            let i = Str.indexFrom(s, delim, start);
+            if (i < 0) { out.push(Str.substring(s, start, Str.length(s) - start)); return out; }
+            out.push(Str.substring(s, start, i - start));
+            start = i + dl;
+        }
+        return out;
+    }
+
+    static fn join(parts: Array<string>, delim: string) -> string {
+        let out = "";
+        for (i in 0..parts.length()) {
+            if (i > 0) { out += delim; }
+            out += parts.get(i);
+        }
+        return out;
     }
 }
