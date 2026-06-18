@@ -1,0 +1,80 @@
+// lib/array.grav — a growable, generic dynamic array (heap-backed).
+// Each instantiation (Array<int>, Array<string>, …) is monomorphized to a
+// concrete struct holding a `T*` buffer that doubles on demand.
+//
+// Note: higher-order methods (map/filter/reduce/forEach) need first-class
+// functions, which Grav does not have yet — see the repo roadmap.
+
+%{
+#include <stdlib.h>
+#include <string.h>
+%}
+
+class Array<T> {
+    private data: T*
+    private len: int
+    private cap: int
+
+    constructor() { self.len = 0; self.cap = 0; self.data = null; }
+
+    private fn ensure(need: int) {
+        if (self.cap >= need) { return; }
+        let nc = self.cap < 4 ? 4 : self.cap * 2;
+        if (nc < need) { nc = need; }
+        let old = self.data;
+        let bytes = nc * sizeof(T);
+        self.data = %{ (void*)realloc((void*)old, (size_t)bytes) %} as T*;
+        self.cap = nc;
+    }
+
+    public fn length() -> int { return self.len; }
+    public fn isEmpty() -> bool { return self.len == 0; }
+
+    public fn push(item: T) {
+        self.ensure(self.len + 1);
+        self.data[self.len] = item;
+        self.len = self.len + 1;
+    }
+
+    public fn pop() -> T {
+        self.len = self.len - 1;
+        return self.data[self.len];
+    }
+
+    public fn get(i: int) -> T { return self.data[i]; }
+    public fn set(i: int, item: T) { self.data[i] = item; }
+
+    public fn first() -> T { return self.data[0]; }
+    public fn last() -> T { return self.data[self.len - 1]; }
+    public fn clear() { self.len = 0; }
+
+    public fn insert(index: int, item: T) {
+        self.ensure(self.len + 1);
+        let i = self.len;
+        while (i > index) { self.data[i] = self.data[i - 1]; i = i - 1; }
+        self.data[index] = item;
+        self.len = self.len + 1;
+    }
+
+    public fn removeAt(index: int) {
+        for (i in index..(self.len - 1)) { self.data[i] = self.data[i + 1]; }
+        self.len = self.len - 1;
+    }
+
+    public fn indexOf(item: T) -> int {
+        for (i in 0..self.len) { if (self.data[i] == item) { return i; } }
+        return -1;
+    }
+    public fn contains(item: T) -> bool { return self.indexOf(item) >= 0; }
+
+    public fn reverse() {
+        let i = 0;
+        let j = self.len - 1;
+        while (i < j) {
+            let t = self.data[i]; self.data[i] = self.data[j]; self.data[j] = t;
+            i = i + 1; j = j - 1;
+        }
+    }
+
+    public fn dispose() { free(self.data); self.len = 0; self.cap = 0; }
+}
