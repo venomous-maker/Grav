@@ -1,0 +1,52 @@
+// 20_super_overload.grav — `super` (parent constructor + parent methods) and
+// free-function overloading.
+//
+//   grav examples/20_super_overload.grav --run
+
+// ---- function overloading: same name, different signatures ----
+fn describe(n: int) -> string { return "int ${n}" }
+fn describe(x: float) -> string { return "float ${x}" }
+fn describe(s: string) -> string { return "string \"${s}\"" }
+fn describe(a: int, b: int) -> string { return "pair ${a},${b}" }
+
+// ---- inheritance with super ----
+class Account {
+    protected owner: string
+    protected balance: int
+    constructor(owner: string, opening: int) {
+        self.owner = owner
+        self.balance = opening
+    }
+    public fn summary() -> string { return "${self.owner}: ${self.balance}" }
+}
+
+class SavingsAccount extends Account {
+    private rate: int                      // percent
+    // A different constructor shape: delegate the shared init to the parent,
+    // then add the subclass's own state.
+    constructor(owner: string, opening: int, rate: int) {
+        super(owner, opening)              // run the parent constructor on self
+        self.rate = rate
+    }
+    // Override, but build on the parent's implementation via `super.method()`.
+    public fn summary() -> string {
+        return super.summary() + " (savings @ ${self.rate}%)"
+    }
+    public fn afterInterest() -> int { return self.balance + self.balance * self.rate / 100 }
+}
+
+fn main() {
+    print("=== overloading ===")
+    print(describe(7))            // int 7
+    print(describe(2.5))          // float 2.5
+    print(describe("hi"))         // string "hi"
+    print(describe(3, 4))         // pair 3,4
+
+    print("=== super ===")
+    let a = new Account("Ada", 100)
+    print(a.summary())            // Ada: 100
+
+    let s = new SavingsAccount("Grace", 200, 5)
+    print(s.summary())            // Grace: 200 (savings @ 5%)
+    print("with interest: ${s.afterInterest()}")  // 210
+}
