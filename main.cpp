@@ -263,8 +263,11 @@ int main(int argc, char **argv) {
         std::string flags = " -std=c11";
         if (!optFlag.empty()) flags += " " + optFlag;
         if (!debugFlag.empty()) flags += " " + debugFlag;
+        // Link libm so inline-C `<math.h>` users (e.g. lib/mathf.grav) work; on
+        // assembly output there is no link step.
+        std::string libs = emit == EmitMode::Asm ? "" : " -lm";
         std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
-                          " \"" + cPath + "\" -o \"" + exePath + "\"";
+                          " \"" + cPath + "\" -o \"" + exePath + "\"" + libs;
         if (verbose) std::cerr << "gravc: " << cmd << "\n";
         int rc = std::system(cmd.c_str());
         if (tempC) { std::error_code ec; fs::remove(cPath, ec); }
