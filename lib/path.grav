@@ -1,0 +1,34 @@
+// lib/path.grav — path string utilities.
+import "string.grav"
+
+class Path {
+    private static fn lastIndex(s: string, ch: int) -> int {
+        let last = -1;
+        for (k in 0..Str.length(s)) { if (Str.charAt(s, k) == ch) { last = k; } }
+        return last;
+    }
+
+    static fn basename(path: string) -> string {
+        let i = Path.lastIndex(path, 47);            // '/'
+        return i < 0 ? path : Str.substring(path, i + 1, Str.length(path));
+    }
+    static fn dirname(path: string) -> string {
+        let i = Path.lastIndex(path, 47);
+        return i <= 0 ? "." : Str.substring(path, 0, i);
+    }
+    static fn extension(path: string) -> string {
+        let base = Path.basename(path);
+        let i = Path.lastIndex(base, 46);            // '.'
+        return i <= 0 ? "" : Str.substring(base, i, Str.length(base));
+    }
+    static fn join(parts: Array<string>) -> string {
+        let out = "";
+        for (i in 0..parts.length()) {
+            let part = parts.get(i);
+            if (Str.length(part) == 0) { continue; }
+            if (Str.length(out) > 0 && !Str.endsWith(out, "/")) { out += "/"; }
+            out += part;
+        }
+        return out;
+    }
+}
