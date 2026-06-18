@@ -8,6 +8,7 @@
   "engines": { "vscode": "^1.75.0" },
   "categories": ["Programming Languages", "Snippets"],
   "keywords": ["grav", "gravc"],
+  "repository": { "type": "git", "url": "https://github.com/venomous-maker/grav" },
   "main": "./extension.js",
   "activationEvents": ["onLanguage:grav"],
   "contributes": {

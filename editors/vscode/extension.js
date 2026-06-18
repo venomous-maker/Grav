@@ -5,7 +5,7 @@
 const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
-const idx = require("../lsp/grav-index");
+const idx = require("./grav-index");
 
 function compilerPath() {
   return vscode.workspace.getConfiguration("grav").get("compilerPath", "grav");
