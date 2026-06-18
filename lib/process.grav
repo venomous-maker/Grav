@@ -1,0 +1,22 @@
+// lib/process.grav — run external commands and process control.
+%{
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
+static const char* grav_exec_output(const char* cmd) {
+    FILE* p = popen(cmd, "r"); if (!p) return "";
+    size_t cap = 4096, n = 0; char* b = (char*)malloc(cap); int c;
+    while ((c = fgetc(p)) != EOF) {
+        if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }
+        b[n++] = (char)c;
+    }
+    b[n] = 0; pclose(p); return b;
+}
+%}
+
+class Process {
+    static fn exec(cmd: string) -> int { return %{ system(cmd) %} as int; }
+    static fn execOutput(cmd: string) -> string { return %{ grav_exec_output(cmd) %} as string; }
+    static fn pid() -> int { return %{ (int)getpid() %} as int; }
+    static fn sleepMs(ms: int) { %{ usleep((unsigned)ms * 1000); %}; }
+}
