@@ -105,6 +105,16 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         } else {
             t = TypeRef::named(currentClass_);
         }
+    } else if (auto *e = dynamic_cast<SuperExpr *>(&expr)) {
+        const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_);
+        if (currentClass_.empty() || inStatic_ || !ci || ci->baseClass.empty()) {
+            error(e->line, e->col,
+                  "'super' is only valid inside an instance method or constructor of a "
+                  "class that extends a parent");
+            t = TypeRef::prim(TypeRef::Kind::Error);
+        } else {
+            t = TypeRef::named(ci->baseClass);
+        }
     } else if (auto *e = dynamic_cast<NameExpr *>(&expr)) {
         LocalVar *local = lookupLocal(e->name);
         if (local) {
@@ -604,7 +614,60 @@ TypeRef TypeChecker::checkStructLiteral(StructLiteralExpr &e) {
     return TypeRef::named(fq);
 }
 
+// Resolves `super(...)` and `super.method(...)`. Returns nullopt when the call
+// is not a super-call (so the normal resolution path runs).
+std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
+    const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_);
+    std::string parent = ci ? ci->baseClass : "";
+
+    // super(...) — parent constructor.
+    if (dynamic_cast<SuperExpr *>(e.callee.get())) {
+        if (!ci || parent.empty()) {
+            error(e.line, e.col, "'super(...)' requires a parent class (extends ...)");
+            for (auto &a : e.args) checkExpr(*a);
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        if (!inConstructor_) {
+            error(e.line, e.col, "'super(...)' can only be called from a constructor");
+            for (auto &a : e.args) checkExpr(*a);
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        const ClassInfo *pc = reg_->cls(parent);
+        std::vector<TypeRef> ptypes;
+        if (pc && pc->constructor)
+            for (const auto &p : pc->constructor->params) ptypes.push_back(p.type);
+        checkArgs(e.args, ptypes, e.line, e.col, "parent constructor '" + parent + "'");
+        e.kind = CallKind::SuperConstructor;
+        e.ownerClass = parent;
+        return TypeRef::prim(TypeRef::Kind::Void);
+    }
+
+    // super.method(...) — parent method, dispatched statically to the parent impl.
+    auto *mem = dynamic_cast<MemberExpr *>(e.callee.get());
+    if (!mem || !dynamic_cast<SuperExpr *>(mem->object.get())) return std::nullopt;
+    if (!ci || parent.empty()) {
+        error(e.line, e.col, "'super' requires a parent class (extends ...)");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    const MethodInfo *mi = reg_->findMethod(parent, mem->member);
+    if (!mi || mi->isStatic) {
+        error(mem->line, mem->col, "parent class '" + parent + "' has no method '" +
+                                       mem->member + "'");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    e.kind = CallKind::SuperMethod;
+    e.methodName = mem->member;
+    e.ownerClass = mi->definingClass; // class whose C function we call directly
+    checkArgs(e.args, mi->paramTypes, e.line, e.col,
+              "parent method '" + parent + "." + mem->member + "'");
+    return mi->returnType;
+}
+
 TypeRef TypeChecker::checkCall(CallExpr &e) {
+    // `super(...)` — delegate to the parent constructor; `super.m(...)` — call the
+    // parent's method implementation directly (non-virtual).
+    if (auto sup = checkSuperCall(e)) return *sup;
+
     // Free function or builtin: callee is a bare name.
     if (auto *name = dynamic_cast<NameExpr *>(e.callee.get())) {
         if (name->name == "print" || name->name == "println") {

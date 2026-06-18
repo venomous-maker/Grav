@@ -73,6 +73,7 @@ private:
     TypeRef checkNew(NewExpr &e);
     TypeRef checkStructLiteral(StructLiteralExpr &e);
     TypeRef checkCall(CallExpr &e);
+    std::optional<TypeRef> checkSuperCall(CallExpr &e);
     TypeRef checkMember(MemberExpr &e); // value position (field read)
     bool isLvalue(const Expr &e) const;
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
