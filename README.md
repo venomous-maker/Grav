@@ -926,6 +926,18 @@ installs the latest build as `grav` in `~/.local/bin` (override the dir with
 
 ## Roadmap / not yet implemented
 
+`v0.9` widened the **numeric types** (`long`/`int64`, `uint`/`unsigned`/`ulong`,
+`byte`, `double`/`float64`, `float32`, with C-like width promotion), added a
+**`binary`** blob type, `typedef` (an alias for `type`), an object-oriented
+standard library (an **instance `File`** class, an **`IO`** class, and `Format`
+type conversions), plus **`super`** (`super(...)` to run the parent constructor and
+`super.method(...)` to call a parent's implementation) and **free-function
+overloading** (same name, different parameter signatures) — see
+[19_types_io.grav](examples/19_types_io.grav) and
+[20_super_overload.grav](examples/20_super_overload.grav). (Overloading is for free
+functions; overloading *methods* is not supported yet, since the vtable keeps one
+slot per method name.)
+
 `v0.8` added the three multiple-inheritance forms (see
 [17_multiple_inheritance.grav](examples/17_multiple_inheritance.grav)): **traits**
 (`trait` interfaces with default method bodies + `Self`), **composition** (`uses
