@@ -602,18 +602,56 @@ TypeRef TypeChecker::checkStructLiteral(StructLiteralExpr &e) {
 TypeRef TypeChecker::checkCall(CallExpr &e) {
     // Free function or builtin: callee is a bare name.
     if (auto *name = dynamic_cast<NameExpr *>(e.callee.get())) {
-        if (name->name == "print") {
+        if (name->name == "print" || name->name == "println") {
             e.kind = CallKind::Builtin;
-            e.targetName = "print";
+            e.targetName = "print";   // println is an alias (print already newlines)
             std::vector<TypeRef> argTypes;
             for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
             if (argTypes.size() != 1) {
-                error(e.line, e.col, "print expects exactly 1 argument");
+                error(e.line, e.col, name->name + " expects exactly 1 argument");
             } else if (!isPrintable(argTypes[0])) {
                 error(e.args[0]->line, e.args[0]->col,
-                      "print cannot display a value of type " + typeRefName(argTypes[0]));
+                      name->name + " cannot display a value of type " + typeRefName(argTypes[0]));
             }
             return TypeRef::prim(TypeRef::Kind::Void);
+        }
+        if (name->name == "exit" || name->name == "panic" || name->name == "assert") {
+            e.kind = CallKind::Builtin;
+            e.targetName = name->name;
+            // exit(int), panic(string), assert(bool[, string])
+            TypeRef::Kind want = name->name == "exit" ? TypeRef::Kind::Int
+                                : name->name == "panic" ? TypeRef::Kind::String
+                                                        : TypeRef::Kind::Bool;
+            size_t maxArgs = name->name == "assert" ? 2 : 1;
+            if (e.args.empty() || e.args.size() > maxArgs) {
+                error(e.line, e.col, name->name + " expects 1" +
+                                         (name->name == "assert" ? " or 2 argument(s)" : " argument"));
+            } else {
+                TypeRef t = checkExpr(*e.args[0]);
+                if (!t.isError() && t.kind != want)
+                    error(e.args[0]->line, e.args[0]->col,
+                          name->name + " expects " + typeRefName(TypeRef::prim(want)) +
+                              ", got " + typeRefName(t));
+                if (e.args.size() == 2) checkExpr(*e.args[1]); // assert message
+            }
+            return TypeRef::prim(TypeRef::Kind::Void);
+        }
+        if (name->name == "cwd") {
+            e.kind = CallKind::Builtin;
+            e.targetName = "cwd";
+            if (!e.args.empty()) error(e.line, e.col, "cwd expects no arguments");
+            return TypeRef::prim(TypeRef::Kind::String);
+        }
+        if (name->name == "env") {
+            e.kind = CallKind::Builtin;
+            e.targetName = "env";
+            if (e.args.size() != 1) error(e.line, e.col, "env expects 1 argument (a name)");
+            else {
+                TypeRef t = checkExpr(*e.args[0]);
+                if (!t.isError() && t.kind != TypeRef::Kind::String)
+                    error(e.args[0]->line, e.args[0]->col, "env expects a string name");
+            }
+            return TypeRef::prim(TypeRef::Kind::String);
         }
         if (name->name == "typename") {
             e.kind = CallKind::Builtin;
