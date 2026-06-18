@@ -1,0 +1,21 @@
+// lib/list.grav — a generic list (a thin, friendly wrapper over Array<T>).
+import "array.grav"
+
+class List<T> {
+    private items: Array<T>
+    constructor() { self.items = new Array<T>(); }
+
+    public fn add(item: T) { self.items.push(item); }
+    public fn get(index: int) -> T { return self.items.get(index); }
+    public fn set(index: int, item: T) { self.items.set(index, item); }
+    public fn removeAt(index: int) { self.items.removeAt(index); }
+    public fn remove(item: T) {
+        let i = self.items.indexOf(item);
+        if (i >= 0) { self.items.removeAt(i); }
+    }
+    public fn indexOf(item: T) -> int { return self.items.indexOf(item); }
+    public fn contains(item: T) -> bool { return self.items.contains(item); }
+    public fn size() -> int { return self.items.length(); }
+    public fn isEmpty() -> bool { return self.items.isEmpty(); }
+    public fn clear() { self.items.clear(); }
+}
