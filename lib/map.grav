@@ -1,0 +1,26 @@
+// lib/map.grav — a generic Map over parallel key/value arrays (linear lookup).
+import "array.grav"
+
+class Map<K, V> {
+    private ks: Array<K>
+    private vs: Array<V>
+    constructor() { self.ks = new Array<K>(); self.vs = new Array<V>(); }
+
+    public fn put(key: K, value: V) {
+        let i = self.ks.indexOf(key);
+        if (i >= 0) { self.vs.set(i, value); } else { self.ks.push(key); self.vs.push(value); }
+    }
+    public fn get(key: K) -> V { return self.vs.get(self.ks.indexOf(key)); }
+    public fn getOr(key: K, fallback: V) -> V {
+        let i = self.ks.indexOf(key);
+        return i >= 0 ? self.vs.get(i) : fallback;
+    }
+    public fn containsKey(key: K) -> bool { return self.ks.indexOf(key) >= 0; }
+    public fn remove(key: K) {
+        let i = self.ks.indexOf(key);
+        if (i >= 0) { self.ks.removeAt(i); self.vs.removeAt(i); }
+    }
+    public fn size() -> int { return self.ks.length(); }
+    public fn keys() -> Array<K> { return self.ks; }
+    public fn values() -> Array<V> { return self.vs; }
+}
