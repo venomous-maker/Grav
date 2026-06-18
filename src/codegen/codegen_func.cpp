@@ -81,7 +81,7 @@ void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) 
                 if (s.name == m.name) { slotOwner = s.slotOwner; break; }
         std::string obj = "self->" + m.accessorField;
         std::string disp = "((" + vtableType(slotOwner) + "*)((struct GravObject*)(" +
-                           obj + "))->__vt)->" + m.name;
+                           obj + "))->__vt)->" + memberCName(m.name);
         std::string args = "(" + structName(slotOwner) + "*)(" + obj + ")";
         for (const auto &p : m.paramNames) args += ", " + p;
         defs_ += (m.returnType.isVoid() ? "    " : "    return ") + disp + "(" + args + ");\n";

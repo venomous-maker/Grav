@@ -359,7 +359,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                         reg_->findInterfaceMethod(call.ownerClass, call.methodName))
                     params = mi->paramTypes;
                 std::string disp = "((" + itab + "*)(" + obj + ").itab)->" +
-                                   call.methodName;
+                                   memberCName(call.methodName);
                 std::string self = "(" + obj + ").obj";
                 out = disp + "(";
                 emitArgs(out, call, params, true, self);
@@ -368,7 +368,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 std::string vt = vtableType(call.slotOwner);
                 std::string self = "(" + structName(call.slotOwner) + "*)(" + obj + ")";
                 std::string disp = "((" + vt + "*)((struct GravObject*)(" + obj +
-                                   "))->__vt)->" + call.methodName;
+                                   "))->__vt)->" + memberCName(call.methodName);
                 std::vector<TypeRef> params;
                 if (const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName))
                     params = mi->paramTypes;

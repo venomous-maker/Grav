@@ -1,4 +1,5 @@
 #include "codegen/mangle.h"
+#include <unordered_set>
 
 namespace grav {
 
@@ -16,7 +17,19 @@ std::string vtableType(const std::string &classFq) { return mangle(classFq) + "_
 std::string vtableInstance(const std::string &classFq) { return mangle(classFq) + "_vtable"; }
 
 std::string methodCName(const std::string &classFq, const std::string &method) {
-    return mangle(classFq) + "_m_" + method;
+    return mangle(classFq) + "_m_" + memberCName(method);
+}
+
+std::string memberCName(const std::string &name) {
+    // Method names that are C keywords would clash as struct members / function
+    // suffixes; append an underscore to keep the generated C valid.
+    static const std::unordered_set<std::string> kw = {
+        "auto","break","case","char","const","continue","default","do","double",
+        "else","enum","extern","float","for","goto","if","inline","int","long",
+        "register","restrict","return","short","signed","sizeof","static","struct",
+        "switch","typedef","union","unsigned","void","volatile","while","_Bool",
+    };
+    return kw.count(name) ? name + "_" : name;
 }
 
 std::string ctorCName(const std::string &classFq) { return mangle(classFq) + "_new"; }

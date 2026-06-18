@@ -427,7 +427,7 @@ void CodeGen::emitVTableType(const ClassInfo &ci) {
         std::string sig = slotFnType(slot); // "RET (*)(params)"
         std::string member = sig;
         auto pos = member.find("(*)");
-        if (pos != std::string::npos) member.replace(pos, 3, "(*" + slot.name + ")");
+        if (pos != std::string::npos) member.replace(pos, 3, "(*" + memberCName(slot.name) + ")");
         vtableTypes_ += "    " + member + ";\n";
     }
     vtableTypes_ += "} " + vt + ";\n\n";
@@ -492,7 +492,7 @@ void CodeGen::emitInterfaceTables() {
         for (const auto &m : ii->methods) {
             std::string params = "void*";
             for (const auto &pt : m.paramTypes) params += ", " + cTy(pt);
-            vtableTypes_ += "    " + cTy(m.returnType) + " (*" + m.name + ")(" +
+            vtableTypes_ += "    " + cTy(m.returnType) + " (*" + memberCName(m.name) + ")(" +
                             params + ");\n";
         }
         vtableTypes_ += "} " + itabType(id->fqName) + ";\n\n";

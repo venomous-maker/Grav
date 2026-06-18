@@ -16,6 +16,7 @@ std::string structName(const std::string &classFq);   // geometry__Circle
 std::string vtableType(const std::string &classFq);    // geometry__Circle_VT
 std::string vtableInstance(const std::string &classFq);// geometry__Circle_vtable
 std::string methodCName(const std::string &classFq, const std::string &method);
+std::string memberCName(const std::string &name); // method name, C-keyword-safe
 std::string ctorCName(const std::string &classFq);     // geometry__Circle_new
 std::string funcCName(const std::string &fnFq);        // vf_geometry__area
 std::string enumConst(const std::string &enumFq, const std::string &member); // Color_Red
