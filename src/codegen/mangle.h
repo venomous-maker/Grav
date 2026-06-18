@@ -20,6 +20,7 @@ std::string memberCName(const std::string &name); // method name, C-keyword-safe
 std::string ctorCName(const std::string &classFq);     // geometry__Circle_new
 std::string ctorInitCName(const std::string &classFq); // geometry__Circle_init (ctor body on self)
 std::string funcCName(const std::string &fnFq);        // vf_geometry__area
+std::string funcCName(const std::string &fnFq, int overloadIndex); // + __ovN for overloads
 std::string enumConst(const std::string &enumFq, const std::string &member); // Color_Red
 
 // C struct name for a fixed-length array type, e.g. int[3] -> "GravArr_int_3".

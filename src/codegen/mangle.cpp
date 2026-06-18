@@ -36,6 +36,10 @@ std::string ctorCName(const std::string &classFq) { return mangle(classFq) + "_n
 std::string ctorInitCName(const std::string &classFq) { return mangle(classFq) + "_init"; }
 
 std::string funcCName(const std::string &fnFq) { return "vf_" + mangle(fnFq); }
+std::string funcCName(const std::string &fnFq, int overloadIndex) {
+    return overloadIndex > 0 ? funcCName(fnFq) + "__ov" + std::to_string(overloadIndex)
+                             : funcCName(fnFq);
+}
 
 std::string enumConst(const std::string &enumFq, const std::string &member) {
     return mangle(enumFq) + "_" + member;

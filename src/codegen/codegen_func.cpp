@@ -29,7 +29,7 @@ std::string CodeGen::paramList(const std::vector<Param> &params,
 void CodeGen::emitPrototypes(const Program &program) {
     for (const auto &declPtr : program.decls) {
         if (auto *fn = dynamic_cast<const FunctionDecl *>(declPtr.get())) {
-            protos_ += cTy(fn->returnType) + " " + funcCName(fn->fqName) +
+            protos_ += cTy(fn->returnType) + " " + funcCName(fn->fqName, fn->overloadIndex) +
                        paramList(fn->params, "") + ";\n";
         } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
             std::string S = structName(c->fqName);
@@ -104,7 +104,7 @@ void CodeGen::emitDefinitions(const Program &program) {
 
 void CodeGen::emitFunction(const FunctionDecl &fn) {
     if (fn.fqName == "main") hasMain_ = true;
-    defs_ += cTy(fn.returnType) + " " + funcCName(fn.fqName) +
+    defs_ += cTy(fn.returnType) + " " + funcCName(fn.fqName, fn.overloadIndex) +
              paramList(fn.params, "") + " {\n";
     cur_ = &defs_;
     indent_ = 1;

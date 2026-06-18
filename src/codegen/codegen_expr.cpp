@@ -355,9 +355,13 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             }
         }
         case CallKind::FreeFunction: {
+            const auto &set = reg_->funcOverloads(call.targetName);
             const FunctionInfo *fi = reg_->func(call.targetName);
+            // Use the exact overload chosen during type checking.
+            for (const auto &cand : set)
+                if (cand.overloadIndex == call.resolvedOverload) { fi = &cand; break; }
             std::vector<TypeRef> params = fi ? fi->paramTypes : std::vector<TypeRef>{};
-            std::string out = funcCName(call.targetName) + "(";
+            std::string out = funcCName(call.targetName, call.resolvedOverload) + "(";
             if (fi && fi->isVariadic) {
                 emitVariadicArgs(out, call, params);
             } else {
