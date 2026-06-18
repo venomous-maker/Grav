@@ -1,0 +1,23 @@
+{
+  "name": "grav",
+  "displayName": "Grav",
+  "version": "0.9.0",
+  "description": "Grav language grammar (TextMate bundle for JetBrains IDEs).",
+  "contributes": {
+    "languages": [
+      {
+        "id": "grav",
+        "aliases": ["Grav"],
+        "extensions": [".grav"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "grav",
+        "scopeName": "source.grav",
+        "path": "./grav.tmLanguage.json"
+      }
+    ]
+  }
+}

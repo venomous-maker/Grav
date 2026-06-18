@@ -1,0 +1,174 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Grav",
+  "scopeName": "source.grav",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#inline-c" },
+    { "include": "#decorators" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#builtins" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.grav",
+          "begin": "//",
+          "end": "$",
+          "patterns": [
+            { "name": "keyword.todo.grav", "match": "\\b(TODO|FIXME|XXX|NOTE)\\b" }
+          ]
+        },
+        {
+          "name": "comment.block.grav",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            { "name": "keyword.todo.grav", "match": "\\b(TODO|FIXME|XXX|NOTE)\\b" }
+          ]
+        }
+      ]
+    },
+    "inline-c": {
+      "comment": "Inline C escape hatch %{ ... %}, highlighted with the C grammar.",
+      "name": "meta.embedded.block.c.grav",
+      "begin": "%\\{",
+      "end": "%\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.grav" } },
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.grav" } },
+      "patterns": [ { "include": "source.c" } ]
+    },
+    "decorators": {
+      "name": "entity.name.function.decorator.grav",
+      "match": "@\\w+"
+    },
+    "strings": {
+      "name": "string.quoted.double.grav",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.grav", "match": "\\\\[ntr\\\\\"$]" },
+        {
+          "comment": "String interpolation ${ ... }",
+          "name": "meta.interpolation.grav",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.definition.interpolation.begin.grav" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.interpolation.end.grav" } },
+          "patterns": [
+            { "include": "#numbers" },
+            { "include": "#constants" },
+            { "include": "#builtins" },
+            { "include": "#types" },
+            { "include": "#operators" },
+            { "match": "\\b\\w+\\b", "name": "variable.other.grav" }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.grav",
+          "match": "\\b(if|else|while|for|do|switch|case|default|match|break|continue|return|in)\\b"
+        },
+        {
+          "name": "keyword.control.exception.grav",
+          "match": "\\b(try|catch|finally|throw)\\b"
+        },
+        {
+          "name": "keyword.declaration.grav",
+          "match": "\\b(fn|class|struct|enum|type|typedef|interface|trait|abstract|namespace|constructor|extends|implements|uses|import|export|new|async|await)\\b"
+        },
+        {
+          "name": "storage.modifier.grav",
+          "match": "\\b(let|const|static|readonly|public|private|protected)\\b"
+        },
+        {
+          "name": "keyword.operator.word.grav",
+          "match": "\\b(as|is|sizeof)\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "support.type.primitive.grav",
+      "match": "\\b(int|float|bool|string|void|binary|long|int64|int32|int16|int8|signed|uint|unsigned|uint64|ulong|uint32|uint16|uint8|byte|double|float64|float32)\\b"
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.boolean.grav", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.null.grav", "match": "\\b(null)\\b" },
+        { "name": "variable.language.grav", "match": "\\b(self|this|Self|super)\\b" }
+      ]
+    },
+    "builtins": {
+      "name": "support.function.builtin.grav",
+      "match": "\\b(print|println|typename|isInstance|str|input|argc|argv|len|free|panic|assert|exit|cwd|env)\\b(?=\\s*\\()"
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.grav", "match": "\\b\\d+\\.\\d+\\b" },
+        { "name": "constant.numeric.integer.grav", "match": "\\b\\d+\\b" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "fn name -> function definition",
+          "match": "\\b(fn)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.grav" },
+            "2": { "name": "entity.name.function.grav" }
+          }
+        },
+        {
+          "comment": "type definitions: class/struct/enum/interface/type/typedef/namespace Name",
+          "match": "\\b(class|struct|enum|interface|type|typedef|namespace|trait)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.grav" },
+            "2": { "name": "entity.name.type.grav" }
+          }
+        },
+        {
+          "comment": "new Type / extends Base / implements Iface",
+          "match": "\\b(new|extends|implements)\\s+([A-Za-z_][\\w.]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.grav" },
+            "2": { "name": "entity.name.type.grav" }
+          }
+        },
+        {
+          "comment": "Enum.Member",
+          "match": "\\b([A-Z]\\w*)\\.([A-Z]\\w*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.type.grav" },
+            "2": { "name": "constant.other.enum.grav" }
+          }
+        },
+        {
+          "comment": "function / method call",
+          "match": "\\b([A-Za-z_]\\w*)\\s*(?=\\()",
+          "name": "entity.name.function.call.grav"
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.grav",
+      "match": "(\\+\\+|--|->|\\?\\?|\\?\\.|==|!=|<=|>=|&&|\\|\\||<<|>>|[-+*/%<>=!&|^~?:])"
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.terminator.grav", "match": ";" },
+        { "name": "punctuation.separator.grav", "match": "[,.]" }
+      ]
+    }
+  }
+}
