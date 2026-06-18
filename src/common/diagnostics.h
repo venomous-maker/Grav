@@ -12,11 +12,12 @@ class GravError : public std::runtime_error {
 public:
     GravError(std::string stage, int line, int col, const std::string &message)
         : std::runtime_error(format(stage, line, col, message)),
-          stage_(std::move(stage)), line_(line), col_(col) {}
+          stage_(std::move(stage)), line_(line), col_(col), message_(message) {}
 
     int line() const { return line_; }
     int col() const { return col_; }
     const std::string &stage() const { return stage_; }
+    const std::string &message() const { return message_; }
 
 private:
     static std::string format(const std::string &stage, int line, int col,
@@ -29,6 +30,7 @@ private:
     std::string stage_;
     int line_;
     int col_;
+    std::string message_;
 };
 
 } // namespace grav
