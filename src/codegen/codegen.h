@@ -10,6 +10,13 @@
 
 namespace grav {
 
+// Maps a line in the combined (import-inlined) source back to its original
+// file and line, so runtime stack traces point at the user's files.
+struct SourceMapEntry {
+    std::string file;
+    int line = 0;
+};
+
 // Translates a type-checked Grav program into a self-contained C translation
 // unit. Classes become structs with a leading vtable pointer; single
 // inheritance flattens base fields; virtual methods dispatch through per-class
@@ -17,7 +24,14 @@ namespace grav {
 // (functions/methods/main), codegen_stmt.cpp and codegen_expr.cpp.
 class CodeGen {
 public:
-    std::string generate(const Program &program, const Registry &reg);
+    std::string generate(const Program &program, const Registry &reg,
+                         const std::vector<SourceMapEntry> &srcMap = {});
+
+    // Original file/line for a combined-source line (1-based), for stack traces.
+    SourceMapEntry origin(int combinedLine) const;
+    // The C expression that formats a thrown value (its describe()/message), or
+    // "" if the value's type has no such method.
+    std::string emitDescribe(const std::string &objExpr, const TypeRef &type) const;
 
 private:
     // codegen_types.cpp
@@ -95,6 +109,12 @@ private:
 
     const Registry *reg_ = nullptr;
     const Program *program_ = nullptr;
+    std::vector<SourceMapEntry> srcMap_;
+    int throwCounter_ = 0;
+    // Emits `GRAV_LINE(n);` for the original line of an AST node (stack traces).
+    void emitLineMark(int combinedLine);
+    // Emits `grav_enter("name", "file");` (a stack frame) at a body's start.
+    void emitEnter(const std::string &displayName, int declLine);
 
     // Fixed-length array types in use, keyed by their C struct name (deduped).
     std::map<std::string, TypeRef> arrayTypes_;

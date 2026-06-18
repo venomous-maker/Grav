@@ -102,6 +102,10 @@ void CodeGen::emitDefinitions(const Program &program) {
     }
 }
 
+void CodeGen::emitEnter(const std::string &displayName, int declLine) {
+    line("grav_enter(\"" + displayName + "\", \"" + escapeC(origin(declLine).file) + "\");");
+}
+
 void CodeGen::emitFunction(const FunctionDecl &fn) {
     if (fn.fqName == "main") hasMain_ = true;
     defs_ += cTy(fn.returnType) + " " + funcCName(fn.fqName, fn.overloadIndex) +
@@ -109,7 +113,9 @@ void CodeGen::emitFunction(const FunctionDecl &fn) {
     cur_ = &defs_;
     indent_ = 1;
     currentReturnType_ = fn.returnType;
+    emitEnter(fn.fqName, fn.line);
     emitBlock(fn.body);
+    line("grav_leave();");
     indent_ = 0;
     defs_ += "}\n\n";
 }
@@ -138,7 +144,9 @@ void CodeGen::emitConstructor(const ClassDecl &cls) {
         cur_ = &defs_;
         indent_ = 1;
         currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
+        emitEnter(cls.fqName + ".constructor", cls.constructor.line);
         emitBlock(cls.constructor.body);
+        line("grav_leave();");
         indent_ = 0;
         defs_ += "}\n\n";
     }
@@ -171,7 +179,9 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     cur_ = &defs_;
     indent_ = 1;
     currentReturnType_ = m.returnType;
+    emitEnter(cls.fqName + "." + m.name, m.line);
     emitBlock(m.body);
+    line("grav_leave();");
     indent_ = 0;
     defs_ += "}\n\n";
 }

@@ -14,7 +14,33 @@ void CodeGen::emitBlock(const Block &block) {
     for (const auto &s : block.statements) emitStmt(*s);
 }
 
+void CodeGen::emitLineMark(int combinedLine) {
+    if (combinedLine <= 0) return;
+    line("GRAV_LINE(" + std::to_string(origin(combinedLine).line) + ");");
+}
+
+std::string CodeGen::emitDescribe(const std::string &objExpr, const TypeRef &type) const {
+    if (!type.isNamed()) return "";
+    // Prefer describe() (type-prefixed message), then message().
+    const MethodInfo *mi = reg_->findMethod(type.name, "describe");
+    if (!mi) mi = reg_->findMethod(type.name, "message");
+    if (!mi || mi->isStatic || !mi->paramTypes.empty() ||
+        mi->returnType.kind != TypeRef::Kind::String)
+        return "";
+    // Dispatch virtually so the dynamic type's override is used (e.g. a base-typed
+    // `e` still reports its real subclass message).
+    std::string slotOwner = type.name;
+    if (const ClassInfo *ci = reg_->cls(type.name))
+        for (const auto &s : ci->slots)
+            if (s.name == mi->name) { slotOwner = s.slotOwner; break; }
+    std::string disp = "((" + vtableType(slotOwner) + "*)((struct GravObject*)(" + objExpr +
+                       "))->__vt)->" + memberCName(mi->name);
+    return disp + "((" + structName(slotOwner) + "*)(" + objExpr + "))";
+}
+
 void CodeGen::emitStmt(const Stmt &stmt) {
+    // Record the current source line in the active frame for stack traces.
+    emitLineMark(stmt.line);
     if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
         line(cTy(s->resolvedType) + " " + s->name + " = " +
              emitAs(*s->init, s->resolvedType) + ";");
@@ -27,8 +53,18 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
         // Returning out of an enclosing `try` must restore the jmp_buf stack top.
         if (!tryTops_.empty()) line("grav_jmp_top = " + tryTops_.front() + ";");
-        if (s->value) line("return " + emitAs(*s->value, currentReturnType_) + ";");
-        else line("return;");
+        if (s->value) {
+            // Evaluate into a temp *before* leaving the frame, so a throw in the
+            // return expression still unwinds with this frame on the trace.
+            std::string rt = "__ret" + std::to_string(throwCounter_++);
+            line(cTy(currentReturnType_) + " " + rt + " = " +
+                 emitAs(*s->value, currentReturnType_) + ";");
+            line("grav_leave();");
+            line("return " + rt + ";");
+        } else {
+            line("grav_leave();");
+            line("return;");
+        }
         return;
     }
     if (auto *s = dynamic_cast<const ExprStmt *>(&stmt)) {
@@ -106,8 +142,14 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const ThrowStmt *>(&stmt)) {
-        const std::string &ty = s->value->type.name;
-        line("grav_throw((void*)(" + emitExpr(*s->value) + "), &" + mangle(ty) + "_typeinfo);");
+        const TypeRef &vt = s->value->type;
+        const std::string &ty = vt.name;
+        // Hoist the value into a temp so describe() isn't evaluated twice.
+        std::string tmp = "__exc" + std::to_string(throwCounter_++);
+        line(cTy(vt) + " " + tmp + " = " + emitExpr(*s->value) + ";");
+        std::string msg = emitDescribe(tmp, vt);
+        line("grav_throw((void*)(" + tmp + "), &" + mangle(ty) + "_typeinfo, " +
+             (msg.empty() ? "0" : msg) + ");");
         return;
     }
     if (auto *s = dynamic_cast<const TryStmt *>(&stmt)) {
@@ -148,6 +190,7 @@ void CodeGen::emitTry(const TryStmt &s) {
     line("{");
     indent_++;
     line("int " + t + " = grav_jmp_top++;");
+    line("int " + t + "_nf = grav_nframes;"); // frame depth to restore on unwind
     line("if (setjmp(grav_jmp_stack[" + t + "]) == 0) {");
     indent_++;
     tryTops_.push_back(t);
@@ -158,6 +201,7 @@ void CodeGen::emitTry(const TryStmt &s) {
     line("} else {");
     indent_++;
     line("grav_jmp_top = " + t + ";"); // exception in flight: pop, then handle
+    line("grav_nframes = " + t + "_nf;"); // unwinding skipped grav_leave()s; restore
     if (s.hasCatch) {
         std::string ct = structName(s.catchType.name);
         line("if (grav_is_instance(" + exc + ".value, &" + mangle(s.catchType.name) + "_typeinfo)) {");
@@ -168,12 +212,12 @@ void CodeGen::emitTry(const TryStmt &s) {
         line("} else {");
         indent_++;
         if (s.hasFinally) emitBlock(s.finallyBlock);
-        line("grav_throw(" + exc + ".value, " + exc + ".type);"); // rethrow
+        line("grav_throw(" + exc + ".value, " + exc + ".type, " + exc + ".message);"); // rethrow
         indent_--;
         line("}");
     } else {
         if (s.hasFinally) emitBlock(s.finallyBlock);
-        line("grav_throw(" + exc + ".value, " + exc + ".type);"); // propagate
+        line("grav_throw(" + exc + ".value, " + exc + ".type, " + exc + ".message);"); // propagate
     }
     indent_--;
     line("}");

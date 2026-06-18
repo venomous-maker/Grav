@@ -8,9 +8,11 @@
 
 namespace grav {
 
-std::string CodeGen::generate(const Program &program, const Registry &reg) {
+std::string CodeGen::generate(const Program &program, const Registry &reg,
+                              const std::vector<SourceMapEntry> &srcMap) {
     reg_ = &reg;
     program_ = &program;
+    srcMap_ = srcMap;
 
     emitPrelude();
     emitEnums();
@@ -36,6 +38,12 @@ std::string CodeGen::generate(const Program &program, const Registry &reg) {
     if (!hoisted_.empty()) head += "/* hoisted includes */\n" + hoisted_ + "\n";
     return head + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ +
            globals_ + defs_;
+}
+
+SourceMapEntry CodeGen::origin(int combinedLine) const {
+    if (combinedLine >= 1 && combinedLine <= static_cast<int>(srcMap_.size()))
+        return srcMap_[combinedLine - 1];
+    return {"<unknown>", combinedLine};
 }
 
 void CodeGen::emitGlobals() {
@@ -143,15 +151,46 @@ void CodeGen::emitPrelude() {
         "    if (c == EOF && n == 0) { free(b); return \"\"; }\n"
         "    b[n] = 0; return b;\n"
         "}\n\n"
-        "/* Exceptions: a jmp_buf stack and the in-flight exception. */\n"
-        "typedef struct GravExc { void* value; const GravTypeInfo* type; } GravExc;\n"
+        "/* Call stack for diagnostics: a frame per active function (name+file+line). */\n"
+        "typedef struct GravFrame { const char* fn; const char* file; int line; } GravFrame;\n"
+        "#define GRAV_MAXFRAMES 512\n"
+        "static GravFrame grav_frames[GRAV_MAXFRAMES];\n"
+        "static int grav_nframes = 0;\n"
+        "static void grav_enter(const char* fn, const char* file) {\n"
+        "    if (grav_nframes < GRAV_MAXFRAMES) {\n"
+        "        grav_frames[grav_nframes].fn = fn; grav_frames[grav_nframes].file = file;\n"
+        "        grav_frames[grav_nframes].line = 0;\n"
+        "    }\n"
+        "    grav_nframes++;\n"
+        "}\n"
+        "static void grav_leave(void) { if (grav_nframes > 0) grav_nframes--; }\n"
+        "#define GRAV_LINE(n) do { if (grav_nframes > 0 && grav_nframes <= GRAV_MAXFRAMES) \\\n"
+        "    grav_frames[grav_nframes - 1].line = (n); } while (0)\n\n"
+        "/* Exceptions: a jmp_buf stack, the in-flight exception, and a captured trace. */\n"
+        "typedef struct GravExc {\n"
+        "    void* value; const GravTypeInfo* type; const char* message;\n"
+        "    GravFrame trace[GRAV_MAXFRAMES]; int ntrace;\n"
+        "} GravExc;\n"
         "static jmp_buf grav_jmp_stack[64];\n"
         "static int grav_jmp_top = 0;\n"
         "static GravExc grav_current_exc;\n"
-        "static void grav_throw(void* v, const GravTypeInfo* t) {\n"
-        "    grav_current_exc.value = v; grav_current_exc.type = t;\n"
+        "static void grav_print_trace(const GravFrame* fr, int n) {\n"
+        "    fprintf(stderr, \"  stack trace (most recent call last):\\n\");\n"
+        "    if (n > GRAV_MAXFRAMES) n = GRAV_MAXFRAMES;\n"
+        "    for (int i = 0; i < n; i++)\n"
+        "        fprintf(stderr, \"    at %s (%s:%d)\\n\",\n"
+        "                fr[i].fn ? fr[i].fn : \"?\", fr[i].file ? fr[i].file : \"?\", fr[i].line);\n"
+        "}\n"
+        "static void grav_throw(void* v, const GravTypeInfo* t, const char* msg) {\n"
+        "    grav_current_exc.value = v; grav_current_exc.type = t; grav_current_exc.message = msg;\n"
+        "    /* Snapshot the live call stack at the throw site (before any unwinding). */\n"
+        "    int n = grav_nframes > GRAV_MAXFRAMES ? GRAV_MAXFRAMES : grav_nframes;\n"
+        "    for (int i = 0; i < n; i++) grav_current_exc.trace[i] = grav_frames[i];\n"
+        "    grav_current_exc.ntrace = n;\n"
         "    if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);\n"
-        "    fprintf(stderr, \"grav: uncaught exception '%s'\\n\", t ? t->name : \"?\");\n"
+        "    fprintf(stderr, \"grav: uncaught exception: %s\\n\",\n"
+        "            (msg && msg[0]) ? msg : (t ? t->name : \"?\"));\n"
+        "    grav_print_trace(grav_current_exc.trace, grav_current_exc.ntrace);\n"
         "    exit(1);\n"
         "}\n\n";
 }
