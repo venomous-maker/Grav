@@ -1,6 +1,11 @@
 -- Buffer-local "go to definition" keymaps for Grav.
 -- Works on plain names (variables, params, functions, types) and on member
 -- accesses in chains like `self.name`, `ptr->name`, `ptr->object.name`, `a.b.c`.
+--
+-- If node + the Grav language server (editors/lsp/server.js) are available, the
+-- built-in LSP starts and its richer definition/references/rename/hover keymaps
+-- override the regex fallbacks below. Otherwise the fallbacks stay active.
+pcall(function() require("grav.lsp").start() end)
 
 local goto_cmd = "<Cmd>lua require('grav.goto').goto_def()<CR>"
 local opts = { buffer = true, silent = true, desc = "Grav: go to definition" }
