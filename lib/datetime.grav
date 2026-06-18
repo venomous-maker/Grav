@@ -1,0 +1,40 @@
+// lib/datetime.grav — calendar date/time (backed by C <time.h>).
+%{
+#include <time.h>
+#include <stdlib.h>
+static int grav_tm_field(int ts, int field) {
+    time_t tt = (time_t)ts; struct tm* m = localtime(&tt);
+    switch (field) {
+        case 0: return m->tm_year + 1900;
+        case 1: return m->tm_mon + 1;
+        case 2: return m->tm_mday;
+        case 3: return m->tm_hour;
+        case 4: return m->tm_min;
+        default: return m->tm_sec;
+    }
+}
+static const char* grav_strftime(int ts, const char* fmt) {
+    time_t tt = (time_t)ts; struct tm* m = localtime(&tt);
+    char* b = (char*)malloc(128); strftime(b, 128, fmt, m); return b;
+}
+%}
+
+class DateTime {
+    private ts: int                       // unix seconds
+    constructor(unixSeconds: int) { self.ts = unixSeconds; }
+
+    static fn now() -> DateTime { return new DateTime(%{ (int)time(0) %} as int); }
+    static fn fromUnix(seconds: int) -> DateTime { return new DateTime(seconds); }
+
+    public fn unix() -> int { return self.ts; }
+    public fn year() -> int { let t = self.ts; return %{ grav_tm_field(t, 0) %} as int; }
+    public fn month() -> int { let t = self.ts; return %{ grav_tm_field(t, 1) %} as int; }
+    public fn day() -> int { let t = self.ts; return %{ grav_tm_field(t, 2) %} as int; }
+    public fn hour() -> int { let t = self.ts; return %{ grav_tm_field(t, 3) %} as int; }
+    public fn minute() -> int { let t = self.ts; return %{ grav_tm_field(t, 4) %} as int; }
+    public fn second() -> int { let t = self.ts; return %{ grav_tm_field(t, 5) %} as int; }
+
+    public fn format(fmt: string) -> string { let t = self.ts; return %{ grav_strftime(t, fmt) %} as string; }
+    public fn addDays(days: int) -> DateTime { return new DateTime(self.ts + days * 86400); }
+    public fn addHours(hours: int) -> DateTime { return new DateTime(self.ts + hours * 3600); }
+}
