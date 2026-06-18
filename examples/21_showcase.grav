@@ -1,0 +1,224 @@
+// 21_showcase.grav — the grand tour: (almost) every Grav language feature and
+// every standard-library module in one runnable program.
+//
+//   grav examples/21_showcase.grav --run
+//
+// Output is deterministic (Random is seeded, DateTime is a fixed instant, files
+// live in /tmp and are cleaned up) so it doubles as a smoke test.
+
+import "../lib/std.grav"   // IO, File, Format, Str, Math, Array/List/Stack/Queue/
+                            // Set/Map, Random, DateTime, Path, Process, exceptions
+
+// ── globals, macros, inline-C ───────────────────────────────────────────────
+const VERSION: string = "0.9"
+#define DOUBLE(x) ((x) * 2)
+
+%{
+// A tiny C helper, shared with Grav through the inline-C escape hatch.
+static int c_triple(int n) { return n * 3; }
+%}
+
+// ── value types: enums, structs, type aliases, typedef ──────────────────────
+enum Suit { Hearts, Diamonds, Clubs, Spades }
+struct Point { x: int  y: int }
+type Grid = Point[3]              // transparent alias for a fixed-length array
+typedef Score = long              // `typedef` is a synonym for `type`
+
+// ── functions: overloading + variadics ──────────────────────────────────────
+fn render(s: Suit) -> string {
+    switch (s) {                  // `switch`/`match` are synonyms
+        case Suit.Hearts:   { return "♥" }
+        case Suit.Diamonds: { return "♦" }
+        case Suit.Clubs:    { return "♣" }
+        default:            { return "♠" }
+    }
+}
+fn area(side: int) -> int { return side * side }            // overload: one int
+fn area(w: int, h: int) -> int { return w * h }             // overload: two ints
+fn area(r: float) -> float { return 3.14159 * r * r }       // overload: a float
+fn total(...xs: int) -> int {                                // variadic
+    let t = 0
+    for (i in 0..xs.length) { t += xs[i] }
+    return t
+}
+
+// ── interfaces, traits, abstract classes, inheritance, composition ──────────
+interface Describable { fn describe() -> string }
+
+trait Tagged {                    // a trait: behaviour with a default body + Self
+    fn tag() -> string
+    fn sameTag(o: Self) -> bool { return self.tag() == o.tag() }
+}
+
+abstract class Animal implements Describable {
+    protected name: string
+    private energy: int           // private -> auto get_energy()/set_energy()
+    static born: int = 0
+    constructor(name: string, energy: int) {
+        self.name = name
+        self.energy = energy
+        Animal.born = Animal.born + 1
+    }
+    public fn describe() -> string { return "${self.name} (energy ${self.energy})" }
+    abstract fn sound() -> string
+}
+
+class Dog extends Animal implements Tagged {
+    constructor(name: string) {
+        super(name, 100)          // run the parent constructor on self
+        Animal.born = Animal.born   // (no-op, just to touch the static)
+    }
+    public fn sound() -> string { return "woof" }
+    public fn tag() -> string { return "dog" }
+    // Override that reuses the parent implementation via super.method().
+    public fn describe() -> string { return super.describe() + " says ${self.sound()}" }
+}
+
+class Logger { public fn log(m: string) -> string { return "[log] " + m } }
+class Service uses logger: Logger {        // composition: forwards log()
+    constructor() { self.logger = new Logger() }
+}
+
+class Walker { public steps: int  constructor() { self.steps = 0 }
+               public fn walk() -> string { self.steps = self.steps + 1; return "walk" } }
+class Swimmer { public laps: int  constructor() { self.laps = 0 }
+               public fn swim() -> string { self.laps = self.laps + 1; return "swim" } }
+class Frog extends Walker, Swimmer { constructor() { self.steps = 0; self.laps = 0 } }
+
+// ── generics ────────────────────────────────────────────────────────────────
+class Box<T> {
+    private value: T
+    constructor(value: T) { self.value = value }
+    public fn get() -> T { return self.value }
+}
+
+// ── exceptions ──────────────────────────────────────────────────────────────
+fn checkedDivide(a: int, b: int) -> int {
+    if (b == 0) { throw new ValueError("division by zero") }
+    return a / b
+}
+
+// ── async / await (eager futures) ───────────────────────────────────────────
+async fn compute(n: int) -> int { return DOUBLE(n) }
+
+async fn main() {
+    IO.print("=== Grav showcase v${VERSION} ===")
+
+    // widened numeric types, binary, conversions
+    IO.print("--- types ---")
+    let big: long = 9000000000
+    let u: uint = 4000000000
+    let b: byte = 255
+    let pi: double = 3.14159
+    let f: float32 = 1.5
+    let sc: Score = big + 1
+    IO.print("long=${big} uint=${u} byte=${b} double=${pi} float32=${f} score=${sc}")
+    IO.print("mixed promote: ${big + 7}, narrow ${big as int}, hex ${Format.hex(255)}")
+    let blob: binary = Format.toBinary("Grav!")
+    IO.print("binary len=${blob.length} text=${blob as string}")
+
+    // overloading + variadics + macros + inline-C
+    IO.print("--- functions ---")
+    IO.print("area(5)=${area(5)} area(3,4)=${area(3,4)} area(2.0)=${area(2.0)}")
+    IO.print("total(1,2,3,4)=${total(1, 2, 3, 4)} DOUBLE(21)=${DOUBLE(21)} triple(7)=${%{ c_triple(7) %} as int}")
+
+    // control flow + enums + structs + pointers
+    IO.print("--- control flow & values ---")
+    let suit = Suit.Spades
+    IO.print("suit ${render(suit)} ordinal=${int(suit)}")
+    let p = Point { x: 3, y: 4 }
+    let pp: Point* = &p
+    pp->x = 10
+    IO.print("point via pointer (${p.x}, ${p.y})")
+    let n = 0
+    do { n += 1 } while (n < 3)
+    IO.print("do/while counted to ${n}")
+
+    // classes, inheritance, super, polymorphism, getters, statics
+    IO.print("--- classes & inheritance ---")
+    let d = new Dog("Rex")
+    IO.print(d.describe())                 // Rex (energy 100) says woof
+    IO.print("energy via getter: ${d.get_energy()}, born=${Animal.born}")
+    let described: Describable = d          // interface-typed dispatch
+    IO.print("as Describable: ${described.describe()}")
+    IO.print("is Tagged? ${d is Dog}")
+
+    // composition + multiple inheritance
+    let svc = new Service()
+    IO.print(svc.log("hello"))             // forwarded to the embedded Logger
+    let frog = new Frog()
+    let w = frog.walk()
+    let sw = frog.swim()
+    IO.print("frog ${w}/${sw} -> ${frog.steps}/${frog.laps}")
+
+    // generics + null/??/?. + sizeof
+    IO.print("--- generics & nullability ---")
+    let boxed = new Box<string>("packed")
+    IO.print("box=${boxed.get()}, sizeof(Point)=${sizeof(Point)}")
+    let maybe: Dog = null
+    let chosen = maybe ?? new Dog("Spot")
+    IO.print("chosen=${chosen.sound()}, maybe?.sound()=${maybe?.sound()}")
+
+    // exceptions
+    IO.print("--- exceptions ---")
+    try {
+        let ok = checkedDivide(10, 2)
+        IO.print("10/2 = ${ok}")
+        let bad = checkedDivide(1, 0)
+        IO.print("unreachable ${bad}")
+    } catch (e: Exception) {
+        IO.print("caught: ${e.describe()}")
+    } finally {
+        IO.print("cleanup ran")
+    }
+
+    // async/await
+    IO.print("await compute(21) = ${await compute(21)}")
+
+    // ── standard library tour ───────────────────────────────────────────────
+    IO.print("=== standard library ===")
+
+    // Array / List / Stack / Queue
+    let nums = new Array<int>()
+    nums.push(3); nums.push(1); nums.push(2); nums.reverse()
+    IO.print("array len=${nums.length()} first=${nums.first()} has2=${nums.contains(2)}")
+    let st = new Stack<int>()
+    st.push(1); st.push(2)
+    let popped = st.pop()
+    let q = new Queue<string>()
+    q.enqueue("x"); q.enqueue("y")
+    let dq = q.dequeue()
+    IO.print("stack pop=${popped} peek=${st.peek()} | queue dq=${dq} size=${q.size()}")
+
+    // Set / Map
+    let s1 = new Set<int>()
+    s1.add(1); s1.add(2); s1.add(2)
+    let s2 = new Set<int>()
+    s2.add(2); s2.add(3)
+    IO.print("set size=${s1.size()} inter=${s1.intersect(s2).size()}")
+    let ages = new Map<string, int>()
+    ages.put("ada", 36)
+    IO.print("map ada=${ages.get("ada")} getOr=${ages.getOr("none", -1)}")
+
+    // Str / Math / Random / DateTime / Path
+    let parts = Str.split(Str.trim("  a,b,c  "), ",")
+    IO.print("str parts=${parts.length()} join=${Str.join(parts, "-")} pad=${Str.padLeft("7", 3, "0")}")
+    IO.print("math sqrt2=${Math.sqrt(2.0)} floor=${Math.floor(3.7)} pow=${Math.pow(2.0, 8.0)}")
+    Random.seed(7)
+    let dice = Random.nextInt(1, 7)
+    IO.print("random in-range=${dice >= 1 && dice < 7}")
+    let dt = DateTime.fromUnix(1700000000)
+    IO.print("datetime yearOk=${dt.year() > 2000} +1day=${dt.addDays(1).unix() - dt.unix()}")
+    IO.print("path base=${Path.basename("/x/y/z.txt")} ext=${Path.extension("/x/y/z.txt")}")
+
+    // File object (text + binary) and Process
+    let file = new File("/tmp/grav_showcase.txt")
+    file.write("alpha\n"); file.append("beta\n"); file.writeLine("gamma")
+    IO.print("file size=${file.size()} lines=${file.readLines().length()}")
+    file.writeBinary(Format.toBinary("raw-bytes"))
+    IO.print("file binary bytes=${file.readBinary().length}")
+    file.delete()
+    IO.print("process echo=${Str.trim(Process.execOutput("echo hi"))} pid>0=${Process.pid() > 0}")
+
+    IO.print("=== done ===")
+}
