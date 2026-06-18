@@ -292,7 +292,8 @@ int main(int argc, char **argv) {
         // Invoke the system C compiler with any optimization/debug flags.
         const char *ccEnv = std::getenv("CC");
         std::string cc = !ccOverride.empty() ? ccOverride : (ccEnv ? ccEnv : "cc");
-        std::string flags = " -std=c11";
+        // _DEFAULT_SOURCE exposes POSIX (getcwd, popen, usleep, …) under -std=c11.
+        std::string flags = " -std=c11 -D_DEFAULT_SOURCE";
         if (!optFlag.empty()) flags += " " + optFlag;
         if (!debugFlag.empty()) flags += " " + debugFlag;
         // Link libm so inline-C `<math.h>` users (e.g. lib/mathf.grav) work; on
