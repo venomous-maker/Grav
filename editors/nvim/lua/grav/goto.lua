@@ -22,6 +22,11 @@ local SKIP = {
   ["sizeof"] = true, ["str"] = true, ["input"] = true, ["argc"] = true,
   ["argv"] = true, ["typename"] = true, ["isInstance"] = true,
   ["trait"] = true, ["uses"] = true, ["Self"] = true, ["free"] = true,
+  ["super"] = true, ["typedef"] = true, ["println"] = true, ["panic"] = true,
+  ["assert"] = true, ["exit"] = true, ["cwd"] = true, ["env"] = true,
+  ["long"] = true, ["double"] = true, ["uint"] = true, ["unsigned"] = true,
+  ["signed"] = true, ["byte"] = true, ["binary"] = true, ["int64"] = true,
+  ["float64"] = true, ["float32"] = true, ["ulong"] = true,
 }
 
 -- Returns the identifier under the cursor and whether it is a member access.
@@ -59,7 +64,7 @@ local function patterns(word, is_member)
     "\\<let\\s\\+" .. w .. "\\>",                                        -- local
     "\\<const\\s\\+" .. w .. "\\>",                                      -- const
     "\\<fn\\s\\+" .. w .. "\\>",                                         -- function/method
-    "\\<\\(class\\|struct\\|enum\\|interface\\|type\\|namespace\\)\\s\\+" .. w .. "\\>", -- type
+    "\\<\\(class\\|struct\\|enum\\|interface\\|type\\|typedef\\|namespace\\)\\s\\+" .. w .. "\\>", -- type
     "\\<" .. w .. "\\s*:",                                               -- parameter / field
   }
 end
@@ -131,7 +136,7 @@ end
 
 -- `gO` — an outline of the current file (every top-level / member declaration).
 function M.symbols()
-  local pat = "\\<\\(fn\\|class\\|struct\\|enum\\|interface\\|type\\|namespace\\|constructor\\)\\>"
+  local pat = "\\<\\(fn\\|class\\|struct\\|enum\\|interface\\|type\\|typedef\\|namespace\\|constructor\\)\\>"
   vim.fn.setloclist(0, {}, " ", { title = "Grav symbols" })
   pcall(function() vim.cmd(string.format("silent! lvimgrep /%s/gj %%", pat)) end)
   if #vim.fn.getloclist(0) == 0 then
