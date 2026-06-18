@@ -1,0 +1,71 @@
+// 19_types_io.grav — the widened numeric types, `binary`, `typedef`, and the
+// object-oriented standard library (IO, File, Format).
+//
+//   grav examples/19_types_io.grav --run
+
+import "../lib/std.grav"
+
+// `typedef` is an alias for `type` — here, a friendly name for a 64-bit id.
+typedef UserId = long
+
+fn main() {
+    IO.print("=== numeric types ===")
+
+    // Sized integers and floats. `long`/`int64` are 64-bit; `uint`/`unsigned`
+    // are 32-bit unsigned; `byte` is an 8-bit unsigned; `double`/`float64` and
+    // `float32` are the two float widths. `signed` is just `int`.
+    let big: long = 9000000000          // > 2^31, would overflow a 32-bit int
+    let count: int = 42
+    let u: uint = 4000000000            // > 2^31, fits because it's unsigned
+    let small: byte = 255
+    let pi: double = 3.14159265358979
+    let ratio: float32 = 1.5
+    let id: UserId = 7000000001         // through the typedef
+
+    IO.print("long   big   = ${big}")
+    IO.print("int    count = ${count}")
+    IO.print("uint   u     = ${u}")
+    IO.print("byte   small = ${small}")
+    IO.print("double pi    = ${pi}")
+    IO.print("float32 ratio= ${ratio}")
+    IO.print("UserId id    = ${id}")
+
+    // Mixed-width arithmetic promotes to the wider type (long here).
+    let total: long = big + count
+    IO.print("big + count  = ${total}")
+
+    // Explicit conversions, both with `as` and via the Format helpers.
+    let narrowed: int = big as int                 // narrowing needs a cast
+    let widened: long = Format.intToLong(count)
+    IO.print("narrowed=${narrowed} widened=${widened} hex(255)=${Format.hex(255)}")
+
+    IO.print("=== binary ===")
+    // `binary` is a NUL-safe byte blob; convert to/from string with `as` or Format.
+    let blob: binary = Format.toBinary("Grav!")
+    IO.print("blob length=${blob.length} text=${blob as string}")
+
+    IO.print("=== File (object) ===")
+    // A File is an object bound to a path — not a bag of static calls.
+    let f = new File("/tmp/grav_demo.txt")
+    f.write("alpha\n")
+    f.append("beta\n")
+    f.writeLine("gamma")
+    IO.print("exists=${f.exists()} size=${f.size()} name=${f.name()}")
+
+    let lines = f.readLines()
+    IO.print("lines=${lines.length()}")
+    for (i in 0..lines.length()) {
+        IO.print("  [${i}] ${lines.get(i)}")
+    }
+
+    // Whole-file binary round-trip, then copy and clean up.
+    f.writeBinary(Format.toBinary("raw-bytes"))
+    let back = f.readBinary()
+    IO.print("binary file bytes=${back.length}")
+    f.copyTo("/tmp/grav_demo_copy.txt")
+    let g = new File("/tmp/grav_demo_copy.txt")
+    IO.print("copy size=${g.size()}")
+    f.delete()
+    g.delete()
+    IO.print("cleaned up, exists=${f.exists()}")
+}
