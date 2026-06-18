@@ -108,6 +108,11 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         std::string l = emitExpr(*e->left);
         std::string r = emitExpr(*e->right);
         if (e->stringConcat) return "grav_str_concat(" + l + ", " + r + ")";
+        // String ==/!= compares contents (not pointers).
+        if ((e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) &&
+            e->left->type.kind == TypeRef::Kind::String &&
+            e->right->type.kind == TypeRef::Kind::String)
+            return "(strcmp(" + l + ", " + r + ") " + binaryOpSymbol(e->op) + " 0)";
         return "(" + l + " " + binaryOpSymbol(e->op) + " " + r + ")";
     }
     if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
@@ -281,6 +286,17 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             }
             if (call.targetName == "free")
                 return "free((void*)(" + emitExpr(*call.args[0]) + "))";
+            if (call.targetName == "exit") return "exit(" + emitExpr(*call.args[0]) + ")";
+            if (call.targetName == "panic")
+                return "grav_panic(" + emitExpr(*call.args[0]) + ")";
+            if (call.targetName == "assert") {
+                std::string cond = emitExpr(*call.args[0]);
+                std::string msg = call.args.size() == 2 ? emitExpr(*call.args[1])
+                                                        : ("\"" + escapeC(cond) + "\"");
+                return "grav_assert(" + cond + ", " + msg + ")";
+            }
+            if (call.targetName == "cwd") return "grav_cwd()";
+            if (call.targetName == "env") return "grav_env(" + emitExpr(*call.args[0]) + ")";
             if (call.targetName == "input") return "grav_input()";
             if (call.targetName == "argc") return "grav_argc";
             if (call.targetName == "argv")
