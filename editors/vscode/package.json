@@ -1,0 +1,56 @@
+{
+  "name": "grav-lang",
+  "displayName": "Grav Language",
+  "description": "Syntax highlighting, snippets, and build/run commands for the Grav language (.grav).",
+  "version": "0.9.0",
+  "publisher": "grav",
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages", "Snippets"],
+  "keywords": ["grav", "gravc"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "grav",
+        "aliases": ["Grav", "grav"],
+        "extensions": [".grav"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "grav",
+        "scopeName": "source.grav",
+        "path": "./syntaxes/grav.tmLanguage.json",
+        "embeddedLanguages": { "meta.embedded.block.c.grav": "c" }
+      }
+    ],
+    "snippets": [
+      { "language": "grav", "path": "./snippets/grav.json" }
+    ],
+    "commands": [
+      { "command": "grav.run", "title": "Grav: Compile & Run Current File", "category": "Grav" },
+      { "command": "grav.build", "title": "Grav: Compile Current File to C", "category": "Grav" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "grav.run", "when": "resourceLangId == grav", "group": "navigation" }
+      ]
+    },
+    "keybindings": [
+      { "command": "grav.run", "key": "ctrl+alt+r", "when": "resourceLangId == grav" }
+    ],
+    "configuration": {
+      "title": "Grav",
+      "properties": {
+        "grav.compilerPath": {
+          "type": "string",
+          "default": "grav",
+          "description": "Path to the gravc/grav compiler binary."
+        }
+      }
+    }
+  }
+}

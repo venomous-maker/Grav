@@ -1,0 +1,91 @@
+{
+  "main function": {
+    "prefix": "main",
+    "body": ["fn main() {", "\t$0", "}"],
+    "description": "Program entry point"
+  },
+  "function": {
+    "prefix": "fn",
+    "body": ["fn ${1:name}(${2:params}) -> ${3:int} {", "\t$0", "}"],
+    "description": "Function declaration"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\t${2:private field: int}",
+      "\tconstructor(${3:field: int}) { self.${4:field} = ${4:field} }",
+      "\tpublic fn ${5:method}() -> ${6:int} { return $0 }",
+      "}"
+    ],
+    "description": "Class with constructor and a method"
+  },
+  "subclass": {
+    "prefix": "extends",
+    "body": [
+      "class ${1:Child} extends ${2:Parent} {",
+      "\tconstructor(${3:args}) {",
+      "\t\tsuper(${4:parentArgs})",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Subclass calling the parent constructor with super"
+  },
+  "interface": {
+    "prefix": "interface",
+    "body": ["interface ${1:Name} { fn ${2:method}() -> ${3:int} }"],
+    "description": "Interface declaration"
+  },
+  "trait": {
+    "prefix": "trait",
+    "body": ["trait ${1:Name} {", "\tfn ${2:method}() -> ${3:int}", "}"],
+    "description": "Trait with a method"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": ["struct ${1:Name} { ${2:x: int}  ${3:y: int} }"],
+    "description": "Struct value type"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": ["enum ${1:Name} { ${2:A}, ${3:B}, ${4:C} }"],
+    "description": "Enum declaration"
+  },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match (${1:value}) {",
+      "\tcase ${2:0}: { $0 }",
+      "\tdefault: {  }",
+      "}"
+    ],
+    "description": "match / switch statement"
+  },
+  "for range": {
+    "prefix": "for",
+    "body": ["for (${1:i} in ${2:0}..${3:n}) {", "\t$0", "}"],
+    "description": "Range for loop"
+  },
+  "try/catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$0",
+      "} catch (${1:e}: ${2:Exception}) {",
+      "\t",
+      "}"
+    ],
+    "description": "try / catch block"
+  },
+  "import std": {
+    "prefix": "importstd",
+    "body": ["import \"${1:../../lib}/std.grav\""],
+    "description": "Import the standard library"
+  },
+  "inline C": {
+    "prefix": "inlinec",
+    "body": ["%{", "$0", "%}"],
+    "description": "Inline C escape hatch"
+  }
+}
