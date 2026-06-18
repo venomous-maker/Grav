@@ -132,12 +132,13 @@ as `cc -std=c11 [opts] <file>.c -o <out>`.
 > ./build/gravc examples/comprehensive.grav --emit bin -o /tmp/comp && /tmp/comp
 > ```
 >
-> For a **multi-file** program (imports, module-shared globals, inline-C variable
-> sharing, and every OOP/generics/exception feature together) see
-> [`examples/qa/`](examples/qa/) — run it with
-> `grav examples/qa/main.grav --run`. The numbered `examples/NN_*.grav` files are a
-> growing, one-feature-at-a-time tour; [`tests/run.sh`](tests/run.sh) compiles and
-> runs them all with golden checks.
+> For the **grand tour** — (almost) every language feature *and* every standard-library
+> module in one runnable file — see
+> [`examples/21_showcase.grav`](examples/21_showcase.grav)
+> (`grav examples/21_showcase.grav --run`). For a **multi-file** program (imports,
+> module-shared globals, inline-C variable sharing) see [`examples/qa/`](examples/qa/).
+> The numbered `examples/NN_*.grav` files are a growing, one-feature-at-a-time tour;
+> [`tests/run.sh`](tests/run.sh) compiles and runs them all with golden checks.
 
 ### Primitive types & variables
 
