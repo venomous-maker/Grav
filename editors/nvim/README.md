@@ -10,9 +10,17 @@ plus optional registration of the `gravc` MCP server with
 editors/nvim/
 ├── syntax/grav.vim      # highlighting (keywords, strings + ${} interpolation, %{ %} C blocks, decorators)
 ├── ftdetect/grav.lua    # *.grav -> filetype=grav
-├── ftplugin/grav.vim    # comments, indentation
+├── ftplugin/grav.{vim,lua} # comments/indent + nav keymaps + LSP autostart
 ├── lua/grav.lua         # LazyVim plugin spec: build/run keymaps + MCP server
+├── lua/grav/goto.lua    # regex-based go-to-definition fallback
+├── lua/grav/lsp.lua     # starts the Grav language server for .grav buffers
 └── README.md
+```
+
+To get the richer LSP features, also copy the `lua/grav/` directory:
+
+```bash
+cp -r editors/nvim/lua/grav ~/.config/nvim/lua/
 ```
 
 ## Install (LazyVim)
@@ -34,18 +42,26 @@ Set `GRAVC_REPO` (or `GRAVC`) in your shell if your checkout isn't at
 | --------------- | -------------------------------------------------------- |
 | `gd` / `<C-]>`  | go to definition of the symbol under the cursor          |
 | `<C-LeftMouse>` | go to definition (Ctrl-click)                            |
-| `gr`            | references to the symbol (project-wide quickfix)         |
+| `gr`            | references to the symbol (project-wide)                  |
 | `gO`            | document outline (declarations in this file)             |
-| `K`             | peek the definition line in a float                      |
+| `grn`           | rename symbol (LSP only)                                  |
+| `K`             | hover / peek the definition line                         |
 | `]]` / `[[`     | jump to next / previous top-level declaration            |
 | `<leader>mr`    | compile to a binary and run it                           |
 | `<leader>mc`    | transpile to C and show the output                       |
 
-**Go to definition** is LSP-free (pure Lua + grep). It understands both plain
-names (variables, parameters, functions, types) and member accesses in chains —
-`self.name`, `ptr->name`, `ptr->object.name`, `a.b.c` — resolving the segment
-under the cursor to its field / method / variable declaration (current buffer
-first, then project-wide).
+**LSP (recommended).** When `node` and the [Grav language server](../lsp/)
+(`editors/lsp/server.js`) are found, `ftplugin/grav.lua` starts it for `.grav`
+buffers and rebinds `gd`/`gr`/`gO`/`K` to real LSP requests, and adds `grn`
+(rename) plus inline compiler diagnostics. The server is located by walking up
+from the file for `editors/lsp/server.js`, or set `g:grav_lsp_server` /
+`$GRAV_LSP_SERVER`.
+
+**Fallback.** Without node/the server, go-to-definition stays LSP-free (pure Lua +
+grep): it understands plain names (variables, parameters, functions, types) and
+member accesses in chains — `self.name`, `ptr->name`, `a.b.c` — resolving the
+segment under the cursor to its declaration (current buffer first, then
+project-wide). `gr`/`gO`/`K` work the same way.
 
 **Inline C** (`%{ … %}`) is highlighted with the real C syntax, and `${ … }`
 string interpolation highlights its inner tokens.

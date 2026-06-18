@@ -27,6 +27,14 @@ plugin lives here ([`build.gradle.kts`](build.gradle.kts),
 [`src/main/kotlin/dev/grav/`](src/main/kotlin/dev/grav)): a `Language`, `FileType`,
 a hand-written lexer, a syntax highlighter, and a commenter.
 
+It also wires up **navigation & refactoring** — go-to-definition, find
+references, rename, document symbols, hover, and compiler diagnostics — by
+launching the shared [Grav language server](../lsp/) through CLion's LSP API
+(`GravLspServerSupportProvider`). That needs **Node.js on `PATH`** and
+`editors/lsp/server.js` present in the open project; it's available in paid IDEs
+(CLion, IntelliJ Ultimate). The TextMate bundle in option A gives highlighting
+only — navigation requires this built plugin.
+
 **Requirements:** JDK 17+ and network access (the IntelliJ Platform SDK is
 downloaded on first build). This box has only JDK 11, so build it on a machine
 with JDK 17+, or open the `editors/jetbrains` folder in IntelliJ IDEA (it

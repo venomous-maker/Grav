@@ -916,25 +916,48 @@ cmake --build build
 
 ## Editor support
 
-Integrations for three editors live under [`editors/`](editors/):
+Integrations for three editors live under [`editors/`](editors/), plus a shared,
+dependency-free **language server** ([`editors/lsp/`](editors/lsp/)) that gives
+every editor the same go-to-declaration, find-references, rename, document-symbol,
+hover, and compiler-diagnostics features.
 
 - **Neovim** ([`editors/nvim/`](editors/nvim/)) — a LazyVim-ready setup: syntax
   highlighting (keywords, `${}` interpolation, `%{ %}` C blocks, decorators),
-  filetype detection, go-to-definition, and `<leader>mr` / `<leader>mc`
-  build-and-run keymaps. It also registers the [`gravc` MCP server](mcp_server/)
-  with `mcphub.nvim`, which installs the latest build as `grav` in `~/.local/bin`
-  (override with `GRAV_DIR`). See [`editors/nvim/README.md`](editors/nvim/README.md).
+  filetype detection, `<leader>mr` / `<leader>mc` build-and-run keymaps, and
+  built-in **LSP** (auto-starts the Grav server for navigation/rename; a pure-Lua
+  go-to-definition fallback works without node). It also registers the
+  [`gravc` MCP server](mcp_server/) with `mcphub.nvim`, which installs the latest
+  build as `grav` in `~/.local/bin` (override with `GRAV_DIR`). See
+  [`editors/nvim/README.md`](editors/nvim/README.md).
 - **VS Code** ([`editors/vscode/`](editors/vscode/)) — a full extension: TextMate
-  grammar, language configuration, snippets, and *compile / compile&run* commands.
-  Install locally with a symlink into `~/.vscode/extensions/`, or package a `.vsix`
-  with `vsce`. See [`editors/vscode/README.md`](editors/vscode/README.md).
+  grammar, language configuration, snippets, *compile / compile&run* commands, and
+  **navigation/refactoring** (definition, references, rename, outline, hover) via
+  the shared indexer. See [`editors/vscode/README.md`](editors/vscode/README.md).
 - **JetBrains / CLion** ([`editors/jetbrains/`](editors/jetbrains/)) — a TextMate
   bundle for instant highlighting (Settings → Editor → TextMate Bundles → add the
   `textmate/` folder), plus a complete Gradle IntelliJ-Platform plugin project
-  (JDK 17+) for a distributable plugin. See
+  (JDK 17+) that adds highlighting **and** LSP-backed navigation/refactoring. See
   [`editors/jetbrains/README.md`](editors/jetbrains/README.md).
 
-All three reuse the same TextMate grammar, so highlighting stays consistent.
+All editors reuse the same TextMate grammar and symbol index, so highlighting and
+navigation stay consistent.
+
+### Install & test locally
+
+- **VS Code** — symlink the extension and reload:
+  ```bash
+  ln -s "$PWD/editors/vscode" ~/.vscode/extensions/grav-lang-0.9.0
+  ```
+  Reload the window (`Ctrl+Shift+P → Developer: Reload Window`), open a `.grav`
+  file, and try `F12` (definition), `Shift+F12` (references), `F2` (rename), and
+  `Ctrl+Alt+R` (compile & run).
+- **Neovim** — copy the runtime files (`syntax`, `ftdetect`, `ftplugin`,
+  `lua/grav`) onto your `runtimepath`; LSP starts automatically when editing
+  inside the repo. `gd` / `gr` / `grn` / `K` / `<leader>mr`.
+- **CLion** — for highlighting now, add the TextMate bundle
+  (Settings → Editor → TextMate Bundles → **+** → `editors/jetbrains/textmate`).
+  For navigation/refactoring, build and install the plugin (JDK 17+, needs Node on
+  `PATH`).
 
 ---
 

@@ -6,8 +6,14 @@ Syntax highlighting, snippets, and build/run commands for the
 ## Features
 
 - **Highlighting** — keywords, the widened numeric / `binary` types, `super`,
-  `typedef`, strings with `${…}` interpolation, decorators, and inline-C `%{ … %}`
-  blocks (highlighted with the real C grammar).
+  `typedef`, generics and return types, PascalCase types / structs, `ALL_CAPS`
+  constants, function & member calls, variables, strings with `${…}`
+  interpolation, decorators, and inline-C `%{ … %}` (highlighted with the real C
+  grammar).
+- **Navigation & refactoring** — go-to-definition (`F12`), find all references
+  (`Shift+F12`), rename symbol (`F2`), document outline (`Ctrl+Shift+O`), and
+  hover. These use the shared [`../lsp/grav-index.js`](../lsp/grav-index.js)
+  directly (no language-server process, no npm dependencies).
 - **Snippets** — `main`, `fn`, `class`, `extends` (with `super`), `interface`,
   `trait`, `struct`, `enum`, `match`, `for`, `try`, `importstd`, `inlinec`.
 - **Commands** — *Grav: Compile & Run Current File* (`Ctrl+Alt+R`) and
@@ -27,11 +33,16 @@ ln -s "$PWD/editors/vscode" ~/.vscode/extensions/grav-lang-0.9.0
 ## Package a `.vsix` (for sharing / Marketplace)
 
 ```bash
+cp ../lsp/grav-index.js .   # bundle the shared indexer for packaging
 npm install -g @vscode/vsce
 cd editors/vscode
 vsce package            # produces grav-lang-0.9.0.vsix
 code --install-extension grav-lang-0.9.0.vsix
 ```
+
+> The symlink install above resolves `../lsp/grav-index.js` directly, so it needs
+> no copy. A packaged `.vsix` can't reference files outside the extension folder,
+> so copy `grav-index.js` in first (and change the `require` to `"./grav-index"`).
 
 The grammar in [`syntaxes/grav.tmLanguage.json`](syntaxes/grav.tmLanguage.json) is
 also reused by the CLion/JetBrains TextMate bundle — see
