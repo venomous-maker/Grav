@@ -9,7 +9,7 @@
   "categories": ["Programming Languages", "Snippets"],
   "keywords": ["grav", "gravc"],
   "main": "./extension.js",
-  "activationEvents": [],
+  "activationEvents": ["onLanguage:grav"],
   "contributes": {
     "languages": [
       {
