@@ -1,0 +1,21 @@
+// lib/random.grav — pseudo-random numbers (backed by C rand()).
+
+%{
+#include <stdlib.h>
+#include <time.h>
+%}
+
+class Random {
+    static fn seed(n: int) { %{ srand((unsigned)n); %}; }
+    static fn seedTime() { %{ srand((unsigned)time(0)); %}; }
+
+    // A random int in [min, max).
+    static fn nextInt(min: int, max: int) -> int {
+        if (max <= min) { return min; }
+        return min + (%{ rand() %} as int) % (max - min);
+    }
+    static fn nextFloat() -> float {
+        return %{ ((double)rand() / ((double)RAND_MAX + 1.0)) %} as float;
+    }
+    static fn nextBool() -> bool { return %{ (rand() & 1) %} as bool; }
+}
