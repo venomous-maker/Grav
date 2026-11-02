@@ -1,6 +1,7 @@
 #ifndef GRAV_SEMA_TYPECHECKER_H
 #define GRAV_SEMA_TYPECHECKER_H
 
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -17,8 +18,19 @@ namespace grav {
 // resolved types and call/member resolutions for the code generator.
 // Implemented across typechecker.cpp (driver + statements) and
 // typechecker_expr.cpp (expressions).
+// Type arguments inferred for generic calls (`maxOf(1, 2)`, `new Box(5)`,
+// `new Array<auto>()`), keyed by call site. The driver re-runs the front end with
+// them filled in as explicit `::<...>` arguments.
+struct InferenceTable {
+    std::map<std::string, std::vector<TypeRef>> entries; // "line:col:name" -> source-form args
+    int added = 0;                                       // new entries in the latest pass
+};
+// Fills recorded inferences into a freshly parsed program as explicit type arguments.
+void applyInferences(Program &program, const InferenceTable &table);
+
 class TypeChecker {
 public:
+    void setInference(InferenceTable *table) { infer_ = table; }
     const std::vector<GravError> &check(Program &program, const Registry &reg);
     const std::vector<GravError> &errors() const { return errors_; }
 
@@ -53,6 +65,27 @@ private:
     // Errors when a non-void body can fall off its end without returning.
     void checkFallthrough(const Block &body, const TypeRef &ret, int line, int col,
                           const std::string &what);
+
+    // typechecker_infer.cpp — inferring omitted / `auto` generic type arguments.
+    using Subst = std::map<std::string, TypeRef>;
+    std::optional<TypeRef> tryInferCall(CallExpr &e, const std::string &name,
+                                        const std::vector<GenericSig> &sigs, const TypeRef *expected);
+    std::optional<TypeRef> tryInferNew(NewExpr &e, const TypeRef *expected);
+    // Unifies the signature with the arguments (and expected result); binds `out`.
+    bool inferArgs(const GenericSig &sig, std::vector<ExprPtr> &args,
+                   const std::vector<TypeRef> &explicitArgs, const TypeRef *expected, Subst &out,
+                   std::string &why);
+    void unify(const TypeRef &param, const TypeRef &arg, const std::vector<std::string> &tps,
+               Subst &s) const;
+    TypeRef substitute(const TypeRef &t, const Subst &s) const;
+    bool mentions(const TypeRef &t, const std::vector<std::string> &tps, const Subst &s) const;
+    TypeRef toSource(const TypeRef &t) const;     // instance names -> Template<args>
+    TypeRef toCanonical(const TypeRef &t) const;  // Template<args> -> existing instance name
+    std::optional<TypeRef> recordInference(int line, int col, const std::string &name,
+                                           const std::vector<std::string> &tps, const Subst &s,
+                                           const TypeRef &ret);
+    Program *program_ = nullptr;
+    InferenceTable *infer_ = nullptr;
 
     // typechecker_lambda.cpp — lambdas, captures, function values.
     TypeRef checkLambda(LambdaExpr &e);
@@ -132,6 +165,9 @@ private:
     void error(int line, int col, const std::string &msg);
     void warn(int line, int col, const std::string &msg);
     bool isAssignable(const TypeRef &from, const TypeRef &to) const;
+    // Can a value of this type be stored in an `any`? (primitives, strings,
+    // classes, interfaces, enums, functions, null — not structs/arrays/pointers)
+    bool isBoxable(const TypeRef &t) const;
     static TypeRef numericPromote(const TypeRef &a, const TypeRef &b);
     bool checkAccess(Access a, const std::string &definingClass) const;
     void pushScope();
