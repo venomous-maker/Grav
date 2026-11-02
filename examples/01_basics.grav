@@ -1,18 +1,81 @@
-// 01 — basics: main, printing, variables, and primitive types.
-// Build & run:  grav examples/01_basics.grav --emit bin -o /tmp/01 && /tmp/01
+// 01_basics.grav — values, variables, operators, casts, and strings.
+//
+//   grav examples/01_basics.grav --run
+//
+// Covers: primitives and the widened numeric types, let/const, type inference,
+// arithmetic / bitwise / shift / compound operators, `**`, the ternary, casts
+// (`int(x)`, `x as T`, `(T)x`), string concatenation, interpolation, escapes,
+// and comparisons. Comments are `//` and `/* ... */`.
+
+import "../lib/std.grav"                // printRaw, Str, … (the standard library)
+
+const APP: string = "Grav basics"      // a module-level constant
 
 fn main() {
-    // `let` is mutable, `const` is immutable. Types are inferred or annotated.
-    let count = 3;
-    const pi: float = 3.14159;
-    let name: string = "Grav";
-    let ready: bool = true;
+    print("== ${APP} ==")
 
-    print(count);          // 3
-    print(pi);             // 3.141590
-    print(name);           // Grav
-    print(ready);          // true
+    // ── primitives & inference ─────────────────────────────────────────────
+    let count: int = 42
+    let ratio: float = 0.75
+    let ready: bool = true
+    let name: string = "Ada"
+    let inferred = count * 2            // int, inferred from the initializer
+    print("count=${count} ratio=${ratio} ready=${ready} name=${name} inferred=${inferred}")
 
-    count = count + 1;
-    print(count);          // 4
+    // Widened numeric types follow C-like promotion rules.
+    let big: long = 9000000000
+    let u: uint = 4000000000
+    let b: byte = 255
+    let precise: double = 3.141592653589793
+    let small: float32 = 1.5
+    print("long=${big} uint=${u} byte=${b} double=${precise} float32=${small}")
+    print("long + int promotes: ${big + count}")
+
+    // ── arithmetic ─────────────────────────────────────────────────────────
+    let a = 17
+    let c = 5
+    print("a+c=${a + c} a-c=${a - c} a*c=${a * c} a/c=${a / c} a%c=${a % c}")
+    print("2**10=${2 ** 10}  2.0**0.5=${2.0 ** 0.5}  (-3)**2=${-3 ** 2}")   // unary minus binds tighter than **
+    print("float division: ${17.0 / 5.0}")
+
+    // ── bitwise & shifts ───────────────────────────────────────────────────
+    let flags = 0
+    flags |= 1                           // compound assignment operators
+    flags |= 4
+    print("flags=${flags} &6=${flags & 6} ^3=${flags ^ 3} ~0=${~0} 1<<8=${1 << 8} 256>>4=${256 >> 4}")
+
+    // ── increments & compound ops ──────────────────────────────────────────
+    let n = 10
+    n += 5
+    n -= 3
+    n *= 2
+    n /= 4
+    n++
+    ++n
+    n--
+    print("n=${n}")
+
+    // ── comparisons, logic, ternary ────────────────────────────────────────
+    let x = 7
+    print("x>5 && x<10: ${x > 5 && x < 10}  x==3 || !ready: ${x == 3 || !ready}")
+    print("parity: ${x % 2 == 0 ? "even" : "odd"}")
+
+    // ── casts ──────────────────────────────────────────────────────────────
+    let f = 9.99
+    print("int(9.99)=${int(f)} float(3)=${float(3)} bool(1)=${bool(1)}")
+    print("as: ${(f as int) + 1}  C-style: ${(long)count * 1000000000}")
+    print("narrowing long->int: ${big as int}")
+
+    // ── strings ────────────────────────────────────────────────────────────
+    let greeting = "Hello, " + name + "!"           // concatenation
+    print(greeting)
+    print("interpolation with expressions: ${count / 2 + 1} and ${name}${name}")
+    print("escapes: tab[\t] quote[\"] backslash[\\] dollar[\${not interpolated}]")
+    print("hex[\x41\x42] unicode[\u{263A} \u{1F680}] esc-bold[\e[1mbold\e[0m]")
+    print("equal? ${"abc" == "abc"}  different? ${"abc" != "abd"}")
+    let s = "grow"
+    s += "ing"                                       // string +=
+    print("s=${s} str(3.5)=${str(3.5)} str(true)=${str(true)}")
+    /* block comments
+       span lines */
 }
