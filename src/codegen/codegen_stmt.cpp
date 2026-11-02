@@ -10,10 +10,6 @@ void CodeGen::line(const std::string &text) {
     cur_->push_back('\n');
 }
 
-void CodeGen::emitBlock(const Block &block) {
-    for (const auto &s : block.statements) emitStmt(*s);
-}
-
 void CodeGen::emitLineMark(int combinedLine) {
     if (combinedLine <= 0) return;
     line("GRAV_LINE(" + std::to_string(origin(combinedLine).line) + ");");
@@ -39,36 +35,81 @@ std::string CodeGen::emitDescribe(const std::string &objExpr, const TypeRef &typ
 }
 
 void CodeGen::emitStmt(const Stmt &stmt) {
-    // Record the current source line in the active frame for stack traces.
-    emitLineMark(stmt.line);
+    // Record the current source line in the active frame for stack traces (only
+    // where the statement can call out; pure computation never shows in a trace).
+    if (trace_ && stmtMayCall(stmt)) emitLineMark(stmt.line);
     if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
-        line(cTy(s->resolvedType) + " " + s->name + " = " +
-             emitAs(*s->init, s->resolvedType) + ";");
+        auto temps = hoistTemps(s->init.get());
+        bool owned = emitOwnedLet(*s); // an owned string: freed when overwritten / out of scope
+        if (owned) { freeTemps(temps); return; }
+        // Written inside a `try` and read after a longjmp: must be volatile.
+        const TypeRef &t = s->resolvedType;
+        bool vol = volatileNames_.count(s->name) && !t.isArray() &&
+                   !(t.isNamed() && (reg_->isStruct(t.name) || reg_->isInterface(t.name))) &&
+                   !t.isBinary();
+        line(cTy(t) + (vol ? " volatile " : " ") + s->name + " = " + emitAs(*s->init, t) + ";");
+        freeTemps(temps);
         return;
     }
     if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
-        line(emitAssign(*s) + ";");
+        auto temps = hoistTemps(s->value.get());
+        if (!emitOwnedAssign(*s)) line(emitAssign(*s) + ";");
+        freeTemps(temps);
         return;
     }
     if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
-        // Returning out of an enclosing `try` must restore the jmp_buf stack top.
-        if (!tryTops_.empty()) line("grav_jmp_top = " + tryTops_.front() + ";");
-        if (s->value) {
-            // Evaluate into a temp *before* leaving the frame, so a throw in the
-            // return expression still unwinds with this frame on the trace.
+        bool cleanups = false; // try/finally/defer to run on the way out?
+        for (const auto &c : cleanups_)
+            if (c.kind == Cleanup::Try || c.kind == Cleanup::Finally || c.kind == Cleanup::Defer ||
+                c.kind == Cleanup::Code)
+                cleanups = true;
+        // Returning an owned local hands it to the caller (copied if it holds a
+        // borrowed value), so the function's result is always caller-owned.
+        if (auto *n = s->value ? dynamic_cast<const NameExpr *>(s->value.get()) : nullptr;
+            n && n->resolvedGlobal.empty() && ownedStrings_.count(n->name)) {
             std::string rt = "__ret" + std::to_string(throwCounter_++);
-            line(cTy(currentReturnType_) + " " + rt + " = " +
-                 emitAs(*s->value, currentReturnType_) + ";");
-            line("grav_leave();");
+            line("const char* " + rt + " = " + n->name + "__own ? " + n->name + " : grav_strdup(" +
+                 n->name + ");");
+            line(n->name + "__own = 0;");
+            emitUnwind(false);
+            if (trace_) line("grav_leave();");
             line("return " + rt + ";");
+            return;
+        }
+        auto temps = s->value ? hoistTemps(s->value.get()) : std::vector<std::string>{};
+        if (!temps.empty()) cleanups = true; // force the value into a temp before freeing
+        if (s->value) {
+            // Evaluate into a temp *before* unwinding/leaving the frame, so a throw
+            // in the return expression still has this frame on the trace and
+            // finally/defer code runs after the value is computed. Simple returns
+            // stay direct (`return f(x);` keeps tail calls possible).
+            if (cleanups || (trace_ && exprMayCall(s->value.get()))) {
+                std::string rt = "__ret" + std::to_string(throwCounter_++);
+                line(cTy(currentReturnType_) + " " + rt + " = " +
+                     emitAs(*s->value, currentReturnType_) + ";");
+                freeTemps(temps);
+                emitUnwind(false);
+                if (trace_) line("grav_leave();");
+                line("return " + rt + ";");
+            } else {
+                if (trace_) line("grav_leave();");
+                line("return " + emitAs(*s->value, currentReturnType_) + ";");
+            }
         } else {
-            line("grav_leave();");
+            emitUnwind(false);
+            if (trace_) line("grav_leave();");
             line("return;");
         }
         return;
     }
     if (auto *s = dynamic_cast<const ExprStmt *>(&stmt)) {
-        line(emitExpr(*s->expr) + ";");
+        // e.g. IO.print("a" + b): bind the temporary, call, free it after.
+        auto temps = hoistTemps(s->expr.get());
+        if (isFreshString(*s->expr)) // a fresh result nobody uses
+            line("free((void*)" + emitExpr(*s->expr) + ");");
+        else
+            line(emitExpr(*s->expr) + ";");
+        freeTemps(temps);
         return;
     }
     if (auto *s = dynamic_cast<const BlockStmt *>(&stmt)) {
@@ -81,13 +122,13 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     }
     if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
         line("while (" + emitExpr(*s->cond) + ") {");
-        indent_++; emitBlock(s->body); indent_--;
+        emitLoopBody(s->body);
         line("}");
         return;
     }
     if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
         line("do {");
-        indent_++; emitBlock(s->body); indent_--;
+        emitLoopBody(s->body);
         line("} while (" + emitExpr(*s->cond) + ");");
         return;
     }
@@ -96,7 +137,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         std::string cond = s->cond ? emitExpr(*s->cond) : "";
         std::string upd = inlineSimple(s->update.get());
         line("for (" + init + "; " + cond + "; " + upd + ") {");
-        indent_++; emitBlock(s->body); indent_--;
+        emitLoopBody(s->body);
         line("}");
         return;
     }
@@ -112,7 +153,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             for (size_t i = 0; i < c.values.size(); ++i) {
                 if (i) cond += " || ";
                 std::string v = emitExpr(*c.values[i]);
-                cond += isStr ? ("strcmp(" + tmp + ", " + v + ") == 0")
+                cond += isStr ? ("grav_streq(" + tmp + ", " + v + ")")
                               : ("(" + tmp + " == " + v + ")");
             }
             line((first ? "if (" : "} else if (") + cond + ") {");
@@ -131,14 +172,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const ForInStmt *>(&stmt)) {
-        // `for (i in lo..hi)` -> a counting C for loop. The upper bound is
-        // hoisted into a temp so it is evaluated once.
-        std::string lim = "__hi" + std::to_string(switchCounter_++);
-        std::string cmp = s->inclusive ? " <= " : " < ";
-        line("for (int " + s->var + " = " + emitExpr(*s->lo) + ", " + lim + " = " +
-             emitExpr(*s->hi) + "; " + s->var + cmp + lim + "; " + s->var + "++) {");
-        indent_++; emitBlock(s->body); indent_--;
-        line("}");
+        emitForIn(*s);
         return;
     }
     if (auto *s = dynamic_cast<const ThrowStmt *>(&stmt)) {
@@ -156,8 +190,9 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         emitTry(*s);
         return;
     }
-    if (dynamic_cast<const BreakStmt *>(&stmt)) { line("break;"); return; }
-    if (dynamic_cast<const ContinueStmt *>(&stmt)) { line("continue;"); return; }
+    // Leaving a loop early first unwinds any try/finally/defer inside it.
+    if (dynamic_cast<const BreakStmt *>(&stmt)) { emitUnwind(true); line("break;"); return; }
+    if (dynamic_cast<const ContinueStmt *>(&stmt)) { emitUnwind(true); line("continue;"); return; }
 }
 
 void CodeGen::emitIf(const IfStmt &s) {
@@ -184,48 +219,6 @@ void CodeGen::emitIf(const IfStmt &s) {
     line("}");
 }
 
-void CodeGen::emitTry(const TryStmt &s) {
-    std::string t = "__try" + std::to_string(tryCounter_++);
-    std::string exc = "grav_current_exc";
-    line("{");
-    indent_++;
-    line("int " + t + " = grav_jmp_top++;");
-    line("int " + t + "_nf = grav_nframes;"); // frame depth to restore on unwind
-    line("if (setjmp(grav_jmp_stack[" + t + "]) == 0) {");
-    indent_++;
-    tryTops_.push_back(t);
-    emitBlock(s.tryBlock);
-    tryTops_.pop_back();
-    line("grav_jmp_top = " + t + ";"); // normal completion: pop
-    indent_--;
-    line("} else {");
-    indent_++;
-    line("grav_jmp_top = " + t + ";"); // exception in flight: pop, then handle
-    line("grav_nframes = " + t + "_nf;"); // unwinding skipped grav_leave()s; restore
-    if (s.hasCatch) {
-        std::string ct = structName(s.catchType.name);
-        line("if (grav_is_instance(" + exc + ".value, &" + mangle(s.catchType.name) + "_typeinfo)) {");
-        indent_++;
-        line(ct + "* " + s.catchVar + " = (" + ct + "*)" + exc + ".value;");
-        emitBlock(s.catchBlock);
-        indent_--;
-        line("} else {");
-        indent_++;
-        if (s.hasFinally) emitBlock(s.finallyBlock);
-        line("grav_throw(" + exc + ".value, " + exc + ".type, " + exc + ".message);"); // rethrow
-        indent_--;
-        line("}");
-    } else {
-        if (s.hasFinally) emitBlock(s.finallyBlock);
-        line("grav_throw(" + exc + ".value, " + exc + ".type, " + exc + ".message);"); // propagate
-    }
-    indent_--;
-    line("}");
-    if (s.hasFinally) emitBlock(s.finallyBlock); // normal + handled paths
-    indent_--;
-    line("}");
-}
-
 void CodeGen::emitBraced(const Block &block) {
     line("{");
     indent_++;
@@ -248,12 +241,22 @@ std::string CodeGen::inlineSimple(const Stmt *s) const {
 // Renders an assignment (plain or compound) without a trailing ';'. `string +=`
 // has no C equivalent, so it lowers to an explicit concat re-assignment.
 std::string CodeGen::emitAssign(const AssignStmt &s) const {
+    // `obj[k] = v` on a class with `operator[]=` calls its op_index_set(k, v).
+    if (auto *ix = dynamic_cast<const IndexExpr *>(s.target.get()); ix && !ix->overloadClass.empty()) {
+        std::vector<TypeRef> params;
+        if (const MethodInfo *mi = reg_->findMethod(ix->overloadClass, ix->overloadMethod))
+            params = mi->paramTypes;
+        std::string args = params.size() == 2
+                               ? emitAs(*ix->index, params[0]) + ", " + emitAs(*s.value, params[1])
+                               : emitExpr(*ix->index) + ", " + emitExpr(*s.value);
+        return methodCall(emitExpr(*ix->base), ix->base->type, ix->overloadMethod, args);
+    }
     std::string target = emitExpr(*s.target);
     if (!s.isCompound)
         return target + " = " + emitAs(*s.value, s.target->type);
     if (s.compoundOp == BinaryOp::Add &&
         s.target->type.kind == TypeRef::Kind::String)
-        return target + " = grav_str_concat(" + target + ", " + emitExpr(*s.value) + ")";
+        return target + " = grav_str_concat(" + target + ", " + emitStringExpr(*s.value) + ")";
     return target + " " + binaryOpSymbol(s.compoundOp) + "= " + emitExpr(*s.value);
 }
 
