@@ -82,6 +82,7 @@ std::string CodeGen::equalExpr(const TypeRef &t, const std::string &a, const std
     if (t.isFunction()) return "grav_fn_eq(" + a + ", " + b + ")";
     if (t.isNamed() && reg_->isInterface(t.name)) return "grav_iface_eq(" + a + ", " + b + ")";
     if (t.isNamed() && reg_->isStruct(t.name)) return structName(t.name) + "__eq(" + a + ", " + b + ")";
+    if (t.isAny()) return "grav_any_eq(" + a + ", " + b + ")";
     if (t.isArray() && !t.isSlice())
         return "(memcmp(&(" + a + "), &(" + b + "), sizeof(" + a + ")) == 0)";
     return "(" + a + " == " + b + ")";
@@ -290,6 +291,9 @@ void CodeGen::emitEnums() {
             typedefs_ += (i ? ", \"" : "\"") + en->members[i].name + "\"";
         if (en->members.empty()) typedefs_ += "\"?\"";
         typedefs_ += " };\n    return (unsigned)v < sizeof names / sizeof names[0] ? names[v] : \"?\";\n}\n";
+        // Same lookup with the signature an `any` box stores.
+        typedefs_ += "static inline GRAV_UNUSED const char* " + enumNameFn(en->fqName) + "_any(long long v) { return " +
+                     enumNameFn(en->fqName) + "((" + s + ")v); }\n";
     }
     if (any) typedefs_ += "\n";
 }
@@ -462,9 +466,21 @@ void CodeGen::emitTypeInfos() {
         // The destructor chain `free(obj)` runs (nearest class with a destructor).
         std::string dtor = reg_->findDestructor(fq);
         std::string drop = dtor.empty() ? "0" : "(void (*)(void*))" + mangle(dtor) + "__drop";
+        // toString() for printing a boxed `any` through its dynamic class.
+        std::string strHook = "0";
+        if (const MethodInfo *ts = reg_->findMethod(fq, "toString");
+            ts && !ts->isStatic && ts->paramTypes.empty() && ts->returnType.kind == TypeRef::Kind::String) {
+            std::string impl = reg_->findMethodImpl(fq, ts->name);
+            if (!impl.empty()) {
+                std::string w = mangle(fq) + "__any_str";
+                vtables_ += "static const char* " + w + "(void* o) { return " + methodCName(impl, ts->name) +
+                            "((" + structName(impl) + "*)o); }\n";
+                strHook = w;
+            }
+        }
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
-                    std::to_string(nextra) + ", " + drop + " };\n";
+                    std::to_string(nextra) + ", " + drop + ", " + strHook + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
