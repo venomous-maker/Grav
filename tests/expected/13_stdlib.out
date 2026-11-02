@@ -1,0 +1,37 @@
+--- Str ---
+trim='The quick brown fox' len=19 upper=THE QUICK BROWN FOX
+contains fox=true indexOf quick=4 count o=2
+starts 'The'=true ends 'fox'=true charAt(4)=113
+substring=quick replace=The slow brown fox reverse=varg
+split -> 4 parts, joined with '|': a|b||c
+pad: [007] [ab...] repeat: =-=-=-=-
+compare: true true true
+--- Format ---
+toInt=43 toLong=9000000000 toFloat=5
+toBool=true toIntOr=-1 hex(255)=0xff
+--- Math ---
+sqrt(2)=1.41421 pow(2,8)=256 abs(-3.5)=3.5
+floor/ceil/round(2.5)=2/3/3 pi=3.14159
+sin(pi/2)=1 log(e)=1 max=7
+--- Random ---
+1000 dice rolls all in 1..6: true; nextFloat in [0,1): true
+--- DateTime ---
+year=2023 month=11 day=15 unix=1700049600
+30 days later: 2023-12-15
+--- Time / Stopwatch ---
+slept at least 10ms: true; clock is past 2020: true
+--- Path ---
+basename=server.log dirname=/var/log/app ext=.log
+join=usr/local/bin
+--- File ---
+exists=true size=34 lines=3 last='third line'
+binary bytes=3
+deleted: true
+--- Process / OS ---
+echo says: hello from the shell
+exec exit code: 3
+platform known: true cpus>0: true pid>0: true
+env GRAV_DEMO=42 missing->default
+--- IO & Term ---
+IO.write has no newline... IO.print does
+styled: [1mbold[0m [32mok[0m [31merr[0m
