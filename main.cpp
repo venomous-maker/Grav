@@ -8,6 +8,7 @@
 //           type-check -> generate C -> optionally compile to a binary.
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fstream>
@@ -247,23 +248,45 @@ int main(int argc, char **argv) {
     }
 
     try {
-        grav::Lexer lexer(source);
-        auto tokens = lexer.tokenize();
-        tokens = grav::preprocess(std::move(tokens));
+        // The front end may run more than once: when the checker infers omitted
+        // generic type arguments (`maxOf(1, 2)`, `new Box(5)`), it records them and
+        // the program is compiled again with them filled in.
+        grav::InferenceTable inference;
+        std::unique_ptr<grav::Program> programPtr;
+        std::unique_ptr<grav::Registry> registryPtr;
+        std::unique_ptr<grav::TypeChecker> checkerPtr;
+        std::vector<grav::GravError> errors;
+        for (int pass = 0; pass < 8; ++pass) {
+            grav::Lexer lexer(source);
+            auto tokens = lexer.tokenize();
+            tokens = grav::preprocess(std::move(tokens));
+            grav::Parser parser(std::move(tokens));
+            programPtr = std::make_unique<grav::Program>(parser.parseProgram());
+            grav::applyInferences(*programPtr, inference);
 
-        grav::Parser parser(std::move(tokens));
-        grav::Program program = parser.parseProgram();
+            // Expand generic structs/functions into concrete instances before symbols.
+            errors = grav::monomorphize(*programPtr);
+            // A failed expansion leaves half-made instances; checking them would only
+            // bury the real error under follow-on errors from library code.
+            if (!errors.empty()) {
+                for (const auto &err : errors) printDiag(err, srcMap);
+                std::cerr << "gravc: " << errors.size() << " error(s); aborting\n";
+                return 1;
+            }
+            registryPtr = std::make_unique<grav::Registry>();
+            auto buildErrors = registryPtr->build(*programPtr);
+            errors.insert(errors.end(), buildErrors.begin(), buildErrors.end());
 
-        // Expand generic structs/functions into concrete instances before symbols.
-        std::vector<grav::GravError> errors = grav::monomorphize(program);
-
-        grav::Registry registry;
-        auto buildErrors = registry.build(program);
-        errors.insert(errors.end(), buildErrors.begin(), buildErrors.end());
-
-        grav::TypeChecker checker;
-        const auto &typeErrors = checker.check(program, registry);
-        errors.insert(errors.end(), typeErrors.begin(), typeErrors.end());
+            checkerPtr = std::make_unique<grav::TypeChecker>();
+            checkerPtr->setInference(&inference);
+            inference.added = 0;
+            const auto &typeErrors = checkerPtr->check(*programPtr, *registryPtr);
+            errors.insert(errors.end(), typeErrors.begin(), typeErrors.end());
+            if (inference.added == 0) break; // nothing new inferred: this pass is final
+        }
+        grav::Program &program = *programPtr;
+        grav::Registry &registry = *registryPtr;
+        grav::TypeChecker &checker = *checkerPtr;
 
         // Warnings (e.g. unused variables). With -Werror they are fatal.
         const auto &warnings = checker.warnings();
