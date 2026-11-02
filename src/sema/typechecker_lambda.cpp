@@ -34,7 +34,10 @@ bool TypeChecker::isCapturedHere(const std::string &name) {
 
 TypeRef TypeChecker::checkExprExpect(Expr &e, const TypeRef &expected) {
     const TypeRef *saved = expected_;
-    expected_ = dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<NameExpr *>(&e) ? &expected : nullptr;
+    expected_ = dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<NameExpr *>(&e) ||
+                        dynamic_cast<NewExpr *>(&e) || dynamic_cast<CallExpr *>(&e)
+                    ? &expected
+                    : nullptr;
     TypeRef t = checkExpr(e);
     expected_ = saved;
     return t;
@@ -97,6 +100,10 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
         bool ok = true;
         ret = reg_->resolveCanonical(e.returnType, currentNs_, ok);
         if (!ok) ret = TypeRef::prim(TypeRef::Kind::Error);
+    } else if (haveExp && expect.fnReturn().isError()) {
+        // The caller is inferring a type parameter from this lambda's result.
+        if (e.isArrow) retKnown = false;
+        else ret = TypeRef::prim(TypeRef::Kind::Void);
     } else if (haveExp) {
         ret = expect.fnReturn();
     } else if (e.isArrow) {
