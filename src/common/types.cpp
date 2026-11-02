@@ -33,6 +33,14 @@ std::string typeRefName(const TypeRef &t) {
         case TypeRef::Kind::Array:
             return (t.elem ? typeRefName(*t.elem) : "?") + "[" +
                    std::to_string(t.arrayLen) + "]";
+        case TypeRef::Kind::Function: {
+            std::string s = "fn(";
+            for (size_t i = 0; i < t.fnParams.size(); ++i)
+                s += (i ? ", " : "") + typeRefName(t.fnParams[i]);
+            s += ")";
+            if (t.elem && !t.elem->isVoid()) s += " -> " + typeRefName(*t.elem);
+            return s;
+        }
         case TypeRef::Kind::Null: return "null";
         case TypeRef::Kind::Error: return "<error>";
     }
