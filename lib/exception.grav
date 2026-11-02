@@ -1,31 +1,56 @@
-// lib/exception.grav — a small exception hierarchy for `throw` / `catch`.
+// lib/exception.grav — the standard exception hierarchy for `throw` / `catch`.
 //
-//   import "../../lib/exception.grav"
 //   try { throw new ValueError("bad"); } catch (e: Exception) { print(e.message()); }
+//
+// Every exception has message() and describe() ("Kind: message"); catch a base
+// class to handle a whole family. Subclass Exception for your own errors.
 
 class Exception {
     protected msg: string
     constructor(m: string) { self.msg = m; }
     public fn message() -> string { return self.msg; }
-    public fn describe() -> string { return "Exception: ${self.msg}"; }
+    public fn kind() -> string { return "Exception"; }
+    public fn describe() -> string { return "${self.kind()}: ${self.msg}"; }
+    fn toString() -> string { return self.describe(); }
 }
 
+// A value is unsuitable (bad argument, unparsable input).
 class ValueError extends Exception {
-    constructor(m: string) { self.msg = m; }
-    public fn describe() -> string { return "ValueError: ${self.msg}"; }
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "ValueError"; }
 }
-
-class RuntimeError extends Exception {
-    constructor(m: string) { self.msg = m; }
-    public fn describe() -> string { return "RuntimeError: ${self.msg}"; }
+// A value has the wrong type (e.g. an `any` holding something unexpected).
+class TypeError extends Exception {
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "TypeError"; }
 }
-
+// An index or position is out of range.
 class IndexError extends Exception {
-    constructor(m: string) { self.msg = m; }
-    public fn describe() -> string { return "IndexError: ${self.msg}"; }
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "IndexError"; }
 }
-
+// A key, file, or record does not exist.
 class NotFound extends Exception {
-    constructor(m: string) { self.msg = m; }
-    public fn describe() -> string { return "NotFound: ${self.msg}"; }
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "NotFound"; }
+}
+// Reading or writing a file, pipe, or device failed.
+class IOError extends Exception {
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "IOError"; }
+}
+// An operation is not valid in the object's current state.
+class StateError extends Exception {
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "StateError"; }
+}
+// Something took longer than allowed.
+class TimeoutError extends Exception {
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "TimeoutError"; }
+}
+// Any other failure while the program runs.
+class RuntimeError extends Exception {
+    constructor(m: string) { super(m); }
+    public fn kind() -> string { return "RuntimeError"; }
 }
