@@ -22,10 +22,12 @@ struct FieldInfo {
 enum class AccessorKind { None, Getter, Setter, Delegate };
 
 struct MethodInfo {
-    std::string name;
+    std::string name;       // internal name (unique per signature; overloads are suffixed)
+    std::string sourceName; // name as written in the source
     Access access = Access::Public;
     bool isStatic = false;
     bool isAbstract = false;         // declared 'abstract' (no body, must override)
+    bool isFinal = false;            // declared 'final' (cannot be overridden)
     std::vector<TypeRef> paramTypes; // canonical
     std::vector<std::string> paramNames;
     TypeRef returnType;              // canonical
@@ -56,6 +58,9 @@ struct ClassInfo {
     std::vector<MethodInfo> methods;       // own methods only
     ConstructorDecl *constructor = nullptr;
     bool hasConstructor = false;
+    std::vector<ConstructorDecl *> ctors;  // every constructor overload, index = C suffix
+    DestructorDecl *destructor = nullptr; // own `destructor() { ... }`, if any
+    bool isFinal = false;                 // `final class`
     std::vector<VTableSlot> slots;         // full hierarchy, base-first
     ClassDecl *decl = nullptr;
 };
@@ -169,8 +174,22 @@ public:
     const MethodInfo *findMethod(const std::string &classFq, const std::string &name) const;
     const MethodInfo *findInterfaceMethod(const std::string &ifaceFq,
                                           const std::string &name) const;
+    // Every method callable as `sourceName` on `classFq` (its own and inherited,
+    // overrides collapsed to the most-derived), for overload resolution.
+    std::vector<const MethodInfo *> findMethodsBySource(const std::string &classFq,
+                                                        const std::string &sourceName) const;
+    // The class method (internal name) that implements interface method `want`
+    // for `classFq` — same source name and signature (`Self` = the class). "" if none.
+    std::string implementingMethod(const std::string &classFq, const MethodInfo &want) const;
     // Most-derived class (at or above classFq) that defines `method`.
     std::string findMethodImpl(const std::string &classFq, const std::string &name) const;
+
+    // Does any subclass of `classFq` provide a different implementation of
+    // `name` than `classFq` itself resolves to? When not, a call through a
+    // `classFq`-typed receiver can be devirtualized into a direct call.
+    bool isOverridden(const std::string &classFq, const std::string &name) const;
+    // Nearest class at or above `classFq` that declares a destructor ("" if none).
+    std::string findDestructor(const std::string &classFq) const;
 
     // Is `sub` the same as or a subclass of `base`?
     bool isSubclass(const std::string &sub, const std::string &base) const;
@@ -185,6 +204,7 @@ private:
     void canonicalize();
     void canonicalizeAliases();
     TypeRef resolveAlias(const std::string &fq); // expands one alias (cycle-guarded)
+    void assignMethodNames(); // give overloads distinct internal names
     void synthesizeAccessors();
     void synthesizeDelegates(); // forwarders for `uses` composition
     TypeRef canonType(const TypeRef &t, const std::string &nsContext, int line, int col);
@@ -202,6 +222,7 @@ private:
     std::unordered_map<std::string, std::vector<FunctionInfo>> funcOverloads_; // all overloads
     std::unordered_map<std::string, GlobalInfo> globals_; // by FQ name
     std::vector<std::string> namespaces_; // known namespace prefixes
+    mutable std::unordered_map<std::string, bool> overrideCache_; // keyed "Class:method"
     std::vector<GravError> errors_;
 };
 
