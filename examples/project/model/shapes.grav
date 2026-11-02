@@ -1,0 +1,33 @@
+// model/shapes.grav — the domain model in nested namespaces.
+import "../util/text.grav"
+
+// Module-level state shared by every importer (it is one program in the end).
+let shapesCreated: int = 0
+
+namespace geometry {
+    export interface Shape {
+        fn area() -> float
+        fn name() -> string
+    }
+
+    export class Circle implements Shape {
+        private r: float
+        constructor(r: float) { self.r = r; shapesCreated += 1 }
+        public fn area() -> float { return 3.14159 * self.r * self.r }
+        public fn name() -> string { return "circle" }
+    }
+
+    export class Rect implements Shape {
+        private w: float
+        private h: float
+        constructor(w: float, h: float) { self.w = w; self.h = h; shapesCreated += 1 }
+        public fn area() -> float { return self.w * self.h }
+        public fn name() -> string { return "rect" }
+    }
+
+    namespace stats {                       // a nested namespace: geometry.stats
+        export fn total(shapes: Array<Shape>) -> float {
+            return shapes.fold::<float>(0.0, fn(acc, s) => acc + s.area())
+        }
+    }
+}
