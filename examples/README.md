@@ -27,6 +27,7 @@ grav examples/01_basics.grav --run        # or: ./build/gravc <file> --run
 | [14_input_args.grav](14_input_args.grav) | `argc`/`argv`, `input()`, `IO.prompt`/`readInt`/`readFloat`/`readBool` (feed it stdin) |
 | [15_inline_c_macros.grav](15_inline_c_macros.grav) | `#define` macros, inline C at top level / as expressions / as statements, decorators, `export` |
 | [16_async.grav](16_async.grav) | async tasks on the worker pool, `GRAV_MAXPROCS`, exceptions across threads, `Mutex`, `AtomicInt`, `Channel`, `awaitAll` |
+| [17_auto_any.grav](17_auto_any.grav) | inferred generic type arguments (`auto`), dynamic values (`any`) with `is`/`as` |
 
 ## A multi-file project
 
