@@ -1,0 +1,23 @@
+--- function values ---
+f(7)=49 inc(7)=8 clamp(-5)=0 clamp(500)=100
+compose(square, negate)(3) = -9
+applyN(inc, 10, 0) = 10
+applyN(x => x*2, 8, 1) = 256
+--- closures ---
+add5(1)=6 add100(1)=101
+offset(1)=1001
+ticker after 3 calls: 3
+curried(4)(2) = 42
+--- callbacks ---
+OK: no handler
+handled OK
+OK clicked 3 time(s)
+listener A got start
+listener A got stop
+log: START, STOP
+--- higher-order collections ---
+evens squared: 4 16 36 64 100
+sum=55 any>9=true all>0=true
+count of multiples of 3: 3, first >6 at 6
+0:fig 1:pear 2:kiwi 3:banana 
+letters: 17
