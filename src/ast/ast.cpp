@@ -22,6 +22,7 @@ const char *binaryOpSymbol(BinaryOp op) {
         case BinaryOp::LessEq: return "<=";
         case BinaryOp::And: return "&&";
         case BinaryOp::Or: return "||";
+        case BinaryOp::Pow: return "**";
     }
     return "?";
 }
