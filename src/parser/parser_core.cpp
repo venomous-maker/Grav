@@ -202,6 +202,7 @@ const TypeRef *Parser::builtinTypeName(const std::string &name) {
         {"float64", TypeRef::floating(64)},
         {"float32", TypeRef::floating(32)},
         {"binary",  TypeRef::prim(TypeRef::Kind::Binary)},
+        {"any",     TypeRef::prim(TypeRef::Kind::Any)},
     };
     auto it = table.find(name);
     return it == table.end() ? nullptr : &it->second;
@@ -345,6 +346,8 @@ DeclPtr Parser::parseGlobalVar() {
     if (matchToken(TokenType::Colon)) {
         g->hasDeclaredType = true;
         g->declaredType = parseType("in the global declaration");
+        if (g->declaredType.isNamed() && g->declaredType.name == "auto" && g->declaredType.args.empty())
+            g->hasDeclaredType = false;
     }
     expect(TokenType::Assign, "after the global name");
     g->init = parseExpression();
