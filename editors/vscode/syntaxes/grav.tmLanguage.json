@@ -163,7 +163,7 @@
     },
     "types": {
       "name": "support.type.primitive.grav",
-      "match": "\\b(int|float|bool|string|void|binary|long|int64|int32|int16|int8|signed|uint|unsigned|uint64|ulong|uint32|uint16|uint8|byte|double|float64|float32)\\b"
+      "match": "\\b(int|float|bool|string|void|binary|long|int64|int32|int16|int8|signed|uint|unsigned|uint64|ulong|uint32|uint16|uint8|byte|double|float64|float32|any|auto)\\b"
     },
     "constants": {
       "patterns": [
