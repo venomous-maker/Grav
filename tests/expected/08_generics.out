@@ -1,0 +1,16 @@
+--- generic structs & aliases ---
+answer=42  swapped: 42, answer
+triple sum = 7.5
+--- generic classes & interfaces ---
+cell = 20
+mapped cell = value #20
+length cell = 9
+counting cell = c after 2 writes
+--- constraints ---
+square with area 9
+--- generic functions & methods ---
+first: ho  count: 3
+as text: <4><8><15><16><23><42>
+average: 18
+--- generic collections ---
+ages[grace]=85 set size=2 stack top=2.5
