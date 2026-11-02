@@ -24,6 +24,7 @@ std::string typeMangle(const TypeRef &t) {
         case TypeRef::Kind::Bool: return "bool";
         case TypeRef::Kind::String: return "string";
         case TypeRef::Kind::Binary: return "binary";
+        case TypeRef::Kind::Any: return "any";
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Null: return "null";
         case TypeRef::Kind::Pointer:
@@ -111,6 +112,7 @@ ExprPtr cloneExpr(const Expr *e) {
     }
     if (auto *x = dynamic_cast<const IsExpr *>(e)) {
         auto n = mkE<IsExpr>(e); n->typeName = x->typeName; n->className = x->className;
+        n->target = x->target;
         n->operand = cloneExpr(x->operand.get()); return n;
     }
     if (auto *x = dynamic_cast<const AwaitExpr *>(e)) {
@@ -327,6 +329,28 @@ private:
     std::unordered_map<std::string, bool> knownTypes_; // fully-qualified type names
     std::string currentNs_;                            // namespace of the code being walked
     void qualifyArg(TypeRef &t) const;
+    // The first named type inside `t` that is not declared anywhere (nullptr if
+    // all are known), so a bad type argument is reported once, at the use site,
+    // instead of as errors throughout the instantiated library code.
+    const TypeRef *unknownIn(const TypeRef &t) const;
+    // `auto` type arguments are inferred later by the type checker.
+    static bool isAuto(const TypeRef &t) {
+        if (t.kind == TypeRef::Kind::Named && t.name == "auto" && t.args.empty()) return true;
+        for (const auto &a : t.args) if (isAuto(a)) return true;
+        for (const auto &p : t.fnParams) if (isAuto(p)) return true;
+        return t.elem && isAuto(*t.elem);
+    }
+    static bool hasAuto(const std::vector<TypeRef> &args) {
+        for (const auto &a : args) if (isAuto(a)) return true;
+        return false;
+    }
+    // A template type for the exported signature tables: class parameters
+    // substituted, other names namespace-qualified, its own parameters kept.
+    TypeRef exportType(TypeRef t, const std::vector<std::string> &own, const Subst &cls) const;
+    GenericSig exportSig(const std::vector<std::string> &own, const std::vector<Param> &params,
+                         const TypeRef &ret, const Subst &cls) const;
+    bool rejectUnknownArgs(const std::string &generic, const std::vector<TypeRef> &args,
+                           int line, int col);
     struct NsScope {
         std::string &ref, saved;
         NsScope(std::string &r, const std::string &v) : ref(r), saved(r) { r = v; }
@@ -391,6 +415,12 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
     }
     if (t.elem) rewriteType(*t.elem, subst, line, col);
     for (auto &a : t.args) { rewriteType(a, subst, line, col); qualifyArg(a); }
+    if (hasAuto(t.args)) {
+        error(line, col, "'auto' type arguments can only be inferred in calls and `new` "
+                         "(e.g. new Array<auto>() or maxOf(1, 2)), not in a declared type");
+        t = TypeRef::prim(TypeRef::Kind::Error);
+        return;
+    }
     for (auto &p : t.fnParams) rewriteType(p, subst, line, col);
 
     if (t.kind == TypeRef::Kind::Named && !t.args.empty()) {
@@ -434,8 +464,11 @@ std::string Mono::instantiateStruct(const std::string &name, const std::vector<T
                                     int line, int col) {
     std::string inst = name;
     for (const auto &a : args) inst += "$" + typeMangle(a);
+    if (rejectUnknownArgs(name, args, line, col)) return name;
     if (done_.count(inst)) return inst;
     done_[inst] = true;
+    knownTypes_[inst] = true;
+    program_.generics.instances[inst] = {name, args};
 
     StructDecl *tpl = structTpl_[name];
     NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
@@ -465,8 +498,11 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
                                 int line, int col) {
     std::string inst = name;
     for (const auto &a : args) inst += "$" + typeMangle(a);
+    if (rejectUnknownArgs(name, args, line, col)) return name;
     if (done_.count(inst)) return inst;
     done_[inst] = true;
+    knownTypes_[inst] = true;
+    program_.generics.instances[inst] = {name, args};
 
     FunctionDecl *tpl = fnTpl_[name];
     NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
@@ -509,8 +545,11 @@ void Mono::rewriteSuper(std::string &name, std::vector<TypeRef> &args, const Sub
 std::string Mono::instantiateInterface(const std::string &name, const std::vector<TypeRef> &args,
                                        int line, int col) {
     std::string inst = instName(name, args);
+    if (rejectUnknownArgs(name, args, line, col)) return name;
     if (done_.count(inst)) return inst;
     done_[inst] = true;
+    knownTypes_[inst] = true;
+    program_.generics.instances[inst] = {name, args};
     InterfaceDecl *tpl = ifaceTpl_[name];
     NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
     if (tpl->typeParams.size() != args.size()) {
@@ -537,8 +576,11 @@ std::string Mono::instantiateInterface(const std::string &name, const std::vecto
 std::string Mono::instantiateClass(const std::string &name, const std::vector<TypeRef> &args,
                                    int line, int col) {
     std::string inst = instName(name, args);
+    if (rejectUnknownArgs(name, args, line, col)) return name;
     if (done_.count(inst)) return inst;
     done_[inst] = true;
+    knownTypes_[inst] = true;
+    program_.generics.instances[inst] = {name, args};
 
     ClassDecl *tpl = classTpl_[name];
     NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
@@ -608,6 +650,8 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     for (const auto &m : tpl->methods) {
         if (!m.typeParams.empty()) { // kept as a template until a call requests it
             genericMethods_.push_back({out.get(), cloneMethod(m), subst, currentNs_});
+            program_.generics.methods[out->fqName + "." + m.name].push_back(
+                exportSig(m.typeParams, m.params, m.returnType, subst));
             continue;
         }
         MethodDecl nm = cloneMethod(m);
@@ -691,7 +735,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         for (auto &f : x->fields) walkExpr(f.value.get(), subst);
     } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
-        if (!x->typeArgs.empty()) {
+        if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
             if (classTpl_.count(x->className))
                 x->className = instantiateClass(x->className, x->typeArgs, e->line, e->col);
             else
@@ -701,7 +745,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         for (auto &a : x->args) walkExpr(a.get(), subst);
     } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
-        if (!x->typeArgs.empty()) {
+        if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
             if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get())) {
                 if (fnTpl_.count(callee->name)) {
                     callee->name = instantiateFn(callee->name, x->typeArgs, e->line, e->col);
@@ -731,6 +775,8 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
     } else if (auto *x = dynamic_cast<TernaryExpr *>(e)) {
         walkExpr(x->cond.get(), subst); walkExpr(x->thenExpr.get(), subst); walkExpr(x->elseExpr.get(), subst);
     } else if (auto *x = dynamic_cast<IsExpr *>(e)) {
+        rewriteType(x->target, subst, e->line, e->col);
+        if (x->target.isNamed()) x->typeName = x->target.name;
         walkExpr(x->operand.get(), subst);
     } else if (auto *x = dynamic_cast<AwaitExpr *>(e)) {
         walkExpr(x->operand.get(), subst);
@@ -768,6 +814,58 @@ void Mono::qualifyArg(TypeRef &t) const {
         if (ns.empty()) return;
         ns = nsOf(ns);
     }
+}
+
+TypeRef Mono::exportType(TypeRef t, const std::vector<std::string> &own, const Subst &cls) const {
+    if (t.kind == TypeRef::Kind::Named && t.args.empty()) {
+        for (const auto &p : own) if (p == t.name) return t;
+        auto it = cls.find(t.name);
+        if (it != cls.end()) return it->second;
+        qualifyArg(t);
+        return t;
+    }
+    for (auto &a : t.args) a = exportType(a, own, cls);
+    for (auto &p : t.fnParams) p = exportType(p, own, cls);
+    if (t.elem) t.elem = std::make_shared<TypeRef>(exportType(*t.elem, own, cls));
+    return t;
+}
+
+GenericSig Mono::exportSig(const std::vector<std::string> &own, const std::vector<Param> &params,
+                           const TypeRef &ret, const Subst &cls) const {
+    GenericSig g;
+    g.typeParams = own;
+    for (const auto &p : params) {
+        g.params.push_back(exportType(p.type, own, cls));
+        if (p.variadic) g.variadic = true;
+    }
+    g.ret = exportType(ret, own, cls);
+    return g;
+}
+
+const TypeRef *Mono::unknownIn(const TypeRef &t) const {
+    if (t.kind == TypeRef::Kind::Named) {
+        if (t.args.empty() && t.name != "Self" && !knownTypes_.count(t.name)) return &t;
+        for (const auto &a : t.args) if (const TypeRef *u = unknownIn(a)) return u;
+    }
+    if (t.elem) if (const TypeRef *u = unknownIn(*t.elem)) return u;
+    for (const auto &p : t.fnParams) if (const TypeRef *u = unknownIn(p)) return u;
+    return nullptr;
+}
+
+bool Mono::rejectUnknownArgs(const std::string &generic, const std::vector<TypeRef> &args,
+                             int line, int col) {
+    for (const auto &a : args) {
+        const TypeRef *u = unknownIn(a);
+        if (!u || u->name == "auto") continue;
+        std::string msg = "unknown type '" + u->name + "' in the type arguments of '" + generic + "'";
+        if (u->name == "auto" || u->name == "any" || u->name == "var" || u->name == "dynamic" ||
+            u->name == "Any" || u->name == "object")
+            msg += "; Grav has no '" + u->name + "' type — write the concrete type (e.g. "
+                   "Array<Future<int>>), or let `let x = ...` infer it from the initializer";
+        error(line, col, msg);
+        return true;
+    }
+    return false;
 }
 
 void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
@@ -845,6 +943,23 @@ void Mono::run() {
         }
     }
 
+    // Export template signatures for type-argument inference in the checker.
+    for (auto &[name, fn] : fnTpl_) {
+        NsScope ns(currentNs_, nsOf(fn->fqName));
+        program_.generics.functions[name].push_back(exportSig(fn->typeParams, fn->params, fn->returnType, {}));
+    }
+    for (auto &[name, cd] : classTpl_) {
+        NsScope ns(currentNs_, nsOf(cd->fqName));
+        TypeRef self = TypeRef::named(name);
+        for (const auto &tp : cd->typeParams) self.args.push_back(TypeRef::named(tp));
+        auto add = [&](const std::vector<Param> &ps) {
+            program_.generics.ctors[name].push_back(exportSig(cd->typeParams, ps, self, {}));
+        };
+        if (cd->constructor.present) add(cd->constructor.params);
+        for (const auto &x : cd->extraCtors) add(x.params);
+        if (!cd->constructor.present) add({});
+    }
+
     // 2) Rewrite + collect instantiations over every concrete decl.
     for (auto &d : kept) walkDeclTypes(d.get(), {});
     instantiateGenericMethods();
@@ -863,8 +978,10 @@ void Mono::extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from,
                                  const Subst &classSubst) {
     std::vector<MethodDecl> keep;
     for (auto &m : from) {
-        if (m.typeParams.empty()) keep.push_back(std::move(m));
-        else genericMethods_.push_back({cd, std::move(m), classSubst, currentNs_});
+        if (m.typeParams.empty()) { keep.push_back(std::move(m)); continue; }
+        program_.generics.methods[cd->fqName + "." + m.name].push_back(
+            exportSig(m.typeParams, m.params, m.returnType, classSubst));
+        genericMethods_.push_back({cd, std::move(m), classSubst, currentNs_});
     }
     from = std::move(keep);
 }
