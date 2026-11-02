@@ -76,6 +76,7 @@ typedef struct GravTypeInfo {
     const struct GravTypeInfo* const* extra;    /* secondary bases (MI) */
     int nextra;
     void (*drop)(void*);                        /* destructor chain, or 0 */
+    const char* (*str)(void*);                  /* toString(), or 0 */
 } GravTypeInfo;
 
 /* Common object header: vtable pointer + runtime type descriptor. */
@@ -228,6 +229,129 @@ static const char* grav_input(void) {
     if (c == EOF && n == 0) { free(b); return ""; }
     if (n > 0 && b[n - 1] == '\r') n--; /* tolerate CRLF input */
     b[n] = 0; return b;
+}
+
+/* `any`: a tagged box for a value of any boxable type. */
+enum { GRAV_ANY_NULL, GRAV_ANY_INT, GRAV_ANY_UINT, GRAV_ANY_FLOAT, GRAV_ANY_BOOL, GRAV_ANY_STR,
+       GRAV_ANY_OBJ, GRAV_ANY_ENUM, GRAV_ANY_FN };
+typedef struct GravAny {
+    int tag;
+    const char* tname;                  /* enum / function type name */
+    const char* (*ename)(long long);    /* enum member names */
+    union { long long i; unsigned long long u; double f; bool b; const char* s; void* p; GravFn fn; } v;
+} GravAny;
+static inline GravAny grav_any_null(void) { GravAny a; memset(&a, 0, sizeof a); return a; }
+static inline GravAny grav_any_int(long long x) { GravAny a = grav_any_null(); a.tag = GRAV_ANY_INT; a.v.i = x; return a; }
+static inline GravAny grav_any_uint(unsigned long long x) { GravAny a = grav_any_null(); a.tag = GRAV_ANY_UINT; a.v.u = x; return a; }
+static inline GravAny grav_any_float(double x) { GravAny a = grav_any_null(); a.tag = GRAV_ANY_FLOAT; a.v.f = x; return a; }
+static inline GravAny grav_any_bool(bool x) { GravAny a = grav_any_null(); a.tag = GRAV_ANY_BOOL; a.v.b = x; return a; }
+static inline GravAny grav_any_str(const char* x) { GravAny a = grav_any_null(); a.tag = GRAV_ANY_STR; a.v.s = x; return a; }
+static inline GravAny grav_any_obj(void* x) {
+    GravAny a = grav_any_null();
+    if (x) { a.tag = GRAV_ANY_OBJ; a.v.p = x; }
+    return a;
+}
+static inline GravAny grav_any_enum(long long x, const char* tname, const char* (*names)(long long)) {
+    GravAny a = grav_any_null(); a.tag = GRAV_ANY_ENUM; a.v.i = x; a.tname = tname; a.ename = names; return a;
+}
+static inline GravAny grav_any_fn(GravFn f, const char* sig) {
+    GravAny a = grav_any_null();
+    if (f.fn) { a.tag = GRAV_ANY_FN; a.v.fn = f; a.tname = sig; }
+    return a;
+}
+static const char* grav_any_typename(GravAny a) {
+    switch (a.tag) {
+        case GRAV_ANY_INT: return "int";
+        case GRAV_ANY_UINT: return "uint";
+        case GRAV_ANY_FLOAT: return "float";
+        case GRAV_ANY_BOOL: return "bool";
+        case GRAV_ANY_STR: return "string";
+        case GRAV_ANY_OBJ: return ((const struct GravObject*)a.v.p)->__type->name;
+        case GRAV_ANY_ENUM: case GRAV_ANY_FN: return a.tname;
+        default: return "null";
+    }
+}
+static GRAV_COLD GRAV_NORETURN void grav_any_bad(GravAny a, const char* want) {
+    char msg[256];
+    snprintf(msg, sizeof msg, "an 'any' holding %s cannot be used as %s (check with `is` first)",
+             grav_any_typename(a), want);
+    grav_panic(msg);
+}
+static long long grav_any_to_int(GravAny a) {
+    if (a.tag == GRAV_ANY_INT) return a.v.i;
+    if (a.tag == GRAV_ANY_UINT) return (long long)a.v.u;
+    grav_any_bad(a, "an integer");
+}
+static unsigned long long grav_any_to_uint(GravAny a) {
+    if (a.tag == GRAV_ANY_UINT) return a.v.u;
+    if (a.tag == GRAV_ANY_INT) return (unsigned long long)a.v.i;
+    grav_any_bad(a, "an integer");
+}
+static double grav_any_to_float(GravAny a) {
+    if (a.tag == GRAV_ANY_FLOAT) return a.v.f;
+    if (a.tag == GRAV_ANY_INT) return (double)a.v.i;
+    if (a.tag == GRAV_ANY_UINT) return (double)a.v.u;
+    grav_any_bad(a, "a float");
+}
+static bool grav_any_to_bool(GravAny a) { if (a.tag == GRAV_ANY_BOOL) return a.v.b; grav_any_bad(a, "a bool"); }
+static const char* grav_any_to_str(GravAny a) { if (a.tag == GRAV_ANY_STR) return a.v.s; grav_any_bad(a, "a string"); }
+static long long grav_any_to_enum(GravAny a, const char* name) {
+    if (a.tag == GRAV_ANY_ENUM && strcmp(a.tname, name) == 0) return a.v.i;
+    grav_any_bad(a, name);
+}
+static void* grav_any_to_obj(GravAny a, const GravTypeInfo* want) {
+    if (a.tag == GRAV_ANY_NULL) return 0;
+    if (a.tag == GRAV_ANY_OBJ && grav_type_is(((const struct GravObject*)a.v.p)->__type, want)) return a.v.p;
+    grav_any_bad(a, want->name);
+}
+static GravFn grav_any_to_fn(GravAny a, const char* sig) {
+    if (a.tag == GRAV_ANY_NULL) { GravFn z = {0, 0}; return z; }
+    if (a.tag == GRAV_ANY_FN && strcmp(a.tname, sig) == 0) return a.v.fn;
+    grav_any_bad(a, sig);
+}
+static inline bool grav_any_is_int(GravAny a) { return a.tag == GRAV_ANY_INT || a.tag == GRAV_ANY_UINT; }
+static inline bool grav_any_is_float(GravAny a) { return a.tag == GRAV_ANY_FLOAT; }
+static inline bool grav_any_is_bool(GravAny a) { return a.tag == GRAV_ANY_BOOL; }
+static inline bool grav_any_is_str(GravAny a) { return a.tag == GRAV_ANY_STR; }
+static inline bool grav_any_is_enum(GravAny a, const char* n) { return a.tag == GRAV_ANY_ENUM && strcmp(a.tname, n) == 0; }
+static inline bool grav_any_is_fn(GravAny a, const char* s) { return a.tag == GRAV_ANY_FN && strcmp(a.tname, s) == 0; }
+static inline bool grav_any_is_obj(GravAny a, const GravTypeInfo* want) {
+    return a.tag == GRAV_ANY_OBJ && grav_type_is(((const struct GravObject*)a.v.p)->__type, want);
+}
+static const char* grav_any_to_string(GravAny a) {
+    switch (a.tag) {
+        case GRAV_ANY_INT: return grav_int_to_str(a.v.i);
+        case GRAV_ANY_UINT: return grav_uint_to_str(a.v.u);
+        case GRAV_ANY_FLOAT: return grav_float_to_str(a.v.f);
+        case GRAV_ANY_BOOL: return a.v.b ? "true" : "false";
+        case GRAV_ANY_STR: return a.v.s;
+        case GRAV_ANY_OBJ: {
+            const GravTypeInfo* t = ((const struct GravObject*)a.v.p)->__type;
+            return t->str ? t->str(a.v.p) : t->name;   /* the dynamic class's toString() */
+        }
+        case GRAV_ANY_ENUM: return a.ename ? a.ename(a.v.i) : a.tname;
+        case GRAV_ANY_FN: return a.tname;
+        default: return "null";
+    }
+}
+static bool grav_any_eq(GravAny a, GravAny b) {
+    bool an = a.tag == GRAV_ANY_INT || a.tag == GRAV_ANY_UINT || a.tag == GRAV_ANY_FLOAT;
+    bool bn = b.tag == GRAV_ANY_INT || b.tag == GRAV_ANY_UINT || b.tag == GRAV_ANY_FLOAT;
+    if (an && bn) {
+        if (a.tag == GRAV_ANY_FLOAT || b.tag == GRAV_ANY_FLOAT)
+            return grav_any_to_float(a) == grav_any_to_float(b);
+        return a.v.i == b.v.i;
+    }
+    if (a.tag != b.tag) return false;
+    switch (a.tag) {
+        case GRAV_ANY_NULL: return true;
+        case GRAV_ANY_BOOL: return a.v.b == b.v.b;
+        case GRAV_ANY_STR: return grav_streq(a.v.s, b.v.s);
+        case GRAV_ANY_OBJ: return a.v.p == b.v.p;
+        case GRAV_ANY_ENUM: return strcmp(a.tname, b.tname) == 0 && a.v.i == b.v.i;
+        case GRAV_ANY_FN: return grav_fn_eq(a.v.fn, b.v.fn);
+        default: return false;
+    }
 }
 
 /* Call stack for diagnostics: a frame per active function (name+file+line).
