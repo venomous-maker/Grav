@@ -1,0 +1,105 @@
+// 10_exceptions.grav — throwing, catching, and cleaning up.
+//
+//   grav examples/10_exceptions.grav --run
+//
+// Covers: throwing class instances, catching by exact type or base class,
+// custom exception hierarchies with `describe()`, `finally` (normal, handled,
+// propagating, and when `return`/`break` leave the try), re-throwing, nested
+// try blocks, exceptions crossing function calls, and local state surviving
+// into `catch`. (An uncaught exception prints its message and a stack trace,
+// then exits with status 1.)
+
+import "../lib/std.grav"
+
+// A custom hierarchy on top of lib/exception.grav's Exception.
+class BankError extends Exception {
+    constructor(m: string) { super(m) }
+    public fn describe() -> string { return "BankError: ${self.msg}" }
+}
+class InsufficientFunds extends BankError {
+    public needed: long
+    constructor(needed: long) { super("insufficient funds"); self.needed = needed }
+    public fn describe() -> string { return "InsufficientFunds: short by ${self.needed}" }
+}
+
+fn withdraw(balance: long, amount: long) -> long {
+    if (amount <= 0) { throw new ValueError("amount must be positive") }
+    if (amount > balance) { throw new InsufficientFunds(amount - balance) }
+    return balance - amount
+}
+
+fn parsePositive(s: string) -> int {
+    let n = Format.toInt(s)
+    if (n <= 0) { throw new ValueError("not a positive number: '${s}'") }
+    return n
+}
+
+// `finally` runs even when `return` leaves the try block.
+fn guarded(n: int) -> string {
+    try {
+        if (n > 0) { return "positive" }
+        throw new RuntimeError("non-positive")
+    } catch (e: RuntimeError) {
+        return "caught ${e.message()}"
+    } finally {
+        print("  (finally for ${n})")
+    }
+    return "unreachable"
+}
+
+fn main() {
+    print("--- catch by type ---")
+    let attempts = [50, 500, -1]
+    for (amt in attempts) {
+        try {
+            let left = withdraw(200, amt)
+            print("withdrew ${amt}, ${left} left")
+        } catch (e: InsufficientFunds) {
+            print("${e.describe()} (needed ${e.needed})")
+        } catch (e: Exception) {                // clauses are tried in order
+            print("other: ${e.describe()}")
+        }
+    }
+
+    print("--- catch by base class ---")
+    try { withdraw(10, 99) } catch (e: BankError) { print("bank problem: ${e.describe()}") }
+    try { withdraw(10, 0) } catch (e: Exception) { print("generic: ${e.describe()}") }
+
+    print("--- finally ---")
+    print(guarded(5))
+    print(guarded(-5))
+    for (i in 0..5) {
+        try {
+            if (i == 2) { break }
+            print("  loop ${i}")
+        } finally {
+            print("  finally ${i}")
+        }
+    }
+
+    print("--- re-throw and nesting ---")
+    try {
+        try {
+            parsePositive("-3")
+        } catch (e: ValueError) {
+            print("inner saw: ${e.message()}; re-throwing")
+            throw e
+        } finally {
+            print("inner finally")
+        }
+    } catch (e: Exception) {
+        print("outer caught: ${e.describe()}")
+    }
+
+    print("--- state survives into catch ---")
+    let processed = 0
+    let inputs = ["4", "8", "x", "16"]
+    try {
+        for (s in inputs) {
+            parsePositive(s)
+            processed = processed + 1
+        }
+    } catch (e: ValueError) {
+        print("stopped after ${processed} values: ${e.message()}")
+    }
+}
