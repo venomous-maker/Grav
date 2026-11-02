@@ -1,0 +1,16 @@
+added [ ] #1 write the release notes (High)
+added [ ] #2 update dependencies (Normal)
+added [ ] #3 fix the login bug (Urgent)
+added [ ] #4 tidy the wiki (Low)
+tagged #1
+tagged #3
+completed #2
+error: unknown priority 'someday'  <- "add someday learn rust"
+error: no task #9  <- "done 9"
+error: unknown command 'frobnicate'  <- "frobnicate"
+open tasks (3):
+  [ ] #3 fix the login bug (Urgent) @bug @release
+  [ ] #1 write the release notes (High) @docs @release
+  [ ] #4 tidy the wiki (Low)
+tagged @release: #3, #1
+4 tasks, 1 done, 1 urgent open
