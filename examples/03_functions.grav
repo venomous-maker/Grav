@@ -1,0 +1,98 @@
+// 03_functions.grav — functions in all their forms.
+//
+//   grav examples/03_functions.grav --run
+//
+// Covers: parameters and return types, `void`, recursion, overloading by
+// parameter types, variadic parameters, generic functions (with a `T: Bound`
+// constraint, called with `::<T>`), module-level globals, and async/await.
+
+import "../lib/std.grav"
+
+// Module-level state: `let` globals are mutable, `const` globals are not.
+let callCount: int = 0
+const GREETING: string = "hello"
+
+fn add(a: int, b: int) -> int { return a + b }
+
+fn greet(name: string) {                 // `-> void` may be omitted
+    callCount += 1
+    print("${GREETING}, ${name}!")
+}
+
+// Recursion.
+fn factorial(n: int) -> long { return n <= 1 ? 1 : (n as long) * factorial(n - 1) }
+fn fib(n: int) -> int { if (n < 2) { return n } return fib(n - 1) + fib(n - 2) }
+fn gcd(a: int, b: int) -> int { return b == 0 ? a : gcd(b, a % b) }
+
+// Overloading: same name, different parameter types/arity.
+fn describe(x: int) -> string { return "int ${x}" }
+fn describe(x: float) -> string { return "float ${x}" }
+fn describe(x: string) -> string { return "string \"${x}\"" }
+fn describe(x: int, y: int) -> string { return "point (${x}, ${y})" }
+
+// Variadics: `...xs` collects the trailing arguments; `xs.length` is the count.
+fn sum(...xs: int) -> int {
+    let total = 0
+    for (x in xs) { total += x }
+    return total
+}
+fn joinAll(sep: string, ...parts: string) -> string {
+    let sb = new StringBuilder()
+    for (i, p in parts) {
+        if (i > 0) { sb.append(sep) }
+        sb.append(p)
+    }
+    let out = sb.toString()
+    free(sb)
+    return out
+}
+
+// Generics: one definition, instantiated per type argument.
+fn maxOf<T>(a: T, b: T) -> T { return a > b ? a : b }
+fn swapPair<A, B>(a: A, b: B) -> string { return "(${b}, ${a})" }
+
+interface Named { fn name() -> string }
+class City implements Named {
+    private n: string
+    constructor(n: string) { self.n = n }
+    public fn name() -> string { return self.n }
+}
+fn shout<T: Named>(x: T) -> string { return Str.upper(x.name()) + "!" }   // bounded
+
+// async/await: futures resolve eagerly (calls stay plain C calls).
+async fn fetchScore(player: string) -> int { return Str.length(player) * 10 }
+async fn total(a: string, b: string) -> int {
+    let x = await fetchScore(a)
+    let y = await fetchScore(b)
+    return x + y
+}
+
+async fn main() {
+    print("--- basics ---")
+    print(add(2, 3))
+    greet("Ada")
+    greet("Linus")
+    print("greet was called ${callCount} times")
+
+    print("--- recursion ---")
+    print("10! = ${factorial(10)}  20! = ${factorial(20)}")
+    print("fib(20) = ${fib(20)}  gcd(84, 36) = ${gcd(84, 36)}")
+
+    print("--- overloading ---")
+    print(describe(7))
+    print(describe(2.5))
+    print(describe("hi"))
+    print(describe(3, 4))
+
+    print("--- variadics ---")
+    print("sum() = ${sum()}  sum(1,2,3,4) = ${sum(1, 2, 3, 4)}")
+    print(joinAll(", ", "red", "green", "blue"))
+
+    print("--- generics ---")
+    print("maxOf ints: ${maxOf::<int>(3, 9)}  floats: ${maxOf::<float>(2.5, 1.5)}")
+    print(swapPair::<int, string>(1, "one"))
+    print(shout::<City>(new City("Nairobi")))
+
+    print("--- async / await ---")
+    print("total score: ${await total("ada", "grace")}")
+}
