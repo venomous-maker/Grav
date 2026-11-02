@@ -9,6 +9,8 @@ system, and annotates the AST for codegen.
 | `typechecker.h`          | `TypeChecker` interface + scope/local tracking.            |
 | `typechecker.cpp`        | Driver + statement checking.                               |
 | `typechecker_expr.cpp`   | Expression checking and call/member resolution.            |
+| `typechecker_lambda.cpp` | Lambdas: parameter inference from the expected type, capture analysis (read-only copies), named functions as values, calls through function values. |
+| `typechecker_ops.cpp`    | Operator overloading, for-each/`step` loops, `defer`, `toString`/enum display, and the missing-return analysis. |
 
 ### `Registry` (build order matters)
 
@@ -16,15 +18,19 @@ system, and annotates the AST for codegen.
    note namespace prefixes.
 2. **canonicalize** — rewrite every `Named` type (in the AST *and* the registry) to its
    fully-qualified form; resolve `extends`/`implements` targets.
-3. **synthesizeAccessors** — add `get_x`/`set_x` methods for private fields.
-4. **computeSlots** — lay out each class's vtable slots, base-first, so a base
+3. **assignMethodNames** — method overloading: overrides inherit the base method's
+   internal name (same vtable slot); the first method of a name keeps it; other
+   signatures become `name__<signature>`. `findMethodsBySource` lists the overloads.
+4. **synthesizeAccessors** — add `get_x`/`set_x` methods for private fields.
+5. **computeSlots** — lay out each class's vtable slots, base-first, so a base
    pointer's vtable view is layout-compatible with any subclass.
-5. **checkHierarchies** — abstract-method completeness, override-signature matching,
-   and interface conformance.
+6. **checkHierarchies** — abstract-method completeness, override-signature matching,
+   `final` classes/methods, and interface conformance.
 
 It also answers the queries everyone else needs: `resolveType`/`resolveFunc`/
 `resolveNamespace` (namespace-aware), `findField`/`findMethod` (walk the chain),
-`findMethodImpl`, `isSubclass`, `classImplements`.
+`findMethodImpl`, `isSubclass`, `classImplements`, plus `isOverridden` (does any
+subclass replace a method? — drives devirtualization) and `findDestructor`.
 
 ### `TypeChecker`
 
