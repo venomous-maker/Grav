@@ -1,0 +1,88 @@
+// 13_stdlib.grav — a tour of the standard library (lib/std.grav).
+//
+//   grav examples/13_stdlib.grav --run
+//
+// Covers: Str (search, transform, split/join, pad, compare), Format (parsing and
+// conversions), Math, Random, DateTime, Time/Stopwatch, Path, File (text,
+// lines, binary), Process, OS, IO, and Term. Output is deterministic: random
+// values are only range-checked, the date is a fixed instant, and files live
+// in /tmp and are removed afterwards.
+
+import "../lib/std.grav"
+
+fn main() {
+    print("--- Str ---")
+    let s = "  The quick brown fox  "
+    let t = Str.trim(s)
+    print("trim='${t}' len=${Str.length(t)} upper=${Str.upper(t)}")
+    print("contains fox=${Str.contains(t, "fox")} indexOf quick=${Str.indexOf(t, "quick")} count o=${Str.count(t, "o")}")
+    print("starts 'The'=${Str.startsWith(t, "The")} ends 'fox'=${Str.endsWith(t, "fox")} charAt(4)=${Str.charAt(t, 4)}")
+    print("substring=${Str.substring(t, 4, 5)} replace=${Str.replace(t, "quick", "slow")} reverse=${Str.reverse("grav")}")
+    let parts = Str.split("a,b,,c", ",")
+    print("split -> ${parts.length()} parts, joined with '|': ${Str.join(parts, "|")}")
+    print("pad: [${Str.padLeft("7", 3, "0")}] [${Str.padRight("ab", 5, ".")}] repeat: ${Str.repeat("=-", 4)}")
+    print("compare: ${Str.compare("apple", "banana") < 0} ${Str.compare("b", "a") > 0} ${Str.compare("x", "x") == 0}")
+
+    print("--- Format ---")
+    print("toInt=${Format.toInt("42") + 1} toLong=${Format.toLong("9000000000")} toFloat=${Format.toFloat("2.5") * 2.0}")
+    print("toBool=${Format.toBool("true")} toIntOr=${Format.toIntOr("oops", -1)} hex(255)=${Format.hex(255)}")
+
+    print("--- Math ---")
+    print("sqrt(2)=${Math.sqrt(2.0)} pow(2,8)=${Math.pow(2.0, 8.0)} abs(-3.5)=${Math.abs(-3.5)}")
+    print("floor/ceil/round(2.5)=${Math.floor(2.5)}/${Math.ceil(2.5)}/${Math.round(2.5)} pi=${Math.pi()}")
+    print("sin(pi/2)=${Math.sin(Math.pi() / 2.0)} log(e)=${Math.log(Math.e())} max=${Math.max(3.0, 7.0)}")
+
+    print("--- Random ---")
+    Random.seed(2024)
+    let inRange = true
+    for (i in 0..1000) {
+        let r = Random.nextInt(1, 6)
+        if (r < 1 || r > 6) { inRange = false }
+    }
+    let f = Random.nextFloat()
+    print("1000 dice rolls all in 1..6: ${inRange}; nextFloat in [0,1): ${f >= 0.0 && f < 1.0}")
+
+    print("--- DateTime ---")
+    let d = DateTime.fromUnix(1700049600)                 // 2023-11-15 12:00 UTC
+    print("year=${d.year()} month=${d.month()} day=${d.day()} unix=${d.unix()}")
+    let later = d.addDays(30)
+    print("30 days later: ${later.format("%Y-%m-%d")}")
+
+    print("--- Time / Stopwatch ---")
+    let sw = new Stopwatch()
+    Time.sleepMs(10)
+    print("slept at least 10ms: ${sw.elapsedMs() >= 10}; clock is past 2020: ${Time.now() > 1577836800}")
+
+    print("--- Path ---")
+    let p = "/var/log/app/server.log"
+    print("basename=${Path.basename(p)} dirname=${Path.dirname(p)} ext=${Path.extension(p)}")
+    let segs = new Array<string>()
+    for (x in ["usr", "local", "bin"]) { segs.push(x) }
+    print("join=${Path.join(segs)}")
+
+    print("--- File ---")
+    let file = new File("/tmp/grav_example_13.txt")
+    file.write("first line\n")
+    file.writeLine("second line")
+    file.append("third line\n")
+    let lines = file.readLines()
+    print("exists=${file.exists()} size=${file.size()} lines=${lines.length()} last='${lines.get(2)}'")
+    let bin = new File("/tmp/grav_example_13.bin")
+    bin.writeBinary("\x01\x02\x03" as binary)
+    print("binary bytes=${bin.readBinary().length}")
+    file.delete()
+    bin.delete()
+    print("deleted: ${!file.exists() && !bin.exists()}")
+
+    print("--- Process / OS ---")
+    print("echo says: ${Str.trim(Process.execOutput("echo hello from the shell"))}")
+    print("exec exit code: ${Process.exec("exit 3") / 256}")
+    print("platform known: ${OS.platform() != ""} cpus>0: ${OS.cpuCount() > 0} pid>0: ${OS.pid() > 0}")
+    OS.setEnv("GRAV_DEMO", "42")
+    print("env GRAV_DEMO=${OS.getEnv("GRAV_DEMO")} missing->${OS.getEnvOr("GRAV_NOPE", "default")}")
+
+    print("--- IO & Term ---")
+    IO.write("IO.write has no newline... ")
+    IO.print("IO.print does")
+    print("styled: ${Term.bold("bold")} ${Term.green("ok")} ${Term.red("err")}")
+}
