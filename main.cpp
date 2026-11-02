@@ -137,6 +137,8 @@ int usage(const char *prog) {
         "  --release            -O3, no stack-trace bookkeeping, NDEBUG\n"
         "  --no-trace           drop call-stack tracing (exceptions report no trace)\n"
         "  --native             tune for this machine (-march=native)\n"
+        "  --race               detect data races between threads (ThreadSanitizer)\n"
+        "  --sanitize           detect memory errors and undefined behaviour (ASan+UBSan)\n"
         "  -g | -g3             include debug info\n"
         "  --cc <compiler>      C compiler to use (default: $CC or cc)\n"
         "\n"
@@ -158,7 +160,7 @@ int main(int argc, char **argv) {
     std::string inputPath, outputPath, ccOverride, optFlag, debugFlag;
     bool useStdin = false, toStdout = false, werror = false;
     bool runAfter = false, keepC = false, verbose = false;
-    bool trace = true, native = false, release = false;
+    bool trace = true, native = false, release = false, race = false, sanitize = false;
     std::vector<std::string> runArgs;
     EmitMode emit = EmitMode::C;
 
@@ -207,6 +209,10 @@ int main(int argc, char **argv) {
             trace = false;
         } else if (arg == "--native") {
             native = true;
+        } else if (arg == "--race") {
+            race = true;
+        } else if (arg == "--sanitize") {
+            sanitize = true;
         } else if (arg == "-Werror") {
             werror = true;
         } else if (arg == "-v" || arg == "--verbose") {
@@ -331,10 +337,18 @@ int main(int argc, char **argv) {
         flags += " " + optFlag;
         if (release) flags += " -DNDEBUG";
         if (native) flags += " -march=native";
+        // Checking builds: instrument the binary (keep frames for readable reports).
+        if (race) flags += " -fsanitize=thread -g -fno-omit-frame-pointer";
+        if (sanitize) flags += " -fsanitize=address,undefined -g -fno-omit-frame-pointer";
+        if (race && sanitize) {
+            std::cerr << "gravc: --race and --sanitize cannot be combined\n";
+            return 1;
+        }
         if (!debugFlag.empty()) flags += " " + debugFlag;
         // Link libm so inline-C `<math.h>` users (e.g. lib/mathf.grav) work; on
         // assembly output there is no link step.
         std::string libs = emit == EmitMode::Asm ? "" : " -lm";
+        flags += " -pthread"; // async tasks run on a worker thread pool
         std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
                           " \"" + cPath + "\" -o \"" + exePath + "\"" + libs;
         if (verbose) std::cerr << "gravc: " << cmd << "\n";
