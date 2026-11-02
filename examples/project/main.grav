@@ -1,0 +1,24 @@
+// project/main.grav — a multi-file program: modules in sub-folders, nested
+// namespaces, a module-level global shared across files, and exports.
+//
+//   grav examples/project/main.grav --run
+//
+// Every module is included once (imports are de-duplicated, so they are also
+// cycle-safe), and names are referenced by their namespace path.
+
+import "../../lib/std.grav"
+import "util/text.grav"
+import "model/shapes.grav"
+import "model/shapes.grav"        // a repeated import is a no-op
+
+fn main() {
+    print(text.banner("Shape report"))
+    let shapes = new Array<geometry.Shape>()
+    shapes.push(new geometry.Circle(1.0))
+    shapes.push(new geometry.Rect(2.0, 3.0))
+    shapes.push(new geometry.Circle(0.5))
+
+    for (s in shapes) { print("${text.pad(s.name(), 8)}${s.area()}") }
+    print("total area: ${geometry.stats.total(shapes)}")
+    print("created ${text.plural(shapesCreated, "shape")} (global shared across modules)")
+}
