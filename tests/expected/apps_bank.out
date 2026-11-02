@@ -1,0 +1,22 @@
+ok    deposit 1000.00 to S-1
+ok    deposit 250.00 to C-1
+ok    transfer 300.00 S-1 -> C-2
+ok    withdraw 290.00 from C-1
+FAIL  withdraw 50.00 from C-1: BankError: C-1 would be overdrawn by 40.00
+FAIL  deposit -5 to C-2: BankError: deposit must be positive
+FAIL  transfer to X-9: BankError: no account 'X-9'
+
+Savings S-1 (Ada)
+  Deposit      +1000.00  salary
+  Withdrawal    -300.00  transfer to C-2
+  Interest        +8.75  monthly interest
+  balance: 708.75
+Checking C-1 (Ada)
+  Deposit       +250.00  cash
+  Withdrawal    -290.00  rent
+  Fee            -15.00  overdraft fee
+  balance: -55.00
+Checking C-2 (Grace)
+  Deposit       +300.00  transfer from S-1
+  balance: 300.00
+bank total: 953.75
