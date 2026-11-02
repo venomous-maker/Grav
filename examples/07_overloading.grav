@@ -1,0 +1,114 @@
+// 07_overloading.grav — method, constructor, and operator overloading.
+//
+//   grav examples/07_overloading.grav --run
+//
+// Covers: overloaded instance and static methods (exact match first, then a
+// unique compatible one), overriding one overload in a subclass while adding
+// another, constructor overloads (also through `super(...)`), operator methods
+// (`+ - * / % == != < <= > >=`, `[]`, `[]=`, with overloads of their own), and
+// `toString()` for printing.
+
+import "../lib/std.grav"
+
+// A 2-D vector with arithmetic operators.
+class Vec {
+    public x: float
+    public y: float
+    constructor() { self.x = 0.0; self.y = 0.0 }
+    constructor(x: float, y: float) { self.x = x; self.y = y }
+    fn operator+(o: Vec) -> Vec { return new Vec(self.x + o.x, self.y + o.y) }
+    fn operator-(o: Vec) -> Vec { return new Vec(self.x - o.x, self.y - o.y) }
+    fn operator*(k: float) -> Vec { return new Vec(self.x * k, self.y * k) }   // scale
+    fn operator*(o: Vec) -> float { return self.x * o.x + self.y * o.y }       // dot
+    fn operator==(o: Vec) -> bool { return self.x == o.x && self.y == o.y }    // != is derived
+    fn length() -> float { return Math.sqrt(self * self) }
+    fn toString() -> string { return "(${self.x}, ${self.y})" }
+}
+
+// Ordering operators on a value-like class.
+class Money {
+    public cents: long
+    constructor(cents: long) { self.cents = cents }
+    constructor(dollars: int, cents: int) { self.cents = (dollars as long) * 100 + cents }
+    fn operator<(o: Money) -> bool { return self.cents < o.cents }
+    fn operator<=(o: Money) -> bool { return self.cents <= o.cents }
+    fn operator>(o: Money) -> bool { return self.cents > o.cents }
+    fn operator>=(o: Money) -> bool { return self.cents >= o.cents }
+    fn operator/(parts: int) -> Money { return new Money(self.cents / parts) }
+    fn operator%(parts: int) -> Money { return new Money(self.cents % parts) }
+    fn toString() -> string {
+        let c = self.cents % 100
+        return "$${self.cents / 100}.${c < 10 ? "0" : ""}${c}"
+    }
+}
+
+// Indexing operators: a sparse row keyed by column number.
+class SparseRow {
+    private cols: HashMap<int, float>
+    constructor() { self.cols = new HashMap<int, float>() }
+    fn operator[](col: int) -> float { return self.cols.getOr(col, 0.0) }
+    fn operator[]=(col: int, v: float) { self.cols.put(col, v) }
+    fn nonZero() -> int { return self.cols.size() }
+}
+
+// Overloaded methods, including statics.
+class Printer {
+    fn show(x: int) -> string { return "int:${x}" }
+    fn show(x: float) -> string { return "float:${x}" }
+    fn show(s: string) -> string { return "string:${s}" }
+    fn show(v: Vec) -> string { return "vec:${v}" }
+    fn show(a: int, b: int) -> string { return "pair:${a},${b}" }
+    static fn banner(title: string) -> string { return "== ${title} ==" }
+    static fn banner(title: string, width: int) -> string {
+        return Str.padRight("== ${title} ", width, "=")
+    }
+}
+
+// A subclass overrides one overload and adds a new one.
+class FancyPrinter extends Printer {
+    fn show(x: int) -> string { return "*${x}*" }
+    fn show(b: bool) -> string { return b ? "yes" : "no" }
+}
+
+// Constructor overloads chained through super(...).
+class Animal {
+    public name: string
+    public legs: int
+    constructor(name: string) { self.name = name; self.legs = 4 }
+    constructor(name: string, legs: int) { self.name = name; self.legs = legs }
+}
+class Bird extends Animal {
+    constructor(name: string) { super(name, 2) }
+}
+
+fn main() {
+    print(Printer.banner("operators"))
+    let a = new Vec(3.0, 4.0)
+    let b = new Vec(1.0, 2.0)
+    print("a+b=${a + b} a-b=${a - b} a*2=${a * 2.0} a.b=${a * b} |a|=${a.length()}")
+    print("a == (3,4): ${a == new Vec(3.0, 4.0)}  a != b: ${a != b}  zero: ${new Vec()}")
+
+    let price = new Money(19, 99)
+    let budget = new Money(2000)
+    print("${price} < ${budget}: ${price < budget}  >=: ${price >= budget}")
+    print("split ${budget} three ways: ${budget / 3} each, remainder ${budget % 3}")
+
+    let row = new SparseRow()
+    row[3] = 1.5
+    row[10] = -2.0
+    print("row[3]=${row[3]} row[4]=${row[4]} row[10]=${row[10]} nonZero=${row.nonZero()}")
+
+    print(Printer.banner("methods", 24))
+    let p = new Printer()
+    print("${p.show(1)} ${p.show(2.5)} ${p.show("hi")} ${p.show(a)} ${p.show(1, 2)}")
+    let f: Printer = new FancyPrinter()
+    print("through a Printer reference: ${f.show(7)} ${f.show("still base")}")
+    let fp = new FancyPrinter()
+    print("fancy only: ${fp.show(true)} ${fp.show(false)}")
+
+    print(Printer.banner("constructors"))
+    let cat = new Animal("cat")
+    let spider = new Animal("spider", 8)
+    let robin = new Bird("robin")
+    print("${cat.name}:${cat.legs} ${spider.name}:${spider.legs} ${robin.name}:${robin.legs}")
+}
