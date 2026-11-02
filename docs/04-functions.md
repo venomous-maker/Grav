@@ -165,24 +165,30 @@ Named functions can be stored in variables and passed around; anonymous function
 
 ## async / await
 
-`async fn` declares a function whose callers receive a future; `await` gets its value.
-Futures currently resolve eagerly (calls stay plain C calls), so `async`/`await` is a
-way to write code that reads asynchronously today and can gain real concurrency later.
+`async fn` declares a function whose calls run concurrently on a pool of worker
+threads. The call returns a `Future<T>` immediately; `await` waits for the result.
 
 ```grav
-async fn fetchScore(name: string) -> int { return 10 }
+import "../lib/std.grav"
 
-async fn main() {
-    let a = await fetchScore("ada")
-    let b = await fetchScore("grace")
-    print(a + b)
+async fn fetchScore(name: string) -> int {
+    Async.sleepMs(100)                    // pretend to do slow work
+    return Str.length(name) * 10
+}
+
+fn main() {
+    let a = fetchScore("ada")             // both start right away...
+    let b = fetchScore("grace")
+    print(await a + await b)              // ...and run at the same time
 }
 ```
 
 Output:
 
 ```text
-20
+80
 ```
+
+Concurrency has its own chapter: [Concurrency](16-concurrency.md).
 
 Next: [Data types →](05-data-types.md)
