@@ -1,0 +1,22 @@
+// lib/tuple.grav — Pair<A,B> and Triple<A,B,C>: small immutable groupings, handy
+// for returning several values. Constructed with inferred types:
+//
+//   let p = new Pair("age", 36)            // Pair<string, int>
+//   print(p.first + ": " + str(p.second))
+class Pair<A, B> {
+    readonly first: A
+    readonly second: B
+    constructor(first: A, second: B) { self.first = first; self.second = second; }
+    public fn swap() -> Pair<B, A> { return new Pair<B, A>(self.second, self.first); }
+    fn operator==(o: Pair<A, B>) -> bool { return self.first == o.first && self.second == o.second; }
+}
+
+class Triple<A, B, C> {
+    readonly first: A
+    readonly second: B
+    readonly third: C
+    constructor(first: A, second: B, third: C) { self.first = first; self.second = second; self.third = third; }
+    fn operator==(o: Triple<A, B, C>) -> bool {
+        return self.first == o.first && self.second == o.second && self.third == o.third;
+    }
+}
