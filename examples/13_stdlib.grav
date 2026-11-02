@@ -76,7 +76,7 @@ fn main() {
 
     print("--- Process / OS ---")
     print("echo says: ${Str.trim(Process.execOutput("echo hello from the shell"))}")
-    print("exec exit code: ${Process.exec("exit 3") / 256}")
+    print("exec exit code: ${Process.exec("exit 3")}")
     print("platform known: ${OS.platform() != ""} cpus>0: ${OS.cpuCount() > 0} pid>0: ${OS.pid() > 0}")
     OS.setEnv("GRAV_DEMO", "42")
     print("env GRAV_DEMO=${OS.getEnv("GRAV_DEMO")} missing->${OS.getEnvOr("GRAV_NOPE", "default")}")
