@@ -13,17 +13,6 @@ std::string joinDots(const std::vector<std::string> &parts, size_t count) {
     }
     return out;
 }
-bool isPrintable(const TypeRef &t) {
-    switch (t.kind) {
-        case TypeRef::Kind::Int:
-        case TypeRef::Kind::Float:
-        case TypeRef::Kind::Bool:
-        case TypeRef::Kind::String:
-            return true;
-        default:
-            return false;
-    }
-}
 } // namespace
 
 std::optional<std::vector<std::string>>
@@ -49,7 +38,9 @@ void TypeChecker::checkArgs(const std::vector<ExprPtr> &args,
                             const std::vector<TypeRef> &params, int line, int col,
                             const std::string &what) {
     std::vector<TypeRef> argTypes;
-    for (auto &a : args) argTypes.push_back(checkExpr(*a));
+    for (size_t i = 0; i < args.size(); ++i)
+        argTypes.push_back(i < params.size() ? checkExprExpect(*args[i], params[i])
+                                             : checkExpr(*args[i]));
     if (argTypes.size() != params.size()) {
         error(line, col, what + " expects " + std::to_string(params.size()) +
                              " argument(s), but got " + std::to_string(argTypes.size()));
@@ -75,8 +66,8 @@ void TypeChecker::checkVariadicArgs(const std::vector<ExprPtr> &args,
                              " argument(s), but got " + std::to_string(args.size()));
     }
     for (size_t i = 0; i < args.size(); ++i) {
-        TypeRef at = checkExpr(*args[i]);
         const TypeRef &want = i < fixed ? params[i] : elem;
+        TypeRef at = checkExprExpect(*args[i], want);
         if (!isAssignable(at, want))
             error(args[i]->line, args[i]->col,
                   "argument " + std::to_string(i + 1) + " to " + what + " expects " +
@@ -104,6 +95,12 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
             t = TypeRef::prim(TypeRef::Kind::Error);
         } else {
             t = TypeRef::named(currentClass_);
+            // `self` inside a lambda is captured like any other outer variable.
+            for (auto &ctx : lambdaStack_) {
+                bool have = false;
+                for (const auto &c : ctx.lam->captures) if (c.name == "self") have = true;
+                if (!have) ctx.lam->captures.push_back({"self", t});
+            }
         }
     } else if (auto *e = dynamic_cast<SuperExpr *>(&expr)) {
         const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_);
@@ -116,14 +113,18 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
             t = TypeRef::named(ci->baseClass);
         }
     } else if (auto *e = dynamic_cast<NameExpr *>(&expr)) {
-        LocalVar *local = lookupLocal(e->name);
+        size_t scopeIdx = 0;
+        LocalVar *local = lookupLocalAt(e->name, scopeIdx);
         if (local) {
             local->used = true;
             t = local->type;
+            if (!lambdaStack_.empty()) noteCapture(e->name, t, scopeIdx);
         } else if (std::string gfq = reg_->resolveGlobal(e->name, currentNs_); !gfq.empty()) {
             const GlobalInfo *gi = reg_->global(gfq);
             e->resolvedGlobal = gi->cName;
             t = gi->type;
+        } else if (auto fr = tryFunctionRef(*e)) {
+            t = *fr; // a named function used as a value
         } else {
             error(e->line, e->col, "use of undeclared variable '" + e->name + "'");
             t = TypeRef::prim(TypeRef::Kind::Error);
@@ -164,6 +165,8 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         t = checkCall(*e);
     } else if (auto *e = dynamic_cast<MemberExpr *>(&expr)) {
         t = checkMember(*e);
+    } else if (auto *e = dynamic_cast<LambdaExpr *>(&expr)) {
+        t = checkLambda(*e);
     }
     expr.type = t;
     return t;
@@ -173,6 +176,8 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
     TypeRef lt = checkExpr(*e.left);
     TypeRef rt = checkExpr(*e.right);
     if (lt.isError() || rt.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // A class operator method (`fn operator+(o: T)`) takes over the operator.
+    if (auto ov = tryOperatorOverload(e, lt, rt)) return *ov;
 
     const char *sym = binaryOpSymbol(e.op);
     if (isLogical(e.op)) {
@@ -186,7 +191,7 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
     if ((e.op == BinaryOp::Eq || e.op == BinaryOp::NotEq) &&
         (lt.kind == TypeRef::Kind::Null || rt.kind == TypeRef::Kind::Null)) {
         auto refOrNull = [&](const TypeRef &x) {
-            return x.kind == TypeRef::Kind::Null || x.isPointer() ||
+            return x.kind == TypeRef::Kind::Null || x.isPointer() || x.isFunction() ||
                    (x.isNamed() && (reg_->isClass(x.name) || reg_->isInterface(x.name)));
         };
         if (refOrNull(lt) && refOrNull(rt))
@@ -372,6 +377,9 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
             if (src.isBinary() || src.kind == TypeRef::Kind::String) return e.target;
             break;
         case TypeRef::Kind::Named: {
+            // An integer ordinal -> enum value (`2 as Suit`).
+            if (reg_->isEnum(e.target.name) && (src.kind == TypeRef::Kind::Int || srcEnum))
+                return e.target;
             // Class<->class within one hierarchy, or class -> interface it implements.
             if (reg_->isClass(e.target.name) && src.isNamed() && reg_->isClass(src.name) &&
                 (reg_->isSubclass(src.name, e.target.name) ||
@@ -446,6 +454,9 @@ std::optional<TypeRef> TypeChecker::tryEnumValue(MemberExpr &e) {
 TypeRef TypeChecker::checkIncDec(IncDecExpr &e) {
     TypeRef t = checkExpr(*e.target);
     if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    if (auto *n = dynamic_cast<NameExpr *>(e.target.get()); n && isCapturedHere(n->name))
+        error(e.line, e.col, "cannot modify captured variable '" + n->name +
+                                 "' inside a lambda (captures are copies)");
     if (!isLvalue(*e.target)) {
         error(e.line, e.col, "'++'/'--' requires a variable or field");
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -545,6 +556,7 @@ TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
 
 TypeRef TypeChecker::checkIndex(IndexExpr &e) {
     TypeRef base = checkExpr(*e.base);
+    if (auto ov = tryIndexOverload(e, base)) return *ov;
     TypeRef idx = checkExpr(*e.index);
     if (!idx.isError() && idx.kind != TypeRef::Kind::Int)
         error(e.index->line, e.index->col,
@@ -569,11 +581,8 @@ TypeRef TypeChecker::checkNew(NewExpr &e) {
     if (ci->isAbstract) {
         error(e.line, e.col, "cannot instantiate abstract class '" + fq + "'");
     }
-    std::vector<TypeRef> params;
-    if (ci->hasConstructor) {
-        for (auto &p : ci->constructor->params) params.push_back(p.type);
-    }
-    checkArgs(e.args, params, e.line, e.col, "constructor of '" + fq + "'");
+    int idx = resolveCtor(fq, e.args, e.line, e.col, "constructor of '" + fq + "'");
+    e.ctorIndex = idx < 0 ? 0 : idx;
     return TypeRef::named(fq);
 }
 
@@ -677,11 +686,20 @@ const FunctionInfo *TypeChecker::pickOverload(const std::vector<FunctionInfo> &c
 
 // Resolves a call to a free function, choosing among overloads of the name.
 TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
+    const std::vector<FunctionInfo> &cands = reg_->funcOverloads(fnFq);
     std::vector<TypeRef> argTypes;
     argTypes.reserve(e.args.size());
-    for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
+    for (size_t i = 0; i < e.args.size(); ++i) {
+        // With a single candidate its parameter types guide lambda inference.
+        const TypeRef *want = nullptr;
+        if (cands.size() == 1) {
+            const auto &ps = cands[0].paramTypes;
+            if (i < ps.size()) want = &ps[i];
+            else if (cands[0].isVariadic && !ps.empty()) want = &ps.back();
+        }
+        argTypes.push_back(want ? checkExprExpect(*e.args[i], *want) : checkExpr(*e.args[i]));
+    }
 
-    const std::vector<FunctionInfo> &cands = reg_->funcOverloads(fnFq);
     const FunctionInfo *fi = pickOverload(cands, argTypes);
     if (!fi) {
         if (cands.size() == 1) {
@@ -718,11 +736,8 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
             for (auto &a : e.args) checkExpr(*a);
             return TypeRef::prim(TypeRef::Kind::Error);
         }
-        const ClassInfo *pc = reg_->cls(parent);
-        std::vector<TypeRef> ptypes;
-        if (pc && pc->constructor)
-            for (const auto &p : pc->constructor->params) ptypes.push_back(p.type);
-        checkArgs(e.args, ptypes, e.line, e.col, "parent constructor '" + parent + "'");
+        int idx = resolveCtor(parent, e.args, e.line, e.col, "parent constructor '" + parent + "'");
+        e.resolvedOverload = idx < 0 ? 0 : idx;
         e.kind = CallKind::SuperConstructor;
         e.ownerClass = parent;
         return TypeRef::prim(TypeRef::Kind::Void);
@@ -735,17 +750,20 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
         error(e.line, e.col, "'super' requires a parent class (extends ...)");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
-    const MethodInfo *mi = reg_->findMethod(parent, mem->member);
-    if (!mi || mi->isStatic) {
+    std::vector<const MethodInfo *> cands;
+    for (const MethodInfo *c : reg_->findMethodsBySource(parent, mem->member))
+        if (!c->isStatic && c->hasBody) cands.push_back(c);
+    if (cands.empty()) {
         error(mem->line, mem->col, "parent class '" + parent + "' has no method '" +
                                        mem->member + "'");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
+    const MethodInfo *mi = resolveMethodOverload(cands, e.args, e.line, e.col,
+                                                 "parent method '" + parent + "." + mem->member + "'");
+    if (!mi) return TypeRef::prim(TypeRef::Kind::Error);
     e.kind = CallKind::SuperMethod;
-    e.methodName = mem->member;
+    e.methodName = mi->name;
     e.ownerClass = mi->definingClass; // class whose C function we call directly
-    checkArgs(e.args, mi->paramTypes, e.line, e.col,
-              "parent method '" + parent + "." + mem->member + "'");
     return mi->returnType;
 }
 
@@ -754,6 +772,18 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     // parent's method implementation directly (non-virtual).
     if (auto sup = checkSuperCall(e)) return *sup;
 
+    // A local/global holding a function value shadows functions and builtins.
+    if (auto *name = dynamic_cast<NameExpr *>(e.callee.get())) {
+        LocalVar *lv = lookupLocal(name->name);
+        const GlobalInfo *gv = nullptr;
+        if (!lv)
+            if (std::string g = reg_->resolveGlobal(name->name, currentNs_); !g.empty())
+                gv = reg_->global(g);
+        if ((lv && lv->type.isFunction()) || (gv && gv->type.isFunction())) {
+            TypeRef ft = checkExpr(*e.callee);
+            return checkFnValueCall(e, ft);
+        }
+    }
     // Free function or builtin: callee is a bare name.
     if (auto *name = dynamic_cast<NameExpr *>(e.callee.get())) {
         if (name->name == "print" || name->name == "println") {
@@ -763,7 +793,8 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             for (auto &a : e.args) argTypes.push_back(checkExpr(*a));
             if (argTypes.size() != 1) {
                 error(e.line, e.col, name->name + " expects exactly 1 argument");
-            } else if (!isPrintable(argTypes[0])) {
+            } else if (!argTypes[0].isError() && !isDisplayable(argTypes[0]) &&
+                       !argTypes[0].isBinary()) {
                 error(e.args[0]->line, e.args[0]->col,
                       name->name + " cannot display a value of type " + typeRefName(argTypes[0]));
             }
@@ -848,7 +879,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 error(e.line, e.col, "str expects exactly 1 argument");
             } else {
                 TypeRef t = checkExpr(*e.args[0]);
-                bool ok = isPrintable(t) || (t.isNamed() && reg_->isEnum(t.name));
+                bool ok = isDisplayable(t) || t.isBinary();
                 if (!t.isError() && !ok)
                     error(e.args[0]->line, e.args[0]->col,
                           "str cannot convert a value of type " + typeRefName(t));
@@ -877,7 +908,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 error(e.line, e.col, "free expects exactly 1 argument");
             } else {
                 TypeRef t = checkExpr(*e.args[0]);
-                bool ok = t.isPointer() || (t.isNamed() && reg_->isClass(t.name));
+                bool ok = t.isPointer() || t.isFunction() || (t.isNamed() && reg_->isClass(t.name));
                 if (!t.isError() && !ok)
                     error(e.args[0]->line, e.args[0]->col,
                           "free expects a class instance or pointer, got " + typeRefName(t));
@@ -908,7 +939,11 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
 
     auto *mem = dynamic_cast<MemberExpr *>(e.callee.get());
     if (!mem) {
-        error(e.line, e.col, "this expression is not callable");
+        // Any other expression producing a function value: `make()(x)`, `fs[i](x)`.
+        TypeRef ft = checkExpr(*e.callee);
+        if (ft.isFunction()) return checkFnValueCall(e, ft);
+        if (!ft.isError()) error(e.line, e.col, "this expression is not callable");
+        for (auto &a : e.args) checkExpr(*a);
         return TypeRef::prim(TypeRef::Kind::Error);
     }
 
@@ -920,21 +955,28 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         std::string prefix = joinDots(*chain, chain->size() - 1);
         std::string clsFq = reg_->resolveType(prefix, currentNs_);
         if (!clsFq.empty() && reg_->isClass(clsFq)) {
-            const MethodInfo *mi = reg_->findMethod(clsFq, last);
-            if (mi && mi->isStatic) {
+            std::vector<const MethodInfo *> statics;
+            const MethodInfo *anyMi = nullptr;
+            for (const MethodInfo *c : reg_->findMethodsBySource(clsFq, last)) {
+                anyMi = c;
+                if (c->isStatic) statics.push_back(c);
+            }
+            if (!statics.empty()) {
+                const MethodInfo *mi = resolveMethodOverload(
+                    statics, e.args, e.line, e.col, "static method '" + clsFq + "." + last + "'");
+                if (!mi) return TypeRef::prim(TypeRef::Kind::Error);
                 mem->kind = MemberKind::StaticTarget;
                 mem->qualified = clsFq;
                 e.kind = CallKind::StaticMethod;
                 e.targetName = clsFq;
-                e.methodName = last;
+                e.methodName = mi->name;
                 e.ownerClass = mi->definingClass;
                 if (!checkAccess(mi->access, mi->definingClass))
                     error(e.line, e.col, "static method '" + last + "' is " +
                                              accessName(mi->access));
-                checkArgs(e.args, mi->paramTypes, e.line, e.col,
-                          "static method '" + clsFq + "." + last + "'");
                 return mi->returnType;
             }
+            const MethodInfo *mi = anyMi;
             if (mi && !mi->isStatic) {
                 error(e.line, e.col, "method '" + last + "' is not static; call it on an instance");
                 return TypeRef::prim(TypeRef::Kind::Error);
@@ -952,6 +994,18 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     // Instance method: dispatch on the object's class via its vtable.
     TypeRef objType = checkExpr(*mem->object);
     if (objType.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // `obj.handler(x)` where `handler` is a field holding a function value.
+    if (objType.isNamed() && (reg_->isClass(objType.name) || reg_->isStruct(objType.name))) {
+        const FieldInfo *fld = reg_->isClass(objType.name)
+                                   ? reg_->findField(objType.name, mem->member)
+                                   : reg_->findStructField(objType.name, mem->member);
+        if (fld && fld->type.isFunction() &&
+            (!reg_->isClass(objType.name) ||
+             reg_->findMethodsBySource(objType.name, mem->member).empty())) {
+            TypeRef ft = checkExpr(*e.callee);
+            return checkFnValueCall(e, ft);
+        }
+    }
 
     // Interface-typed receiver: dispatch through the interface's itable.
     if (objType.isNamed() && reg_->isInterface(objType.name)) {
@@ -976,12 +1030,18 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                                        "' on a value of type " + typeRefName(objType));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
-    const MethodInfo *mi = reg_->findMethod(objType.name, mem->member);
-    if (!mi || mi->isStatic) {
+    std::vector<const MethodInfo *> cands;
+    for (const MethodInfo *c : reg_->findMethodsBySource(objType.name, mem->member))
+        if (!c->isStatic) cands.push_back(c);
+    if (cands.empty()) {
         error(mem->line, mem->col, "type '" + objType.name + "' has no method '" +
                                        mem->member + "'");
+        for (auto &a : e.args) checkExpr(*a);
         return TypeRef::prim(TypeRef::Kind::Error);
     }
+    const MethodInfo *mi = resolveMethodOverload(cands, e.args, e.line, e.col,
+                                                 "method '" + objType.name + "." + mem->member + "'");
+    if (!mi) return TypeRef::prim(TypeRef::Kind::Error);
     if (!checkAccess(mi->access, mi->definingClass))
         error(mem->line, mem->col, "method '" + mem->member + "' is " +
                                        accessName(mi->access) + " in '" +
@@ -991,16 +1051,14 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     std::string slotOwner = objType.name;
     if (const ClassInfo *ci = reg_->cls(objType.name)) {
         for (const auto &s : ci->slots)
-            if (s.name == mem->member) { slotOwner = s.slotOwner; break; }
+            if (s.name == mi->name) { slotOwner = s.slotOwner; break; }
     }
     mem->kind = MemberKind::MethodRef;
     mem->ownerClass = objType.name;
     e.kind = CallKind::InstanceMethod;
-    e.methodName = mem->member;
+    e.methodName = mi->name;
     e.ownerClass = objType.name;
     e.slotOwner = slotOwner;
-    checkArgs(e.args, mi->paramTypes, e.line, e.col,
-              "method '" + objType.name + "." + mem->member + "'");
     if (mem->optional) checkOptionalResult(e.line, e.col, mi->returnType, /*allowVoid=*/true);
     return mi->returnType;
 }
