@@ -1,0 +1,25 @@
+--- enums ---
+suit Clubs has ordinal 2
+is hearts? false
+Hearts Diamonds Clubs Spades 
+--- structs (value semantics) ---
+a=(1, 2) b=(100, 2)
+area=12
+--- aliases ---
+grid[1]=8 length=3 distance=12.5m
+--- arrays ---
+squares total=54 len=5
+p0=(1,1) p1=(2,4) p2=(3,9) 
+matrix[1][2]=6
+--- pointers ---
+counter=42 via pointer=42
+grown area=30
+--- null, ?? and ?. ---
+missing == null: true
+use=first
+head.next?.label=second  missing?.label=''
+--- sizeof ---
+sizeof(int)=4 sizeof(long)=8 sizeof(Vec2)=8
+--- binary ---
+blob length=6
+byte sum=434 back to text=true
