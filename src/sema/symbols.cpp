@@ -1,5 +1,7 @@
 #include "sema/symbols.h"
 
+#include <cctype>
+
 #include <algorithm>
 #include <functional>
 
@@ -209,6 +211,37 @@ std::string Registry::findMethodImpl(const std::string &classFq,
     return "";
 }
 
+bool Registry::isOverridden(const std::string &classFq, const std::string &name) const {
+    std::string key = classFq + ':' + name;
+    auto it = overrideCache_.find(key);
+    if (it != overrideCache_.end()) return it->second;
+    std::string mine = findMethodImpl(classFq, name);
+    bool over = mine.empty(); // abstract here: must dispatch to whatever subclass
+    if (!over) {
+        const MethodInfo *mi = findMethod(classFq, name);
+        if (!(mi && mi->isFinal)) {
+            for (const auto &[fq, ci] : classes_) {
+                if (fq == classFq || !isSubclass(fq, classFq)) continue;
+                if (findMethodImpl(fq, name) != mine) { over = true; break; }
+            }
+        }
+    }
+    overrideCache_[key] = over;
+    return over;
+}
+
+std::string Registry::findDestructor(const std::string &classFq) const {
+    std::string cur = classFq;
+    int guard = 0;
+    while (!cur.empty() && guard++ < 100) {
+        const ClassInfo *ci = cls(cur);
+        if (!ci) break;
+        if (ci->destructor) return cur;
+        cur = ci->baseClass;
+    }
+    return "";
+}
+
 bool Registry::isSubclass(const std::string &sub, const std::string &base) const {
     std::string cur = sub;
     int guard = 0;
@@ -243,12 +276,114 @@ const std::vector<GravError> &Registry::build(Program &program) {
     registerDecls(program);
     canonicalizeAliases();
     canonicalize();
+    assignMethodNames();
     synthesizeAccessors();
     synthesizeDelegates();
     computeSlots();
     checkHierarchies();
     checkStructCycles();
     return errors_;
+}
+
+namespace {
+// A C-identifier-safe spelling of a parameter list, e.g. (int, string) -> "int_string".
+std::string signatureSuffix(const std::vector<TypeRef> &params) {
+    if (params.empty()) return "void";
+    std::string out;
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i) out += '_';
+        for (char c : typeRefName(params[i]))
+            out += std::isalnum(static_cast<unsigned char>(c)) ? c : (c == '*' ? 'P' : '_');
+    }
+    return out;
+}
+} // namespace
+
+// Method overloading. Each method gets an internal name that is unique per
+// signature within its hierarchy: an override reuses the base method's name (so
+// it lands in the same vtable slot); the first method of a given name keeps the
+// plain name; any other signature of that name becomes `name__<signature>`.
+void Registry::assignMethodNames() {
+    std::unordered_map<std::string, bool> done;
+    std::function<void(const std::string &)> assign = [&](const std::string &fq) {
+        if (done[fq]) return;
+        done[fq] = true;
+        ClassInfo &ci = classes_[fq];
+        if (!ci.baseClass.empty() && isClass(ci.baseClass)) assign(ci.baseClass);
+        std::vector<MethodInfo *> seen; // own methods already named
+        for (auto &m : ci.methods) {
+            m.sourceName = m.name;
+            std::string internal;
+            bool nameTaken = false;
+            // Inherited method with the same source name: same signature = override.
+            for (const MethodInfo *b : findMethodsBySource(ci.baseClass, m.sourceName)) {
+                nameTaken = true;
+                if (b->paramTypes == m.paramTypes && b->isStatic == m.isStatic) {
+                    internal = b->name;
+                    break;
+                }
+            }
+            for (MethodInfo *o : seen) {
+                if (o->sourceName != m.sourceName) continue;
+                nameTaken = true;
+                if (o->paramTypes == m.paramTypes) {
+                    int line = m.decl ? m.decl->line : ci.decl->line;
+                    int col = m.decl ? m.decl->col : ci.decl->col;
+                    error(line, col, "duplicate method '" + m.sourceName + "' with the same "
+                                     "parameter types in class '" + fq + "'");
+                }
+            }
+            if (internal.empty())
+                internal = nameTaken ? m.sourceName + "__" + signatureSuffix(m.paramTypes)
+                                     : m.sourceName;
+            m.name = internal;
+            if (m.decl) {
+                m.decl->sourceName = m.sourceName;
+                m.decl->name = internal;
+            }
+            seen.push_back(&m);
+        }
+    };
+    for (auto &[fq, ci] : classes_) assign(fq);
+    for (auto &[fq, ii] : interfaces_)
+        for (auto &m : ii.methods) m.sourceName = m.name;
+}
+
+std::vector<const MethodInfo *> Registry::findMethodsBySource(const std::string &classFq,
+                                                              const std::string &sourceName) const {
+    std::vector<const MethodInfo *> out;
+    std::string cur = classFq;
+    int guard = 0;
+    while (!cur.empty() && guard++ < 100) {
+        const ClassInfo *ci = cls(cur);
+        if (!ci) break;
+        for (const auto &m : ci->methods) {
+            const std::string &src = m.sourceName.empty() ? m.name : m.sourceName;
+            if (src != sourceName) continue;
+            bool shadowed = false; // overridden by a more-derived class already seen
+            for (const MethodInfo *o : out)
+                if (o->name == m.name) { shadowed = true; break; }
+            if (!shadowed) out.push_back(&m);
+        }
+        cur = ci->baseClass;
+    }
+    return out;
+}
+
+std::string Registry::implementingMethod(const std::string &classFq,
+                                         const MethodInfo &want) const {
+    auto matches = [&](const TypeRef &h, TypeRef w) {
+        if (w.isNamed() && w.name == "Self") w = TypeRef::named(classFq);
+        return h == w;
+    };
+    for (const MethodInfo *m : findMethodsBySource(classFq, want.name)) {
+        if (m->isStatic || m->paramTypes.size() != want.paramTypes.size()) continue;
+        bool ok = matches(m->returnType, want.returnType);
+        for (size_t i = 0; ok && i < want.paramTypes.size(); ++i)
+            ok = matches(m->paramTypes[i], want.paramTypes[i]);
+        if (ok) return m->name;
+    }
+    return "";
 }
 
 // Auto-generate get_<field>/set_<field> methods for each private field, unless
@@ -269,6 +404,7 @@ void Registry::synthesizeAccessors() {
             if (!hasMethod(getter)) {
                 MethodInfo g;
                 g.name = getter;
+                g.sourceName = getter;
                 g.access = Access::Public;
                 g.returnType = f.type;
                 g.definingClass = fq;
@@ -282,6 +418,7 @@ void Registry::synthesizeAccessors() {
             if (!f.isReadonly && !hasMethod(setter)) {
                 MethodInfo s;
                 s.name = setter;
+                s.sourceName = setter;
                 s.access = Access::Public;
                 s.returnType = TypeRef::prim(TypeRef::Kind::Void);
                 s.paramTypes.push_back(f.type);
@@ -327,6 +464,7 @@ void Registry::synthesizeDelegates() {
                     if (hasMethod(m.name)) continue;
                     MethodInfo fwd;
                     fwd.name = m.name;
+                    fwd.sourceName = m.sourceName.empty() ? m.name : m.sourceName;
                     fwd.access = Access::Public;
                     fwd.returnType = m.returnType;
                     fwd.paramTypes = m.paramTypes;
@@ -371,6 +509,10 @@ void Registry::registerDecls(Program &program) {
             info.decl = c;
             info.hasConstructor = c->constructor.present;
             info.constructor = c->constructor.present ? &c->constructor : nullptr;
+            if (c->constructor.present) info.ctors.push_back(&c->constructor);
+            for (auto &x : c->extraCtors) info.ctors.push_back(&x);
+            info.destructor = c->destructor.present ? &c->destructor : nullptr;
+            info.isFinal = c->isFinal;
             for (auto &f : c->fields) {
                 FieldInfo fi{f.access, f.isReadonly, f.name, f.type, c->fqName};
                 info.fields.push_back(std::move(fi));
@@ -381,6 +523,7 @@ void Registry::registerDecls(Program &program) {
                 mi.access = m.access;
                 mi.isStatic = m.isStatic;
                 mi.isAbstract = m.isAbstract;
+                mi.isFinal = m.isFinal;
                 mi.returnType = m.returnType;
                 mi.definingClass = c->fqName;
                 mi.decl = &m;
@@ -521,6 +664,11 @@ TypeRef Registry::resolveCanonical(const TypeRef &t, const std::string &nsContex
         return TypeRef::array(resolveCanonical(*t.elem, nsContext, ok), t.arrayLen);
     if (t.isFuture())
         return TypeRef::future(resolveCanonical(*t.elem, nsContext, ok));
+    if (t.isFunction()) {
+        std::vector<TypeRef> ps;
+        for (const auto &p : t.fnParams) ps.push_back(resolveCanonical(p, nsContext, ok));
+        return TypeRef::function(std::move(ps), resolveCanonical(*t.elem, nsContext, ok));
+    }
     if (!t.isNamed()) return t;
     // `Self` is a placeholder for the implementing type inside a trait; it stays
     // a sentinel here and is matched/substituted where the concrete class is known.
@@ -624,6 +772,18 @@ void Registry::canonicalize() {
             ci.fields[i].type = cd->fields[i].type;
         }
         for (auto &p : cd->constructor.params) p.type = canonType(p.type, ns, line, col);
+        for (auto &x : cd->extraCtors)
+            for (auto &p : x.params) p.type = canonType(p.type, ns, line, col);
+        // Constructor overloads must differ in their parameter types.
+        for (size_t a = 0; a < ci.ctors.size(); ++a)
+            for (size_t b = a + 1; b < ci.ctors.size(); ++b) {
+                bool same = ci.ctors[a]->params.size() == ci.ctors[b]->params.size();
+                for (size_t k = 0; same && k < ci.ctors[a]->params.size(); ++k)
+                    same = ci.ctors[a]->params[k].type == ci.ctors[b]->params[k].type;
+                if (same)
+                    error(ci.ctors[b]->line, ci.ctors[b]->col,
+                          "duplicate constructor with the same parameter types in class '" + fq + "'");
+            }
         for (size_t i = 0; i < cd->methods.size(); ++i) {
             MethodDecl &m = cd->methods[i];
             m.returnType = canonType(m.returnType, ns, m.line, m.col);
@@ -767,11 +927,23 @@ void Registry::checkHierarchies() {
             }
         }
 
+        // `final` classes cannot be extended (by a primary or secondary base).
+        auto checkFinalBase = [&](const std::string &b) {
+            if (const ClassInfo *bc = cls(b); bc && bc->isFinal)
+                error(line, col, "class '" + fq + "' cannot extend final class '" + b + "'");
+        };
+        if (!ci.baseClass.empty()) checkFinalBase(ci.baseClass);
+        for (const auto &eb : ci.extraBases) if (!eb.empty()) checkFinalBase(eb);
+
         // Override signatures must match the base method.
         for (auto &m : ci.methods) {
             if (ci.baseClass.empty()) continue;
             const MethodInfo *base = findMethod(ci.baseClass, m.name);
             if (!base) continue;
+            if (base->isFinal && m.decl)
+                error(m.decl->line, m.decl->col,
+                      "method '" + m.name + "' overrides final method in '" +
+                          base->definingClass + "'");
             bool ok = base->returnType == m.returnType &&
                       base->paramTypes.size() == m.paramTypes.size();
             for (size_t i = 0; ok && i < m.paramTypes.size(); ++i)
@@ -788,7 +960,14 @@ void Registry::checkHierarchies() {
             const InterfaceInfo *ii = iface(ifq);
             if (!ii) continue;
             for (const auto &want : ii->methods) {
-                const MethodInfo *have = findMethod(fq, want.name);
+                // Overloads: prefer the method whose signature matches exactly.
+                const MethodInfo *have = nullptr;
+                if (std::string impl = implementingMethod(fq, want); !impl.empty())
+                    have = findMethod(fq, impl);
+                if (!have) {
+                    auto all = findMethodsBySource(fq, want.name);
+                    have = all.empty() ? nullptr : all.front();
+                }
                 if (!have || have->isStatic) {
                     error(line, col, "class '" + fq + "' does not implement method '" +
                                          want.name + "' required by interface '" + ifq + "'");
