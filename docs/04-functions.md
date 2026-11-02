@@ -111,15 +111,16 @@ colors: red green (2)
 
 ## Generic functions
 
-Type parameters go in angle brackets after the name; call sites pass the types with
-`::<...>`. See [Generics](09-generics.md) for constraints and generic classes.
+Type parameters go in angle brackets after the name. Call sites can pass the types
+with `::<...>` or let the compiler infer them from the arguments. See
+[Generics](09-generics.md) for constraints, generic classes, and inference.
 
 ```grav
 fn larger<T>(a: T, b: T) -> T { return a > b ? a : b }
 
 fn main() {
-    print(larger::<int>(3, 7))
-    print(larger::<float>(2.5, 1.5))
+    print(larger(3, 7))                  // T = int, inferred
+    print(larger::<float>(2.5, 1.5))     // or explicit
 }
 ```
 
