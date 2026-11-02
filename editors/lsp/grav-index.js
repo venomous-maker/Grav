@@ -46,6 +46,7 @@ const KEYWORDS = new Set([
   "static", "readonly", "public", "private", "protected", "if", "else",
   "while", "for", "do", "switch", "case", "default", "match", "break",
   "continue", "in", "try", "catch", "finally", "throw", "as", "is", "sizeof",
+  "defer", "step", "final", "destructor", "operator",
   "self", "this", "Self", "super", "true", "false", "null",
   "int", "float", "bool", "string", "void", "binary", "long", "double",
   "uint", "unsigned", "signed", "byte",
