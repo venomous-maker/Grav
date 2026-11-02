@@ -19,6 +19,9 @@ std::string methodCName(const std::string &classFq, const std::string &method);
 std::string memberCName(const std::string &name); // method name, C-keyword-safe
 std::string ctorCName(const std::string &classFq);     // geometry__Circle_new
 std::string ctorInitCName(const std::string &classFq); // geometry__Circle_init (ctor body on self)
+// Constructor overload `idx` (0 = the first): _new / _new1 / _new2 …
+std::string ctorCName(const std::string &classFq, int idx);
+std::string ctorInitCName(const std::string &classFq, int idx);
 std::string funcCName(const std::string &fnFq);        // vf_geometry__area
 std::string funcCName(const std::string &fnFq, int overloadIndex); // + __ovN for overloads
 std::string enumConst(const std::string &enumFq, const std::string &member); // Color_Red
