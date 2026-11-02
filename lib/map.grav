@@ -24,11 +24,27 @@ class Map<K, V> {
         return i >= 0 ? self.vs.get(i) : fallback;
     }
     public fn containsKey(key: K) -> bool { return self.ks.indexOf(key) >= 0; }
-    public fn remove(key: K) {
+    public fn remove(key: K) -> bool {
         let i = self.ks.indexOf(key);
-        if (i >= 0) { self.ks.removeAt(i); self.vs.removeAt(i); }
+        if (i < 0) { return false; }
+        self.ks.removeAt(i);
+        self.vs.removeAt(i);
+        return true;
     }
-    public fn size() -> int { return self.ks.length(); }
-    public fn keys() -> Array<K> { return self.ks; }
-    public fn values() -> Array<V> { return self.vs; }
+    public fn size() -> int { return self.ks.size(); }
+    public fn length() -> int { return self.ks.size(); }
+    public fn isEmpty() -> bool { return self.ks.isEmpty(); }
+    public fn clear() { self.ks.clear(); self.vs.clear(); }
+    // Copies, in insertion order (changing them does not affect the map).
+    public fn keys() -> Array<K> { return self.ks.copy(); }
+    public fn values() -> Array<V> { return self.vs.copy(); }
+    public fn forEach(f: fn(K, V)) { for (i in 0..self.ks.size()) { f(self.ks.get(i), self.vs.get(i)); } }
+    // The value for `key`, inserting `fallback` first when absent.
+    public fn getOrPut(key: K, fallback: V) -> V {
+        let i = self.ks.indexOf(key);
+        if (i >= 0) { return self.vs.get(i); }
+        self.ks.push(key);
+        self.vs.push(fallback);
+        return fallback;
+    }
 }
