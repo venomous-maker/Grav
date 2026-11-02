@@ -27,7 +27,8 @@ namespace {
 const std::set<std::string> &strFreshFns() {
     static const std::set<std::string> fns = {
         "concat", "upper", "lower", "reverse", "repeat", "substring", "remove", "trim",
-        "trimStart", "trimEnd", "replace", "padLeft", "padRight"};
+        "trimStart", "trimEnd", "replace", "padLeft", "padRight", "capitalize", "slice",
+        "removePrefix", "removeSuffix", "center", "fromChar"};
     return fns;
 }
 
@@ -50,7 +51,11 @@ bool isFnNonRetainingCall(const CallExpr &c) {
 bool isNonRetainingCall(const CallExpr &c) {
     static const std::set<std::string> strFns = {"length", "isEmpty", "equals", "contains",
                                                  "count", "indexOf", "indexFrom", "startsWith",
-                                                 "endsWith", "charAt", "compare"};
+                                                 "endsWith", "charAt", "compare", "isBlank",
+                                                 "equalsIgnoreCase", "compareIgnoreCase",
+                                                 "lastIndexOf", "isDigits", "isAlpha",
+                                                 "isAlphanumeric", "isUpper", "isLower", "split",
+                                                 "lines", "words"};
     if (c.kind == CallKind::StaticMethod && c.targetName == "Str" && strFreshFns().count(c.methodName))
         return true;
     static const std::set<std::string> ioFns = {"print", "write", "eprint"};
