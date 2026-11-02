@@ -1,6 +1,7 @@
 // lib/hashmap.grav — HashMap<K,V>: open addressing with linear probing, O(1)
-// average put/get/remove (Map<K,V> is O(n)). Keys may be int, long, or string —
-// anything with a `hashOf` overload below and `==`.
+// average put/get/remove (Map<K,V> is O(n)). Keys may be any type with a
+// `hashOf` overload below: integers, bool, float, string, enums, and objects
+// (by identity). Iteration order is unspecified.
 //
 //   let ages = new HashMap<string, int>()
 //   ages["ada"] = 36              // operator[]= is put
@@ -9,6 +10,7 @@
 import "array.grav"
 
 %{
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 static long long grav_hash_u64(unsigned long long x) {   /* splitmix64 finalizer */
@@ -22,6 +24,16 @@ static long long grav_hash_str(const char* s) {           /* FNV-1a */
     for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ULL; }
     return (long long)(h & 0x7fffffffffffffffULL);
 }
+static long long grav_hash_any(GravAny a) {
+    switch (a.tag) {
+        case GRAV_ANY_STR: return grav_hash_str(a.v.s);
+        case GRAV_ANY_FLOAT: { double d = a.v.f; unsigned long long u; memcpy(&u, &d, sizeof u); return grav_hash_u64(u); }
+        case GRAV_ANY_OBJ: return grav_hash_u64((unsigned long long)(uintptr_t)a.v.p);   /* identity */
+        case GRAV_ANY_FN: return grav_hash_u64((unsigned long long)(uintptr_t)a.v.fn.fn ^ (unsigned long long)(uintptr_t)a.v.fn.env);
+        case GRAV_ANY_ENUM: return grav_hash_u64((unsigned long long)a.v.i) ^ grav_hash_str(a.tname);
+        default: return grav_hash_u64((unsigned long long)a.v.i);
+    }
+}
 static void* grav_hm_calloc(int n, size_t elem) {
     void* p = calloc((size_t)n, elem ? elem : 1);
     if (!p) { abort(); }
@@ -32,6 +44,14 @@ static void* grav_hm_calloc(int n, size_t elem) {
 fn hashOf(x: int) -> long { return %{ grav_hash_u64((unsigned long long)(long long)x) %} as long; }
 fn hashOf(x: long) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
 fn hashOf(x: string) -> long { return %{ grav_hash_str(x) %} as long; }
+fn hashOf(x: uint) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+fn hashOf(x: ulong) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+fn hashOf(x: byte) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+fn hashOf(x: bool) -> long { return x ? 1 : 2; }
+fn hashOf(x: float) -> long { let a: any = x; return hashOf(a); }
+// Anything else that fits in an `any`: objects hash by identity (matching their
+// `==`), enums by value, so HashMap<MyClass, V> and HashMap<MyEnum, V> work too.
+fn hashOf(x: any) -> long { return %{ grav_hash_any(x) %} as long; }
 
 class HashMap<K, V> {
     private ks: K*
@@ -108,6 +128,7 @@ class HashMap<K, V> {
     }
 
     public fn size() -> int { return self.count; }
+    public fn length() -> int { return self.count; }
     public fn isEmpty() -> bool { return self.count == 0; }
     public fn clear() {
         let n = self.cap;
@@ -118,6 +139,16 @@ class HashMap<K, V> {
         let out = new Array<K>();
         for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.ks[i]); } }
         return out;
+    }
+    public fn forEach(f: fn(K, V)) {
+        for (i in 0..self.cap) { if (self.used[i] != 0) { f(self.ks[i], self.vs[i]); } }
+    }
+    // The value for `key`, inserting `fallback` first when absent.
+    public fn getOrPut(key: K, fallback: V) -> V {
+        let i = self.slot(key);
+        if (self.used[i] != 0) { return self.vs[i]; }
+        self.put(key, fallback);
+        return fallback;
     }
     public fn values() -> Array<V> {
         let out = new Array<V>();
