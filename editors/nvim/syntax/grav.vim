@@ -30,7 +30,7 @@ syn keyword gravOperatorKw as is sizeof
 syn keyword gravType int float bool string void binary
 syn keyword gravType long int64 int32 int16 int8 signed
 syn keyword gravType uint unsigned uint64 ulong uint32 uint16 uint8 byte
-syn keyword gravType double float64 float32
+syn keyword gravType double float64 float32 any auto
 
 " Constants
 syn keyword gravBoolean true false
