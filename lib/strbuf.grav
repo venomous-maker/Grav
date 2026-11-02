@@ -19,8 +19,8 @@ static unsigned char* grav_sb_grow(unsigned char* buf, int* cap, int need) {
     *cap = nc;
     return nb;
 }
-static const char* grav_sb_ll(long long n) { static char b[32]; snprintf(b, sizeof b, "%lld", n); return b; }
-static const char* grav_sb_g(double f) { static char b[48]; snprintf(b, sizeof b, "%g", f); return b; }
+static const char* grav_sb_ll(long long n) { static _Thread_local char b[32]; snprintf(b, sizeof b, "%lld", n); return b; }
+static const char* grav_sb_g(double f) { static _Thread_local char b[48]; snprintf(b, sizeof b, "%g", f); return b; }
 static const char* grav_sb_dup(const unsigned char* buf, int len) {
     char* r = (char*)malloc((size_t)len + 1);
     if (!r) { fprintf(stderr, "panic: out of memory\n"); exit(1); }
