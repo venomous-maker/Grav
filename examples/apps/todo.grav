@@ -1,0 +1,148 @@
+// apps/todo.grav — a task manager driven by a script of commands.
+//
+//   grav examples/apps/todo.grav --run
+//
+// Parses text commands ("add", "done", "tag", "list", ...) with a string
+// switch, keeps tasks in an Array with an id index in a HashMap, filters and
+// sorts with lambdas, compares priorities with operator overloading, and
+// reports bad commands through exceptions — like a tiny CLI.
+
+import "../../lib/std.grav"
+
+enum Priority { Low, Normal, High, Urgent }
+
+class Task {
+    readonly id: int
+    public title: string
+    public priority: Priority
+    public done: bool
+    public tags: Set<string>
+    constructor(id: int, title: string, priority: Priority) {
+        self.id = id
+        self.title = title
+        self.priority = priority
+        self.done = false
+        self.tags = new Set<string>()
+    }
+    destructor() { free(self.tags) }
+    // Higher priority first, then lower id.
+    fn operator<(o: Task) -> bool {
+        if (self.priority != o.priority) { return int(self.priority) > int(o.priority) }
+        return self.id < o.id
+    }
+    fn toString() -> string {
+        let sb = new StringBuilder()
+        sb.append(self.done ? "[x] " : "[ ] ").append("#${self.id} ").append(self.title)
+          .append(" (${self.priority})")
+        for (i in 0..self.tags.size()) { sb.append(" @").append(self.tags.at(i)) }
+        let out = sb.toString()
+        free(sb)
+        return out
+    }
+}
+
+class CommandError extends Exception {
+    constructor(m: string) { super(m) }
+    public fn describe() -> string { return "error: ${self.msg}" }
+}
+
+class TodoList {
+    private tasks: Array<Task>
+    private byId: HashMap<int, Task>
+    private nextId: int
+    constructor() { self.tasks = new Array<Task>(); self.byId = new HashMap<int, Task>(); self.nextId = 1 }
+
+    fn parsePriority(s: string) -> Priority {
+        switch (s) {
+            case "low":    { return Priority.Low }
+            case "normal": { return Priority.Normal }
+            case "high":   { return Priority.High }
+            case "urgent": { return Priority.Urgent }
+            default:       { throw new CommandError("unknown priority '${s}'") }
+        }
+    }
+    fn get(idText: string) -> Task {
+        if (!Format.isInt(idText)) { throw new CommandError("'${idText}' is not a task id") }
+        let id = Format.toInt(idText)
+        if (!self.byId.containsKey(id)) { throw new CommandError("no task #${id}") }
+        return self.byId[id]
+    }
+    fn sorted(keep: fn(Task) -> bool) -> Array<Task> {
+        let out = self.tasks.filter(keep)
+        out.sortBy(fn(a, b) => a < b ? -1 : (b < a ? 1 : 0))
+        return out
+    }
+
+    // Runs one command line; the first word picks the command.
+    fn run(line: string) {
+        let words = Str.split(line, " ")
+        let cmd = words.get(0)
+        switch (cmd) {
+            case "add": {
+                if (words.length() < 3) { throw new CommandError("usage: add <priority> <title...>") }
+                let pr = self.parsePriority(words.get(1))
+                words.removeAt(0)
+                words.removeAt(0)
+                let t = new Task(self.nextId, Str.join(words, " "), pr)
+                self.nextId = self.nextId + 1
+                self.tasks.push(t)
+                self.byId[t.id] = t
+                print("added ${t}")
+            }
+            case "done": {
+                let t = self.get(words.get(1))
+                t.done = true
+                print("completed #${t.id}")
+            }
+            case "tag": {
+                let t = self.get(words.get(1))
+                for (i in 2..words.length()) { t.tags.add(words.get(i)) }
+                print("tagged #${t.id}")
+            }
+            case "list": {
+                let open = self.sorted(fn(t) => !t.done)
+                print("open tasks (${open.length()}):")
+                for (t in open) { print("  ${t}") }
+                free(open)
+            }
+            case "find": {
+                let tag = words.get(1)
+                let hits = self.sorted(fn(t) => t.tags.contains(tag))
+                print("tagged @${tag}: ${Str.join(hits.mapTo::<string>(fn(t) => "#${t.id}"), ", ")}")
+                free(hits)
+            }
+            case "stats": {
+                let doneCount = self.tasks.countWhere(fn(t) => t.done)
+                let urgent = self.tasks.countWhere(fn(t) => !t.done && t.priority == Priority.Urgent)
+                print("${self.tasks.length()} tasks, ${doneCount} done, ${urgent} urgent open")
+            }
+            default: { throw new CommandError("unknown command '${cmd}'") }
+        }
+    }
+}
+
+fn main() {
+    let script = [
+        "add high write the release notes",
+        "add normal update dependencies",
+        "add urgent fix the login bug",
+        "add low tidy the wiki",
+        "tag 1 docs release",
+        "tag 3 bug release",
+        "done 2",
+        "add someday learn rust",
+        "done 9",
+        "frobnicate",
+        "list",
+        "find release",
+        "stats"
+    ]
+    let todo = new TodoList()
+    for (line in script) {
+        try {
+            todo.run(line)
+        } catch (e: CommandError) {
+            print("${e.describe()}  <- \"${line}\"")
+        }
+    }
+}
