@@ -1,0 +1,12 @@
+// util/text.grav — small text helpers in the `text` namespace (a library
+// module: no `main`). Paths in `import` are relative to the importing file.
+import "../../../lib/string.grav"
+
+namespace text {
+    export fn banner(title: string) -> string {
+        let line = Str.repeat("=", Str.length(title) + 4)
+        return line + "\n| " + title + " |\n" + line
+    }
+    export fn plural(n: int, word: string) -> string { return n == 1 ? "1 ${word}" : "${n} ${word}s" }
+    export fn pad(s: string, width: int) -> string { return Str.padRight(s, width, " ") }
+}
