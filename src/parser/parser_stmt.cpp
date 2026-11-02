@@ -240,6 +240,10 @@ StmtPtr Parser::parseLet() {
     if (matchToken(TokenType::Colon)) {
         stmt->hasDeclaredType = true;
         stmt->declaredType = parseType("in the declaration");
+        // `let x: auto = e` spells out "infer it" (same as leaving the type off).
+        if (stmt->declaredType.isNamed() && stmt->declaredType.name == "auto" &&
+            stmt->declaredType.args.empty())
+            stmt->hasDeclaredType = false;
     }
     expect(TokenType::Assign, "after the variable name");
     stmt->init = parseExpression();
