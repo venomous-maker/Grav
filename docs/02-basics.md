@@ -21,6 +21,7 @@ Output:
 4 items at 9.99, limit 10
 ```
 
+`let x: auto = 5` spells out the inference explicitly (it is the same as `let x = 5`).
 Assigning to a `const` is a compile error, and so is using a variable before it is
 declared. Unused local variables produce a warning (an error with `-Werror`).
 
@@ -38,6 +39,7 @@ declared. Unused local variables produce a warning (an error with `-Werror`).
 | `bool` | `true` / `false` | `bool` |
 | `string` | immutable text | `const char*` |
 | `binary` | a byte buffer with a length | |
+| `any` | a value of any type, checked at run time ([details](05-data-types.md#any)) | |
 | `void` | no value (function results) | |
 
 Integers of different widths mix freely and promote like C (the wider type wins,
