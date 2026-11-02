@@ -166,7 +166,7 @@ ExprPtr Parser::parseAdditive() {
 }
 
 ExprPtr Parser::parseMultiplicative() {
-    ExprPtr left = parseAsIs();
+    ExprPtr left = parsePower();
     for (;;) {
         // A line-leading `*` is a dereference starting a new statement.
         if (check(TokenType::Star) && onNewLine()) return left;
@@ -179,9 +179,26 @@ ExprPtr Parser::parseMultiplicative() {
         auto bin = at<BinaryExpr>(opTok);
         bin->op = op;
         bin->left = std::move(left);
-        bin->right = parseAsIs();
+        bin->right = parsePower();
         left = std::move(bin);
     }
+}
+
+// `a ** b` — exponentiation, right-associative, binding tighter than `*`. Written
+// as two adjacent `*` tokens (the lexer keeps `**` apart so `T**` types still work).
+ExprPtr Parser::parsePower() {
+    ExprPtr left = parseAsIs();
+    if (check(TokenType::Star) && !onNewLine() && peekAt(1).type == TokenType::Star &&
+        peekAt(1).line == peek().line && peekAt(1).col == peek().col + 1) {
+        const Token &opTok = advance();
+        advance(); // second '*'
+        auto bin = at<BinaryExpr>(opTok);
+        bin->op = BinaryOp::Pow;
+        bin->left = std::move(left);
+        bin->right = parsePower();
+        return bin;
+    }
+    return left;
 }
 
 // `expr as Type` (cast) and `expr is ClassName` (RTTI test). Left-associative.
@@ -215,6 +232,9 @@ bool Parser::looksLikeCast() const {
                      t0 == TokenType::KwBool || t0 == TokenType::KwString ||
                      t0 == TokenType::KwVoid;
     bool named = t0 == TokenType::Identifier;
+    // Built-in type names (`long`, `uint`, `byte`, `double`, …) are identifiers
+    // lexically but always mean the type here.
+    if (named && builtinTypeName(tokens_[i].lexeme)) { primitive = true; named = false; }
     if (!primitive && !named) return false;
     ++i; // consume first type token
     if (named)
@@ -373,7 +393,8 @@ ExprPtr Parser::parsePostfix() {
             idx->index = parseExpression();
             expect(TokenType::RBracket, "to close the index");
             expr = std::move(idx);
-        } else if (check(TokenType::PlusPlus) || check(TokenType::MinusMinus)) {
+        } else if ((check(TokenType::PlusPlus) || check(TokenType::MinusMinus)) && !onNewLine()) {
+            // A line-leading `++x` starts a new statement; it is not `prev++`.
             const Token &opTok = advance();
             auto e = at<IncDecExpr>(opTok);
             e->isIncrement = (opTok.type == TokenType::PlusPlus);
@@ -451,6 +472,9 @@ bool Parser::looksLikeTypeArg() const {
                      t0 == TokenType::KwBool || t0 == TokenType::KwString ||
                      t0 == TokenType::KwVoid;
     bool named = t0 == TokenType::Identifier;
+    // Built-in type names (`long`, `uint`, `byte`, `double`, …) are identifiers
+    // lexically but always mean the type here.
+    if (named && builtinTypeName(tokens_[i].lexeme)) { primitive = true; named = false; }
     if (!primitive && !named) return false;
     ++i;
     bool sawExtra = false;
@@ -488,6 +512,34 @@ ExprPtr Parser::parsePrimary() {
                 e->operand = parseExpression();
             }
             expect(TokenType::RParen, "to close 'sizeof'");
+            return e;
+        }
+        case TokenType::Fn: { // a lambda: `fn(x: T, y) => expr` / `fn(x: T) -> R { ... }`
+            advance();
+            auto e = at<LambdaExpr>(t);
+            expect(TokenType::LParen, "to begin the lambda's parameters");
+            if (!check(TokenType::RParen)) {
+                do {
+                    Param p;
+                    p.name = expect(TokenType::Identifier, "as a lambda parameter name").lexeme;
+                    bool typed = matchToken(TokenType::Colon);
+                    p.type = typed ? parseType("for the lambda parameter")
+                                   : TypeRef::prim(TypeRef::Kind::Error);
+                    e->params.push_back(std::move(p));
+                    e->paramTyped.push_back(typed);
+                } while (matchToken(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "to end the lambda's parameters");
+            if (matchToken(TokenType::Arrow)) {
+                e->hasReturnType = true;
+                e->returnType = parseType("as the lambda's return type");
+            }
+            if (matchToken(TokenType::FatArrow)) {
+                e->isArrow = true;
+                e->exprBody = parseExpression();
+            } else {
+                e->body = parseBlock();
+            }
             return e;
         }
         case TokenType::LBracket: { // `[a, b, c]` — an array literal
