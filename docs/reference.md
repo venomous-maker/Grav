@@ -67,14 +67,14 @@ Name<T, U>                 generic instance
 T[N]                       fixed-length array
 T*                         pointer
 fn(A, B) -> R              function value
-Future<T>                  result of an async call
+Future<T>                  handle to a running async call (await it for the T)
 ```
 
 ## Declarations
 
 ```text
 fn name<T>(a: A, ...rest: R) -> Ret { ... }          function (generic, variadic optional)
-async fn name(...) -> T { ... }
+async fn name(...) -> T { ... }                      (runs on the worker pool; no variadics)
 [final|abstract] class Name<T> extends Base, Other implements I, J uses f: T { ... }
     [public|private|protected] [static] [readonly] field: T [= init for static]
     constructor(...) { ... }          (may repeat with different parameters)
@@ -124,6 +124,6 @@ try { } catch (e: T) { } [catch (e: U) { }] [finally { }]
 | `typename(o)`, `isInstance(o, T)` | runtime type information |
 | `sizeof(T)` / `sizeof(expr)` | size in bytes |
 | `assert(c[, msg])`, `panic(msg)`, `exit(code)` | checks and termination |
-| `free(x)` | release an object (running destructors), pointer, or closure |
+| `free(x)` | release an object (running destructors), pointer, closure, or finished future |
 
 [← Back to the index](README.md)
