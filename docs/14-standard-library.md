@@ -248,6 +248,14 @@ no newline, then one
 true
 ```
 
+## Concurrency
+
+`lib/async.grav`: `Async` (`maxProcs`, `setMaxProcs`, `pending`, `cpuCount`,
+`threadId`, `sleepMs`), `Mutex` (`lock`, `unlock`, `tryLock`, `withLock`),
+`AtomicInt` (`get`, `set`, `add`, `increment`, `decrement`, `compareAndSet`),
+`Channel<T>` (`send`, `receive`, `receiveOr`, `hasNext`, `close`, `size`), and
+`awaitAll::<T>(futures)`. See [Concurrency](16-concurrency.md).
+
 ## Exceptions
 
 `lib/exception.grav` defines `Exception` (`message()`, `describe()`) and the
