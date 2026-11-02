@@ -1,34 +1,80 @@
-// lib/path.grav — path string utilities.
+// lib/path.grav — path string utilities ('/'-separated).
 import "string.grav"
+import "array.grav"
+
+%{
+#include <string.h>
+static int grav_path_last(const char* s, int ch) { const char* p = strrchr(s, ch); return p ? (int)(p - s) : -1; }
+%}
 
 class Path {
-    private static fn lastIndex(s: string, ch: int) -> int {
-        let last = -1;
-        for (k in 0..Str.length(s)) { if (Str.charAt(s, k) == ch) { last = k; } }
-        return last;
-    }
+    private static fn lastIndex(s: string, ch: int) -> int { return %{ grav_path_last(s, ch) %} as int; }
 
+    // "dir/file.txt" -> "file.txt"
     static fn basename(path: string) -> string {
-        let i = Path.lastIndex(path, 47);            // '/'
-        return i < 0 ? path : Str.substring(path, i + 1, Str.length(path));
+        let i = Path.lastIndex(path, 47);
+        return i < 0 ? Str.substring(path, 0, Str.length(path)) : Str.substring(path, i + 1, Str.length(path));
     }
+    // "dir/file.txt" -> "dir" ("." for a bare name, "/" for a root entry)
     static fn dirname(path: string) -> string {
         let i = Path.lastIndex(path, 47);
-        return i <= 0 ? "." : Str.substring(path, 0, i);
+        if (i < 0) { return "."; }
+        return i == 0 ? "/" : Str.substring(path, 0, i);
     }
+    // "file.tar.gz" -> ".gz" ("" when there is none; dot-files like ".bashrc" have none)
     static fn extension(path: string) -> string {
         let base = Path.basename(path);
-        let i = Path.lastIndex(base, 46);            // '.'
+        let i = Path.lastIndex(base, 46);
         return i <= 0 ? "" : Str.substring(base, i, Str.length(base));
     }
+    // "dir/report.pdf" -> "report"
+    static fn stem(path: string) -> string {
+        let base = Path.basename(path);
+        let i = Path.lastIndex(base, 46);
+        return i <= 0 ? base : Str.substring(base, 0, i);
+    }
+    // "notes.txt" with ".md" -> "notes.md"
+    static fn withExtension(path: string, ext: string) -> string {
+        let e = Path.extension(path);
+        return Str.substring(path, 0, Str.length(path) - Str.length(e)) + ext;
+    }
+    static fn isAbsolute(path: string) -> bool { return Str.startsWith(path, "/"); }
+
     static fn join(parts: Array<string>) -> string {
         let out = "";
-        for (i in 0..parts.length()) {
-            let part = parts.get(i);
+        for (part in parts) {
             if (Str.length(part) == 0) { continue; }
+            if (Str.startsWith(part, "/")) { out = part; continue; }   // an absolute part restarts
             if (Str.length(out) > 0 && !Str.endsWith(out, "/")) { out += "/"; }
             out += part;
         }
         return out;
+    }
+    static fn combine(a: string, b: string) -> string {
+        let parts = new Array<string>();
+        parts.push(a); parts.push(b);
+        let r = Path.join(parts);
+        free(parts);
+        return r;
+    }
+    static fn combine(a: string, b: string, c: string) -> string { return Path.combine(Path.combine(a, b), c); }
+
+    // Resolves "." and ".." and repeated slashes: "a/./b/../c//d" -> "a/c/d".
+    static fn normalize(path: string) -> string {
+        let abs = Path.isAbsolute(path);
+        let out = new Array<string>();
+        for (seg in Str.split(path, "/")) {
+            if (seg == "" || seg == ".") { continue; }
+            if (seg == "..") {
+                if (!out.isEmpty() && out.last() != "..") { out.pop(); }
+                else if (!abs) { out.push(".."); }
+                continue;
+            }
+            out.push(seg);
+        }
+        let body = Str.join(out, "/");
+        free(out);
+        if (abs) { return "/" + body; }
+        return Str.isEmpty(body) ? "." : body;
     }
 }
