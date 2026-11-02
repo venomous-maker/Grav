@@ -101,6 +101,7 @@ std::string cType(const TypeRef &t) {
             return (t.elem ? cType(*t.elem) : "void") + "*";
         case TypeRef::Kind::Array: return arrayStructName(t);
         case TypeRef::Kind::Function: return "GravFn";
+        case TypeRef::Kind::Any: return "GravAny";
         case TypeRef::Kind::Error: return "int /*error*/";
     }
     return "int";
