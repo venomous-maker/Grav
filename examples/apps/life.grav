@@ -1,0 +1,95 @@
+// apps/life.grav — Conway's Game of Life on a wrapping (toroidal) grid.
+//
+//   grav examples/apps/life.grav --run
+//
+// A Grid class over a flat Array<bool> with `[]`-style access, neighbour
+// counting with wrap-around, double-buffered generations, pattern stamping
+// from strings, and simple population statistics.
+
+import "../../lib/std.grav"
+
+class Grid {
+    readonly w: int
+    readonly h: int
+    private cells: Array<bool>
+
+    constructor(w: int, h: int) {
+        self.w = w
+        self.h = h
+        self.cells = new Array<bool>()
+        for (i in 0..w * h) { self.cells.push(false) }
+    }
+    destructor() { free(self.cells) }
+
+    // Coordinates wrap around the edges.
+    fn index(x: int, y: int) -> int {
+        let wx = ((x % self.w) + self.w) % self.w
+        let wy = ((y % self.h) + self.h) % self.h
+        return wy * self.w + wx
+    }
+    fn alive(x: int, y: int) -> bool { return self.cells[self.index(x, y)] }
+    fn set(x: int, y: int, v: bool) { self.cells[self.index(x, y)] = v }
+
+    fn neighbours(x: int, y: int) -> int {
+        let n = 0
+        for (dy in -1..=1) {
+            for (dx in -1..=1) {
+                if ((dx != 0 || dy != 0) && self.alive(x + dx, y + dy)) { n++ }
+            }
+        }
+        return n
+    }
+
+    // Stamp a pattern written as rows of '#' (alive) and '.' (dead).
+    fn stamp(x0: int, y0: int, rows: Array<string>) {
+        for (y, row in rows) {
+            for (x in 0..Str.length(row)) { self.set(x0 + x, y0 + y, Str.charAt(row, x) == 35) }
+        }
+    }
+
+    fn population() -> int { return self.cells.countWhere(fn(c) => c) }
+
+    // The next generation as a new grid (the old one is left untouched).
+    fn step() -> Grid {
+        let next = new Grid(self.w, self.h)
+        for (y in 0..self.h) {
+            for (x in 0..self.w) {
+                let n = self.neighbours(x, y)
+                next.set(x, y, n == 3 || (n == 2 && self.alive(x, y)))
+            }
+        }
+        return next
+    }
+
+    fn render() -> string {
+        let sb = new StringBuilder()
+        for (y in 0..self.h) {
+            for (x in 0..self.w) { sb.append(self.alive(x, y) ? "#" : ".") }
+            if (y < self.h - 1) { sb.append("\n") }
+        }
+        let out = sb.toString()
+        free(sb)
+        return out
+    }
+}
+
+fn rows(...lines: string) -> Array<string> {
+    let out = new Array<string>()
+    for (l in lines) { out.push(l) }
+    return out
+}
+
+fn main() {
+    let g = new Grid(12, 8)
+    g.stamp(1, 1, rows(".#.", "..#", "###"))         // a glider
+    g.stamp(8, 4, rows("###"))                       // a blinker
+
+    for (gen in 0..=4) {
+        print("generation ${gen} (population ${g.population()}):")
+        print(g.render())
+        let next = g.step()
+        free(g)
+        g = next
+    }
+    print("generation 5 population: ${g.population()} (a glider keeps its 5 cells, a blinker its 3)")
+}
