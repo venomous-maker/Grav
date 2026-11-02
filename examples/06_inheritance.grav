@@ -1,0 +1,118 @@
+// 06_inheritance.grav — inheritance, interfaces, traits, composition, RTTI.
+//
+//   grav examples/06_inheritance.grav --run
+//
+// Covers: single inheritance with virtual dispatch, abstract classes and
+// methods, `super(...)` and `super.method()`, protected members, interfaces
+// (several per class), traits with default methods and `Self`, composition
+// with `uses` (automatic forwarding), multiple inheritance (`extends A, B`),
+// `final` methods, and runtime type info: `typename`, `isInstance`, `is`, `as`.
+
+import "../lib/std.grav"
+
+interface Drawable { fn draw() -> string }
+interface Measurable { fn area() -> float }
+
+abstract class Shape implements Drawable, Measurable {
+    protected name: string
+    constructor(name: string) { self.name = name }
+    abstract fn area() -> float
+    public fn draw() -> string { return "<${self.name} area=${self.area()}>" }
+    final fn kind() -> string { return "shape" }        // cannot be overridden
+}
+
+class Circle extends Shape {
+    private r: float
+    constructor(r: float) { super("circle"); self.r = r }
+    public fn area() -> float { return 3.14159 * self.r * self.r }
+}
+
+class Rect extends Shape {
+    protected w: float
+    protected h: float
+    constructor(w: float, h: float) { super("rect"); self.w = w; self.h = h }
+    public fn area() -> float { return self.w * self.h }
+}
+
+class Square extends Rect {
+    constructor(side: float) { super(side, side); self.name = "square" }
+    // Override that reuses the parent's implementation.
+    public fn draw() -> string { return "[square] " + super.draw() }
+}
+
+// A trait: an interface whose methods may have default bodies; `Self` is the
+// implementing type.
+trait Comparable {
+    fn compareTo(other: Self) -> int
+    fn maxWith(other: Self) -> bool { return self.compareTo(other) >= 0 }
+}
+
+class Score implements Comparable {
+    public points: int
+    constructor(p: int) { self.points = p }
+    public fn compareTo(other: Score) -> int { return self.points - other.points }
+}
+
+// Composition: `uses log: Logger` forwards Logger's public methods.
+class Logger {
+    private prefix: string
+    constructor(prefix: string) { self.prefix = prefix }
+    public fn log(msg: string) -> string { return "[${self.prefix}] ${msg}" }
+}
+class Service uses log: Logger {
+    constructor() { self.log = new Logger("svc") }
+    public fn start() -> string { return self.log("starting") }   // forwarded
+}
+
+// Multiple inheritance: fields and methods of both bases are flattened in.
+class Flyer { public altitude: int  constructor() { self.altitude = 0 }
+              public fn fly() -> string { self.altitude = self.altitude + 100; return "flying" } }
+class Swimmer { public depth: int  constructor() { self.depth = 0 }
+                public fn dive() -> string { self.depth = self.depth + 5; return "diving" } }
+class Duck extends Flyer, Swimmer {
+    constructor() { self.altitude = 0; self.depth = 0 }
+}
+
+fn main() {
+    print("--- polymorphism ---")
+    let shapes = new Array<Shape>()
+    shapes.push(new Circle(1.0))
+    shapes.push(new Rect(2.0, 3.0))
+    shapes.push(new Square(4.0))
+    for (s in shapes) { print(s.draw()) }
+    let total = 0.0
+    for (s in shapes) { total += s.area() }
+    print("total area = ${total}")
+
+    print("--- interfaces ---")
+    let d: Drawable = new Square(1.0)
+    let m: Measurable = new Circle(2.0)
+    print("${d.draw()} / ${m.area()}")
+
+    print("--- traits ---")
+    let x = new Score(70)
+    let y = new Score(85)
+    print("x >= y? ${x.maxWith(y)}  y >= x? ${y.maxWith(x)}")
+
+    print("--- composition ---")
+    let svc = new Service()
+    print(svc.start())
+    print(svc.log("direct call through the forwarder"))
+
+    print("--- multiple inheritance ---")
+    let duck = new Duck()
+    print("${duck.fly()}, ${duck.dive()}, ${duck.fly()} -> altitude ${duck.altitude}, depth ${duck.depth}")
+    print("duck is Flyer: ${duck is Flyer}, is Swimmer: ${duck is Swimmer}")
+
+    print("--- runtime type info ---")
+    for (s in shapes) {
+        let isRect = isInstance(s, Rect)
+        printRaw("${typename(s)}(rect? ${isRect}, square? ${s is Square}) ")
+    }
+    print("")
+    let first: Shape = shapes.get(2)
+    if (first is Square) {
+        let sq = first as Square              // downcast after a check
+        print("downcast ok: ${sq.draw()} kind=${sq.kind()}")
+    }
+}
