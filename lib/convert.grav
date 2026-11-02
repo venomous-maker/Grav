@@ -11,6 +11,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
+#include <strings.h>
+/* Does `s` hold exactly one number (surrounding spaces allowed)? */
+static int grav_is_number(const char* s, int integer) {
+    char* end = 0;
+    if (integer) (void)strtoll(s, &end, 10); else (void)strtod(s, &end);
+    if (end == s) return 0;
+    while (*end && isspace((unsigned char)*end)) end++;
+    return *end == 0;
+}
 static const char* grav_to_hex(int n) {
     char* b = (char*)malloc(20); snprintf(b, 20, "0x%x", (unsigned)n); return b;
 }
@@ -25,13 +35,16 @@ class Format {
     static fn toByte(s: string) -> byte { return %{ (unsigned char)atoi(s) %} as byte; }
     static fn toFloat(s: string) -> float { return %{ atof(s) %} as float; }
     static fn toDouble(s: string) -> double { return %{ atof(s) %} as double; }
+    // true for "true", "1", "yes", "y", "on" (any case); false otherwise.
     static fn toBool(s: string) -> bool {
-        return %{ (strcmp(s, "true") == 0 || strcmp(s, "1") == 0) %} as bool;
+        return %{ (strcasecmp(s, "true") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "yes") == 0 ||
+                   strcasecmp(s, "y") == 0 || strcasecmp(s, "on") == 0) %} as bool;
     }
-    // Parse an int, falling back when the text is empty.
+    static fn isInt(s: string) -> bool { return %{ grav_is_number(s, 1) %} as bool; }
+    static fn isNumber(s: string) -> bool { return %{ grav_is_number(s, 0) %} as bool; }
+    // Parse an int, or return `fallback` unless the whole text is a valid integer.
     static fn toIntOr(s: string, fallback: int) -> int {
-        let valid = %{ (s[0] != 0) %} as bool;
-        return valid ? Format.toInt(s) : fallback;
+        return Format.isInt(s) ? Format.toInt(s) : fallback;
     }
 
     // ---- value -> string ---- (str(x) is the general builtin; these read nicely)
