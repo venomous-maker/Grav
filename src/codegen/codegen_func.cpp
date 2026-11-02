@@ -34,6 +34,7 @@ void CodeGen::emitPrototypes(const Program &program) {
         if (auto *fn = dynamic_cast<const FunctionDecl *>(declPtr.get())) {
             protos_ += "static " + cTy(fn->returnType) + " " +
                        funcCName(fn->fqName, fn->overloadIndex) + paramList(fn->params, "") + ";\n";
+            if (fn->isAsync) emitAsyncSpawner(*fn);
         } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
             std::string S = structName(c->fqName);
             if (!c->constructor.present)
@@ -238,10 +239,34 @@ void CodeGen::emitDestructor(const ClassDecl &cls) {
     defs_ += "}\n\n";
 }
 
+// `async fn f(a: A) -> R` keeps its plain C body `vf_f(a)`; callers use
+// `vf_f__spawn(a)`, which copies the arguments into a task record, queues it on
+// the worker pool, and returns the GravTask handle that `await` waits on.
+void CodeGen::emitAsyncSpawner(const FunctionDecl &fn) {
+    std::string base = funcCName(fn.fqName, fn.overloadIndex);
+    std::string rec = "GravAsync_" + base;
+    bool isVoid = fn.returnType.isVoid();
+    std::string fields = "GravTask task;";
+    for (const auto &p : fn.params) fields += " " + cTy(p.type) + " " + p.name + ";";
+    if (!isVoid) fields += " " + cTy(fn.returnType) + " result;";
+    asyncDecls_ += "typedef struct " + rec + " { " + fields + " } " + rec + ";\n";
+    std::string args;
+    for (const auto &p : fn.params) args += (args.empty() ? "r->" : ", r->") + p.name;
+    asyncDecls_ += "static void " + base + "__run(GravTask* t) {\n    " + rec + "* r = (" + rec +
+                   "*)t;\n    (void)r;\n    " + (isVoid ? "" : "r->result = ") + base + "(" + args +
+                   ");\n}\n";
+    std::string sets;
+    for (const auto &p : fn.params) sets += " r->" + p.name + " = " + p.name + ";";
+    asyncDecls_ += "static GravTask* " + base + "__spawn" + paramList(fn.params, "") + " {\n    " + rec +
+                   "* r = (" + rec + "*)grav_zalloc(sizeof *r);" + sets + "\n    return grav_spawn(&r->task, " +
+                   base + "__run, " + (isVoid ? "0" : "&r->result") + ");\n}\n";
+}
+
 void CodeGen::emitMainWrapper() {
     defs_ += "int main(int argc, char** argv) {\n";
     defs_ += "    grav_argc = argc; grav_argv = argv;\n";
     if (hasMain_) defs_ += "    " + funcCName("main") + "();\n";
+    if (!asyncDecls_.empty()) defs_ += "    grav_join_all(); /* finish tasks that were never awaited */\n";
     defs_ += "    return 0;\n}\n";
 }
 
