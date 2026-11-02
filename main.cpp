@@ -1,4 +1,4 @@
-// gravc — the Grav (v0.2, OOP + namespaces) compiler driver.
+// gravc — the Grav compiler driver.
 //
 // Usage:
 //   gravc <input.grav> [-o out] [--emit c|bin|both] [-Werror]
@@ -8,6 +8,8 @@
 //           type-check -> generate C -> optionally compile to a binary.
 #include <cstdlib>
 #include <filesystem>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -22,6 +24,7 @@
 #include "lexer/preprocess.h"
 #include "parser/parser.h"
 #include "sema/monomorph.h"
+#include "sema/sanitize.h"
 #include "sema/symbols.h"
 #include "sema/typechecker.h"
 
@@ -130,7 +133,10 @@ int usage(const char *prog) {
         "  --keep-c             keep the generated .c when building a binary\n"
         "\n"
         "codegen (passed to the C compiler):\n"
-        "  -O0|-O1|-O2|-O3|-Os  optimization level (default: none)\n"
+        "  -O0|-O1|-O2|-O3|-Os|-Ofast  optimization level (default: -O2, or -O0 with -g)\n"
+        "  --release            -O3, no stack-trace bookkeeping, NDEBUG\n"
+        "  --no-trace           drop call-stack tracing (exceptions report no trace)\n"
+        "  --native             tune for this machine (-march=native)\n"
         "  -g | -g3             include debug info\n"
         "  --cc <compiler>      C compiler to use (default: $CC or cc)\n"
         "\n"
@@ -152,6 +158,7 @@ int main(int argc, char **argv) {
     std::string inputPath, outputPath, ccOverride, optFlag, debugFlag;
     bool useStdin = false, toStdout = false, werror = false;
     bool runAfter = false, keepC = false, verbose = false;
+    bool trace = true, native = false, release = false;
     std::vector<std::string> runArgs;
     EmitMode emit = EmitMode::C;
 
@@ -193,6 +200,13 @@ int main(int argc, char **argv) {
             optFlag = arg;
         } else if (arg == "-g" || arg == "-g3" || arg == "-g0" || arg == "-g1" || arg == "-g2") {
             debugFlag = arg;
+        } else if (arg == "--release") {
+            release = true;
+            trace = false;
+        } else if (arg == "--no-trace") {
+            trace = false;
+        } else if (arg == "--native") {
+            native = true;
         } else if (arg == "-Werror") {
             werror = true;
         } else if (arg == "-v" || arg == "--verbose") {
@@ -256,7 +270,11 @@ int main(int argc, char **argv) {
             return 1;
         }
 
+        // Locals named like C keywords/library functions get C-safe spellings.
+        grav::sanitizeIdentifiers(program);
+
         grav::CodeGen codegen;
+        codegen.setTrace(trace);
         // Hand the line map to codegen so runtime stack traces show real file:line.
         std::vector<grav::SourceMapEntry> cgMap;
         cgMap.reserve(srcMap.size());
@@ -279,8 +297,18 @@ int main(int argc, char **argv) {
             cPath = base + ".c";
         } else { // Asm or Bin: the .c is intermediate unless --keep-c
             if (exePath.empty()) exePath = (emit == EmitMode::Asm) ? base + ".s" : base;
-            cPath = base + ".gen.c";
-            tempC = !keepC;
+            if (keepC) {
+                cPath = base + ".gen.c";
+            } else {
+                // A unique scratch file in the temp dir: no clutter next to the
+                // sources, and parallel builds of the same file cannot collide.
+                std::error_code tec;
+                fs::path tmp = fs::temp_directory_path(tec);
+                if (tec) tmp = ".";
+                cPath = (tmp / ("gravc-" + std::to_string(getpid()) + "-" +
+                                fs::path(base).filename().string() + ".c")).string();
+                tempC = true;
+            }
         }
 
         std::ofstream out(cPath);
@@ -297,8 +325,12 @@ int main(int argc, char **argv) {
         const char *ccEnv = std::getenv("CC");
         std::string cc = !ccOverride.empty() ? ccOverride : (ccEnv ? ccEnv : "cc");
         // _DEFAULT_SOURCE exposes POSIX (getcwd, popen, usleep, …) under -std=c11.
-        std::string flags = " -std=c11 -D_DEFAULT_SOURCE";
-        if (!optFlag.empty()) flags += " " + optFlag;
+        std::string flags = " -std=c11 -D_DEFAULT_SOURCE -pipe";
+        // Optimize by default; an explicit -O wins, and plain -g means "debug me".
+        if (optFlag.empty()) optFlag = release ? "-O3" : (debugFlag.empty() ? "-O2" : "-O0");
+        flags += " " + optFlag;
+        if (release) flags += " -DNDEBUG";
+        if (native) flags += " -march=native";
         if (!debugFlag.empty()) flags += " " + debugFlag;
         // Link libm so inline-C `<math.h>` users (e.g. lib/mathf.grav) work; on
         // assembly output there is no link step.
@@ -328,8 +360,10 @@ int main(int argc, char **argv) {
             std::string runCmd = "\"" + runPath + "\"";
             for (const auto &a : runArgs) runCmd += " \"" + a + "\"";
             int prc = std::system(runCmd.c_str());
-            if (emit == EmitMode::Bin && tempC) { /* binary kept; nothing to clean */ }
-            return prc == 0 ? 0 : 1;
+            // Pass the program's own exit status through.
+            if (prc == -1) return 1;
+            if (WIFEXITED(prc)) return WEXITSTATUS(prc);
+            return 128 + (WIFSIGNALED(prc) ? WTERMSIG(prc) : 0);
         }
         return 0;
     } catch (const grav::GravError &e) {
