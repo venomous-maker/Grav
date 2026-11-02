@@ -1,0 +1,116 @@
+// 09_lambdas.grav — first-class functions and closures.
+//
+//   grav examples/09_lambdas.grav --run
+//
+// Covers: function types `fn(A) -> R`, lambdas in arrow form (`=> expr`) and
+// block form, parameter types inferred from context, named functions as
+// values, closures (capture by value; shared state through objects; `self`),
+// functions returned from functions, callbacks stored in fields and
+// collections, null function values, and the collection higher-order methods.
+
+import "../lib/std.grav"
+
+fn square(x: int) -> int { return x * x }
+fn negate(x: int) -> int { return -x }
+
+fn compose(f: fn(int) -> int, g: fn(int) -> int) -> fn(int) -> int {
+    return fn(x) => g(f(x))
+}
+fn applyN(f: fn(int) -> int, n: int, x: int) -> int {
+    let v = x
+    for (i in 0..n) { v = f(v) }
+    return v
+}
+fn makeAdder(k: int) -> fn(int) -> int { return fn(x) => x + k }
+
+// Mutable state shared with a closure lives in an object.
+class Counter { public n: int  constructor() { self.n = 0 } }
+fn makeTicker() -> fn() -> int {
+    let c = new Counter()
+    return fn() -> int { c.n = c.n + 1; return c.n }
+}
+
+// Callbacks as fields; lambdas that capture `self`.
+class Button {
+    public label: string
+    public onClick: fn(string) -> string
+    private clicks: int
+    constructor(label: string) { self.label = label; self.onClick = null; self.clicks = 0 }
+    fn click() -> string {
+        self.clicks = self.clicks + 1
+        if (self.onClick == null) { return "${self.label}: no handler" }
+        return self.onClick(self.label)
+    }
+    fn useCounterHandler() {
+        self.onClick = fn(l) => "${l} clicked ${self.clicks} time(s)"
+    }
+}
+
+// An event bus holding a list of handlers.
+class Events {
+    private handlers: Array<fn(string)>
+    constructor() { self.handlers = new Array<fn(string)>() }
+    fn on(h: fn(string)) { self.handlers.push(h) }
+    fn emit(e: string) { self.handlers.forEach(fn(h) => h(e)) }
+}
+
+fn main() {
+    print("--- function values ---")
+    let f: fn(int) -> int = square              // a named function as a value
+    let inc = fn(x: int) => x + 1               // arrow lambda
+    let clamp = fn(x: int) -> int {             // block lambda
+        if (x < 0) { return 0 }
+        if (x > 100) { return 100 }
+        return x
+    }
+    print("f(7)=${f(7)} inc(7)=${inc(7)} clamp(-5)=${clamp(-5)} clamp(500)=${clamp(500)}")
+    print("compose(square, negate)(3) = ${compose(square, negate)(3)}")
+    print("applyN(inc, 10, 0) = ${applyN(inc, 10, 0)}")
+    print("applyN(x => x*2, 8, 1) = ${applyN(fn(x) => x * 2, 8, 1)}")   // types inferred
+
+    print("--- closures ---")
+    let add5 = makeAdder(5)
+    let add100 = makeAdder(100)
+    print("add5(1)=${add5(1)} add100(1)=${add100(1)}")
+    let base = 1000
+    let offset = fn(x: int) => x + base         // captures `base` by value
+    print("offset(1)=${offset(1)}")
+    let tick = makeTicker()
+    tick()
+    tick()
+    print("ticker after 3 calls: ${tick()}")
+    let curried = fn(a: int) => fn(b: int) => a * 10 + b
+    print("curried(4)(2) = ${curried(4)(2)}")
+
+    print("--- callbacks ---")
+    let ok = new Button("OK")
+    print(ok.click())
+    ok.onClick = fn(l) => "handled ${l}"
+    print(ok.click())
+    ok.useCounterHandler()
+    print(ok.click())
+
+    let bus = new Events()
+    let log = new Array<string>()
+    bus.on(fn(e) => print("listener A got ${e}"))
+    bus.on(fn(e) { log.push(Str.upper(e)) })
+    bus.emit("start")
+    bus.emit("stop")
+    print("log: ${Str.join(log, ", ")}")
+
+    print("--- higher-order collections ---")
+    let nums = new Array<int>()
+    for (n in 1..=10) { nums.push(n) }
+    let evens = nums.filter(fn(n) => n % 2 == 0)
+    let squares = evens.map(fn(n) => n * n)
+    print("evens squared: ${Str.join(squares.mapTo::<string>(fn(n) => str(n)), " ")}")
+    print("sum=${nums.reduce(0, fn(a, b) => a + b)} any>9=${nums.any(fn(n) => n > 9)} all>0=${nums.all(fn(n) => n > 0)}")
+    print("count of multiples of 3: ${nums.countWhere(fn(n) => n % 3 == 0)}, first >6 at ${nums.findIndex(fn(n) => n > 6)}")
+    let words = new Array<string>()
+    for (w in ["pear", "fig", "banana", "kiwi"]) { words.push(w) }
+    words.sortBy(fn(a, b) => Str.length(a) - Str.length(b))
+    words.forEachIndexed(fn(i, w) { printRaw("${i}:${w} ") })
+    print("")
+    let totalLetters = words.fold::<int>(0, fn(acc, w) => acc + Str.length(w))
+    print("letters: ${totalLetters}")
+}
