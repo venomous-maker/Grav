@@ -2,8 +2,14 @@
 // Each instantiation (Array<int>, Array<string>, …) is monomorphized to a
 // concrete struct holding a `T*` buffer that doubles on demand.
 //
-// Note: higher-order methods (map/filter/reduce/forEach) need first-class
-// functions, which Grav does not have yet — see the repo roadmap.
+// Iterate with `for (x in arr)` / `for (i, x in arr)`, index with `arr[i]`.
+// Element access is bounds-checked (an out-of-range index panics). `free(arr)`
+// releases the buffer too (via the destructor).
+//
+// Higher-order methods take lambdas: `xs.filter(fn(x) => x > 2).map(fn(x) => x * 10)`.
+// To map into a different element type use the generic method `xs.mapTo::<U>(f)`;
+// `xs.fold::<A>(init, f)` reduces into any type. (Free-function forms `mapTo::<T, U>`
+// and `fold::<T, A>` are kept for compatibility.)
 
 %{
 #include <stdlib.h>
@@ -16,6 +22,11 @@ class Array<T> {
     private cap: int
 
     constructor() { self.len = 0; self.cap = 0; self.data = null; }
+    destructor() { free(self.data); }
+
+    private fn check(i: int) {
+        if (i < 0 || i >= self.len) { panic("Array index ${i} out of range (length ${self.len})"); }
+    }
 
     private fn ensure(need: int) {
         if (self.cap >= need) { return; }
@@ -24,6 +35,7 @@ class Array<T> {
         let old = self.data;
         let bytes = nc * sizeof(T);
         self.data = %{ (void*)realloc((void*)old, (size_t)bytes) %} as T*;
+        if (self.data == null) { panic("Array: out of memory"); }
         self.cap = nc;
     }
 
@@ -37,18 +49,22 @@ class Array<T> {
     }
 
     public fn pop() -> T {
+        if (self.len == 0) { panic("Array.pop on an empty array"); }
         self.len = self.len - 1;
         return self.data[self.len];
     }
 
-    public fn get(i: int) -> T { return self.data[i]; }
-    public fn set(i: int, item: T) { self.data[i] = item; }
+    public fn get(i: int) -> T { self.check(i); return self.data[i]; }
+    public fn set(i: int, item: T) { self.check(i); self.data[i] = item; }
+    fn operator[](i: int) -> T { self.check(i); return self.data[i]; }
+    fn operator[]=(i: int, item: T) { self.check(i); self.data[i] = item; }
 
-    public fn first() -> T { return self.data[0]; }
-    public fn last() -> T { return self.data[self.len - 1]; }
+    public fn first() -> T { self.check(0); return self.data[0]; }
+    public fn last() -> T { self.check(self.len - 1); return self.data[self.len - 1]; }
     public fn clear() { self.len = 0; }
 
     public fn insert(index: int, item: T) {
+        if (index < 0 || index > self.len) { panic("Array.insert index ${index} out of range"); }
         self.ensure(self.len + 1);
         let i = self.len;
         while (i > index) { self.data[i] = self.data[i - 1]; i = i - 1; }
@@ -57,6 +73,7 @@ class Array<T> {
     }
 
     public fn removeAt(index: int) {
+        self.check(index);
         for (i in index..(self.len - 1)) { self.data[i] = self.data[i + 1]; }
         self.len = self.len - 1;
     }
@@ -76,5 +93,104 @@ class Array<T> {
         }
     }
 
-    public fn dispose() { free(self.data); self.len = 0; self.cap = 0; }
+    public fn dispose() { free(self.data); self.data = null; self.len = 0; self.cap = 0; }
+
+    // ── higher-order operations ────────────────────────────────────────────
+    public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.data[i]); } }
+    public fn forEachIndexed(f: fn(int, T)) { for (i in 0..self.len) { f(i, self.data[i]); } }
+    public fn map(f: fn(T) -> T) -> Array<T> {
+        let out = new Array<T>();
+        out.ensure(self.len);
+        for (i in 0..self.len) { out.push(f(self.data[i])); }
+        return out;
+    }
+    public fn filter(keep: fn(T) -> bool) -> Array<T> {
+        let out = new Array<T>();
+        for (i in 0..self.len) { if (keep(self.data[i])) { out.push(self.data[i]); } }
+        return out;
+    }
+    public fn reduce(init: T, f: fn(T, T) -> T) -> T {
+        let acc = init;
+        for (i in 0..self.len) { acc = f(acc, self.data[i]); }
+        return acc;
+    }
+    public fn any(pred: fn(T) -> bool) -> bool {
+        for (i in 0..self.len) { if (pred(self.data[i])) { return true; } }
+        return false;
+    }
+    public fn all(pred: fn(T) -> bool) -> bool {
+        for (i in 0..self.len) { if (!pred(self.data[i])) { return false; } }
+        return true;
+    }
+    public fn countWhere(pred: fn(T) -> bool) -> int {
+        let n = 0;
+        for (i in 0..self.len) { if (pred(self.data[i])) { n += 1; } }
+        return n;
+    }
+    // Index of the first element matching `pred`, or -1.
+    public fn findIndex(pred: fn(T) -> bool) -> int {
+        for (i in 0..self.len) { if (pred(self.data[i])) { return i; } }
+        return -1;
+    }
+    public fn copy() -> Array<T> {
+        let out = new Array<T>();
+        out.ensure(self.len);
+        for (i in 0..self.len) { out.push(self.data[i]); }
+        return out;
+    }
+    // Generic methods: map into another element type / fold into any accumulator.
+    //   let names = nums.mapTo::<string>(fn(n) => "#${n}")
+    public fn mapTo<U>(f: fn(T) -> U) -> Array<U> {
+        let out = new Array<U>();
+        for (i in 0..self.len) { out.push(f(self.data[i])); }
+        return out;
+    }
+    public fn fold<A>(init: A, f: fn(A, T) -> A) -> A {
+        let acc = init;
+        for (i in 0..self.len) { acc = f(acc, self.data[i]); }
+        return acc;
+    }
+    // Stable merge sort; `cmp(a, b)` < 0 puts a first. O(n log n).
+    public fn sortBy(cmp: fn(T, T) -> int) {
+        if (self.len < 2) { return; }
+        let n = self.len;
+        let bytes = n * sizeof(T);
+        let tmp = %{ (void*)malloc((size_t)bytes) %} as T*;
+        let width = 1;
+        while (width < n) {
+            let lo = 0;
+            while (lo < n) {
+                let mid = lo + width < n ? lo + width : n;
+                let hi = lo + 2 * width < n ? lo + 2 * width : n;
+                let i = lo;
+                let j = mid;
+                let k = lo;
+                while (i < mid && j < hi) {
+                    if (cmp(self.data[j], self.data[i]) < 0) { tmp[k] = self.data[j]; j += 1; }
+                    else { tmp[k] = self.data[i]; i += 1; }
+                    k += 1;
+                }
+                while (i < mid) { tmp[k] = self.data[i]; i += 1; k += 1; }
+                while (j < hi) { tmp[k] = self.data[j]; j += 1; k += 1; }
+                lo = hi;
+            }
+            for (x in 0..n) { self.data[x] = tmp[x]; }
+            width = width * 2;
+        }
+        free(tmp);
+    }
+}
+
+// Map into a different element type: `mapTo::<int, string>(xs, fn(x) => str(x))`.
+fn mapTo<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U> {
+    let out = new Array<U>();
+    for (i in 0..xs.length()) { out.push(f(xs.get(i))); }
+    return out;
+}
+
+// Reduce into an accumulator of any type: `fold::<string, int>(words, 0, fn(n, w) => n + 1)`.
+fn fold<T, A>(xs: Array<T>, init: A, f: fn(A, T) -> A) -> A {
+    let acc = init;
+    for (i in 0..xs.length()) { acc = f(acc, xs.get(i)); }
+    return acc;
 }
