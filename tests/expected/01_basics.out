@@ -1,0 +1,20 @@
+== Grav basics ==
+count=42 ratio=0.75 ready=true name=Ada inferred=84
+long=9000000000 uint=4000000000 byte=255 double=3.14159 float32=1.5
+long + int promotes: 9000000042
+a+c=22 a-c=12 a*c=85 a/c=3 a%c=2
+2**10=1024  2.0**0.5=1.41421  (-3)**2=9
+float division: 3.4
+flags=5 &6=4 ^3=6 ~0=-1 1<<8=256 256>>4=16
+n=7
+x>5 && x<10: true  x==3 || !ready: false
+parity: odd
+int(9.99)=9 float(3)=3 bool(1)=true
+as: 10  C-style: 42000000000
+narrowing long->int: 410065408
+Hello, Ada!
+interpolation with expressions: 22 and AdaAda
+escapes: tab[	] quote["] backslash[\] dollar[${not interpolated}]
+hex[AB] unicode[☺ 🚀] esc-bold[[1mbold[0m]
+equal? true  different? true
+s=growing str(3.5)=3.5 str(true)=true
