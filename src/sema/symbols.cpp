@@ -609,6 +609,9 @@ void Registry::registerDecls(Program &program) {
                 info.paramNames.push_back(p.name);
                 if (p.variadic) info.isVariadic = true;
             }
+            // A task can outlive the caller's stack, where variadic arguments live.
+            if (info.isAsync && info.isVariadic)
+                error(fn->line, fn->col, "an async function cannot have a variadic parameter");
             // Overloading: a repeated name is allowed as long as the parameter
             // signature differs; an identical signature is a true duplicate.
             auto &set = funcOverloads_[fn->fqName];
