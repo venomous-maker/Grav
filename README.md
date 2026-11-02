@@ -12,7 +12,7 @@ binary). The compiler — `gravc` — is written in C++20.
 
 ## Documentation
 
-The full language guide lives in [`docs/`](docs/README.md): fifteen chapters from
+The full language guide lives in [`docs/`](docs/README.md): sixteen chapters from
 [getting started](docs/01-getting-started.md) to
 [how Grav compiles](docs/15-how-it-compiles.md), plus a [reference](docs/reference.md)
 of keywords, operator precedence, and built-ins. Every runnable snippet in the docs
@@ -128,6 +128,8 @@ gravc -                       # read source from stdin, write C to stdout
 | `--release`                  | `-O3`, `-DNDEBUG`, and no stack-trace bookkeeping.             |
 | `--no-trace`                 | Drop call-stack tracing (uncaught exceptions print no trace).  |
 | `--native`                   | Tune for the build machine (`-march=native`).                  |
+| `--race`                     | Build with ThreadSanitizer to detect data races between tasks. |
+| `--sanitize`                 | Build with AddressSanitizer + UBSan (memory errors, UB).       |
 | `-g`, `-g3`                  | Include debug info.                                            |
 | `--cc <compiler>`            | C compiler to use (default `$CC`, else `cc`).                  |
 | `-Werror`                    | Treat warnings (e.g. unused variables) as fatal.              |
@@ -547,26 +549,39 @@ fn main() {
 
 ### Async / await
 
-`async fn` marks a function whose callers receive a `Future<T>`; `await` (only
-valid inside an `async fn`) unwraps a `Future<T>` back to `T`.
-
-Grav uses an **eager-future** model: an async call runs to completion immediately
-and returns an already-resolved future, so `await` is a zero-cost, statically
-checked unwrap. This keeps the surface syntax of structured concurrency while the
-generated C stays a plain, dependency-free function call — a cooperative scheduler
-where every task finishes at its call site.
+`async fn` marks a function whose calls run **concurrently** on a pool of worker
+threads; a call returns a `Future<T>` at once, and `await` waits for the result
+(re-throwing any exception the task raised). The pool has `GRAV_MAXPROCS` workers —
+by default the number of CPU cores; set the `GRAV_MAXPROCS` environment variable or
+call `Async.setMaxProcs(n)` to change it. A task awaited before a worker picks it up
+runs on the awaiting thread, so tasks can await tasks without deadlocking even with
+one worker.
 
 ```grav
-async fn square(x: int) -> int { return x * x }
+import "lib/std.grav"
 
-async fn main() {
-    let f = square(9)                // f : Future<int>
-    print(await f)                   // 81
+async fn countPrimes(lo: int, hi: int) -> int {
+    let n = 0
+    for (x in lo..hi) {
+        let p = x > 1
+        for (d in 2..x) { if (d * d > x) { break } if (x % d == 0) { p = false; break } }
+        if (p) { n++ }
+    }
+    return n
+}
+
+fn main() {
+    let parts = new Array<Future<int>>()
+    for (k in 0..4) { parts.push(countPrimes(k * 50000, (k + 1) * 50000)) }   // run in parallel
+    print(awaitAll::<int>(parts).reduce(0, fn(a, b) => a + b))              // 17984
 }
 ```
 
-The type checker still enforces the discipline: a `Future<int>` is not an `int`,
-so you must `await` it before use, and you may not `await` outside an `async fn`.
+Share data between tasks through `Mutex`, `AtomicInt`, and `Channel<T>`
+(`lib/async.grav`); the runtime itself (exceptions, stack traces, library buffers) is
+thread-safe, and `--race` builds the program with ThreadSanitizer to catch unsafe
+sharing in your code. See [docs/16-concurrency.md](docs/16-concurrency.md) and
+[16_async.grav](examples/16_async.grav).
 
 ### Structs
 
@@ -1170,6 +1185,14 @@ navigation stay consistent.
 
 ## Roadmap / not yet implemented
 
+`v1.3` made **async/await concurrent**: async calls run on a pool of `GRAV_MAXPROCS`
+worker threads (default: CPU cores, overridable from the environment), `await`
+works anywhere and re-throws task exceptions, `Future<T>` is a first-class type, the
+runtime and library are thread-safe, and `lib/async.grav` adds `Mutex`, `AtomicInt`,
+`Channel<T>`, `awaitAll`, and pool controls. New `--race` (ThreadSanitizer) and
+`--sanitize` (AddressSanitizer + UBSan) build flags check programs for data races and
+memory errors.
+
 `v1.2` also defined **left-to-right evaluation** (call arguments, receivers, and
 the pieces of `+`/`${}` strings — C leaves argument order unspecified), multiple
 `catch` clauses, `==` on structs (member-wise), interfaces and functions (identity),
@@ -1255,8 +1278,7 @@ implemented yet — using them is a parse/type error today:
 - **`Dynamic` / `any` and reflection** — and the libraries that depend on them (JSON,
   a general-purpose serializer) are not implemented. `Option<T>` / `Result<T,E>` exist
   only as much as plain generics allow — there is no pattern-match binding (`match`).
-- **Concurrency & networking** — `async`/`await` lower to synchronous calls today;
-  real threads, channels, HTTP, and sockets are not implemented.
+- **Networking** — HTTP and sockets are not in the standard library yet (use inline C).
 
 What *is* in the standard library now (see [lib/README.md](lib/README.md)): the
 collections above plus `HashMap<K,V>`, `StringBuilder`, an expanded `Str`
