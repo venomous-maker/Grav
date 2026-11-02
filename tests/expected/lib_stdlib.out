@@ -1,0 +1,24 @@
+5 5 3 true 2
+9,3 slice=2 max=9 first>4=9
+deque 20 front=19 back=18 pop=19,18 d[3]=11
+queue bcd peekOr=-1
+hs add true false true size=2
+obj key one missing=false
+enum key 7 -1
+the=3 cat=1
+pq 1 3 5 7 9 
+linked 54310 first=5 last=0 contains3=true
+sorted apple,fig,kiwi,pear first=apple between=fig,kiwi
+bits count=3 has64=true has5=false list=1,64,200
+pair age=36 swapped=36 eq=true
+opt 5 -1 v5 false
+Grav **x** 4 name true true 3 G   7
+3.14 -1,234,567 0b1010 0o10 25.6% 1.5 KB 255 1.5
+7 4 10 12 12 true 3628800 2.72 true -1
+random same=true 1..6=true shuffled-sum=45 rng-range=true choice-ok=true
+a/c/d /y report n.md /abs /
+file wrote=true copied=true size=4 list=copy.bin,sub isDir=true
+process code=4 out=hi ok=false
+date 2024-02-29 12:00:00 weekday=3 leap=true days=28 cmp=true until=10
+IOError: disk kind=IOError
+hello world42
