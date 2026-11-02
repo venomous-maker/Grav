@@ -6,7 +6,12 @@ Translates a type-checked `Program` into a single self-contained C translation u
 |------------------------|----------------------------------------------------------------|
 | `mangle.h/.cpp`        | Name mangling (`a.b.C` → `a__b__C`) and C type spelling.        |
 | `codegen.h`            | The `CodeGen` class and its output sections.                   |
-| `codegen_types.cpp`    | Prelude, struct layouts, vtable & itable types/instances, RTTI.|
+| `codegen_runtime.cpp`  | The runtime prelude (strings, RTTI, tracing, exceptions).      |
+| `codegen_types.cpp`    | Struct layouts, vtable & itable types/instances, RTTI, enums.  |
+| `codegen_flow.cpp`     | Blocks/`defer`, loops & `for … in`, try/catch/finally, the cleanup stack that `return`/`break`/`continue` unwind, `volatile` analysis, line-mark filtering. |
+| `codegen_lambda.cpp`   | Closures: lifted `grav_lambda_N` functions, `GravEnv_N` capture structs, `grav_mk_lambda_N` constructors, function references, and per-signature `grav_call_N` helpers. |
+| `codegen_owned.cpp`    | Ownership analysis that frees local strings automatically (flag-guarded frees on reassignment and scope exit; temporaries after non-retaining calls). |
+| `codegen_dispatch.cpp` | Method calls (devirtualized direct calls, single-evaluation thunks), fused string building, `print`/`str`. |
 | `codegen_func.cpp`     | Prototypes, functions, methods, constructors, accessors, `main`.|
 | `codegen_stmt.cpp`     | Statement emission.                                            |
 | `codegen_expr.cpp`     | Expression emission, calls, upcasts/boxing.                    |
@@ -22,9 +27,11 @@ declarations always precede use.
   `const void* __vt; const GravTypeInfo* __type;` — compatible with the shared
   `struct GravObject`. Inherited fields are flattened base-first, so a `Derived*`
   is layout-compatible with `Base*`.
-- **Virtual dispatch**: one vtable struct per class, slots laid out base-first.
-  A call `a.m(x)` becomes
-  `((SlotOwner_VT*)((struct GravObject*)a)->__vt)->m((SlotOwner*)a, x)`.
+- **Virtual dispatch**: one `const` vtable struct per class, slots laid out base-first.
+  A call `a.m(x)` whose method no subclass of `a`'s static type overrides becomes a
+  direct `Impl_m_m((Impl*)a, x)`; otherwise it calls a `static inline` thunk
+  `SlotOwner__vcall__m((SlotOwner*)a, x)` that loads the slot (so `a` is evaluated
+  once even when it is a call). Interface calls use `I__icall__m(v, x)` the same way.
 - **Interfaces**: an interface value is a `GravIface { void* obj; const void* itab; }`
   fat pointer. Each (class × interface) pair gets an itable instance; a call becomes
   `((I_ITAB*)v.itab)->m(v.obj, …)`. Boxing a class into an interface builds the fat
@@ -33,12 +40,24 @@ declarations always precede use.
   `__type`; `typename`/`isInstance` read it.
 - **Constructors**: `Class_new(...)` `calloc`s the struct, sets `__vt`/`__type`, runs
   the constructor body, returns the pointer.
+- **Destructors**: `Class__drop(self)` runs the body then the nearest base's drop;
+  `GravTypeInfo.drop` points at the dynamic type's chain, which `free(obj)`
+  (`grav_free_obj`) calls before releasing memory.
+- **Function values**: `GravFn { fn, env }`; a lambda's body becomes
+  `grav_lambda_N(void* env, …)` which re-binds its captures as locals, so it is
+  compiled like any function. Calls go through `grav_call_N(f, …)` (null-checked).
+- **Control flow with cleanups**: try/finally, catch-with-finally, `defer` and loops
+  push entries on a cleanup stack; `return` unwinds all of them (restoring the
+  `jmp_buf` stack and emitting finally/deferred code inline), `break`/`continue`
+  unwind to the innermost loop.
 
 ### Runtime prelude
 
-A small, dependency-light prelude is emitted at the top of every program:
-`grav_str_concat` (string `+`), `grav_typename`, `grav_is_instance`, and the
-`GravTypeInfo`/`GravObject`/`GravIface` definitions.
+A small, dependency-light prelude is emitted at the top of every program: string
+helpers (`grav_concatn`/`grav_fmt` for fused `+` chains, `grav_streq`), RTTI
+(`grav_typename`, `grav_is_instance`), `grav_free_obj`, call-stack tracing
+(compiled out when `GRAV_NO_TRACE` is defined, i.e. `--release`/`--no-trace`), and
+the exception runtime.
 
 ### Type spelling
 
