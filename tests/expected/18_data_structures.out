@@ -1,0 +1,24 @@
+--- Array: an ordered, growable list ---
+top scores: 95, 95, 88, 72 (best 95)
+--- Deque: add/remove at both ends in O(1) ---
+last three: 9 2 6
+--- Stack and Queue ---
+undo delete, then bold
+serving ada; next up bob; waiting 2
+--- HashMap and HashSet: fast lookup ---
+apples: 3, kiwis: 0
+distinct words in order: to be or not
+--- SortedMap: keys in order, range queries ---
+alphabetical: apple, banana, cherry, kiwi, melon
+from b to l: banana, cherry, kiwi
+--- PriorityQueue: always take the most urgent ---
+  9: fix outage
+  5: lunch
+  2: write docs
+--- LinkedList: cheap changes at the ends ---
+recent pages: blog api docs 
+--- BitSet: sets of small integers ---
+primes below 50: 15 -> 2 3 5 7 11 13 17 19 23 29 31 37 41 43 47
+--- Pair and Optional ---
+score range: 72..95
+figs: 1, kiwis: 0, present: true/false
