@@ -1185,6 +1185,16 @@ navigation stay consistent.
 
 ## Roadmap / not yet implemented
 
+`v1.5` reworked the **standard library**: one set of conventions across every
+collection (`size`, `isEmpty`, `clear`, `contains`, `forEach`, `toArray`, copies from
+`keys()`), new data structures (`Deque`, `HashSet`, `PriorityQueue`, `LinkedList`,
+`SortedMap`, `BitSet`, `Pair`/`Triple`, `Optional`), O(1) `Queue` and a one-allocation
+`Str.join` (100–1000× faster), a portable per-thread xoshiro `Random` with inclusive
+ranges, `Dir`, `Process.run`, number formatting (`Format.fixed`, `grouped`, `bytes`),
+`DateTime.of`, many new `Str`/`Math` functions, and fixes (`Process.exec` exit codes,
+`Str.charAt` bounds, 64-bit file sizes, binary-safe `File.copyTo`, `Map.keys()` copies).
+See [18_data_structures.grav](examples/18_data_structures.grav).
+
 `v1.4` added **`auto`** — generic type arguments are inferred from call arguments,
 lambda results, constructor arguments, and expected types (`maxOf(3, 9)`,
 `new Box(5)`, `xs.mapTo(fn(n) => "#${n}")`, `self.items = new Array<auto>()`) — and
