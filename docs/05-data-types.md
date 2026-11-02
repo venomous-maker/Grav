@@ -187,6 +187,66 @@ Output:
 4 8 8 3
 ```
 
+## any
+
+`any` holds a value of any primitive type, a string, an enum, an object, a function,
+or `null`, together with its runtime type. Values go in implicitly; `x is T` tests
+what is inside and `x as T` takes it out (stopping the program with a clear message
+if the type is wrong). `print`, interpolation, `str`, `==`, and `typename` work on
+`any` directly.
+
+```grav
+import "../lib/std.grav"
+
+class Point {
+    public x: int  public y: int
+    constructor(x: int, y: int) { self.x = x; self.y = y }
+    fn toString() -> string { return "(${self.x}, ${self.y})" }
+}
+
+fn describe(v: any) -> string {
+    if (v is int) { return "an int, doubled ${(v as int) * 2}" }
+    if (v is string) { return "a string of length ${Str.length(v as string)}" }
+    if (v is Point) { return "a point with x=${(v as Point).x}" }
+    if (v == null) { return "nothing" }
+    return "a ${typename(v)}"
+}
+
+fn main() {
+    let items = new Array<any>()
+    items.push(21)
+    items.push("grav")
+    items.push(new Point(3, 4))
+    items.push(true)
+    items.push(null)
+    for (it in items) { print("${it}: ${describe(it)}") }
+
+    let config = new HashMap<string, any>()
+    config["port"] = 8080
+    config["debug"] = true
+    print((config["port"] as int) + 1)
+    print(config["port"] == 8080)
+}
+```
+
+Output:
+
+```text
+21: an int, doubled 42
+grav: a string of length 4
+(3, 4): a point with x=3
+true: a bool
+null: nothing
+8081
+true
+```
+
+`any` cannot hold structs, fixed arrays, pointers, or `binary`. An object taken out
+of an `any` comes out as its class (or a base class); to use it through an
+interface, unbox it as the class first. Prefer real types where you can — `any` is
+for genuinely mixed data such as configuration, heterogeneous lists, or values
+crossing a plugin boundary.
+
 ## binary
 
 `binary` holds raw bytes with an explicit length, so unlike `string` it may contain
