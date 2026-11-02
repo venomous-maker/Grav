@@ -4,6 +4,7 @@ import "array.grav"
 class List<T> {
     private items: Array<T>
     constructor() { self.items = new Array<T>(); }
+    destructor() { free(self.items); }
 
     public fn add(item: T) { self.items.push(item); }
     public fn get(index: int) -> T { return self.items.get(index); }
@@ -18,4 +19,9 @@ class List<T> {
     public fn size() -> int { return self.items.length(); }
     public fn isEmpty() -> bool { return self.items.isEmpty(); }
     public fn clear() { self.items.clear(); }
+    public fn forEach(f: fn(T)) { self.items.forEach(f); }
+    public fn any(pred: fn(T) -> bool) -> bool { return self.items.any(pred); }
+    public fn all(pred: fn(T) -> bool) -> bool { return self.items.all(pred); }
+    public fn sortBy(cmp: fn(T, T) -> int) { self.items.sortBy(cmp); }
+    public fn toArray() -> Array<T> { return self.items.copy(); }
 }
