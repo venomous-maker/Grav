@@ -203,6 +203,7 @@ std::string CodeGen::emitToString(const Expr &e) const {
         case TypeRef::Kind::Float: return "grav_float_to_str(" + emitExpr(e) + ")";
         case TypeRef::Kind::Bool: return "((" + emitExpr(e) + ") ? \"true\" : \"false\")";
         case TypeRef::Kind::Binary: return "grav_bytes_to_str(" + emitExpr(e) + ")";
+        case TypeRef::Kind::Any: return "grav_any_to_string(" + emitExpr(e) + ")";
         default: break;
     }
     if (t.isNamed() && reg_->isEnum(t.name)) return enumNameFn(t.name) + "(" + emitExpr(e) + ")";
