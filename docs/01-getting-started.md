@@ -58,6 +58,8 @@ cat hello.grav | grav -             # read stdin, print the C to stdout
 | `--release` | `-O3`, `NDEBUG`, and no stack-trace bookkeeping |
 | `--no-trace` | drop call-stack tracing (uncaught exceptions print no trace) |
 | `--native` | tune for this machine (`-march=native`) |
+| `--race` | build with ThreadSanitizer to find data races between tasks |
+| `--sanitize` | build with AddressSanitizer + UBSan to find memory errors |
 | `-g`, `-g3` | debug information |
 | `--cc <compiler>` | C compiler to use (default `$CC`, else `cc`) |
 | `-Werror` | treat warnings (such as unused variables) as errors |
