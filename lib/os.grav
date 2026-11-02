@@ -20,7 +20,7 @@ static const char* grav_os_platform(void) {
 #endif
 }
 static const char* grav_os_uname(int field) {
-    static struct utsname u; static int done = 0;
+    static _Thread_local struct utsname u; static _Thread_local int done = 0;
     if (!done) { if (uname(&u) != 0) memset(&u, 0, sizeof u); done = 1; }
     return field == 0 ? u.machine : field == 1 ? u.nodename : u.release;
 }
