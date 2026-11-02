@@ -1,0 +1,130 @@
+// 16_async.grav — concurrency with async/await on a worker thread pool.
+//
+//   grav examples/16_async.grav --run
+//   GRAV_MAXPROCS=2 grav examples/16_async.grav --run     # cap the worker pool
+//
+// Covers: `async fn` calls running in parallel on GRAV_MAXPROCS workers (default:
+// CPU cores), `await` (anywhere, re-throwing a task's exception), Future<T>
+// values in collections and `awaitAll`, tasks that spawn and await tasks, Mutex
+// and AtomicInt for shared state, a producer/consumer Channel, and releasing
+// finished tasks with free(future).
+
+import "../lib/std.grav"
+
+// CPU-bound work: count the primes in [lo, hi).
+async fn countPrimes(lo: int, hi: int) -> int {
+    let count = 0
+    for (n in lo..hi) {
+        if (n < 2) { continue }
+        let prime = true
+        let d = 2
+        while (d * d <= n) {
+            if (n % d == 0) { prime = false; break }
+            d++
+        }
+        if (prime) { count++ }
+    }
+    return count
+}
+
+async fn napAndReturn(ms: int, value: string) -> string {
+    Async.sleepMs(ms)
+    return value
+}
+
+async fn checkedDivide(a: int, b: int) -> int {
+    if (b == 0) { throw new ValueError("cannot divide ${a} by zero") }
+    return a / b
+}
+
+// A task that fans out sub-tasks and awaits them.
+async fn parallelSum(xs: Array<int>, chunks: int) -> long {
+    let parts = new Array<Future<long>>()
+    let size = (xs.length() + chunks - 1) / chunks
+    for (c in 0..chunks) {
+        parts.push(sumRange(xs, c * size, (c + 1) * size))
+    }
+    let total: long = 0
+    for (p in parts) { total += await p }
+    return total
+}
+async fn sumRange(xs: Array<int>, lo: int, hi: int) -> long {
+    let s: long = 0
+    for (i in lo..hi) { if (i < xs.length()) { s += xs[i] } }
+    return s
+}
+
+class Tally { public hits: int  constructor() { self.hits = 0 } }
+
+async fn record(m: Mutex, tally: Tally, atomic: AtomicInt, times: int) {
+    for (i in 0..times) {
+        m.withLock(fn() { tally.hits = tally.hits + 1 })     // guarded by the mutex
+        atomic.increment()                                   // lock-free
+    }
+}
+
+async fn produce(ch: Channel<int>, count: int) {
+    for (i in 1..=count) { ch.send(i * i) }
+    ch.close()
+}
+async fn consume(ch: Channel<int>) -> long {
+    let sum: long = 0
+    while (ch.hasNext()) { sum += ch.receiveOr(0) }
+    return sum
+}
+
+fn main() {
+    print("--- the pool ---")
+    print("workers available: ${Async.maxProcs() > 0} (GRAV_MAXPROCS or CPU cores)")
+
+    print("--- parallel work ---")
+    let jobs = new Array<Future<int>>()
+    for (k in 0..8) { jobs.push(countPrimes(k * 25000, (k + 1) * 25000)) }
+    let perChunk = awaitAll::<int>(jobs)
+    print("primes below 200000: ${perChunk.reduce(0, fn(a, b) => a + b)}")
+
+    let sw = new Stopwatch()
+    let a = napAndReturn(200, "first")
+    let b = napAndReturn(200, "second")
+    let c = napAndReturn(200, "third")
+    print("${await a}, ${await b}, ${await c}")
+    print("three 200ms naps overlapped: ${sw.elapsedMs() < 550}")
+
+    print("--- exceptions cross threads ---")
+    try {
+        print(await checkedDivide(10, 2))
+        print(await checkedDivide(1, 0))
+    } catch (e: ValueError) {
+        print("caught from a task: ${e.message()}")
+    }
+
+    print("--- tasks awaiting tasks ---")
+    let nums = new Array<int>()
+    for (i in 1..=1000) { nums.push(i) }
+    print("sum 1..1000 in 4 chunks: ${await parallelSum(nums, 4)}")
+
+    print("--- shared state ---")
+    let m = new Mutex()
+    let tally = new Tally()
+    let atomic = new AtomicInt(0)
+    let workers = new Array<Future<void>>()
+    for (w in 0..8) { workers.push(record(m, tally, atomic, 250)) }
+    for (w in workers) { await w }
+    print("mutex-guarded hits: ${tally.hits}, atomic count: ${atomic.get()}")
+
+    print("--- channels ---")
+    let ch = new Channel<int>(8)
+    let consumer = consume(ch)
+    let producer = produce(ch, 100)
+    await producer
+    print("sum of squares 1..100 through a channel: ${await consumer}")
+
+    print("--- releasing tasks ---")
+    let total = 0
+    for (i in 0..1000) {
+        let f = checkedDivide(i, 1)
+        total += await f
+        free(f)                      // done with this future: release its record
+    }
+    print("1000 short tasks, total ${total}; still pending: ${Async.pending()}")
+}
