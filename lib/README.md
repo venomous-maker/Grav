@@ -1,47 +1,57 @@
-# lib — Grav's basic standard library
+# lib — Grav's standard library
 
-Small, dependency-free modules you can `import` (paths are relative to the importing
-file). Import the umbrella `std.grav`, or individual modules.
+Modules written in Grav (with inline C where they talk to the system). Import the
+umbrella `std.grav`, or individual modules (paths are relative to the importing
+file). Full documentation with examples: [docs/14-standard-library.md](../docs/14-standard-library.md).
 
-| Module           | Provides                                                              |
-| ---------------- | -------------------------------------------------------------------- |
-| `exception.grav` | `Exception` base class + `ValueError` / `RuntimeError` / `IndexError` / `NotFound`, each with `message()` / `describe()`. |
-| `convert.grav`   | **`Format`** class — string→value (`toInt` / `toLong` / `toUInt` / `toByte` / `toFloat` / `toDouble` / `toBool` / `toIntOr`, validation `isInt` / `isNumber`), numeric conversions (`intToFloat` / `floatToInt` / `intToLong` / `longToInt` / `intToByte` / `intToDouble`), `hex`, and string↔binary (`toBinary` / `fromBinary`). The general value→string is the built-in `str(x)`. |
-| `string.grav`    | **`Str`** class — `length`, `isEmpty`, `equals`, `compare`, `contains`, `count`, `indexOf`, `startsWith`, `endsWith`, `charAt`, `concat`, `upper`, `lower`, `reverse`, `repeat`, `substring`, `remove`, `trim` / `trimStart` / `trimEnd`, `replace`, `padLeft` / `padRight`, `split` → `Array<string>`, `join`. |
-| `math.grav`      | **`Math`** class — floating-point `sqrt`, `cbrt`, `pow`, `abs`, `sin`, `cos`, `tan`, `atan2`, `floor`, `ceil`, `round`, `log`, `log10`, `exp`, `min`, `max`, `pi()`, `e()` (over `<math.h>`). |
-| `array.grav`     | **`Array<T>`** — growable list: `length`, `isEmpty`, `push`, `pop`, `get`, `set`, `arr[i]` / `arr[i] = v`, `first`, `last`, `clear`, `insert`, `removeAt`, `indexOf`, `contains`, `reverse`, `dispose`, and higher-order `forEach` / `forEachIndexed` / `map` / `filter` / `reduce` / `any` / `all` / `countWhere` / `findIndex` / `copy` / `sortBy(cmp)` (stable merge sort). Generic methods `xs.mapTo::<U>(f)` and `xs.fold::<A>(init, f)` change the element type (free-function forms `mapTo::<T, U>` / `fold::<T, A>` also exist). Bounds-checked (out of range panics); iterable with `for (x in arr)`. |
-| `list.grav`      | **`List<T>`** — thin convenience wrapper over `Array<T>` (`add`/`get`/`set`/`remove`/…, `forEach`, `any`, `all`, `sortBy`, `toArray`). |
-| `stack.grav`     | **`Stack<T>`** (`push`/`pop`/`peek`) and **`Queue<T>`** (`enqueue`/`dequeue`/`peek`). |
-| `set.grav`       | **`Set<T>`** — `add`, `contains`, `remove`, `size`, `at`, `union`, `intersect`. |
-| `map.grav`       | **`Map<K,V>`** — insertion-ordered, linear lookup: `put`, `get` (panics if missing), `getOr`, `m[k]` / `m[k] = v`, `containsKey`, `remove`, `size`, `keys`, `values`. |
-| `hashmap.grav`   | **`HashMap<K,V>`** — O(1) average hash table for `int`/`long`/`string` keys: `put`, `get` (zero value if missing), `getOr`, `m[k]` / `m[k] = v`, `containsKey`, `remove`, `size`, `isEmpty`, `clear`, `keys`, `values`. Add a `hashOf(x: T) -> long` overload for other key types. |
-| `strbuf.grav`    | **`StringBuilder`** — amortized O(1) `append` / `appendLine` / `appendInt` / `appendFloat` / `appendBool` / `appendChar` / `repeat` (chainable), `length`, `isEmpty`, `clear`, `toString` (printable directly). |
-| `random.grav`    | **`Random`** — `seed`, `seedTime`, `nextInt`, `nextFloat`, `nextBool`. |
-| `datetime.grav`  | **`DateTime`** — `now`, `fromUnix`, `unix`, `year`/`month`/`day`/`hour`/`minute`/`second`, `format`, `addDays`, `addHours` (over `<time.h>`). |
-| `fs.grav`        | **`File`** object (`new File(path)`) — `exists`, `size`, `name`, `read`, `write`, `append`, `writeLine`, `readLines` → `Array<string>`, `readBinary`/`writeBinary`/`appendBinary` (`binary`), `copyTo`, `delete`. |
-| `path.grav`      | **`Path`** — `basename`, `dirname`, `extension`, `join`. |
-| `process.grav`   | **`Process`** — `exec`, `execOutput`, `pid`, `sleepMs` (over `popen`/`system`). |
-| `os.grav`        | **`OS`** — `platform`, `arch`, `hostname`, `kernel`, `user`, `home`, `cwd`, `chdir`, `pid`, `ppid`, `cpuCount`, `pageSize`, `getEnv`/`getEnvOr`/`hasEnv`/`setEnv`/`unsetEnv`, `isTerminal`. |
-| `time.grav`      | **`Time`** — `now` (unix s), `nowMs`, `monotonicMs`, `monotonicNs`, `sleepMs`; **`Stopwatch`** — `reset`, `elapsedNs`/`elapsedMs`/`elapsedSeconds`. |
-| `term.grav`      | **`Term`** — ANSI styles `bold`/`dim`/`italic`/`underline`, colours `red`…`gray`, 256-colour `color(s, n)`, `clear`, `clearLine`, `moveTo`, `hideCursor`/`showCursor`. |
-| `io.grav`        | free functions `readLine`/`prompt`/`readInt`/`readFloat`/`readBool`/`promptInt`/`eprint`/`printRaw`, plus an **`IO`** class grouping them as static methods (`IO.print`, `IO.write`, `IO.eprint`, `IO.input`, `IO.prompt`, `IO.readInt`/`readLong`/`readFloat`/`readDouble`/`readBool`, `IO.promptInt`). |
-| `async.grav`     | concurrency: **`Async`** (`maxProcs`/`setMaxProcs` — default CPU cores, env `GRAV_MAXPROCS` — `pending`, `threadId`, `sleepMs`), **`Mutex`** (`lock`/`unlock`/`tryLock`/`withLock`), **`AtomicInt`**, **`Channel<T>`** (blocking bounded queue with `close`), and `awaitAll::<T>(futures)`. |
-| `std.grav`       | imports all of the above.                                            |
+## Collections
 
-Conversions live in **one** place: `Format` parses strings into values, and the
-built-in `str(x)` turns any value into a string — so there's no separate "to string"
-class (give your own classes a `toString()` and `str`/`print`/`${}` will use it).
-Memory: `new` heap-allocates; the built-in `free(obj)` runs the object's destructor and
-releases it (no GC). Every collection here has a destructor, so `free(coll)` also
-frees its internal buffers.
+All collections share `size()` (`length()` too), `isEmpty()`, `clear()`,
+`contains(x)`, `forEach(f)`, and `toArray()`; indexed ones support `c[i]` and
+`for (x in c)`. Returned collections (`keys()`, `filter`, …) are copies.
 
-```grav
-import "../../lib/std.grav"
+| Module | Provides |
+|--------|----------|
+| `array.grav` | **`Array<T>`** — growable list (bounds-checked): `add`/`push`, `insert`, `removeAt`, `remove`, `removeWhere`, `swap`, `fill`, `slice`, `addAll`, `indexOf`/`lastIndexOf`, `reverse`, `copy`, `sortBy` (stable), `maxBy`/`minBy`, `findFirst`, and `forEach`/`map`/`mapTo`/`filter`/`reduce`/`fold`/`any`/`all`/`countWhere`/`findIndex` |
+| `list.grav` | **`List<T>`** — the same with collection-style names |
+| `deque.grav` | **`Deque<T>`** — ring buffer, O(1) at both ends |
+| `stack.grav` | **`Stack<T>`** (LIFO) and **`Queue<T>`** (FIFO, O(1)), with `peekOr` |
+| `hashmap.grav` | **`HashMap<K,V>`** — O(1) average; `getOr`, `getOrPut`, `forEach(fn(k, v))`; keys: integers, bool, float, string, enums, objects (identity) via `hashOf` overloads |
+| `hashset.grav` | **`HashSet<T>`** — O(1) membership, `union`/`intersect`/`difference`/`isSubsetOf` |
+| `map.grav` | **`Map<K,V>`** — insertion-ordered, linear; any key with `==` |
+| `set.grav` | **`Set<T>`** — insertion-ordered, linear; any element with `==` |
+| `sortedmap.grav` | **`SortedMap<K,V>`** — keys ordered by a comparator; `firstKey`/`lastKey`/`keysBetween` |
+| `heap.grav` | **`PriorityQueue<T>`** — binary heap ordered by a comparator |
+| `linkedlist.grav` | **`LinkedList<T>`** — doubly linked; `addFirst`/`addLast`/`removeFirst`/`removeLast`/`reverse` |
+| `bitset.grav` | **`BitSet`** — sets of small non-negative ints; `count`, `unionWith`, `intersectWith` |
+| `tuple.grav` | **`Pair<A,B>`**, **`Triple<A,B,C>`** |
+| `optional.grav` | **`Optional<T>`** — `isPresent`, `get`, `getOr`, `map`, `filter`, `ifPresent` |
+| `strbuf.grav` | **`StringBuilder`** — `append` (string or any value), `appendInt`/`Float`/`Bool`/`Char`, `appendLine`, `insert`, `truncate`, `reserve`, `toString` |
 
-fn main() {
-    print(Math.sqrt(2.0));              // 1.41421
-    print(Str.upper("hello"));          // HELLO
-    let n = Format.toIntOr(prompt("n? "), 0);
-    print("n + 1 = ${n + 1}, as text = ${str(n)}");
-}
-```
+## Text, numbers, and data
+
+| Module | Provides |
+|--------|----------|
+| `string.grav` | **`Str`** — inspect (`isBlank`, `isDigits`, …), compare (also ignoring case), search (`indexOf`, `lastIndexOf`, …), transform (`upper`, `capitalize`, `replace`, …), cut (`substring`, `slice`, `removePrefix`, …), layout (`padLeft`, `center`), `split`/`lines`/`words`/`join` |
+| `convert.grav` | **`Format`** — parsing (`toInt`, `isInt`, `toIntOr`, `parseInt(s, base, fallback)`, …) and number formatting (`fixed`, `grouped`, `percent`, `bytes`, `hex`/`binary`/`octal`) |
+| `math.grav` | **`Math`** — constants `PI`/`E`/`TAU`, powers/logs, trigonometry, rounding (`roundTo`), `min`/`max`/`abs`/`clamp`/`sign` with integer overloads, `gcd`/`lcm`/`isPrime`/`factorial` |
+| `random.grav` | **`Random`** (xoshiro256**, per thread, reproducible) — inclusive `nextInt`/`nextLong`, `nextFloat`, `nextGaussian`, `chance`, `shuffle`, `choice`; **`Rng`** for independent streams |
+| `exception.grav` | **`Exception`** with `ValueError`, `TypeError`, `IndexError`, `NotFound`, `IOError`, `StateError`, `TimeoutError`, `RuntimeError` |
+
+## System
+
+| Module | Provides |
+|--------|----------|
+| `io.grav` | **`IO`** — `print`/`write`/`eprint` (strings or any value), `prompt`, `readInt`/…, `readAll`, `readLines`; free-function mirrors (`printRaw`, `readLine`, …) |
+| `fs.grav` | **`File`** — text/lines/binary read and write (writes return success), `size` (64-bit), `modified`, `copyTo`, `moveTo`, `delete`; **`Dir`** — `exists`, `create` (with parents), `remove`, `list`, `temp` |
+| `path.grav` | **`Path`** — `basename`, `dirname`, `extension`, `stem`, `withExtension`, `isAbsolute`, `join`, `combine`, `normalize` |
+| `process.grav` | **`Process`** — `exec` (exit code), `execOutput`, `run` → `ProcessResult`, `args`, `pid`, `exit` |
+| `os.grav` | **`OS`** — platform, host, user, environment, CPU count, `isTerminal` |
+| `time.grav` | **`Time`**, **`Stopwatch`** |
+| `datetime.grav` | **`DateTime`** — `of(y, m, d, …)`, fields, `weekday`, `format`, `toString`, `add…`, `daysUntil`, comparisons, `isLeapYear`, `daysInMonth` |
+| `term.grav` | **`Term`** — ANSI styles and colours (256 and RGB), cursor control, `width`/`height` |
+| `async.grav` | **`Async`**, **`Mutex`**, **`AtomicInt`**, **`Channel<T>`**, `awaitAll` — see [docs/16-concurrency.md](../docs/16-concurrency.md) |
+| `std.grav` | imports everything above |
+
+Every module is exercised by [`tests/lib/stdlib.grav`](../tests/lib/stdlib.grav),
+whose output `tests/run.sh` checks against a golden file.
