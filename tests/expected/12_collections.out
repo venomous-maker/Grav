@@ -1,0 +1,22 @@
+--- Array ---
+start: [5, 3, 9, 1, 7]
+edited: [42, 50, 9, 1, 7]
+a[0]=42 first=42 last=7 len=5
+indexOf(9)=2 contains(3)=false
+sorted: [1, 7, 9, 42, 50]
+reversed: [50, 42, 9, 7, 1]
+popped 1; now 4 items
+--- List ---
+  1. write docs
+  2. ship
+--- Stack & Queue ---
+stack pops: c b a
+queue dequeues: 10 20 30
+--- Set ---
+union: 1 2 3 4 5  intersection: 3 4
+--- Map (insertion-ordered) ---
+one=11 two=2 three=3 | has two: true, four or 0: 0
+--- HashMap ---
+apple:3 fig:1 pear:2 
+after remove: size=2 pear=-1 missing int=0
+10000 entries, squares[9999]=99980001
