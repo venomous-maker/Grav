@@ -1,0 +1,17 @@
+--- the pool ---
+workers available: true (GRAV_MAXPROCS or CPU cores)
+--- parallel work ---
+primes below 200000: 17984
+first, second, third
+three 200ms naps overlapped: true
+--- exceptions cross threads ---
+5
+caught from a task: cannot divide 1 by zero
+--- tasks awaiting tasks ---
+sum 1..1000 in 4 chunks: 500500
+--- shared state ---
+mutex-guarded hits: 2000, atomic count: 2000
+--- channels ---
+sum of squares 1..100 through a channel: 338350
+--- releasing tasks ---
+1000 short tasks, total 499500; still pending: 0
