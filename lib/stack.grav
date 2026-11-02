@@ -4,6 +4,7 @@ import "array.grav"
 class Stack<T> {
     private items: Array<T>
     constructor() { self.items = new Array<T>(); }
+    destructor() { free(self.items); }
     public fn push(item: T) { self.items.push(item); }
     public fn pop() -> T { return self.items.pop(); }
     public fn peek() -> T { return self.items.last(); }
@@ -14,6 +15,7 @@ class Stack<T> {
 class Queue<T> {
     private items: Array<T>
     constructor() { self.items = new Array<T>(); }
+    destructor() { free(self.items); }
     public fn enqueue(item: T) { self.items.push(item); }
     public fn dequeue() -> T { let x = self.items.first(); self.items.removeAt(0); return x; }
     public fn peek() -> T { return self.items.first(); }
