@@ -81,6 +81,8 @@ class Str {
     static fn length(s: string) -> int { return %{ (int)strlen(s) %} as int; }
     static fn isEmpty(s: string) -> bool { return %{ (s[0] == 0) %} as bool; }
     static fn equals(a: string, b: string) -> bool { return a == b; }
+    // <0, 0, >0 like strcmp: `xs.sortBy(fn(a, b) => Str.compare(a, b))` sorts A-Z.
+    static fn compare(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }
     static fn charAt(s: string, i: int) -> int { return %{ (int)(unsigned char)s[i] %} as int; }
     static fn concat(a: string, b: string) -> string { return a + b; }
 
