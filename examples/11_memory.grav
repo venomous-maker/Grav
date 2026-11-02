@@ -1,0 +1,84 @@
+// 11_memory.grav — how memory works in Grav (there is no garbage collector).
+//
+//   grav examples/11_memory.grav --run
+//
+// Covers: `new` / `free`, destructors (run most-derived first), collections
+// that free what they own, `defer` for guaranteed cleanup, closures' captured
+// environments, and the compiler's automatic freeing of strings it can prove
+// are owned — plus StringBuilder for building large text.
+
+import "../lib/std.grav"
+
+class Resource {
+    protected name: string
+    constructor(name: string) { self.name = name; print("  acquire ${name}") }
+    destructor() { print("  release ${self.name}") }
+}
+class Database extends Resource {
+    private queries: int
+    constructor(name: string) { super(name); self.queries = 0 }
+    fn query(q: string) -> string { self.queries = self.queries + 1; return "rows for '${q}'" }
+    destructor() { print("  flush ${self.queries} queries on ${self.name}") }   // runs first
+}
+
+// `defer` frees the connection on every path out of the function.
+fn lookup(id: int) -> string {
+    let db = new Database("db-${id}")
+    defer free(db)
+    if (id < 0) { return "invalid id" }
+    return db.query("user ${id}")
+}
+
+// Every return is a new string, so callers own the result (and the compiler
+// frees it for them when it goes out of scope).
+fn title(name: string, width: int) -> string {
+    let bar = Str.repeat("-", width)
+    return bar + " " + name + " " + bar
+}
+
+fn main() {
+    print("--- new / free / destructors ---")
+    let r: Resource = new Database("main")      // static type Resource...
+    free(r)                                     // ...but the Database destructor runs too
+
+    print("--- defer ---")
+    print(lookup(7))
+    print(lookup(-1))
+
+    print("--- collections own their buffers ---")
+    let list = new Array<string>()
+    for (i in 0..5) { list.push("item") }
+    print("  ${list.length()} items")
+    free(list)                                  // frees the buffer and the object
+
+    print("--- automatic string freeing ---")
+    // `line` is freed at the end of every iteration; `report` frees its previous
+    // value on each `+=`; temporaries passed to IO.print are freed after the call.
+    let report = ""
+    for (i in 0..10000) {
+        let line = "entry ${i}"
+        if (i % 2500 == 0) { report += line + "; " }
+    }
+    IO.print("report: " + report)
+    let t = title("Grav", 3)                    // caller-owned, freed at end of main
+    print(t)
+
+    print("--- closures ---")
+    let factor = 3
+    let scale = fn(x: int) => x * factor        // local closure: environment freed at exit
+    print("  scale(14) = ${scale(14)}")
+    let nums = new Array<int>()
+    for (n in 1..=5) { nums.push(n) }
+    let big = nums.filter(fn(n) => n > factor)  // capturing temp lambda: freed after the call
+    print("  above ${factor}: ${big.length()}")
+    free(big)
+    free(nums)
+
+    print("--- StringBuilder for big text ---")
+    let sb = new StringBuilder()
+    for (i in 0..1000) { sb.appendInt(i % 10) }
+    sb.append(" (").appendInt(sb.length()).append(" digits)")
+    let text = sb.toString()
+    print("  ${Str.substring(text, 0, 20)}... ${Str.length(text)} chars")
+    free(sb)
+}
