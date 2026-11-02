@@ -1,0 +1,103 @@
+// tests/lib/stdlib.grav — exercises every standard-library module; its output is
+// checked against tests/expected/lib_stdlib.out by tests/run.sh.
+import "../../lib/std.grav"
+enum Color { Red, Green }
+class P { public n: int constructor(n: int) { self.n = n } }
+fn main() {
+    // Array
+    let a = new Array<int>(4)
+    for (x in [5, 1, 4, 1, 3]) { a.add(x) }
+    a.insert(1, 9)
+    print("${a.removeAt(0)} ${a.size()} ${a.lastIndexOf(1)} ${a.remove(4)} ${a.removeWhere(fn(x) => x == 1)}")
+    let s = a.slice(0, 2)
+    print("${Str.join(a.mapTo(fn(x) => str(x)), ",")} slice=${s.size()} max=${a.maxBy(fn(x, y) => x - y)} first>4=${a.findFirst(fn(x) => x > 4, -1)}")
+    // Deque / Queue / Stack
+    let d = new Deque<int>()
+    for (i in 0..20) { if (i % 2 == 0) { d.pushBack(i) } else { d.pushFront(i) } }
+    print("deque ${d.size()} front=${d.peekFront()} back=${d.peekBack()} pop=${d.popFront()},${d.popBack()} d[3]=${d[3]}")
+    let q = new Queue<string>()
+    for (w in ["a", "b", "c"]) { q.enqueue(w) }
+    q.dequeue()
+    q.enqueue("d")
+    let qs = new StringBuilder()
+    for (x in q) { qs.append(x) }
+    print("queue ${qs} peekOr=${new Queue<int>().peekOr(-1)}")
+    // HashSet / HashMap with object & enum keys
+    let hs = new HashSet<string>()
+    print("hs add ${hs.add("x")} ${hs.add("x")} ${hs.add("y")} size=${hs.size()}")
+    let byObj = new HashMap<P, string>()
+    let p1 = new P(1)
+    byObj[p1] = "one"
+    print("obj key ${byObj[p1]} missing=${byObj.containsKey(new P(1))}")
+    let byEnum = new HashMap<Color, int>()
+    byEnum[Color.Green] = 7
+    print("enum key ${byEnum[Color.Green]} ${byEnum.getOr(Color.Red, -1)}")
+    let wc = new HashMap<string, int>()
+    for (w in Str.words("the cat the dog the end")) { wc[w] = wc.getOrPut(w, 0) + 1 }
+    print("the=${wc["the"]} cat=${wc["cat"]}")
+    // PriorityQueue
+    let pq = new PriorityQueue<int>(fn(x, y) => x - y)
+    for (x in [7, 3, 9, 1, 5]) { pq.push(x) }
+    let order = new StringBuilder()
+    while (!pq.isEmpty()) { order.appendInt(pq.pop()).append(" ") }
+    print("pq ${order}")
+    // LinkedList
+    let ll = new LinkedList<int>()
+    for (i in 1..=5) { ll.addLast(i) }
+    ll.addFirst(0)
+    ll.removeAt(2)
+    ll.reverse()
+    let ls = new StringBuilder()
+    for (x in ll) { ls.appendInt(x) }
+    print("linked ${ls} first=${ll.first()} last=${ll.last()} contains3=${ll.contains(3)}")
+    // SortedMap
+    let sm = new SortedMap<string, int>(fn(x, y) => Str.compare(x, y))
+    for (w in ["pear", "apple", "fig", "kiwi"]) { sm[w] = Str.length(w) }
+    print("sorted ${Str.join(sm.keys(), ",")} first=${sm.firstKey()} between=${Str.join(sm.keysBetween("b", "l"), ",")}")
+    // BitSet
+    let bs = new BitSet()
+    for (b in [1, 5, 64, 200]) { bs.set(b) }
+    bs.unset(5)
+    print("bits count=${bs.count()} has64=${bs.get(64)} has5=${bs.get(5)} list=${Str.join(bs.toArray().mapTo(fn(x) => str(x)), ",")}")
+    // Pair / Optional
+    let pr = new Pair("age", 36)
+    print("pair ${pr.first}=${pr.second} swapped=${pr.swap().first} eq=${pr == new Pair("age", 36)}")
+    let some = new Optional(5)
+    let none = new Optional<int>()
+    print("opt ${some.getOr(0)} ${none.getOr(-1)} ${some.map(fn(x) => "v${x}").get()} ${none.isPresent()}")
+    // Str
+    print("${Str.capitalize("grav")} ${Str.center("x", 5, "*")} ${Str.lastIndexOf("abcabc", "bc")} ${Str.removePrefix("prefix-name", "prefix-")} ${Str.isBlank("  ")} ${Str.equalsIgnoreCase("ABC", "abc")} ${Str.lines("a\r\nb\nc").size()} ${Str.fromChar(71)} ${Str.padLeft("7", 3, "")}")
+    // Format / Math
+    print("${Format.fixed(3.14159, 2)} ${Format.grouped(-1234567)} ${Format.binary(10)} ${Format.octal(8)} ${Format.percent(0.256, 1)} ${Format.bytes(1536)} ${Format.parseInt("ff", 16, -1)} ${Format.toFloatOr("x", 1.5)}")
+    print("${Math.max(3, 7)} ${Math.abs(-4)} ${Math.clamp(15, 0, 10)} ${Math.gcd(84, 36)} ${Math.lcm(4, 6)} ${Math.isPrime(97)} ${Math.factorial(10)} ${Math.roundTo(2.71828, 2)} ${Math.PI > 3.14} ${Math.sign(-2.5)}")
+    // Random determinism + range
+    Random.seed(42)
+    let r1 = Random.nextInt(1, 6)
+    Random.seed(42)
+    let r2 = Random.nextInt(1, 6)
+    let deck = new Array<int>()
+    for (i in 0..10) { deck.push(i) }
+    Random.shuffle(deck)
+    let rng = new Rng(7)
+    let inRange = true
+    for (i in 0..1000) { let v = rng.nextInt(-3, 3)  if (v < -3 || v > 3) { inRange = false } }
+    print("random same=${r1 == r2} 1..6=${r1 >= 1 && r1 <= 6} shuffled-sum=${deck.reduce(0, fn(x, y) => x + y)} rng-range=${inRange} choice-ok=${deck.contains(Random.choice(deck))}")
+    // Path / File / Dir / Process / DateTime
+    print("${Path.normalize("a/./b/../c//d")} ${Path.normalize("/x/../../y")} ${Path.stem("dir/report.pdf")} ${Path.withExtension("n.txt", ".md")} ${Path.combine("a", "/abs")} ${Path.dirname("/top")}")
+    Dir.create("/tmp/grav_libtest/sub/deep")
+    let f = new File("/tmp/grav_libtest/sub/deep/x.bin")
+    let wrote = f.writeBinary("ab\x01c" as binary)
+    let copied = f.copyTo("/tmp/grav_libtest/copy.bin")
+    print("file wrote=${wrote} copied=${copied} size=${new File("/tmp/grav_libtest/copy.bin").size()} list=${Str.join(Dir.list("/tmp/grav_libtest"), ",")} isDir=${Dir.exists("/tmp/grav_libtest/sub")}")
+    Process.exec("rm -rf /tmp/grav_libtest")
+    let r = Process.run("echo hi; exit 4")
+    print("process code=${r.code} out=${Str.trim(r.output)} ok=${r.ok()}")
+    let dt = DateTime.of(2024, 2, 28, 12, 0, 0)
+    print("date ${dt.addDays(1)} weekday=${dt.weekday()} leap=${DateTime.isLeapYear(2024)} days=${DateTime.daysInMonth(2023, 2)} cmp=${dt < dt.addHours(1)} until=${dt.daysUntil(dt.addDays(10))}")
+    // Exceptions & StringBuilder
+    try { throw new IOError("disk") } catch (e: Exception) { print("${e} kind=${e.kind()}") }
+    let sb = new StringBuilder()
+    sb.append("world").insert(0, "hello ").append(42).append(true)
+    sb.truncate(13)
+    print(sb)
+}
