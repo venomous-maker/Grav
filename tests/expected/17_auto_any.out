@@ -1,0 +1,20 @@
+--- auto ---
+9
+2.500000
+(id, 7)
+#42
+<4><8><15> total=27
+apple=5, pear=1
+1.000000
+--- any ---
+int: 42  -> int 42
+float: 2.5  -> float 2.5
+bool: true  -> bool true
+string: hello  -> string "hello"
+Level: High  -> level High
+Point: Point(1, 2)  -> point at 1,2
+null: null  -> null
+connect to localhost:8081 verbose=false
+port is int: true, host is int: false
+x == 10: true, x == 10.0: true, x == "10": false
+x is string: true
