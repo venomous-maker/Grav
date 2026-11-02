@@ -1,0 +1,107 @@
+// 08_generics.grav — generic types and functions.
+//
+//   grav examples/08_generics.grav --run
+//
+// Covers: generic structs, classes, and interfaces; generic inheritance
+// (`extends Base<T>`); `T: Bound` constraints; generic type aliases; generic
+// free functions and generic *methods* (both called with `::<...>`); and the
+// standard generic collections.
+
+import "../lib/std.grav"
+
+struct Pair<A, B> { first: A  second: B }
+
+type Triple<T> = T[3]                          // generic alias
+
+interface Container<T> {
+    fn get() -> T
+    fn put(v: T)
+}
+
+class Cell<T> implements Container<T> {
+    protected value: T
+    constructor(v: T) { self.value = v }
+    public fn get() -> T { return self.value }
+    public fn put(v: T) { self.value = v }
+    // A generic method: its own type parameter U, independent of T.
+    public fn map<U>(f: fn(T) -> U) -> Cell<U> { return new Cell<U>(f(self.value)) }
+}
+
+// Generic inheritance: a cell that counts its writes.
+class CountingCell<T> extends Cell<T> {
+    public writes: int
+    constructor(v: T) { super(v); self.writes = 0 }
+    public fn put(v: T) { self.value = v; self.writes = self.writes + 1 }
+}
+
+// A bounded generic: T must implement Shape.
+interface Shape { fn area() -> float  fn label() -> string }
+class Sq implements Shape {
+    private s: float
+    constructor(s: float) { self.s = s }
+    public fn area() -> float { return self.s * self.s }
+    public fn label() -> string { return "square" }
+}
+fn report<T: Shape>(x: T) -> string { return "${x.label()} with area ${x.area()}" }
+
+fn firstOf<T>(xs: Array<T>) -> T { return xs.get(0) }
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> { return Pair<B, A> { first: p.second, second: p.first } }
+
+// A tiny generic utility class with a static generic method.
+class Util {
+    static fn repeat<T>(x: T, n: int) -> Array<T> {
+        let out = new Array<T>()
+        for (i in 0..n) { out.push(x) }
+        return out
+    }
+}
+
+fn main() {
+    print("--- generic structs & aliases ---")
+    let p = Pair<string, int> { first: "answer", second: 42 }
+    let q = swap::<string, int>(p)
+    print("${p.first}=${p.second}  swapped: ${q.first}, ${q.second}")
+    let t: Triple<float> = [1.5, 2.5, 3.5]
+    print("triple sum = ${t[0] + t[1] + t[2]}")
+
+    print("--- generic classes & interfaces ---")
+    let c = new Cell<int>(10)
+    let box: Container<int> = c
+    box.put(box.get() * 2)
+    print("cell = ${c.get()}")
+    let label = c.map::<string>(fn(v) => "value #${v}")
+    print("mapped cell = ${label.get()}")
+    let lengths = label.map::<int>(fn(s) => Str.length(s))
+    print("length cell = ${lengths.get()}")
+
+    let cc = new CountingCell<string>("a")
+    cc.put("b")
+    cc.put("c")
+    print("counting cell = ${cc.get()} after ${cc.writes} writes")
+
+    print("--- constraints ---")
+    print(report::<Sq>(new Sq(3.0)))
+
+    print("--- generic functions & methods ---")
+    let words = Util.repeat::<string>("ho", 3)
+    print("first: ${firstOf::<string>(words)}  count: ${words.length()}")
+    let nums = new Array<int>()
+    for (n in [4, 8, 15, 16, 23, 42]) { nums.push(n) }
+    let asText = nums.mapTo::<string>(fn(n) => "<${n}>")
+    print("as text: ${Str.join(asText, "")}")
+    let avg = nums.fold::<double>(0.0, fn(acc, n) => acc + (n as double)) / (nums.length() as double)
+    print("average: ${avg}")
+
+    print("--- generic collections ---")
+    let ages = new HashMap<string, int>()
+    ages["ada"] = 36
+    ages["grace"] = 85
+    let names = new Set<string>()
+    names.add("ada")
+    names.add("ada")                       // duplicates are ignored
+    names.add("linus")
+    let stack = new Stack<float>()
+    stack.push(1.5)
+    stack.push(2.5)
+    print("ages[grace]=${ages["grace"]} set size=${names.size()} stack top=${stack.peek()}")
+}
