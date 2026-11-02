@@ -1,0 +1,56 @@
+// 15_inline_c_macros.grav — the C escape hatch, macros, decorators, export.
+//
+//   grav examples/15_inline_c_macros.grav --run
+//
+// Covers: `#define` constants and function-like macros, top-level inline C
+// (`%{ ... %}`) defining helpers and globals, inline C as an expression
+// (typed with `as T`) and as a statement, Grav locals visible inside inline C,
+// `#include` lines hoisted to the top of the output, `@Decorators` (metadata),
+// and `export`.
+
+import "../lib/std.grav"
+
+#define BUFFER_SIZE 16
+#define CLAMP(v, lo, hi) ((v) < (lo) ? (lo) : ((v) > (hi) ? (hi) : (v)))
+
+%{
+#include <ctype.h>
+// C helpers shared with Grav code below.
+static int c_calls = 0;
+static int c_checksum(const char* s) {
+    int h = 0;
+    c_calls++;
+    while (*s) h = h * 31 + (unsigned char)*s++;
+    return h & 0x7fffffff;
+}
+static const char* c_capitalize(const char* s) {
+    size_t n = strlen(s);
+    char* r = (char*)malloc(n + 1);
+    for (size_t i = 0; i <= n; i++) r[i] = (char)(i == 0 ? toupper((unsigned char)s[i]) : s[i]);
+    return r;
+}
+%}
+
+@Deprecated("use checksumOf")
+export fn legacyHash(s: string) -> int { return %{ c_checksum(s) %} as int }
+
+@Pure
+export fn checksumOf(s: string) -> int { return %{ c_checksum(s) %} as int }
+
+fn main() {
+    print("--- macros ---")
+    print("BUFFER_SIZE=${BUFFER_SIZE} clamp(42,0,10)=${CLAMP(42, 0, 10)} clamp(-3,0,10)=${CLAMP(-3, 0, 10)}")
+
+    print("--- inline C expressions ---")
+    let word = "grav"
+    print("checksum('${word}') = ${checksumOf(word)}")
+    print("capitalized = ${%{ c_capitalize(word) %} as string}")      // a Grav local used in C
+    let isDigit: bool = %{ isdigit('7') != 0 %}
+    print("isdigit('7') = ${isDigit}")
+
+    print("--- inline C statements ---")
+    let total = 0
+    %{ for (int i = 1; i <= 10; i++) total += i; %};
+    print("sum 1..10 computed in C = ${total}")
+    print("legacyHash agrees: ${legacyHash(word) == checksumOf(word)}; C helper called ${%{ c_calls %} as int} times")
+}
