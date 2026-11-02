@@ -1,0 +1,23 @@
+--- new / free / destructors ---
+  acquire main
+  flush 0 queries on main
+  release main
+--- defer ---
+  acquire db-7
+  flush 1 queries on db-7
+  release db-7
+rows for 'user 7'
+  acquire db--1
+  flush 0 queries on db--1
+  release db--1
+invalid id
+--- collections own their buffers ---
+  5 items
+--- automatic string freeing ---
+report: entry 0; entry 2500; entry 5000; entry 7500; 
+--- Grav ---
+--- closures ---
+  scale(14) = 42
+  above 3: 2
+--- StringBuilder for big text ---
+  01234567890123456789... 1014 chars
