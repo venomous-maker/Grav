@@ -1,0 +1,75 @@
+// lib/strbuf.grav — StringBuilder: amortized O(1) appends into one growable
+// buffer. Building a string in a loop with `s += x` copies the whole string on
+// every step (and strands the old copy); a StringBuilder does neither.
+//
+//   let sb = new StringBuilder()
+//   for (i in 0..3) { sb.append("item ").appendInt(i).appendChar(10) }
+//   print(sb)          // toString() makes it printable
+//   free(sb)           // releases the buffer (destructor)
+%{
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static unsigned char* grav_sb_grow(unsigned char* buf, int* cap, int need) {
+    if (need + 1 <= *cap) return buf;
+    int nc = *cap < 32 ? 32 : *cap;
+    while (nc < need + 1) nc *= 2;
+    unsigned char* nb = (unsigned char*)realloc(buf, (size_t)nc);
+    if (!nb) { fprintf(stderr, "panic: out of memory\n"); exit(1); }
+    *cap = nc;
+    return nb;
+}
+static const char* grav_sb_ll(long long n) { static char b[32]; snprintf(b, sizeof b, "%lld", n); return b; }
+static const char* grav_sb_g(double f) { static char b[48]; snprintf(b, sizeof b, "%g", f); return b; }
+static const char* grav_sb_dup(const unsigned char* buf, int len) {
+    char* r = (char*)malloc((size_t)len + 1);
+    if (!r) { fprintf(stderr, "panic: out of memory\n"); exit(1); }
+    if (len) memcpy(r, buf, (size_t)len);
+    r[len] = 0;
+    return r;
+}
+%}
+
+class StringBuilder {
+    private buf: byte*
+    private len: int
+    private cap: int
+
+    constructor() { self.buf = null; self.len = 0; self.cap = 0; }
+    destructor() { free(self.buf); }
+
+    // Appends raw bytes (the core every other append funnels through).
+    private fn put(s: string, n: int) {
+        %{ self->buf = grav_sb_grow(self->buf, &self->cap, self->len + n);
+           memcpy(self->buf + self->len, s, (size_t)n);
+           self->len += n;
+           self->buf[self->len] = 0; %};
+    }
+
+    public fn append(s: string) -> StringBuilder { self.put(s, %{ (int)strlen(s) %} as int); return self; }
+    public fn appendLine(s: string) -> StringBuilder { self.append(s); self.put("\n", 1); return self; }
+    public fn appendInt(n: long) -> StringBuilder {
+        return self.append(%{ grav_sb_ll((long long)n) %} as string);
+    }
+    public fn appendFloat(f: double) -> StringBuilder {
+        return self.append(%{ grav_sb_g(f) %} as string);
+    }
+    public fn appendBool(b: bool) -> StringBuilder { return self.append(b ? "true" : "false"); }
+    // Appends one byte (e.g. 10 for a newline, 65 for 'A').
+    public fn appendChar(c: int) -> StringBuilder {
+        %{ self->buf = grav_sb_grow(self->buf, &self->cap, self->len + 1);
+           self->buf[self->len++] = (unsigned char)c;
+           self->buf[self->len] = 0; %};
+        return self;
+    }
+    public fn repeat(s: string, times: int) -> StringBuilder {
+        for (i in 0..times) { self.append(s); }
+        return self;
+    }
+
+    public fn length() -> int { return self.len; }
+    public fn isEmpty() -> bool { return self.len == 0; }
+    public fn clear() { self.len = 0; if (self.buf != null) { self.buf[0] = 0; } }
+    // A fresh copy of the contents (the builder stays usable).
+    public fn toString() -> string { return %{ grav_sb_dup(self->buf, self->len) %} as string; }
+}
