@@ -1,6 +1,8 @@
 #ifndef GRAV_AST_H
 #define GRAV_AST_H
 
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -117,6 +119,7 @@ struct AsExpr : Expr {
 // `expr is ClassName` — a runtime type test (RTTI), yields bool.
 struct IsExpr : Expr {
     ExprPtr operand;
+    TypeRef target;        // the tested type (`x is int` on an `any`, or a class)
     std::string typeName;  // as written; checker rewrites to FQ class name
     std::string className; // resolved FQ class
 };
@@ -560,9 +563,30 @@ struct LambdaExpr : Expr {
     mutable int liftId = -1;
 };
 
+// Signatures of generic templates, exported by the monomorphizer so the type
+// checker can infer omitted (or `auto`) type arguments from call arguments.
+struct GenericSig {
+    std::vector<std::string> typeParams; // parameters to infer
+    std::vector<TypeRef> params;         // in terms of typeParams
+    TypeRef ret;
+    bool variadic = false;
+};
+struct GenericTables {
+    std::map<std::string, std::vector<GenericSig>> functions; // generic fn name -> signature
+    std::map<std::string, std::vector<GenericSig>> ctors;     // generic class -> constructors
+    std::map<std::string, std::vector<GenericSig>> methods;   // "Class.method" -> generic methods
+    // Instance name -> (template, type arguments), e.g. "Array$int" -> ("Array", [int]).
+    std::map<std::string, std::pair<std::string, std::vector<TypeRef>>> instances;
+};
+
 struct Program {
     std::vector<DeclPtr> decls;
+    GenericTables generics;
 };
+
+// Calls `f` on every expression in the program (pre-order, including lambda
+// bodies, initializers of globals and static fields).
+void visitExprs(Program &program, const std::function<void(Expr &)> &f);
 
 } // namespace grav
 
