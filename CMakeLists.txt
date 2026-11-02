@@ -20,6 +20,7 @@ add_executable(gravc
         src/sema/typechecker_expr.cpp
         src/sema/typechecker_ops.cpp
         src/sema/typechecker_lambda.cpp
+        src/sema/typechecker_infer.cpp
         src/sema/sanitize.cpp
         src/codegen/mangle.cpp
         src/codegen/codegen_runtime.cpp
