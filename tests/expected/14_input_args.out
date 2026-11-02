@@ -1,0 +1,7 @@
+program received 2 argument(s)
+  arg 1: alpha
+  arg 2: beta
+out-of-range argv(99) is empty: true
+name? 
+hello Ada: 7 squared is 49, ratio x2 = 7, agreed: true
+2 more line(s) after the answers
