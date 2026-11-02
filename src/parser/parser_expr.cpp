@@ -215,7 +215,8 @@ ExprPtr Parser::parseAsIs() {
             const Token &kw = advance();
             auto e = at<IsExpr>(kw);
             e->operand = std::move(left);
-            e->typeName = parseQualifiedName("after 'is'");
+            e->target = parseType("after 'is'");
+            if (e->target.isNamed()) e->typeName = e->target.name;
             left = std::move(e);
         } else {
             return left;
