@@ -1,0 +1,92 @@
+// 12_collections.grav — the standard collections in practice.
+//
+//   grav examples/12_collections.grav --run
+//
+// Covers: Array<T> (push/pop/insert/remove/index/reverse/sort/search, `[]`),
+// List<T>, Stack<T>, Queue<T>, Set<T> (union/intersect), Map<K,V> (ordered,
+// linear), HashMap<K,V> (hashed, `[]`/`[]=`, remove, keys/values), and
+// iterating all of them with `for (x in coll)` and `for (i, x in coll)`.
+
+import "../lib/std.grav"
+
+fn show(label: string, xs: Array<int>) {
+    printRaw("${label}: [")
+    for (i, x in xs) { printRaw(i == 0 ? "${x}" : ", ${x}") }
+    print("]")
+}
+
+fn main() {
+    print("--- Array ---")
+    let a = new Array<int>()
+    for (v in [5, 3, 9, 1, 7]) { a.push(v) }
+    show("start", a)
+    a.insert(0, 42)
+    a.removeAt(2)
+    a[1] = 50                                   // operator[]=
+    show("edited", a)
+    print("a[0]=${a[0]} first=${a.first()} last=${a.last()} len=${a.length()}")
+    print("indexOf(9)=${a.indexOf(9)} contains(3)=${a.contains(3)}")
+    a.sortBy(fn(x, y) => x - y)
+    show("sorted", a)
+    a.reverse()
+    show("reversed", a)
+    print("popped ${a.pop()}; now ${a.length()} items")
+
+    print("--- List ---")
+    let todo = new List<string>()
+    todo.add("write")
+    todo.add("test")
+    todo.add("ship")
+    todo.remove("test")
+    todo.set(0, "write docs")
+    for (i, t in todo) { print("  ${i + 1}. ${t}") }
+
+    print("--- Stack & Queue ---")
+    let st = new Stack<string>()
+    for (s in ["a", "b", "c"]) { st.push(s) }
+    printRaw("stack pops:")
+    while (!st.isEmpty()) { printRaw(" ${st.pop()}") }
+    print("")
+    let q = new Queue<int>()
+    for (n in 1..=3) { q.enqueue(n * 10) }
+    printRaw("queue dequeues:")
+    while (!q.isEmpty()) { printRaw(" ${q.dequeue()}") }
+    print("")
+
+    print("--- Set ---")
+    let x = new Set<int>()
+    let y = new Set<int>()
+    for (n in [1, 2, 3, 4]) { x.add(n) }
+    for (n in [3, 4, 5]) { y.add(n) }
+    let u = x.union(y)
+    let inter = x.intersect(y)
+    printRaw("union:")
+    for (i in 0..u.size()) { printRaw(" ${u.at(i)}") }
+    printRaw("  intersection:")
+    for (i in 0..inter.size()) { printRaw(" ${inter.at(i)}") }
+    print("")
+
+    print("--- Map (insertion-ordered) ---")
+    let m = new Map<string, int>()
+    m.put("one", 1)
+    m.put("two", 2)
+    m["three"] = 3
+    m["one"] = 11                               // overwrite
+    for (i, k in m.keys()) { printRaw("${k}=${m[k]} ") }
+    print("| has two: ${m.containsKey("two")}, four or 0: ${m.getOr("four", 0)}")
+
+    print("--- HashMap ---")
+    let stock = new HashMap<string, int>()
+    for (item in ["apple", "pear", "apple", "fig", "apple", "pear"]) {
+        stock[item] = stock.getOr(item, 0) + 1
+    }
+    let keys = stock.keys()
+    keys.sortBy(fn(p, r) => Str.compare(p, r))
+    for (k in keys) { printRaw("${k}:${stock[k]} ") }
+    print("")
+    stock.remove("pear")
+    print("after remove: size=${stock.size()} pear=${stock.getOr("pear", -1)} missing int=${stock["kiwi"]}")
+    let squares = new HashMap<int, long>()
+    for (i in 0..10000) { squares[i] = (i as long) * i }
+    print("10000 entries, squares[9999]=${squares[9999]}")
+}
