@@ -1,0 +1,94 @@
+// 05_classes.grav — classes and objects.
+//
+//   grav examples/05_classes.grav --run
+//
+// Covers: fields and methods, `self` (and its alias `this`), access modifiers
+// (public / private / protected) and `readonly`, auto-generated getters and
+// setters for private fields, static fields and static methods, constructor
+// overloading, destructors run by `free`, `toString()` integration with
+// print/str/interpolation, and `final` classes.
+
+import "../lib/std.grav"
+
+class Account {
+    readonly id: int                     // assignable only in a constructor
+    private owner: string                // private -> get_owner()/set_owner() exist
+    private balance: long
+    static opened: int = 0               // one value shared by all instances
+    static readonly BANK: string = "Grav Bank"
+
+    // Constructor overloads, chosen by the argument types.
+    constructor(owner: string) {
+        self.id = Account.opened + 1
+        self.owner = owner
+        self.balance = 0
+        Account.opened = Account.opened + 1
+    }
+    constructor(owner: string, initial: long) {
+        this.id = Account.opened + 1     // `this` is an alias for `self`
+        this.owner = owner
+        this.balance = initial
+        Account.opened = Account.opened + 1
+    }
+
+    public fn deposit(amount: long) -> Account {        // returns self for chaining
+        if (amount > 0) { self.balance = self.balance + amount }
+        return self
+    }
+    public fn withdraw(amount: long) -> bool {
+        if (amount > self.balance) { return false }
+        self.balance = self.balance - amount
+        return true
+    }
+    public fn getBalance() -> long { return self.balance }
+
+    static fn describeBank() -> string { return "${Account.BANK} (${Account.opened} accounts)" }
+
+    fn toString() -> string { return "#${self.id} ${self.owner}: ${self.balance}" }
+}
+
+// A class with a destructor: `free(obj)` runs it before releasing the memory.
+class TempFile {
+    private path: string
+    constructor(path: string) { self.path = path; print("  open ${path}") }
+    destructor() { print("  close ${self.path}") }
+}
+
+// `final`: cannot be extended; its methods can always be called directly.
+final class Version {
+    public major: int
+    public minor: int
+    constructor(major: int, minor: int) { self.major = major; self.minor = minor }
+    fn toString() -> string { return "v${self.major}.${self.minor}" }
+}
+
+fn main() {
+    print("--- objects & methods ---")
+    let a = new Account("Ada")
+    let b = new Account("Grace", 500)
+    a.deposit(100).deposit(50)            // chained calls
+    print(a)                              // uses toString()
+    print("b: ${b}")
+    print("withdraw 600 from b: ${b.withdraw(600)}, balance ${b.getBalance()}")
+    print("withdraw 200 from b: ${b.withdraw(200)}, balance ${b.getBalance()}")
+
+    print("--- generated accessors ---")
+    print("a.get_owner() = ${a.get_owner()}")
+    a.set_owner("Ada Lovelace")
+    print("renamed: ${a}")
+    print("a.id = ${a.id} (readonly)")
+
+    print("--- statics ---")
+    print(Account.describeBank())
+    let c = new Account("Linus", 10)
+    print("after another: ${Account.opened} accounts, newest is ${c}")
+
+    print("--- destructors ---")
+    let tmp = new TempFile("/tmp/report.txt")
+    print("  ...working...")
+    free(tmp)
+
+    print("--- final ---")
+    let v = new Version(1, 2)
+    print("running ${v}")
+}
