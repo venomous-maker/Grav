@@ -1185,6 +1185,13 @@ navigation stay consistent.
 
 ## Roadmap / not yet implemented
 
+`v1.4` added **`auto`** — generic type arguments are inferred from call arguments,
+lambda results, constructor arguments, and expected types (`maxOf(3, 9)`,
+`new Box(5)`, `xs.mapTo(fn(n) => "#${n}")`, `self.items = new Array<auto>()`) — and
+**`any`**, a dynamic value that holds any primitive, string, enum, object, or
+function, tested with `x is T` and unpacked with a checked `x as T`. See
+[17_auto_any.grav](examples/17_auto_any.grav).
+
 `v1.3` made **async/await concurrent**: async calls run on a pool of `GRAV_MAXPROCS`
 worker threads (default: CPU cores, overridable from the environment), `await`
 works anywhere and re-throws task exceptions, `Future<T>` is a first-class type, the
@@ -1269,15 +1276,17 @@ implemented yet — using them is a parse/type error today:
   with `new Array<int>()` etc.; only the literal syntax is outstanding. Fixed-length
   `T[N]` arrays *are* implemented — see [Arrays](#arrays).
 - **Lazy iteration** — `Iterator` / `Generator` / `Stream` are not implemented
-  (lambdas and eager `map` / `filter` / `reduce` are). Generic methods need explicit
-  type arguments (`xs.mapTo::<string>(f)`); they are not inferred.
+  (lambdas and eager `map` / `filter` / `reduce` are). Generic type arguments are
+  inferred from arguments and expected types, but not from later uses of a value
+  (`let xs = new Array<auto>()` with no initializer type cannot be inferred).
 - **Garbage collection** — there is no collector: objects are released with `free` /
   destructors, and strings/closures are freed automatically only where the compiler
   proves ownership (see [Memory](#memory-destructors--defer)); values that escape into
   objects or collections are not reclaimed.
-- **`Dynamic` / `any` and reflection** — and the libraries that depend on them (JSON,
-  a general-purpose serializer) are not implemented. `Option<T>` / `Result<T,E>` exist
-  only as much as plain generics allow — there is no pattern-match binding (`match`).
+- **Reflection** — and the libraries that depend on it (JSON, a general-purpose
+  serializer) are not implemented yet (`any` now covers dynamic values).
+  `Option<T>` / `Result<T,E>` exist only as much as plain generics allow — there is
+  no pattern-match binding (`match`).
 - **Networking** — HTTP and sockets are not in the standard library yet (use inline C).
 
 What *is* in the standard library now (see [lib/README.md](lib/README.md)): the
