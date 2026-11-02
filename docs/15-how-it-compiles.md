@@ -108,6 +108,15 @@ A lambda becomes a top-level C function `grav_lambda_N(void* env, ...)`. Its
 captured variables are copied into a heap `GravEnv_N` struct when the lambda is
 created; a function value is the pair `{code pointer, environment}`.
 
+## Async tasks
+
+An `async fn f` keeps its plain C body `vf_f`, plus a spawner `vf_f__spawn` that
+copies the arguments into a task record, queues it for the worker pool, and returns
+a `GravTask*` (the `Future`). `await` is `grav_await(task)`: it runs the task on the
+current thread if no worker has started it, waits for completion, re-throws a
+captured exception, and reads the result. The exception state, stack-trace frames,
+and handler stack are `_Thread_local`, so threads never see each other's errors.
+
 ## Exceptions
 
 `try` uses `setjmp`/`longjmp` with a stack of handlers. Locals modified inside a `try`
