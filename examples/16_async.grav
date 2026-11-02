@@ -78,7 +78,7 @@ fn main() {
     print("workers available: ${Async.maxProcs() > 0} (GRAV_MAXPROCS or CPU cores)")
 
     print("--- parallel work ---")
-    let jobs = new Array<Future<int>>()
+    let jobs = new Array<Future<auto>>() as Array<Future<int>>
     for (k in 0..8) { jobs.push(countPrimes(k * 25000, (k + 1) * 25000)) }
     let perChunk = awaitAll::<int>(jobs)
     print("primes below 200000: ${perChunk.reduce(0, fn(a, b) => a + b)}")
