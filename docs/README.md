@@ -49,7 +49,7 @@ Hello, Grace!
 | 11 | [Exceptions](11-exceptions.md) | `throw`, `try`/`catch`/`finally`, custom error hierarchies |
 | 12 | [Memory](12-memory.md) | `new`/`free`, destructors, `defer`, automatic string freeing |
 | 13 | [Modules, namespaces & C interop](13-modules.md) | `import`, `namespace`, `export`, macros, inline C |
-| 14 | [Standard library](14-standard-library.md) | collections, strings, math, files, time, OS, terminal |
+| 14 | [Standard library](14-standard-library.md) | conventions, 16 collection types, strings, formatting, math, random, files, processes, dates, terminal |
 | 15 | [How Grav compiles](15-how-it-compiles.md) | the pipeline, the generated C, performance, diagnostics |
 | 16 | [Concurrency](16-concurrency.md) | async tasks on a worker pool, `GRAV_MAXPROCS`, mutexes, atomics, channels, `--race` |
 | — | [Reference](reference.md) | keywords, operator precedence, built-ins, grammar summary |
