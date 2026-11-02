@@ -36,6 +36,11 @@ std::string typeMangle(const TypeRef &t) {
             for (const auto &a : t.args) s += "$" + typeMangle(a);
             return s;
         }
+        case TypeRef::Kind::Function: { // fn(int, string) -> bool  =>  fn_int_string_r_bool
+            std::string s = "fn";
+            for (const auto &p : t.fnParams) s += "_" + typeMangle(p);
+            return s + "_r_" + (t.elem ? typeMangle(*t.elem) : "void");
+        }
         default: return "x";
     }
 }
@@ -136,6 +141,14 @@ ExprPtr cloneExpr(const Expr *e) {
         for (const auto &el : x->elements) n->elements.push_back(cloneExpr(el.get()));
         return n;
     }
+    if (auto *x = dynamic_cast<const LambdaExpr *>(e)) {
+        auto n = mkE<LambdaExpr>(e);
+        n->params = x->params; n->paramTyped = x->paramTyped;
+        n->hasReturnType = x->hasReturnType; n->returnType = x->returnType;
+        n->isArrow = x->isArrow; n->exprBody = cloneExpr(x->exprBody.get());
+        n->body = cloneBlock(x->body);
+        return n;
+    }
     if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
         auto n = mkE<IndexExpr>(e); n->base = cloneExpr(x->base.get());
         n->index = cloneExpr(x->index.get()); return n;
@@ -214,8 +227,13 @@ StmtPtr cloneStmt(const Stmt *s) {
         n->update = cloneStmt(x->update.get()); n->body = cloneBlock(x->body); return n;
     }
     if (auto *x = dynamic_cast<const ForInStmt *>(s)) {
-        auto n = mkS<ForInStmt>(s); n->var = x->var; n->inclusive = x->inclusive;
-        n->lo = cloneExpr(x->lo.get()); n->hi = cloneExpr(x->hi.get()); n->body = cloneBlock(x->body); return n;
+        auto n = mkS<ForInStmt>(s); n->var = x->var; n->indexVar = x->indexVar;
+        n->inclusive = x->inclusive;
+        n->lo = cloneExpr(x->lo.get()); n->hi = cloneExpr(x->hi.get());
+        n->step = cloneExpr(x->step.get()); n->body = cloneBlock(x->body); return n;
+    }
+    if (auto *x = dynamic_cast<const DeferStmt *>(s)) {
+        auto n = mkS<DeferStmt>(s); n->body = cloneBlock(x->body); return n;
     }
     if (auto *x = dynamic_cast<const ThrowStmt *>(s)) {
         auto n = mkS<ThrowStmt>(s); n->value = cloneExpr(x->value.get()); return n;
@@ -223,8 +241,12 @@ StmtPtr cloneStmt(const Stmt *s) {
     if (auto *x = dynamic_cast<const TryStmt *>(s)) {
         auto n = mkS<TryStmt>(s);
         n->tryBlock = cloneBlock(x->tryBlock);
-        n->hasCatch = x->hasCatch; n->catchVar = x->catchVar; n->catchType = x->catchType;
-        n->catchBlock = cloneBlock(x->catchBlock);
+        for (const auto &c : x->catches) {
+            CatchClause nc;
+            nc.var = c.var; nc.type = c.type; nc.line = c.line; nc.col = c.col;
+            nc.block = cloneBlock(c.block);
+            n->catches.push_back(std::move(nc));
+        }
         n->hasFinally = x->hasFinally; n->finallyBlock = cloneBlock(x->finallyBlock);
         return n;
     }
@@ -237,7 +259,8 @@ MethodDecl cloneMethod(const MethodDecl &m) {
     MethodDecl n;
     n.access = m.access; n.isStatic = m.isStatic; n.isAbstract = m.isAbstract;
     n.name = m.name; n.params = m.params; n.returnType = m.returnType;
-    n.hasBody = m.hasBody; n.line = m.line; n.col = m.col;
+    n.hasBody = m.hasBody; n.isFinal = m.isFinal; n.line = m.line; n.col = m.col;
+    n.typeParams = m.typeParams;
     n.body = cloneBlock(m.body);
     return n;
 }
@@ -291,6 +314,28 @@ private:
     void walkExpr(Expr *e, const Subst &subst);
     void walkDeclTypes(Decl *d, const Subst &subst);
     void synthesizeTraits(); // copy interface/trait default methods into implementers
+    // Generic methods: templates (with the owning class's substitution) and the
+    // `obj.m::<Args>(...)` requests seen so far; instantiated to a fixed point.
+    struct GenericMethod { ClassDecl *owner; MethodDecl tpl; Subst classSubst; std::string ns; };
+    std::vector<GenericMethod> genericMethods_;
+    std::vector<std::pair<std::string, std::vector<TypeRef>>> methodRequests_;
+    std::unordered_map<std::string, bool> methodReqSeen_, methodDone_;
+    void extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from, const Subst &classSubst);
+    // Namespace-aware type arguments: `Array<Shape>` written inside namespace
+    // `geometry` means `Array<geometry.Shape>`, wherever the instance lands.
+    std::unordered_map<std::string, bool> knownTypes_; // fully-qualified type names
+    std::string currentNs_;                            // namespace of the code being walked
+    void qualifyArg(TypeRef &t) const;
+    struct NsScope {
+        std::string &ref, saved;
+        NsScope(std::string &r, const std::string &v) : ref(r), saved(r) { r = v; }
+        ~NsScope() { ref = saved; }
+    };
+    static std::string nsOf(const std::string &fq) {
+        auto dot = fq.rfind('.');
+        return dot == std::string::npos ? "" : fq.substr(0, dot);
+    }
+    void instantiateGenericMethods();
     void flattenBases();     // copy secondary bases' fields+methods (multiple inheritance)
 };
 
@@ -344,7 +389,8 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
         }
     }
     if (t.elem) rewriteType(*t.elem, subst, line, col);
-    for (auto &a : t.args) rewriteType(a, subst, line, col);
+    for (auto &a : t.args) { rewriteType(a, subst, line, col); qualifyArg(a); }
+    for (auto &p : t.fnParams) rewriteType(p, subst, line, col);
 
     if (t.kind == TypeRef::Kind::Named && !t.args.empty()) {
         // A generic alias expands transparently: `Vec<int>` -> the target with
@@ -391,6 +437,7 @@ std::string Mono::instantiateStruct(const std::string &name, const std::vector<T
     done_[inst] = true;
 
     StructDecl *tpl = structTpl_[name];
+    NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
     if (tpl->typeParams.size() != args.size()) {
         error(line, col, "generic struct '" + name + "' expects " +
                              std::to_string(tpl->typeParams.size()) + " type argument(s), got " +
@@ -421,6 +468,7 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
     done_[inst] = true;
 
     FunctionDecl *tpl = fnTpl_[name];
+    NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
     if (tpl->typeParams.size() != args.size()) {
         error(line, col, "generic function '" + name + "' expects " +
                              std::to_string(tpl->typeParams.size()) + " type argument(s), got " +
@@ -463,6 +511,7 @@ std::string Mono::instantiateInterface(const std::string &name, const std::vecto
     if (done_.count(inst)) return inst;
     done_[inst] = true;
     InterfaceDecl *tpl = ifaceTpl_[name];
+    NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
     if (tpl->typeParams.size() != args.size()) {
         error(line, col, "generic interface '" + name + "' expects " +
                              std::to_string(tpl->typeParams.size()) + " type argument(s), got " +
@@ -491,6 +540,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     done_[inst] = true;
 
     ClassDecl *tpl = classTpl_[name];
+    NsScope nsScope(currentNs_, nsOf(tpl->fqName)); // names in the template are its own
     if (tpl->typeParams.size() != args.size()) {
         error(line, col, "generic class '" + name + "' expects " +
                              std::to_string(tpl->typeParams.size()) + " type argument(s), got " +
@@ -505,6 +555,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     out->line = tpl->line; out->col = tpl->col;
     out->name = inst; out->fqName = inst;
     out->isAbstract = tpl->isAbstract;
+    out->isFinal = tpl->isFinal;
     out->baseName = tpl->baseName;
     out->baseArgs = tpl->baseArgs;
     rewriteSuper(out->baseName, out->baseArgs, subst, /*isClass=*/true, tpl->line, tpl->col);
@@ -519,6 +570,8 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
         if (i < out->interfaceArgs.size())
             rewriteSuper(out->interfaceNames[i], out->interfaceArgs[i], subst,
                          /*isClass=*/false, tpl->line, tpl->col);
+    out->delegates = tpl->delegates; // `uses field: T` forwarding survives instantiation
+    for (auto &d : out->delegates) rewriteType(d.type, subst, tpl->line, tpl->col);
     for (const auto &f : tpl->fields) {
         FieldDecl nf = f;
         rewriteType(nf.type, subst, f.line, f.col);
@@ -539,7 +592,23 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     for (auto &p : out->constructor.params) rewriteType(p.type, subst, tpl->constructor.line, tpl->constructor.col);
     out->constructor.body = cloneBlock(tpl->constructor.body);
     walkBlock(out->constructor.body, subst);
+    for (const auto &x : tpl->extraCtors) {
+        ConstructorDecl nc;
+        nc.present = true; nc.line = x.line; nc.col = x.col; nc.params = x.params;
+        for (auto &p : nc.params) rewriteType(p.type, subst, x.line, x.col);
+        nc.body = cloneBlock(x.body);
+        walkBlock(nc.body, subst);
+        out->extraCtors.push_back(std::move(nc));
+    }
+    out->destructor.present = tpl->destructor.present;
+    out->destructor.line = tpl->destructor.line; out->destructor.col = tpl->destructor.col;
+    out->destructor.body = cloneBlock(tpl->destructor.body);
+    walkBlock(out->destructor.body, subst);
     for (const auto &m : tpl->methods) {
+        if (!m.typeParams.empty()) { // kept as a template until a call requests it
+            genericMethods_.push_back({out.get(), cloneMethod(m), subst, currentNs_});
+            continue;
+        }
         MethodDecl nm = cloneMethod(m);
         for (auto &p : nm.params) rewriteType(p.type, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
@@ -581,12 +650,15 @@ void Mono::walkStmt(Stmt *s, const Subst &subst) {
         walkStmt(x->init.get(), subst); walkExpr(x->cond.get(), subst);
         walkStmt(x->update.get(), subst); walkBlock(x->body, subst);
     } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
-        walkExpr(x->lo.get(), subst); walkExpr(x->hi.get(), subst); walkBlock(x->body, subst);
+        walkExpr(x->lo.get(), subst); walkExpr(x->hi.get(), subst);
+        walkExpr(x->step.get(), subst); walkBlock(x->body, subst);
+    } else if (auto *x = dynamic_cast<DeferStmt *>(s)) {
+        walkBlock(x->body, subst);
     } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) {
         walkExpr(x->value.get(), subst);
     } else if (auto *x = dynamic_cast<TryStmt *>(s)) {
         walkBlock(x->tryBlock, subst);
-        if (x->hasCatch) { rewriteType(x->catchType, subst, x->line, x->col); walkBlock(x->catchBlock, subst); }
+        for (auto &c : x->catches) { rewriteType(c.type, subst, c.line, c.col); walkBlock(c.block, subst); }
         if (x->hasFinally) walkBlock(x->finallyBlock, subst);
     }
 }
@@ -610,14 +682,14 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         if (x->isType) rewriteType(x->target, subst, e->line, e->col);
         else walkExpr(x->operand.get(), subst);
     } else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) {
-        for (auto &a : x->typeArgs) rewriteType(a, subst, e->line, e->col);
+        for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty()) {
             x->typeName = instantiateStruct(x->typeName, x->typeArgs, e->line, e->col);
             x->typeArgs.clear();
         }
         for (auto &f : x->fields) walkExpr(f.value.get(), subst);
     } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
-        for (auto &a : x->typeArgs) rewriteType(a, subst, e->line, e->col);
+        for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty()) {
             if (classTpl_.count(x->className))
                 x->className = instantiateClass(x->className, x->typeArgs, e->line, e->col);
@@ -627,7 +699,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         }
         for (auto &a : x->args) walkExpr(a.get(), subst);
     } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
-        for (auto &a : x->typeArgs) rewriteType(a, subst, e->line, e->col);
+        for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty()) {
             if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get())) {
                 if (fnTpl_.count(callee->name)) {
@@ -635,8 +707,17 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
                 } else {
                     error(e->line, e->col, "'" + callee->name + "' is not a generic function");
                 }
+            } else if (auto *mem = dynamic_cast<MemberExpr *>(x->callee.get())) {
+                // `obj.m::<Args>(...)` -> the method instance `m$Args`, requested for
+                // every class that declares a generic method `m`.
+                std::string key = instName(mem->member, x->typeArgs);
+                if (!methodReqSeen_.count(key)) {
+                    methodReqSeen_[key] = true;
+                    methodRequests_.push_back({mem->member, x->typeArgs});
+                }
+                mem->member = key;
             } else {
-                error(e->line, e->col, "turbofish '::<...>' is only valid on a function name");
+                error(e->line, e->col, "turbofish '::<...>' needs a function or method name");
             }
             x->typeArgs.clear();
         }
@@ -662,6 +743,13 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         walkExpr(x->target.get(), subst);
     } else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) {
         for (auto &el : x->elements) walkExpr(el.get(), subst);
+    } else if (auto *x = dynamic_cast<LambdaExpr *>(e)) {
+        for (size_t i = 0; i < x->params.size(); ++i)
+            if (i < x->paramTyped.size() && x->paramTyped[i])
+                rewriteType(x->params[i].type, subst, e->line, e->col);
+        if (x->hasReturnType) rewriteType(x->returnType, subst, e->line, e->col);
+        walkExpr(x->exprBody.get(), subst);
+        walkBlock(x->body, subst);
     } else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
         walkExpr(x->base.get(), subst); walkExpr(x->index.get(), subst);
     } else if (auto *x = dynamic_cast<MemberExpr *>(e)) {
@@ -669,7 +757,20 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
     }
 }
 
+void Mono::qualifyArg(TypeRef &t) const {
+    if (t.kind != TypeRef::Kind::Named || !t.args.empty() || knownTypes_.count(t.name)) return;
+    // Innermost enclosing namespace first, then outwards.
+    std::string ns = currentNs_;
+    for (;;) {
+        std::string cand = ns.empty() ? t.name : ns + "." + t.name;
+        if (knownTypes_.count(cand)) { t.name = cand; return; }
+        if (ns.empty()) return;
+        ns = nsOf(ns);
+    }
+}
+
 void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
+    NsScope nsScope(currentNs_, nsOf(d->fqName));
     if (auto *st = dynamic_cast<StructDecl *>(d)) {
         for (auto &f : st->fields) rewriteType(f.type, subst, f.line, f.col);
     } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
@@ -677,6 +778,7 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         rewriteType(fn->returnType, subst, fn->line, fn->col);
         walkBlock(fn->body, subst);
     } else if (auto *cd = dynamic_cast<ClassDecl *>(d)) {
+        extractGenericMethods(cd, cd->methods, subst);
         rewriteSuper(cd->baseName, cd->baseArgs, subst, /*isClass=*/true, cd->line, cd->col);
         for (size_t i = 0; i < cd->extraBases.size(); ++i)
             if (i < cd->extraBaseArgs.size())
@@ -694,6 +796,11 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         }
         for (auto &p : cd->constructor.params) rewriteType(p.type, subst, cd->line, cd->col);
         if (cd->constructor.present) walkBlock(cd->constructor.body, subst);
+        for (auto &x : cd->extraCtors) {
+            for (auto &p : x.params) rewriteType(p.type, subst, x.line, x.col);
+            walkBlock(x.body, subst);
+        }
+        if (cd->destructor.present) walkBlock(cd->destructor.body, subst);
         for (auto &m : cd->methods) {
             for (auto &p : m.params) rewriteType(p.type, subst, m.line, m.col);
             rewriteType(m.returnType, subst, m.line, m.col);
@@ -708,7 +815,13 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
 }
 
 void Mono::run() {
-    // 0) Record class inheritance/implements (by simple name) for constraint checks.
+    // 0) Every declared type's fully-qualified name (for qualifying type arguments).
+    for (auto &d : program_.decls)
+        if (dynamic_cast<ClassDecl *>(d.get()) || dynamic_cast<StructDecl *>(d.get()) ||
+            dynamic_cast<InterfaceDecl *>(d.get()) || dynamic_cast<EnumDecl *>(d.get()) ||
+            dynamic_cast<TypeAliasDecl *>(d.get()))
+            knownTypes_[d->fqName] = true;
+    // Record class inheritance/implements (by simple name) for constraint checks.
     for (auto &d : program_.decls)
         if (auto *cd = dynamic_cast<ClassDecl *>(d.get()))
             classImpl_[cd->name] = {cd->baseName, cd->interfaceNames};
@@ -733,6 +846,7 @@ void Mono::run() {
 
     // 2) Rewrite + collect instantiations over every concrete decl.
     for (auto &d : kept) walkDeclTypes(d.get(), {});
+    instantiateGenericMethods();
 
     // 3) Emit: concrete decls first, then the generated instances.
     program_.decls = std::move(kept);
@@ -742,6 +856,49 @@ void Mono::run() {
     flattenBases();
     // 5) Trait/interface default methods are copied into each implementer.
     synthesizeTraits();
+}
+
+void Mono::extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from,
+                                 const Subst &classSubst) {
+    std::vector<MethodDecl> keep;
+    for (auto &m : from) {
+        if (m.typeParams.empty()) keep.push_back(std::move(m));
+        else genericMethods_.push_back({cd, std::move(m), classSubst, currentNs_});
+    }
+    from = std::move(keep);
+}
+
+void Mono::instantiateGenericMethods() {
+    for (bool progress = true; progress;) {
+        progress = false;
+        // Index loops: instantiating can add templates (new class instances) and
+        // requests (calls inside the new bodies); later passes pick those up.
+        for (size_t gi = 0; gi < genericMethods_.size(); ++gi) {
+            for (size_t ri = 0; ri < methodRequests_.size(); ++ri) {
+                std::string name = methodRequests_[ri].first;
+                std::vector<TypeRef> args = methodRequests_[ri].second;
+                if (genericMethods_[gi].tpl.name != name ||
+                    genericMethods_[gi].tpl.typeParams.size() != args.size())
+                    continue;
+                ClassDecl *owner = genericMethods_[gi].owner;
+                NsScope nsScope(currentNs_, genericMethods_[gi].ns);
+                std::string inst = instName(name, args);
+                std::string key = owner->name + "." + inst;
+                if (methodDone_.count(key)) continue;
+                methodDone_[key] = true;
+                progress = true;
+                MethodDecl m = cloneMethod(genericMethods_[gi].tpl);
+                Subst s = genericMethods_[gi].classSubst;
+                for (size_t i = 0; i < args.size(); ++i) s[m.typeParams[i]] = args[i];
+                m.name = inst;
+                m.typeParams.clear();
+                for (auto &p : m.params) rewriteType(p.type, s, m.line, m.col);
+                rewriteType(m.returnType, s, m.line, m.col);
+                if (m.hasBody) walkBlock(m.body, s);
+                owner->methods.push_back(std::move(m));
+            }
+        }
+    }
 }
 
 void Mono::flattenBases() {
