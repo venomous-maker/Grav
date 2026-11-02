@@ -154,9 +154,9 @@
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.grav", "match": "\\b(if|else|while|for|do|switch|case|default|match|break|continue|return|in)\\b" },
+        { "name": "keyword.control.grav", "match": "\\b(if|else|while|for|do|switch|case|default|match|break|continue|return|in|defer|step)\\b" },
         { "name": "keyword.control.exception.grav", "match": "\\b(try|catch|finally|throw)\\b" },
-        { "name": "keyword.declaration.grav", "match": "\\b(fn|class|struct|enum|type|typedef|interface|trait|abstract|namespace|constructor|extends|implements|uses|import|export|new|async|await)\\b" },
+        { "name": "keyword.declaration.grav", "match": "\\b(fn|class|struct|enum|type|typedef|interface|trait|abstract|namespace|constructor|destructor|operator|final|extends|implements|uses|import|export|new|async|await)\\b" },
         { "name": "storage.modifier.grav", "match": "\\b(let|const|static|readonly|public|private|protected)\\b" },
         { "name": "keyword.operator.word.grav", "match": "\\b(as|is|sizeof)\\b" }
       ]
