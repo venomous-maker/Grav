@@ -1,0 +1,18 @@
+--- objects & methods ---
+#1 Ada: 150
+b: #2 Grace: 500
+withdraw 600 from b: false, balance 500
+withdraw 200 from b: true, balance 300
+--- generated accessors ---
+a.get_owner() = Ada
+renamed: #1 Ada Lovelace: 150
+a.id = 1 (readonly)
+--- statics ---
+Grav Bank (2 accounts)
+after another: 3 accounts, newest is #3 Linus: 10
+--- destructors ---
+  open /tmp/report.txt
+  ...working...
+  close /tmp/report.txt
+--- final ---
+running v1.2
