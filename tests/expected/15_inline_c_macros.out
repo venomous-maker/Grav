@@ -1,0 +1,9 @@
+--- macros ---
+BUFFER_SIZE=16 clamp(42,0,10)=10 clamp(-3,0,10)=0
+--- inline C expressions ---
+checksum('grav') = 3181152
+capitalized = Grav
+isdigit('7') = true
+--- inline C statements ---
+sum 1..10 computed in C = 55
+legacyHash agrees: true; C helper called 3 times
