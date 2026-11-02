@@ -14,7 +14,7 @@ namespace grav {
 // wraps the eventual result type of an async call (see `elem`).
 struct TypeRef {
     enum class Kind { Int, Float, Bool, String, Void, Named, Future, Pointer, Array, Null, Binary,
-                      Function, Error };
+                      Function, Any, Error };
 
     Kind kind = Kind::Error;
     std::string name;              // populated only when kind == Named
@@ -95,6 +95,7 @@ struct TypeRef {
     bool isPointer() const { return kind == Kind::Pointer; }
     bool isArray() const { return kind == Kind::Array; }
     bool isFunction() const { return kind == Kind::Function; }
+    bool isAny() const { return kind == Kind::Any; }
     const TypeRef &fnReturn() const { return *elem; }
     // A "slice": a runtime-length sequence (a variadic parameter), spelled in C as
     // a bare pointer plus a separate length. Marked by a negative array length.
