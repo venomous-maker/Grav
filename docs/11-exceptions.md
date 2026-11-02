@@ -4,8 +4,9 @@
 
 Any class instance can be thrown. A `try` may have several `catch` clauses; the first
 whose class matches (exactly or as a base class) handles the exception. The standard
-library's `lib/exception.grav` provides `Exception` (with `message()` and
-`describe()`) and `ValueError`, `RuntimeError`, `IndexError`, `NotFound`.
+library's `lib/exception.grav` provides `Exception` (with `message()`, `kind()`, and
+`describe()`) and `ValueError`, `TypeError`, `IndexError`, `NotFound`, `IOError`,
+`StateError`, `TimeoutError`, and `RuntimeError`.
 
 ```grav
 import "../lib/std.grav"
