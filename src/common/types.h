@@ -13,7 +13,8 @@ namespace grav {
 // reference to its fully-qualified form before code generation. `Future`
 // wraps the eventual result type of an async call (see `elem`).
 struct TypeRef {
-    enum class Kind { Int, Float, Bool, String, Void, Named, Future, Pointer, Array, Null, Binary, Error };
+    enum class Kind { Int, Float, Bool, String, Void, Named, Future, Pointer, Array, Null, Binary,
+                      Function, Error };
 
     Kind kind = Kind::Error;
     std::string name;              // populated only when kind == Named
@@ -28,6 +29,8 @@ struct TypeRef {
     // `int` in `Box<int>`. Cleared once the monomorphizer rewrites the reference
     // to its concrete, mangled name.
     std::vector<TypeRef> args;
+    // Kind::Function (`fn(A, B) -> R`): the parameter types; `elem` is the return type.
+    std::vector<TypeRef> fnParams;
 
     static TypeRef prim(Kind k) {
         TypeRef t;
@@ -59,6 +62,13 @@ struct TypeRef {
         t.arrayLen = len;
         return t;
     }
+    static TypeRef function(std::vector<TypeRef> params, TypeRef ret) {
+        TypeRef t;
+        t.kind = Kind::Function;
+        t.fnParams = std::move(params);
+        t.elem = std::make_shared<TypeRef>(std::move(ret));
+        return t;
+    }
     static TypeRef integer(int bits, bool isUnsigned) {
         TypeRef t;
         t.kind = Kind::Int;
@@ -84,6 +94,8 @@ struct TypeRef {
     bool isFuture() const { return kind == Kind::Future; }
     bool isPointer() const { return kind == Kind::Pointer; }
     bool isArray() const { return kind == Kind::Array; }
+    bool isFunction() const { return kind == Kind::Function; }
+    const TypeRef &fnReturn() const { return *elem; }
     // A "slice": a runtime-length sequence (a variadic parameter), spelled in C as
     // a bare pointer plus a separate length. Marked by a negative array length.
     bool isSlice() const { return kind == Kind::Array && arrayLen < 0; }
@@ -99,6 +111,8 @@ struct TypeRef {
             return arrayLen == o.arrayLen && elem && o.elem && *elem == *o.elem;
         if (kind == Kind::Future || kind == Kind::Pointer)
             return elem && o.elem && *elem == *o.elem;
+        if (kind == Kind::Function)
+            return fnParams == o.fnParams && elem && o.elem && *elem == *o.elem;
         return true;
     }
     bool operator!=(const TypeRef &o) const { return !(*this == o); }
