@@ -39,7 +39,7 @@ Hello, Grace!
 | 1 | [Getting started](01-getting-started.md) | building `gravc`, compiling and running programs, compiler flags |
 | 2 | [Basics](02-basics.md) | types, variables, operators, casts, strings and interpolation |
 | 3 | [Control flow](03-control-flow.md) | `if`, loops, ranges, for-each, `switch`/`match`, `defer` |
-| 4 | [Functions](04-functions.md) | parameters, overloading, variadics, recursion, globals, async |
+| 4 | [Functions](04-functions.md) | parameters, overloading, variadics, recursion, globals, `async` basics |
 | 5 | [Data types](05-data-types.md) | enums, structs, aliases, arrays, pointers, `null`, `binary` |
 | 6 | [Classes](06-classes.md) | fields, methods, access control, statics, constructors, destructors |
 | 7 | [Inheritance & interfaces](07-inheritance.md) | subclasses, abstract classes, interfaces, traits, composition, RTTI |
@@ -51,6 +51,7 @@ Hello, Grace!
 | 13 | [Modules, namespaces & C interop](13-modules.md) | `import`, `namespace`, `export`, macros, inline C |
 | 14 | [Standard library](14-standard-library.md) | collections, strings, math, files, time, OS, terminal |
 | 15 | [How Grav compiles](15-how-it-compiles.md) | the pipeline, the generated C, performance, diagnostics |
+| 16 | [Concurrency](16-concurrency.md) | async tasks on a worker pool, `GRAV_MAXPROCS`, mutexes, atomics, channels, `--race` |
 | — | [Reference](reference.md) | keywords, operator precedence, built-ins, grammar summary |
 
 Runnable programs for every chapter live in [`../examples/`](../examples/README.md).
