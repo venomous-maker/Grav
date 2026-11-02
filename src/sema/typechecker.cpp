@@ -67,7 +67,7 @@ bool TypeChecker::isAssignable(const TypeRef &from, const TypeRef &to) const {
     }
     // `null` flows into any class, interface, or pointer (reference) type.
     if (from.kind == TypeRef::Kind::Null &&
-        (to.isPointer() ||
+        (to.isPointer() || to.isFunction() ||
          (to.isNamed() && (reg_->isClass(to.name) || reg_->isInterface(to.name)))))
         return true;
     if (from.isNamed() && to.isNamed()) {
@@ -165,6 +165,7 @@ void TypeChecker::checkFunction(FunctionDecl &fn) {
     checkBlock(fn.body);
     popScope();
     inAsync_ = false;
+    checkFallthrough(fn.body, fn.returnType, fn.line, fn.col, "function '" + fn.fqName + "'");
 }
 
 void TypeChecker::checkClass(ClassDecl &cls) {
@@ -172,15 +173,24 @@ void TypeChecker::checkClass(ClassDecl &cls) {
     currentNs_ = Registry::namespaceOf(cls.fqName);
     inAsync_ = false; // methods are not async in core v0.2
 
-    if (cls.constructor.present) {
+    auto checkCtor = [&](ConstructorDecl &ctor) {
         inConstructor_ = true;
         inStatic_ = false;
         currentReturn_ = TypeRef::prim(TypeRef::Kind::Void);
         pushScope();
-        for (auto &p : cls.constructor.params)
-            declareLocal(p.name, p.type, true, false, cls.constructor.line,
-                         cls.constructor.col);
-        checkBlock(cls.constructor.body);
+        for (auto &p : ctor.params) declareLocal(p.name, p.type, true, false, ctor.line, ctor.col);
+        checkBlock(ctor.body);
+        popScope();
+    };
+    if (cls.constructor.present) checkCtor(cls.constructor);
+    for (auto &x : cls.extraCtors) checkCtor(x);
+
+    if (cls.destructor.present) {
+        inConstructor_ = false;
+        inStatic_ = false;
+        currentReturn_ = TypeRef::prim(TypeRef::Kind::Void);
+        pushScope();
+        checkBlock(cls.destructor.body);
         popScope();
     }
 
@@ -193,6 +203,8 @@ void TypeChecker::checkClass(ClassDecl &cls) {
         for (auto &p : m.params) declareLocal(p.name, p.type, true, false, m.line, m.col);
         checkBlock(m.body);
         popScope();
+        checkFallthrough(m.body, m.returnType, m.line, m.col,
+                         "method '" + cls.fqName + "." + m.name + "'");
     }
 }
 
@@ -214,6 +226,7 @@ void TypeChecker::checkStmt(Stmt &stmt) {
     if (auto *s = dynamic_cast<SwitchStmt *>(&stmt)) return checkSwitch(*s);
     if (auto *s = dynamic_cast<ThrowStmt *>(&stmt)) return checkThrow(*s);
     if (auto *s = dynamic_cast<TryStmt *>(&stmt)) return checkTry(*s);
+    if (auto *s = dynamic_cast<DeferStmt *>(&stmt)) return checkDefer(*s);
     if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) return checkBlock(s->block);
     if (dynamic_cast<BreakStmt *>(&stmt) || dynamic_cast<ContinueStmt *>(&stmt)) {
         if (loopDepth_ == 0)
@@ -273,38 +286,27 @@ void TypeChecker::checkThrow(ThrowStmt &s) {
 
 void TypeChecker::checkTry(TryStmt &s) {
     checkBlock(s.tryBlock);
-    if (s.hasCatch) {
+    std::vector<std::string> seen; // a later clause for a subclass of an earlier one never runs
+    for (auto &c : s.catches) {
         bool ok = true;
-        TypeRef ct = reg_->resolveCanonical(s.catchType, currentNs_, ok);
+        TypeRef ct = reg_->resolveCanonical(c.type, currentNs_, ok);
         if (!ok || !(ct.isNamed() && reg_->isClass(ct.name))) {
-            error(s.line, s.col, "'catch' type must be a class, but got " +
-                                     typeRefName(s.catchType));
+            error(c.line, c.col, "'catch' type must be a class, but got " + typeRefName(c.type));
             ct = TypeRef::prim(TypeRef::Kind::Error);
+        } else {
+            for (const auto &prev : seen)
+                if (reg_->isSubclass(ct.name, prev))
+                    error(c.line, c.col, "this 'catch (" + ct.name + ")' is unreachable: an earlier "
+                                         "clause already catches '" + prev + "'");
+            seen.push_back(ct.name);
         }
-        s.catchType = ct;
+        c.type = ct;
         pushScope();
-        declareLocal(s.catchVar, ct, true, false, s.line, s.col);
-        checkBlock(s.catchBlock);
+        declareLocal(c.var, ct, true, false, c.line, c.col);
+        checkBlock(c.block);
         popScope();
     }
     if (s.hasFinally) checkBlock(s.finallyBlock);
-}
-
-void TypeChecker::checkForIn(ForInStmt &s) {
-    TypeRef lo = checkExpr(*s.lo);
-    TypeRef hi = checkExpr(*s.hi);
-    if (!lo.isError() && lo.kind != TypeRef::Kind::Int)
-        error(s.lo->line, s.lo->col,
-              "a 'for ... in' range bound must be int, got " + typeRefName(lo));
-    if (!hi.isError() && hi.kind != TypeRef::Kind::Int)
-        error(s.hi->line, s.hi->col,
-              "a 'for ... in' range bound must be int, got " + typeRefName(hi));
-    pushScope(); // the loop variable's scope spans the whole loop
-    declareLocal(s.var, TypeRef::prim(TypeRef::Kind::Int), true, false, s.line, s.col);
-    loopDepth_++;
-    checkBlock(s.body);
-    loopDepth_--;
-    popScope();
 }
 
 void TypeChecker::checkSwitch(SwitchStmt &s) {
@@ -330,7 +332,6 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
 }
 
 void TypeChecker::checkLet(LetStmt &s) {
-    TypeRef initType = checkExpr(*s.init);
     if (s.hasDeclaredType) {
         bool ok = true;
         TypeRef c = reg_->resolveCanonical(s.declaredType, currentNs_, ok);
@@ -341,6 +342,8 @@ void TypeChecker::checkLet(LetStmt &s) {
             s.declaredType = c;
         }
     }
+    TypeRef initType = s.hasDeclaredType ? checkExprExpect(*s.init, s.declaredType)
+                                         : checkExpr(*s.init);
     // An inline C expression adopts the declared type of the binding it feeds.
     bool isCBlock = dynamic_cast<CBlockExpr *>(s.init.get()) != nullptr;
     if (isCBlock && s.hasDeclaredType && !s.declaredType.isError()) {
@@ -373,7 +376,14 @@ void TypeChecker::checkLet(LetStmt &s) {
 }
 
 void TypeChecker::checkAssign(AssignStmt &s) {
-    TypeRef valueType = checkExpr(*s.value);
+    // A lambda assigned to a typed variable/field takes its parameter types from it.
+    TypeRef valueType;
+    if (dynamic_cast<LambdaExpr *>(s.value.get())) {
+        TypeRef tt = checkExpr(*s.target);
+        valueType = checkExprExpect(*s.value, tt);
+    } else {
+        valueType = checkExpr(*s.value);
+    }
 
     // `*p = value` — write through a pointer.
     if (dynamic_cast<DerefExpr *>(s.target.get())) {
@@ -388,6 +398,40 @@ void TypeChecker::checkAssign(AssignStmt &s) {
         return;
     }
 
+    // `obj[k] = value` on a class with `operator[]=` calls `op_index_set(k, value)`.
+    if (auto *ix = dynamic_cast<IndexExpr *>(s.target.get())) {
+        TypeRef bt = checkExpr(*ix->base);
+        if (bt.isNamed() && reg_->isClass(bt.name)) {
+            const MethodInfo *mi = nullptr;
+            TypeRef keyT = checkExpr(*ix->index);
+            for (const MethodInfo *c : reg_->findMethodsBySource(bt.name, "op_index_set"))
+                if (!c->isStatic && c->paramTypes.size() == 2 &&
+                    (!mi || c->paramTypes[0] == keyT))
+                    mi = c;
+            if (!mi) {
+                error(s.line, s.col, "class '" + bt.name +
+                                         "' has no 'operator[]=(key, value)' for element assignment");
+                return;
+            }
+            if (s.isCompound) {
+                error(s.line, s.col, "compound assignment through 'operator[]' is not supported");
+                return;
+            }
+            TypeRef kt = keyT;
+            if (!isAssignable(kt, mi->paramTypes[0]))
+                error(ix->index->line, ix->index->col, "index of type " + typeRefName(kt) +
+                                                           " does not match 'operator[]=' key " +
+                                                           typeRefName(mi->paramTypes[0]));
+            if (!isAssignable(valueType, mi->paramTypes[1]))
+                error(s.value->line, s.value->col, "cannot assign " + typeRefName(valueType) +
+                                                       " through 'operator[]=' expecting " +
+                                                       typeRefName(mi->paramTypes[1]));
+            ix->overloadClass = bt.name;
+            ix->overloadMethod = mi->name;
+            ix->type = TypeRef::prim(TypeRef::Kind::Void);
+            return;
+        }
+    }
     // `a[i] = value` — write through an array/pointer element.
     if (dynamic_cast<IndexExpr *>(s.target.get())) {
         TypeRef targetType = checkExpr(*s.target); // validates indexability, sets type
@@ -429,6 +473,10 @@ void TypeChecker::checkAssign(AssignStmt &s) {
             error(name->line, name->col,
                   "cannot assign to constant '" + name->name + "'");
         }
+        if (isCapturedHere(name->name))
+            error(name->line, name->col,
+                  "cannot assign to captured variable '" + name->name +
+                      "' inside a lambda (captures are copies; use an object field to share state)");
         if (s.isCompound) {
             checkCompound(s, local->type, valueType);
         } else if (!isAssignable(valueType, local->type)) {
@@ -540,9 +588,11 @@ void TypeChecker::checkCompound(const AssignStmt &s, const TypeRef &targetType,
                                  typeRefName(targetType) + " and " + typeRefName(valueType));
         return;
     }
-    if (targetType != valueType) {
+    // Mixed widths are fine as long as the result fits the target's kind
+    // (`int += byte`, `double += int`); float into an integer needs a cast.
+    if (targetType != valueType && !isAssignable(valueType, targetType)) {
         error(s.line, s.col, std::string("operator '") + sym +
-                                 "=' requires matching types, but got " +
+                                 "=' needs an explicit cast: " +
                                  typeRefName(targetType) + " and " + typeRefName(valueType));
         return;
     }
@@ -551,8 +601,9 @@ void TypeChecker::checkCompound(const AssignStmt &s, const TypeRef &targetType,
 }
 
 void TypeChecker::checkReturn(ReturnStmt &s) {
+    if (inDefer_) error(s.line, s.col, "'return' is not allowed inside a 'defer' block");
     if (s.value) {
-        TypeRef vt = checkExpr(*s.value);
+        TypeRef vt = checkExprExpect(*s.value, currentReturn_);
         if (currentReturn_.isVoid()) {
             error(s.line, s.col, "cannot return a value from a void function");
         } else if (!isAssignable(vt, currentReturn_)) {
