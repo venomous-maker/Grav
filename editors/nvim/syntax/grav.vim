@@ -13,14 +13,14 @@ syn region  gravBlockComment start="/\*" end="\*/" contains=gravTodo
 " Declaration / structure keywords
 syn keyword gravKeyword fn class struct enum type typedef interface abstract namespace
 syn keyword gravKeyword constructor extends implements uses new return import export
-syn keyword gravKeyword trait
+syn keyword gravKeyword trait destructor operator final
 syn keyword gravStorage  let const static readonly public private protected
 syn keyword gravKeyword async await
 
 " Control flow
 syn keyword gravConditional if else switch case default match
-syn keyword gravRepeat     while for do in
-syn keyword gravStatement  break continue
+syn keyword gravRepeat     while for do in step
+syn keyword gravStatement  break continue defer
 syn keyword gravException  try catch finally throw
 syn keyword gravOperatorKw as is sizeof
 
