@@ -79,7 +79,8 @@ b
 
 ## Generic functions
 
-Pass type arguments with `::<...>` (they are not inferred from the arguments).
+Type arguments can be written with `::<...>` or left out and inferred (see
+[Inferring type arguments](#inferring-type-arguments-auto) below).
 
 ```grav
 fn firstOf<T>(a: T, b: T, pickFirst: bool) -> T { return pickFirst ? a : b }
@@ -154,6 +155,68 @@ Output:
 #42
 (1, true)
 ```
+
+## Inferring type arguments (auto)
+
+You rarely need to write type arguments: leave them out (or write `auto` for the
+ones you want inferred) and the compiler works them out from
+
+- the **call arguments** — `maxOf(3, 9)` means `T = int`;
+- **constructor arguments** — `new Box(5)` is a `Box<int>`;
+- **lambda results** — `box.map(fn(v) => "#${v}")` gives `U = string`;
+- the **expected type** — a typed `let`, a field or variable being assigned, a
+  parameter, a `return`, or an `as` cast.
+
+```grav
+import "../lib/std.grav"
+
+fn maxOf<T>(a: T, b: T) -> T { return a > b ? a : b }
+
+class Box<T> {
+    public value: T
+    constructor(v: T) { self.value = v }
+    fn map<U>(f: fn(T) -> U) -> Box<U> { return new Box<U>(f(self.value)) }
+}
+
+class Registry {
+    private names: Array<string>
+    constructor() { self.names = new Array<auto>() }    // from the field type
+    fn add(n: string) { self.names.push(n) }
+    fn count() -> int { return self.names.length() }
+}
+
+fn main() {
+    print(maxOf(3, 9))
+    let b = new Box(20)
+    print(b.map(fn(v) => "v${v + 1}").value)
+    let nums = new Array<int>()
+    nums.push(2)
+    nums.push(3)
+    print(Str.join(nums.mapTo(fn(n) => "<${n}>"), ""))
+    let scores: HashMap<string, int> = new HashMap<auto, auto>()
+    scores["ada"] = 99
+    print(scores["ada"])
+    let r = new Registry()
+    r.add("x")
+    print(r.count())
+}
+```
+
+Output:
+
+```text
+9
+v21
+<2><3>
+99
+1
+```
+
+`::<auto>` mixes explicit and inferred arguments (`convert::<auto, string>(x)`).
+When nothing determines a type argument — `let xs = new Array<auto>()` on its own —
+the compiler asks you to write it out. `auto` is only for type *arguments* and
+`let x: auto = ...` (which is the same as `let x = ...`); a declared type such as
+`let xs: Array<auto>` is an error.
 
 ## Generic aliases
 
