@@ -34,6 +34,12 @@ std::string memberCName(const std::string &name) {
 
 std::string ctorCName(const std::string &classFq) { return mangle(classFq) + "_new"; }
 std::string ctorInitCName(const std::string &classFq) { return mangle(classFq) + "_init"; }
+std::string ctorCName(const std::string &classFq, int idx) {
+    return ctorCName(classFq) + (idx ? std::to_string(idx) : "");
+}
+std::string ctorInitCName(const std::string &classFq, int idx) {
+    return ctorInitCName(classFq) + (idx ? std::to_string(idx) : "");
+}
 
 std::string funcCName(const std::string &fnFq) { return "vf_" + mangle(fnFq); }
 std::string funcCName(const std::string &fnFq, int overloadIndex) {
@@ -94,6 +100,7 @@ std::string cType(const TypeRef &t) {
         case TypeRef::Kind::Pointer:
             return (t.elem ? cType(*t.elem) : "void") + "*";
         case TypeRef::Kind::Array: return arrayStructName(t);
+        case TypeRef::Kind::Function: return "GravFn";
         case TypeRef::Kind::Error: return "int /*error*/";
     }
     return "int";
