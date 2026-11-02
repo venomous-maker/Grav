@@ -1,0 +1,30 @@
+// 14_input_args.grav — command-line arguments and standard input.
+//
+//   printf 'Ada\n7\n3.5\nyes\n' | grav examples/14_input_args.grav --run -- alpha beta
+//
+// Covers: argc()/argv(i), input() (one line, "" at end of input), IO.prompt,
+// IO.readInt / readFloat / readBool, and reading until end of input.
+
+import "../lib/std.grav"
+
+fn main() {
+    print("program received ${argc() - 1} argument(s)")
+    for (i in 1..argc()) { print("  arg ${i}: ${argv(i)}") }
+    print("out-of-range argv(99) is empty: ${argv(99) == ""}")
+
+    let name = IO.prompt("name? ")
+    print("")
+    let n = IO.readInt()
+    let ratio = IO.readFloat()
+    let agree = IO.readBool()
+    print("hello ${name}: ${n} squared is ${n * n}, ratio x2 = ${ratio * 2.0}, agreed: ${agree}")
+
+    // Read whatever is left, line by line.
+    let rest = 0
+    let line = input()
+    while (line != "") {
+        rest += 1
+        line = input()
+    }
+    print("${rest} more line(s) after the answers")
+}
