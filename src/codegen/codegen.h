@@ -200,6 +200,10 @@ private:
 
     // codegen_expr.cpp
     std::string emitExpr(const Expr &expr) const;
+    // `any` boxing / unboxing / type tests.
+    std::string boxAny(const Expr &e) const;
+    std::string unboxAny(const std::string &c, const TypeRef &target) const;
+    std::string isAnyTest(const std::string &c, const TypeRef &target) const;
     std::string emitCall(const CallExpr &call) const;
     // Emits an expression, adding a C pointer cast when the value flows into a
     // named (class/interface) slot of a different static type (upcasts).
