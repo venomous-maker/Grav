@@ -17,7 +17,7 @@ pass=0; fail=0
 run() { # file, stdin, args...
   local f="$1"; shift
   local stdin="$1"; shift
-  local name; name="$(echo "${f#examples/}" | sed 's|/|_|g; s|\.grav$||')"
+  local name; name="$(echo "${f#examples/}" | sed 's|^tests/||; s|/|_|g; s|\.grav$||')"
   local bin="$TMP/$name" out="$TMP/$name.out" gold="tests/expected/$name.out"
   if ! "$GRAV" "$f" --emit bin -o "$bin" >"$TMP/err" 2>&1; then
     echo "FAIL (compile) $f"; sed 's/^/    /' "$TMP/err"; fail=$((fail+1)); return
@@ -39,6 +39,8 @@ for f in examples/*.grav examples/apps/*.grav; do
   esac
 done
 run examples/project/main.grav ''
+# Library tests: every standard-library module, golden-checked like the examples.
+for f in tests/lib/*.grav; do run "$f" ''; done
 
 # Every example must also build in release mode (no tracing, -O3).
 for f in examples/*.grav examples/apps/*.grav examples/project/main.grav; do
