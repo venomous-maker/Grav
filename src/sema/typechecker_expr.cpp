@@ -191,7 +191,7 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
     if ((e.op == BinaryOp::Eq || e.op == BinaryOp::NotEq) &&
         (lt.kind == TypeRef::Kind::Null || rt.kind == TypeRef::Kind::Null)) {
         auto refOrNull = [&](const TypeRef &x) {
-            return x.kind == TypeRef::Kind::Null || x.isPointer() || x.isFunction() ||
+            return x.kind == TypeRef::Kind::Null || x.isPointer() || x.isFunction() || x.isAny() ||
                    (x.isNamed() && (reg_->isClass(x.name) || reg_->isInterface(x.name)));
         };
         if (refOrNull(lt) && refOrNull(rt))
@@ -227,6 +227,12 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
     }
 
     bool ordered = e.op != BinaryOp::Eq && e.op != BinaryOp::NotEq;
+    // `any == value` compares the boxed value (the other side is boxed).
+    if (!ordered && (lt.isAny() || rt.isAny())) {
+        if (isBoxable(lt) && isBoxable(rt)) return TypeRef::prim(TypeRef::Kind::Bool);
+        error(e.line, e.col, "cannot compare " + typeRefName(lt) + " with " + typeRefName(rt));
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     // Numeric comparisons allow mixed widths/signedness; otherwise types must match.
     if (lt.isNumeric() && rt.isNumeric()) {
         return TypeRef::prim(TypeRef::Kind::Bool);
@@ -340,19 +346,38 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
         e.operand->type = e.target;
         return e.target;
     }
-    TypeRef src = checkExpr(*e.operand);
     // Canonicalize the target (resolving named parts and expanding aliases, looking
     // through any pointer wrappers like `Point*`).
     {
         bool ok = true;
         TypeRef c = reg_->resolveCanonical(e.target, currentNs_, ok);
         if (!ok) {
+            checkExpr(*e.operand);
             error(e.line, e.col, "unknown type '" + typeRefName(e.target) + "' in cast");
             return TypeRef::prim(TypeRef::Kind::Error);
         }
         e.target = c;
     }
+    // The cast target guides inference: `new Array<auto>() as Array<int>`.
+    TypeRef src = checkExprExpect(*e.operand, e.target);
     if (src.isError()) return e.target;
+
+    // `any`: boxing is implicit (and allowed here too); unboxing is checked at run time.
+    if (e.target.isAny()) {
+        if (isBoxable(src)) return e.target;
+        error(e.line, e.col, "a value of type " + typeRefName(src) + " cannot be stored in 'any'");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    if (src.isAny()) {
+        if (e.target.isNamed() && reg_->isInterface(e.target.name)) {
+            error(e.line, e.col, "take the object out of 'any' as its class, then use it as '" +
+                                     e.target.name + "'");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        if (isBoxable(e.target) && e.target.kind != TypeRef::Kind::Null) return e.target;
+        error(e.line, e.col, "cannot take a " + typeRefName(e.target) + " out of 'any'");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
 
     // Pointer cast: between any pointer types, or from null (like a C cast).
     if (e.target.isPointer()) {
@@ -403,6 +428,23 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
 
 TypeRef TypeChecker::checkIs(IsExpr &e) {
     TypeRef src = checkExpr(*e.operand);
+    // `x is int` / `x is string` / `x is MyClass` on an `any`: a run-time tag test.
+    if (src.isAny()) {
+        bool ok = true;
+        TypeRef t = reg_->resolveCanonical(e.target, currentNs_, ok);
+        if (!ok || !isBoxable(t) || t.kind == TypeRef::Kind::Null) {
+            error(e.line, e.col, "'is' on an 'any' needs a type an 'any' can hold, got '" +
+                                     typeRefName(e.target) + "'");
+            return TypeRef::prim(TypeRef::Kind::Bool);
+        }
+        e.target = t;
+        if (t.isNamed()) e.className = t.name;
+        return TypeRef::prim(TypeRef::Kind::Bool);
+    }
+    if (!e.target.isNamed()) {
+        error(e.line, e.col, "'is' expects a class name (or an 'any' on the left)");
+        return TypeRef::prim(TypeRef::Kind::Bool);
+    }
     std::string fq = reg_->resolveType(e.typeName, currentNs_);
     if (fq.empty() || !reg_->isClass(fq)) {
         error(e.line, e.col, "'is' expects a class name, got '" + e.typeName + "'");
@@ -566,7 +608,12 @@ TypeRef TypeChecker::checkIndex(IndexExpr &e) {
 }
 
 TypeRef TypeChecker::checkNew(NewExpr &e) {
+    const TypeRef *expNew = expected_;
+    expected_ = nullptr;
     std::string fq = reg_->resolveType(e.className, currentNs_);
+    // A generic class constructed without (or with `auto`) type arguments.
+    if (fq.empty() || !reg_->isClass(fq))
+        if (auto r = tryInferNew(e, expNew)) return *r;
     if (fq.empty() || !reg_->isClass(fq)) {
         error(e.line, e.col, "cannot construct unknown class '" + e.className + "'");
         for (auto &a : e.args) checkExpr(*a);
@@ -764,6 +811,10 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
 }
 
 TypeRef TypeChecker::checkCall(CallExpr &e) {
+    // The expected result type (for inferring generic arguments) applies to this
+    // call only, not to anything nested inside it.
+    const TypeRef *expCall = expected_;
+    expected_ = nullptr;
     // `super(...)` — delegate to the parent constructor; `super.m(...)` — call the
     // parent's method implementation directly (non-virtual).
     if (auto sup = checkSuperCall(e)) return *sup;
@@ -841,9 +892,9 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 error(e.line, e.col, "typename expects exactly 1 argument");
             } else {
                 TypeRef t = checkExpr(*e.args[0]);
-                if (!t.isError() && !(t.isNamed() && reg_->isClass(t.name)))
+                if (!t.isError() && !t.isAny() && !(t.isNamed() && reg_->isClass(t.name)))
                     error(e.args[0]->line, e.args[0]->col,
-                          "typename expects a class instance, got " + typeRefName(t));
+                          "typename expects a class instance or an any, got " + typeRefName(t));
             }
             return TypeRef::prim(TypeRef::Kind::String);
         }
@@ -926,6 +977,9 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             return TypeRef::prim(TypeRef::Kind::String);
         }
         std::string fnFq = reg_->resolveFunc(name->name, currentNs_);
+        // A generic function called without (or with `auto`) type arguments.
+        if (fnFq.empty() && program_ && program_->generics.functions.count(name->name))
+            return *tryInferCall(e, name->name, program_->generics.functions.at(name->name), expCall);
         if (fnFq.empty()) {
             error(e.line, e.col, "unknown function '" + name->name + "'");
             for (auto &a : e.args) checkExpr(*a);
@@ -983,6 +1037,12 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         if (!fnFq.empty()) {
             return resolveFreeCall(e, fnFq);
         }
+        // A static generic method called without type arguments.
+        if (!clsFq.empty() && program_) {
+            auto gm = program_->generics.methods.find(clsFq + "." + last);
+            if (gm != program_->generics.methods.end())
+                return *tryInferCall(e, last, gm->second, expCall);
+        }
         error(e.line, e.col, "unknown function or static method '" +
                                  joinDots(*chain, chain->size()) + "'");
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -1030,6 +1090,17 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     std::vector<const MethodInfo *> cands;
     for (const MethodInfo *c : reg_->findMethodsBySource(objType.name, mem->member))
         if (!c->isStatic) cands.push_back(c);
+    // A generic method called without type arguments (on this class or a base).
+    if (cands.empty() && program_) {
+        std::string cur = objType.name;
+        for (int guard = 0; !cur.empty() && guard < 100; ++guard) {
+            auto gm = program_->generics.methods.find(cur + "." + mem->member);
+            if (gm != program_->generics.methods.end())
+                return *tryInferCall(e, mem->member, gm->second, expCall);
+            const ClassInfo *ci = reg_->cls(cur);
+            cur = ci ? ci->baseClass : "";
+        }
+    }
     if (cands.empty()) {
         error(mem->line, mem->col, "type '" + objType.name + "' has no method '" +
                                        mem->member + "'");
