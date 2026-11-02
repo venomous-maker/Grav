@@ -1,0 +1,88 @@
+// 18_data_structures.grav — choosing the right collection.
+//
+//   grav examples/18_data_structures.grav --run
+//
+// Covers the standard data structures and when to use each:
+//   Array (growable list) · Deque (both ends) · Stack / Queue · HashMap / HashSet
+//   (O(1) lookup) · Map / Set (ordered, any ==) · SortedMap (ordered keys, ranges)
+//   PriorityQueue (always take the best next) · LinkedList (cheap end splicing)
+//   BitSet (sets of small integers) · Pair / Optional (small value wrappers)
+// Every collection shares size(), isEmpty(), clear(), contains(), forEach(), and
+// toArray(), and works with `for (x in coll)`.
+
+import "../lib/std.grav"
+
+struct Task { name: string  priority: int }
+
+fn main() {
+    print("--- Array: an ordered, growable list ---")
+    let scores = new Array<int>()
+    for (s in [72, 95, 64, 88, 95]) { scores.add(s) }
+    scores.removeWhere(fn(s) => s < 70)
+    scores.sortBy(fn(a, b) => b - a)
+    print("top scores: ${Str.join(scores.mapTo(fn(s) => str(s)), ", ")} (best ${scores.first()})")
+
+    print("--- Deque: add/remove at both ends in O(1) ---")
+    let window = new Deque<int>()
+    for (x in [3, 1, 4, 1, 5, 9, 2, 6]) {
+        window.pushBack(x)
+        if (window.size() > 3) { window.popFront() }    // a sliding window of 3
+    }
+    print("last three: ${Str.join(window.toArray().mapTo(fn(x) => str(x)), " ")}")
+
+    print("--- Stack and Queue ---")
+    let undo = new Stack<string>()
+    for (a in ["type", "bold", "delete"]) { undo.push(a) }
+    print("undo ${undo.pop()}, then ${undo.pop()}")
+    let line = new Queue<string>()
+    for (p in ["ada", "bob", "cy"]) { line.enqueue(p) }
+    print("serving ${line.dequeue()}; next up ${line.peek()}; waiting ${line.size()}")
+
+    print("--- HashMap and HashSet: fast lookup ---")
+    let stock = new HashMap<string, int>()
+    for (item in ["apple", "pear", "apple", "fig", "apple"]) { stock[item] = stock.getOrPut(item, 0) + 1 }
+    print("apples: ${stock["apple"]}, kiwis: ${stock.getOr("kiwi", 0)}")
+    let seen = new HashSet<string>()
+    let firsts = new Array<string>()
+    for (w in Str.words("to be or not to be")) { if (seen.add(w)) { firsts.add(w) } }
+    print("distinct words in order: ${Str.join(firsts, " ")}")
+
+    print("--- SortedMap: keys in order, range queries ---")
+    let index = new SortedMap<string, int>(fn(a, b) => Str.compare(a, b))
+    for (w in ["melon", "apple", "cherry", "banana", "kiwi"]) { index[w] = Str.length(w) }
+    print("alphabetical: ${Str.join(index.keys(), ", ")}")
+    print("from b to l: ${Str.join(index.keysBetween("b", "l"), ", ")}")
+
+    print("--- PriorityQueue: always take the most urgent ---")
+    let todo = new PriorityQueue<Task>(fn(a, b) => b.priority - a.priority)
+    todo.push(Task { name: "write docs", priority: 2 })
+    todo.push(Task { name: "fix outage", priority: 9 })
+    todo.push(Task { name: "lunch", priority: 5 })
+    while (!todo.isEmpty()) {
+        let t = todo.pop()
+        print("  ${t.priority}: ${t.name}")
+    }
+
+    print("--- LinkedList: cheap changes at the ends ---")
+    let history = new LinkedList<string>()
+    for (page in ["home", "docs", "api", "blog"]) {
+        history.addFirst(page)                          // newest first
+        if (history.size() > 3) { history.removeLast() }
+    }
+    let pages = new StringBuilder()
+    for (p in history) { pages.append(p).append(" ") }
+    print("recent pages: ${pages}")
+
+    print("--- BitSet: sets of small integers ---")
+    let sieve = new BitSet()
+    for (n in 2..50) { sieve.set(n) }
+    for (n in 2..8) { for (m in n * n..50 step n) { sieve.unset(m) } }
+    print("primes below 50: ${sieve.count()} -> ${Str.join(sieve.toArray().mapTo(fn(x) => str(x)), " ")}")
+
+    print("--- Pair and Optional ---")
+    let range = new Pair(scores.last(), scores.first())
+    print("score range: ${range.first}..${range.second}")
+    let found = stock.containsKey("fig") ? new Optional(stock["fig"]) : new Optional<int>()
+    let missing = new Optional<int>()
+    print("figs: ${found.getOr(0)}, kiwis: ${missing.getOr(0)}, present: ${found.isPresent()}/${missing.isPresent()}")
+}
