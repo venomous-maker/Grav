@@ -59,7 +59,7 @@ class City implements Named {
 }
 fn shout<T: Named>(x: T) -> string { return Str.upper(x.name()) + "!" }   // bounded
 
-// async/await: futures resolve eagerly (calls stay plain C calls).
+// async/await: each call runs as a task on the worker pool (see 16_async.grav).
 async fn fetchScore(player: string) -> int { return Str.length(player) * 10 }
 async fn total(a: string, b: string) -> int {
     let x = await fetchScore(a)
