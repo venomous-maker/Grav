@@ -10,6 +10,10 @@ type typedef try catch finally throw async await as is sizeof null true false
 int float bool string void
 ```
 
+Contextual names: `auto` (an inferred type argument, or `let x: auto = …`) and
+`any` (the dynamic type) are recognized in type positions and stay usable as
+identifiers elsewhere.
+
 Contextual keywords (only special where shown, otherwise usable as names):
 `defer` (statement), `step` (in a range), `final` (before `class`/`fn`),
 `destructor` (in a class body), `operator` (in `fn operator+`).
@@ -36,7 +40,7 @@ From loosest to tightest binding:
 | 10 | `+ -` | left |
 | 11 | `* / %` | left |
 | 12 | `**` | right |
-| 13 | `as`, `is` | left |
+| 13 | `as`, `is` (`x is T` also tests what an `any` holds) | left |
 | 14 | unary `- ! ~ ++ -- await`, `&` `*` (address/deref), `(T)x` casts | right |
 | 15 | calls `f()`, `::<T>()`, indexing `a[i]`, members `.` `?.` `->`, postfix `++ --` | left |
 
@@ -61,7 +65,7 @@ are evaluated left to right; `&&`, `||`, `??`, `?:`, and `?.` short-circuit.
 ```text
 int long int8..int64 uint ulong uint8..uint64 byte     integers
 float double float32 float64                          floating point
-bool string binary void
+bool string binary void any                           (any = dynamic, run-time checked)
 Name                       class, interface, struct, enum, or alias
 Name<T, U>                 generic instance
 T[N]                       fixed-length array
@@ -121,7 +125,7 @@ try { } catch (e: T) { } [catch (e: U) { }] [finally { }]
 | `input()` | one line from stdin |
 | `argc()`, `argv(i)` | command-line arguments |
 | `env(name)`, `cwd()` | environment variable, working directory |
-| `typename(o)`, `isInstance(o, T)` | runtime type information |
+| `typename(o)`, `isInstance(o, T)` | runtime type information (`typename` also works on `any`) |
 | `sizeof(T)` / `sizeof(expr)` | size in bytes |
 | `assert(c[, msg])`, `panic(msg)`, `exit(code)` | checks and termination |
 | `free(x)` | release an object (running destructors), pointer, closure, or finished future |
