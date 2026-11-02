@@ -1,4 +1,8 @@
-// lib/datetime.grav — calendar date/time (backed by C <time.h>).
+// lib/datetime.grav — calendar dates and times in the local time zone (C <time.h>).
+//
+//   let d = DateTime.of(2024, 2, 29, 9, 30, 0)
+//   print(d)                              // 2024-02-29 09:30:00
+//   print(d.addDays(1).format("%A %d %B"))
 %{
 #include <time.h>
 #include <stdlib.h>
@@ -10,12 +14,20 @@ static int grav_tm_field(long long ts, int field) {
         case 2: return m->tm_mday;
         case 3: return m->tm_hour;
         case 4: return m->tm_min;
-        default: return m->tm_sec;
+        case 5: return m->tm_sec;
+        case 6: return m->tm_wday == 0 ? 7 : m->tm_wday;   /* ISO: Monday 1 .. Sunday 7 */
+        default: return m->tm_yday + 1;
     }
 }
 static const char* grav_strftime(long long ts, const char* fmt) {
     time_t tt = (time_t)ts; struct tm tmv; struct tm* m = localtime_r(&tt, &tmv); /* thread-safe */
-    char* b = (char*)malloc(128); strftime(b, 128, fmt, m); return b;
+    char* b = (char*)malloc(256); if (!strftime(b, 256, fmt, m)) b[0] = 0; return b;
+}
+static long long grav_mktime(int y, int mo, int d, int h, int mi, int s) {
+    struct tm t = {0};
+    t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d;
+    t.tm_hour = h; t.tm_min = mi; t.tm_sec = s; t.tm_isdst = -1;
+    return (long long)mktime(&t);
 }
 %}
 
@@ -25,6 +37,16 @@ class DateTime {
 
     static fn now() -> DateTime { return new DateTime(%{ (long long)time(0) %} as long); }
     static fn fromUnix(seconds: long) -> DateTime { return new DateTime(seconds); }
+    // From calendar fields (local time); out-of-range fields roll over (Jan 32 -> Feb 1).
+    static fn of(year: int, month: int, day: int, hour: int, minute: int, second: int) -> DateTime {
+        return new DateTime(%{ grav_mktime(year, month, day, hour, minute, second) %} as long);
+    }
+    static fn of(year: int, month: int, day: int) -> DateTime { return DateTime.of(year, month, day, 0, 0, 0); }
+    static fn isLeapYear(year: int) -> bool { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
+    static fn daysInMonth(year: int, month: int) -> int {
+        if (month == 2) { return DateTime.isLeapYear(year) ? 29 : 28; }
+        return month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31;
+    }
 
     public fn unix() -> long { return self.ts; }
     public fn year() -> int { let t = self.ts; return %{ grav_tm_field(t, 0) %} as int; }
@@ -33,8 +55,27 @@ class DateTime {
     public fn hour() -> int { let t = self.ts; return %{ grav_tm_field(t, 3) %} as int; }
     public fn minute() -> int { let t = self.ts; return %{ grav_tm_field(t, 4) %} as int; }
     public fn second() -> int { let t = self.ts; return %{ grav_tm_field(t, 5) %} as int; }
+    // ISO weekday: 1 = Monday … 7 = Sunday.
+    public fn weekday() -> int { let t = self.ts; return %{ grav_tm_field(t, 6) %} as int; }
+    public fn dayOfYear() -> int { let t = self.ts; return %{ grav_tm_field(t, 7) %} as int; }
 
+    // strftime patterns, e.g. "%Y-%m-%d %H:%M".
     public fn format(fmt: string) -> string { let t = self.ts; return %{ grav_strftime(t, fmt) %} as string; }
-    public fn addDays(days: int) -> DateTime { return new DateTime(self.ts + (days as long) * 86400); }
+    public fn date() -> string { return self.format("%Y-%m-%d"); }
+    public fn time() -> string { return self.format("%H:%M:%S"); }
+    fn toString() -> string { return self.format("%Y-%m-%d %H:%M:%S"); }
+
+    public fn addSeconds(s: long) -> DateTime { return new DateTime(self.ts + s); }
+    public fn addMinutes(m: int) -> DateTime { return new DateTime(self.ts + (m as long) * 60); }
     public fn addHours(hours: int) -> DateTime { return new DateTime(self.ts + (hours as long) * 3600); }
+    public fn addDays(days: int) -> DateTime { return new DateTime(self.ts + (days as long) * 86400); }
+    // Seconds from this instant to `other` (negative if `other` is earlier).
+    public fn secondsUntil(other: DateTime) -> long { return other.ts - self.ts; }
+    public fn daysUntil(other: DateTime) -> long { return (other.ts - self.ts) / 86400; }
+
+    fn operator==(o: DateTime) -> bool { return self.ts == o.ts; }
+    fn operator<(o: DateTime) -> bool { return self.ts < o.ts; }
+    fn operator<=(o: DateTime) -> bool { return self.ts <= o.ts; }
+    fn operator>(o: DateTime) -> bool { return self.ts > o.ts; }
+    fn operator>=(o: DateTime) -> bool { return self.ts >= o.ts; }
 }
