@@ -70,6 +70,59 @@ static const char* grav_str_replace(const char* s, const char* o, const char* n)
     while ((q = strstr(p, o))) { memcpy(w, p, q - p); w += q - p; memcpy(w, n, nl); w += nl; p = q + ol; }
     strcpy(w, p); return r;
 }
+static int grav_str_ends(const char* s, const char* suf) {
+    size_t n = strlen(s), m = strlen(suf);
+    return m <= n && memcmp(s + n - m, suf, m) == 0;
+}
+static int grav_str_lastindexof(const char* s, const char* sub) {
+    size_t n = strlen(s), m = strlen(sub);
+    if (m > n) return -1;
+    for (size_t i = n - m + 1; i-- > 0;) if (memcmp(s + i, sub, m) == 0) return (int)i;
+    return -1;
+}
+/* One allocation for the whole result (Str.join). */
+static const char* grav_str_join(const char** parts, int count, const char* delim) {
+    size_t dl = strlen(delim), total = 0;
+    for (int i = 0; i < count; i++) total += strlen(parts[i]) + (i ? dl : 0);
+    char* r = (char*)malloc(total + 1); char* w = r;
+    for (int i = 0; i < count; i++) {
+        if (i) { memcpy(w, delim, dl); w += dl; }
+        size_t l = strlen(parts[i]); memcpy(w, parts[i], l); w += l;
+    }
+    *w = 0; return r;
+}
+static const char* grav_str_capitalize(const char* s) {
+    size_t n = strlen(s); char* r = (char*)malloc(n + 1); memcpy(r, s, n + 1);
+    if (n) r[0] = (char)toupper((unsigned char)r[0]);
+    return r;
+}
+static int grav_str_casecmp(const char* a, const char* b) {
+    for (;; a++, b++) {
+        int x = tolower((unsigned char)*a), y = tolower((unsigned char)*b);
+        if (x != y || !x) return x - y;
+    }
+}
+static int grav_str_all(const char* s, int kind) {
+    if (!*s) return 0;
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        int ok = kind == 0 ? isdigit(c) : kind == 1 ? isalpha(c) : kind == 2 ? isalnum(c)
+               : kind == 3 ? isspace(c) : kind == 4 ? (isupper(c) || !isalpha(c)) : (islower(c) || !isalpha(c));
+        if (!ok) return 0;
+    }
+    return 1;
+}
+static const char* grav_str_center(const char* s, int width, char c) {
+    int n = (int)strlen(s);
+    if (n >= width) return grav_str_dup(s);
+    int left = (width - n) / 2, right = width - n - left;
+    char* r = (char*)malloc((size_t)width + 1);
+    memset(r, c, left); memcpy(r + left, s, n); memset(r + left + n, c, right); r[width] = 0;
+    return r;
+}
+static const char* grav_str_from_char(int code) {
+    char* r = (char*)malloc(2); r[0] = (char)code; r[1] = 0; return r;
+}
 static int grav_str_count(const char* s, const char* sub) {
     size_t l = strlen(sub); if (l == 0) return 0;
     int c = 0; for (const char* p = s; (p = strstr(p, sub)); p += l) c++;
@@ -78,58 +131,86 @@ static int grav_str_count(const char* s, const char* sub) {
 %}
 
 class Str {
+    // ── inspecting ─────────────────────────────────────────────────────────
     static fn length(s: string) -> int { return %{ (int)strlen(s) %} as int; }
     static fn isEmpty(s: string) -> bool { return %{ (s[0] == 0) %} as bool; }
+    // Empty or only whitespace.
+    static fn isBlank(s: string) -> bool { return Str.isEmpty(s) || %{ grav_str_all(s, 3) %} as bool; }
     static fn equals(a: string, b: string) -> bool { return a == b; }
+    static fn equalsIgnoreCase(a: string, b: string) -> bool { return %{ grav_str_casecmp(a, b) == 0 %} as bool; }
     // <0, 0, >0 like strcmp: `xs.sortBy(fn(a, b) => Str.compare(a, b))` sorts A-Z.
     static fn compare(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }
-    static fn charAt(s: string, i: int) -> int { return %{ (int)(unsigned char)s[i] %} as int; }
-    static fn concat(a: string, b: string) -> string { return a + b; }
+    static fn compareIgnoreCase(a: string, b: string) -> int { return %{ grav_str_casecmp(a, b) %} as int; }
+    // The byte at index i (bounds-checked).
+    static fn charAt(s: string, i: int) -> int {
+        if (i < 0 || i >= Str.length(s)) { panic("Str.charAt index ${i} out of range"); }
+        return %{ (int)(unsigned char)s[i] %} as int;
+    }
+    // A one-character string from a byte value (65 -> "A").
+    static fn fromChar(code: int) -> string { return %{ grav_str_from_char(code) %} as string; }
+    static fn isDigits(s: string) -> bool { return %{ grav_str_all(s, 0) %} as bool; }
+    static fn isAlpha(s: string) -> bool { return %{ grav_str_all(s, 1) %} as bool; }
+    static fn isAlphanumeric(s: string) -> bool { return %{ grav_str_all(s, 2) %} as bool; }
+    static fn isUpper(s: string) -> bool { return %{ grav_str_all(s, 4) %} as bool; }
+    static fn isLower(s: string) -> bool { return %{ grav_str_all(s, 5) %} as bool; }
 
+    // ── searching ──────────────────────────────────────────────────────────
     static fn indexOf(s: string, sub: string) -> int { return %{ grav_str_indexof(s, sub, 0) %} as int; }
     static fn indexFrom(s: string, sub: string, from: int) -> int { return %{ grav_str_indexof(s, sub, from) %} as int; }
+    static fn lastIndexOf(s: string, sub: string) -> int { return %{ grav_str_lastindexof(s, sub) %} as int; }
     static fn contains(s: string, sub: string) -> bool { return Str.indexOf(s, sub) >= 0; }
     static fn count(s: string, sub: string) -> int { return %{ grav_str_count(s, sub) %} as int; }
-
     static fn startsWith(s: string, prefix: string) -> bool {
         return %{ (strncmp(s, prefix, strlen(prefix)) == 0) %} as bool;
     }
-    static fn endsWith(s: string, suffix: string) -> bool {
-        let n = Str.length(s);
-        let m = Str.length(suffix);
-        return m <= n && Str.substring(s, n - m, m) == suffix;
-    }
+    static fn endsWith(s: string, suffix: string) -> bool { return %{ grav_str_ends(s, suffix) %} as bool; }
 
+    // ── transforming (each returns a new string) ───────────────────────────
+    static fn concat(a: string, b: string) -> string { return a + b; }
     static fn upper(s: string) -> string { return %{ grav_str_upper(s) %} as string; }
     static fn lower(s: string) -> string { return %{ grav_str_lower(s) %} as string; }
+    static fn capitalize(s: string) -> string { return %{ grav_str_capitalize(s) %} as string; }
     static fn reverse(s: string) -> string { return %{ grav_str_reverse(s) %} as string; }
     static fn repeat(s: string, n: int) -> string { return %{ grav_str_repeat(s, n) %} as string; }
     static fn substring(s: string, start: int, len: int) -> string {
         return %{ grav_str_sub(s, start, len) %} as string;
     }
+    // Characters [start, end) (bounds are clamped).
+    static fn slice(s: string, start: int, end: int) -> string {
+        return %{ grav_str_sub(s, start, end > start ? end - start : 0) %} as string;
+    }
     static fn remove(s: string, start: int, len: int) -> string {
         return Str.substring(s, 0, start) + Str.substring(s, start + len, Str.length(s));
     }
-
+    static fn removePrefix(s: string, prefix: string) -> string {
+        return Str.startsWith(s, prefix) ? Str.substring(s, Str.length(prefix), Str.length(s)) : Str.substring(s, 0, Str.length(s));
+    }
+    static fn removeSuffix(s: string, suffix: string) -> string {
+        let n = Str.length(s);
+        return Str.endsWith(s, suffix) ? Str.substring(s, 0, n - Str.length(suffix)) : Str.substring(s, 0, n);
+    }
     static fn trim(s: string) -> string { return %{ grav_str_trim(s, 1, 1) %} as string; }
     static fn trimStart(s: string) -> string { return %{ grav_str_trim(s, 1, 0) %} as string; }
     static fn trimEnd(s: string) -> string { return %{ grav_str_trim(s, 0, 1) %} as string; }
-
     static fn replace(s: string, old: string, repl: string) -> string {
         return %{ grav_str_replace(s, old, repl) %} as string;
     }
-
+    // Pad to `len` characters with the first character of `ch` (a space if `ch` is empty).
     static fn padLeft(s: string, len: int, ch: string) -> string {
-        return %{ grav_str_pad(s, len, ch[0], 1) %} as string;
+        return %{ grav_str_pad(s, len, ch[0] ? ch[0] : ' ', 1) %} as string;
     }
     static fn padRight(s: string, len: int, ch: string) -> string {
-        return %{ grav_str_pad(s, len, ch[0], 0) %} as string;
+        return %{ grav_str_pad(s, len, ch[0] ? ch[0] : ' ', 0) %} as string;
+    }
+    static fn center(s: string, width: int, ch: string) -> string {
+        return %{ grav_str_center(s, width, ch[0] ? ch[0] : ' ') %} as string;
     }
 
+    // ── splitting and joining ──────────────────────────────────────────────
     static fn split(s: string, delim: string) -> Array<string> {
         let out = new Array<string>();
         let dl = Str.length(delim);
-        if (dl == 0) { out.push(s); return out; }
+        if (dl == 0) { out.push(Str.substring(s, 0, Str.length(s))); return out; }
         let start = 0;
         while (true) {
             let i = Str.indexFrom(s, delim, start);
@@ -139,13 +220,41 @@ class Str {
         }
         return out;
     }
-
-    static fn join(parts: Array<string>, delim: string) -> string {
-        let out = "";
-        for (i in 0..parts.length()) {
-            if (i > 0) { out += delim; }
-            out += parts.get(i);
+    // Lines of text (handles \n and \r\n; no trailing empty line for a final newline).
+    static fn lines(s: string) -> Array<string> {
+        let out = new Array<string>();
+        let n = Str.length(s);
+        let start = 0;
+        for (i in 0..n) {
+            if (Str.charAt(s, i) == 10) {
+                let end = i > start && Str.charAt(s, i - 1) == 13 ? i - 1 : i;
+                out.push(Str.substring(s, start, end - start));
+                start = i + 1;
+            }
         }
+        if (start < n) { out.push(Str.substring(s, start, n - start)); }
+        return out;
+    }
+    // Whitespace-separated words (no empty entries).
+    static fn words(s: string) -> Array<string> {
+        let out = new Array<string>();
+        let n = Str.length(s);
+        let start = -1;
+        for (i in 0..=n) {
+            let space = i == n || %{ isspace((unsigned char)s[i]) %} as bool;
+            if (space && start >= 0) { out.push(Str.substring(s, start, i - start)); start = -1; }
+            else if (!space && start < 0) { start = i; }
+        }
+        return out;
+    }
+    // Joins with one allocation (no quadratic copying).
+    static fn join(parts: Array<string>, delim: string) -> string {
+        let n = parts.size();
+        if (n == 0) { return ""; }
+        let ptrs = %{ (const char**)malloc(sizeof(const char*) * (size_t)n) %} as string*;
+        for (i in 0..n) { ptrs[i] = parts.get(i); }
+        let out = %{ grav_str_join(ptrs, n, delim) %} as string;
+        free(ptrs);
         return out;
     }
 }
