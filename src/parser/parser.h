@@ -90,6 +90,7 @@ private:
     ExprPtr parseShift();
     ExprPtr parseAdditive();
     ExprPtr parseMultiplicative();
+    ExprPtr parsePower();
     ExprPtr parseAsIs();
     ExprPtr parseUnary();
     ExprPtr parsePostfix();
