@@ -1,5 +1,7 @@
 #include "codegen/codegen.h"
 
+#include <cstdio>
+
 #include "codegen/mangle.h"
 
 namespace grav {
@@ -35,7 +37,17 @@ std::string CodeGen::escapeC(const std::string &s) {
             case '\n': out += "\\n"; break;
             case '\t': out += "\\t"; break;
             case '\r': out += "\\r"; break;
-            default: out += c; break;
+            default:
+                // Other control bytes (e.g. from `\0`/`\x01`) as fixed 3-digit octal,
+                // which cannot run into a following digit the way `\x` escapes do.
+                if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+                    char buf[8];
+                    snprintf(buf, sizeof buf, "\\%03o", static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+                break;
         }
     }
     return out;
@@ -43,6 +55,9 @@ std::string CodeGen::escapeC(const std::string &s) {
 
 std::string CodeGen::emitAs(const Expr &expr, const TypeRef &target) const {
     std::string e = emitExpr(expr);
+    // A null function value.
+    if (target.isFunction() && expr.type.kind == TypeRef::Kind::Null)
+        return "((GravFn){ 0, 0 })";
     // A null reference flowing into an interface value is an empty fat pointer.
     if (target.isNamed() && reg_->isInterface(target.name) &&
         expr.type.kind == TypeRef::Kind::Null) {
@@ -101,6 +116,8 @@ void CodeGen::emitVariadicArgs(std::string &out, const CallExpr &call,
 }
 
 std::string CodeGen::emitExpr(const Expr &expr) const {
+    if (!exprOverride_.empty())
+        if (auto it = exprOverride_.find(&expr); it != exprOverride_.end()) return it->second;
     if (auto *e = dynamic_cast<const IntLiteralExpr *>(&expr)) return e->raw;
     if (auto *e = dynamic_cast<const FloatLiteralExpr *>(&expr)) return e->raw;
     if (auto *e = dynamic_cast<const BoolLiteralExpr *>(&expr))
@@ -109,8 +126,11 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         return "\"" + escapeC(e->value) + "\"";
     if (dynamic_cast<const NullLiteralExpr *>(&expr)) return "0";
     if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return hoistIncludes(e->code);
-    if (auto *e = dynamic_cast<const NameExpr *>(&expr))
+    if (auto *e = dynamic_cast<const NameExpr *>(&expr)) {
+        if (!e->fnRef.empty()) return emitFnRef(*e);
         return e->resolvedGlobal.empty() ? e->name : e->resolvedGlobal;
+    }
+    if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) return emitLambdaValue(*e);
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
     if (dynamic_cast<const SuperExpr *>(&expr)) return "self"; // viewed as parent in calls
 
@@ -127,15 +147,61 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
                 iface = e->right.get();
             if (iface)
                 return "((" + emitExpr(*iface) + ").obj " + binaryOpSymbol(e->op) + " 0)";
+            // Function values compare their code pointer against null.
+            const Expr *fnv = nullptr;
+            if (e->left->type.isFunction() && e->right->type.kind == TypeRef::Kind::Null)
+                fnv = e->left.get();
+            else if (e->right->type.isFunction() && e->left->type.kind == TypeRef::Kind::Null)
+                fnv = e->right.get();
+            if (fnv)
+                return "((" + emitExpr(*fnv) + ").fn " + binaryOpSymbol(e->op) + " 0)";
         }
+        // A class operator method: `a + b` -> a.op_add(b) (receiver evaluated once).
+        if (!e->overloadMethod.empty()) {
+            std::vector<TypeRef> params;
+            if (const MethodInfo *mi = reg_->findMethod(e->overloadClass, e->overloadMethod))
+                params = mi->paramTypes;
+            std::string arg = params.empty() ? emitExpr(*e->right) : emitAs(*e->right, params[0]);
+            std::string call = methodCall(emitExpr(*e->left), e->left->type, e->overloadMethod, arg);
+            return e->overloadNegate ? "(!" + call + ")" : call;
+        }
+        // `+` chains on strings fuse into one allocation (see emitStringExpr).
+        if (e->stringConcat) return emitStringExpr(*e);
         std::string l = emitExpr(*e->left);
         std::string r = emitExpr(*e->right);
-        if (e->stringConcat) return "grav_str_concat(" + l + ", " + r + ")";
         // String ==/!= compares contents (not pointers).
         if ((e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) &&
             e->left->type.kind == TypeRef::Kind::String &&
             e->right->type.kind == TypeRef::Kind::String)
-            return "(strcmp(" + l + ", " + r + ") " + binaryOpSymbol(e->op) + " 0)";
+        {
+            // A freshly built operand (`a + b == c`) is compared, then released.
+            bool fl = isFreshString(*e->left), fr = isFreshString(*e->right);
+            std::string neg = e->op == BinaryOp::Eq ? "" : "!";
+            if (fl || fr)
+                return neg + "grav_streq_tmp(" + l + ", " + r + ", " + (fl ? "1" : "0") + ", " +
+                       (fr ? "1" : "0") + ")";
+            return neg + "grav_streq(" + l + ", " + r + ")";
+        }
+        // Value equality for kinds C cannot compare with `==`.
+        if ((e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) && e->left->type == e->right->type) {
+            const TypeRef &lt = e->left->type;
+            bool special = lt.isFunction() || lt.isBinary() || (lt.isArray() && !lt.isSlice()) ||
+                           (lt.isNamed() && (reg_->isInterface(lt.name) || reg_->isStruct(lt.name)));
+            if (special) {
+                if (lt.isArray()) { // needs addressable operands: compare through temps
+                    std::string ty = cTy(lt);
+                    return std::string(e->op == BinaryOp::Eq ? "" : "!") +
+                           "(memcmp((" + ty + "[]){" + l + "}, (" + ty + "[]){" + r + "}, sizeof(" +
+                           ty + ")) == 0)";
+                }
+                return std::string(e->op == BinaryOp::Eq ? "" : "!") + equalExpr(lt, l, r);
+            }
+        }
+        if (e->op == BinaryOp::Pow) {
+            if (e->type.kind == TypeRef::Kind::Float)
+                return "((" + cTy(e->type) + ")pow((double)(" + l + "), (double)(" + r + ")))";
+            return "((" + cTy(e->type) + ")grav_ipow((long long)(" + l + "), (long long)(" + r + ")))";
+        }
         return "(" + l + " " + binaryOpSymbol(e->op) + " " + r + ")";
     }
     if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
@@ -152,6 +218,8 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         if (e->target.isPointer())
             return "((" + cTy(e->target) + ")(" + emitExpr(*e->operand) + "))";
         // Named targets reuse the upcast/box logic; primitives do a C cast.
+        if (e->target.isNamed() && reg_->isEnum(e->target.name))
+            return "((" + cTy(e->target) + ")(" + emitExpr(*e->operand) + "))";
         if (e->target.isNamed()) return emitAs(*e->operand, e->target);
         std::string inner = emitExpr(*e->operand);
         return emitPrimCast(e->target, *e->operand, inner);
@@ -205,6 +273,14 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         return out + " } }";
     }
     if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
+        // `obj[k]` on a class with `operator[]` -> obj.op_index(k).
+        if (!e->overloadClass.empty()) {
+            std::vector<TypeRef> params;
+            if (const MethodInfo *mi = reg_->findMethod(e->overloadClass, e->overloadMethod))
+                params = mi->paramTypes;
+            std::string arg = params.empty() ? emitExpr(*e->index) : emitAs(*e->index, params[0]);
+            return methodCall(emitExpr(*e->base), e->base->type, e->overloadMethod, arg);
+        }
         std::string base = emitExpr(*e->base);
         std::string idx = emitExpr(*e->index);
         // Fixed arrays index through their `.data` member; slices and pointers
@@ -216,9 +292,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
     if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
         std::vector<TypeRef> params;
         if (const ClassInfo *ci = reg_->cls(e->className))
-            if (ci->constructor)
-                for (const auto &p : ci->constructor->params) params.push_back(p.type);
-        std::string out = ctorCName(e->className) + "(";
+            if (e->ctorIndex < static_cast<int>(ci->ctors.size()))
+                for (const auto &p : ci->ctors[e->ctorIndex]->params) params.push_back(p.type);
+        std::string out = ctorCName(e->className, e->ctorIndex) + "(";
         for (size_t i = 0; i < e->args.size(); ++i) {
             if (i) out += ", ";
             out += (i < params.size()) ? emitAs(*e->args[i], params[i])
@@ -300,8 +376,15 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return "grav_is_instance(" + emitExpr(*call.args[0]) + ", &" +
                        mangle(call.ownerClass) + "_typeinfo)";
             }
-            if (call.targetName == "free")
+            if (call.targetName == "free") {
+                // Class instances run their destructor chain before release.
+                const TypeRef &ft = call.args[0]->type;
+                if (ft.isNamed() && reg_->isClass(ft.name))
+                    return "grav_free_obj((void*)(" + emitExpr(*call.args[0]) + "))";
+                if (ft.isFunction()) // releases a closure's captured environment
+                    return "free((" + emitExpr(*call.args[0]) + ").env)";
                 return "free((void*)(" + emitExpr(*call.args[0]) + "))";
+            }
             if (call.targetName == "exit") return "exit(" + emitExpr(*call.args[0]) + ")";
             if (call.targetName == "panic")
                 return "grav_panic(" + emitExpr(*call.args[0]) + ")";
@@ -317,42 +400,10 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             if (call.targetName == "argc") return "grav_argc";
             if (call.targetName == "argv")
                 return "grav_argv_at(" + emitExpr(*call.args[0]) + ")";
-            if (call.targetName == "str") {
-                std::string a = emitExpr(*call.args[0]);
-                const TypeRef &t = call.args[0]->type;
-                switch (t.kind) {
-                    case TypeRef::Kind::String: return a;
-                    case TypeRef::Kind::Int:
-                        return t.isUnsigned
-                                   ? "grav_uint_to_str((unsigned long long)(" + a + "))"
-                                   : "grav_int_to_str((long long)(" + a + "))";
-                    case TypeRef::Kind::Float: return "grav_float_to_str(" + a + ")";
-                    case TypeRef::Kind::Bool:
-                        return "((" + a + ") ? \"true\" : \"false\")";
-                    case TypeRef::Kind::Binary: return "grav_bytes_to_str(" + a + ")";
-                    default:
-                        if (t.isNamed() && reg_->isEnum(t.name))
-                            return "grav_int_to_str((long long)(" + a + "))";
-                        return "\"\"";
-                }
-            }
+            if (call.targetName == "str") return emitToString(*call.args[0]);
             // print
-            std::string a = call.args.empty() ? "0" : emitExpr(*call.args[0]);
-            TypeRef t = call.args.empty() ? TypeRef::prim(TypeRef::Kind::Int)
-                                          : call.args[0]->type;
-            switch (t.kind) {
-                case TypeRef::Kind::Int:
-                    return t.isUnsigned
-                               ? "printf(\"%llu\\n\", (unsigned long long)(" + a + "))"
-                               : "printf(\"%lld\\n\", (long long)(" + a + "))";
-                case TypeRef::Kind::Float: return "printf(\"%f\\n\", " + a + ")";
-                case TypeRef::Kind::Bool:
-                    return "printf(\"%s\\n\", (" + a + ") ? \"true\" : \"false\")";
-                case TypeRef::Kind::String: return "printf(\"%s\\n\", " + a + ")";
-                case TypeRef::Kind::Binary:
-                    return "printf(\"%s\\n\", grav_bytes_to_str(" + a + "))";
-                default: return "printf(\"\\n\")";
-            }
+            if (call.args.empty()) return "puts(\"\")";
+            return emitPrint(*call.args[0]);
         }
         case CallKind::FreeFunction: {
             const auto &set = reg_->funcOverloads(call.targetName);
@@ -379,51 +430,39 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
         }
         case CallKind::InstanceMethod: {
             auto *mem = dynamic_cast<const MemberExpr *>(call.callee.get());
+            TypeRef recv = mem->object->type;
+            if (!(recv.isNamed() && (reg_->isClass(recv.name) || reg_->isInterface(recv.name))))
+                recv = TypeRef::named(call.ownerClass);
+            std::vector<TypeRef> params;
+            const MethodInfo *mi = call.ifaceDispatch
+                                       ? reg_->findInterfaceMethod(call.ownerClass, call.methodName)
+                                       : reg_->findMethod(call.ownerClass, call.methodName);
+            if (mi) params = mi->paramTypes;
+            std::string args = methodArgs(call.args, params);
             std::string obj = emitExpr(*mem->object);
-            std::string out;
-            if (call.ifaceDispatch) {
-                std::string itab = mangle(call.ownerClass) + "_ITAB";
-                std::vector<TypeRef> params;
-                if (const MethodInfo *mi =
-                        reg_->findInterfaceMethod(call.ownerClass, call.methodName))
-                    params = mi->paramTypes;
-                std::string disp = "((" + itab + "*)(" + obj + ").itab)->" +
-                                   memberCName(call.methodName);
-                std::string self = "(" + obj + ").obj";
-                out = disp + "(";
-                emitArgs(out, call, params, true, self);
-                out += ")";
-            } else {
-                std::string vt = vtableType(call.slotOwner);
-                std::string self = "(" + structName(call.slotOwner) + "*)(" + obj + ")";
-                std::string disp = "((" + vt + "*)((struct GravObject*)(" + obj +
-                                   "))->__vt)->" + memberCName(call.methodName);
-                std::vector<TypeRef> params;
-                if (const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName))
-                    params = mi->paramTypes;
-                out = disp + "(";
-                emitArgs(out, call, params, true, self);
-                out += ")";
-            }
-            // `a?.m(...)` guards the dispatch against a null receiver.
-            if (mem->optional) {
-                bool iface = mem->object->type.isNamed() &&
-                             reg_->isInterface(mem->object->type.name);
-                std::string guard = iface ? "(" + obj + ").obj != 0" : obj + " != 0";
-                if (call.type.isVoid())
-                    return "(" + guard + " ? (" + out + ", 0) : 0)";
-                std::string nul = call.type.kind == TypeRef::Kind::String ? "\"\"" : "0";
-                return "(" + guard + " ? " + out + " : " + nul + ")";
-            }
-            return out;
+            if (!mem->optional) return methodCall(obj, recv, call.methodName, args);
+            // `a?.m(...)`: a side-effect-free receiver keeps the cheap inline guard
+            // (and skips evaluating the arguments); anything else goes through a
+            // null-checking thunk so the receiver is evaluated once.
+            bool simple = dynamic_cast<const NameExpr *>(mem->object.get()) ||
+                          dynamic_cast<const SelfExpr *>(mem->object.get());
+            if (!simple) return methodCall(obj, recv, call.methodName, args, /*nullSafe=*/true);
+            bool iface = reg_->isInterface(recv.name);
+            std::string guard = iface ? "(" + obj + ").obj != 0" : obj + " != 0";
+            std::string out = methodCall(obj, recv, call.methodName, args);
+            if (call.type.isVoid()) return "(" + guard + " ? (" + out + ", 0) : 0)";
+            std::string nul = call.type.kind == TypeRef::Kind::String ? "\"\"" : "0";
+            return "(" + guard + " ? " + out + " : " + nul + ")";
         }
+        case CallKind::FnValue: return emitFnCall(call);
         case CallKind::SuperConstructor: {
             const ClassInfo *pc = reg_->cls(call.ownerClass);
-            if (!pc || !pc->constructor) return "((void)0)"; // parent has no ctor body
+            if (!pc || call.resolvedOverload >= static_cast<int>(pc->ctors.size()))
+                return "((void)0)"; // parent has no ctor body
             std::vector<TypeRef> params;
-            for (const auto &p : pc->constructor->params) params.push_back(p.type);
+            for (const auto &p : pc->ctors[call.resolvedOverload]->params) params.push_back(p.type);
             std::string self = "(" + structName(call.ownerClass) + "*)self";
-            std::string out = ctorInitCName(call.ownerClass) + "(";
+            std::string out = ctorInitCName(call.ownerClass, call.resolvedOverload) + "(";
             emitArgs(out, call, params, true, self);
             return out + ")";
         }
