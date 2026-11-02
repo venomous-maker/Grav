@@ -18,8 +18,16 @@ add_executable(gravc
         src/sema/symbols.cpp
         src/sema/typechecker.cpp
         src/sema/typechecker_expr.cpp
+        src/sema/typechecker_ops.cpp
+        src/sema/typechecker_lambda.cpp
+        src/sema/sanitize.cpp
         src/codegen/mangle.cpp
+        src/codegen/codegen_runtime.cpp
         src/codegen/codegen_types.cpp
+        src/codegen/codegen_flow.cpp
+        src/codegen/codegen_dispatch.cpp
+        src/codegen/codegen_lambda.cpp
+        src/codegen/codegen_owned.cpp
         src/codegen/codegen_func.cpp
         src/codegen/codegen_stmt.cpp
         src/codegen/codegen_expr.cpp
