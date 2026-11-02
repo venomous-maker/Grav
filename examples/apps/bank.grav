@@ -1,0 +1,179 @@
+// apps/bank.grav — a small banking system.
+//
+//   grav examples/apps/bank.grav --run
+//
+// An abstract Account with Savings and Checking subclasses, an interface for
+// anything that can produce a statement, custom exceptions for rule
+// violations, a HashMap index of accounts, a transaction log, monthly
+// interest/fees, and a formatted report built with StringBuilder.
+
+import "../../lib/std.grav"
+
+enum Kind { Deposit, Withdrawal, Transfer, Interest, Fee }
+
+struct Txn { kind: Kind  amount: long  note: string }
+
+class BankError extends Exception {
+    constructor(m: string) { super(m) }
+    public fn describe() -> string { return "BankError: ${self.msg}" }
+}
+class Overdrawn extends BankError {
+    constructor(id: string, short: long) { super("${id} would be overdrawn by ${Money.fmt(short)}") }
+}
+class UnknownAccount extends BankError {
+    constructor(id: string) { super("no account '${id}'") }
+}
+
+class Money {
+    // 12345 cents -> "123.45"
+    static fn fmt(cents: long) -> string {
+        let sign = cents < 0 ? "-" : ""
+        let c = cents < 0 ? -cents : cents
+        let frac = c % 100
+        return "${sign}${c / 100}.${frac < 10 ? "0" : ""}${frac}"
+    }
+}
+
+interface Statement { fn statement() -> string }
+
+abstract class Account implements Statement {
+    readonly id: string
+    protected owner: string
+    protected balance: long
+    protected log: Array<Txn>
+
+    constructor(id: string, owner: string) {
+        self.id = id
+        self.owner = owner
+        self.balance = 0
+        self.log = new Array<Txn>()
+    }
+    destructor() { free(self.log) }
+
+    abstract fn kindName() -> string
+    // How far below zero this account may go.
+    fn overdraftLimit() -> long { return 0 }
+    // Month-end processing (interest or fees).
+    abstract fn monthEnd()
+
+    fn record(kind: Kind, amount: long, note: string) {
+        self.log.push(Txn { kind: kind, amount: amount, note: note })
+    }
+    fn deposit(amount: long, note: string) {
+        if (amount <= 0) { throw new BankError("deposit must be positive") }
+        self.balance = self.balance + amount
+        self.record(Kind.Deposit, amount, note)
+    }
+    fn withdraw(amount: long, note: string) {
+        if (amount <= 0) { throw new BankError("withdrawal must be positive") }
+        let after = self.balance - amount
+        if (after < -self.overdraftLimit()) { throw new Overdrawn(self.id, -self.overdraftLimit() - after) }
+        self.balance = after
+        self.record(Kind.Withdrawal, amount, note)
+    }
+    fn getBalance() -> long { return self.balance }
+
+    fn statement() -> string {
+        let sb = new StringBuilder()
+        sb.append("${self.kindName()} ${self.id} (${self.owner})\n")
+        for (t in self.log) {
+            let sign = t.kind == Kind.Withdrawal || t.kind == Kind.Fee ? "-" : "+"
+            sb.append("  ").append(Str.padRight("${t.kind}", 11, " "))
+              .append(Str.padLeft("${sign}${Money.fmt(t.amount)}", 10, " "))
+              .append("  ").append(t.note).append("\n")
+        }
+        sb.append("  balance: ${Money.fmt(self.balance)}")
+        let out = sb.toString()
+        free(sb)
+        return out
+    }
+}
+
+class Savings extends Account {
+    private rateBasisPoints: int            // 125 = 1.25% per month
+    constructor(id: string, owner: string, rateBasisPoints: int) {
+        super(id, owner)
+        self.rateBasisPoints = rateBasisPoints
+    }
+    fn kindName() -> string { return "Savings" }
+    fn monthEnd() {
+        let interest = self.balance * self.rateBasisPoints / 10000
+        if (interest > 0) {
+            self.balance = self.balance + interest
+            self.record(Kind.Interest, interest, "monthly interest")
+        }
+    }
+}
+
+class Checking extends Account {
+    constructor(id: string, owner: string) { super(id, owner) }
+    fn kindName() -> string { return "Checking" }
+    fn overdraftLimit() -> long { return 5000 }          // $50 overdraft
+    fn monthEnd() {
+        if (self.balance < 0) {
+            self.balance = self.balance - 1500
+            self.record(Kind.Fee, 1500, "overdraft fee")
+        }
+    }
+}
+
+class Bank {
+    private accounts: HashMap<string, Account>
+    private order: Array<string>                        // stable report order
+    constructor() { self.accounts = new HashMap<string, Account>(); self.order = new Array<string>() }
+
+    fn open(acct: Account) -> Account {
+        self.accounts[acct.id] = acct
+        self.order.push(acct.id)
+        return acct
+    }
+    fn find(id: string) -> Account {
+        if (!self.accounts.containsKey(id)) { throw new UnknownAccount(id) }
+        return self.accounts[id]
+    }
+    fn transfer(from: string, to: string, amount: long) {
+        let a = self.find(from)
+        let b = self.find(to)
+        a.withdraw(amount, "transfer to ${to}")
+        b.deposit(amount, "transfer from ${from}")
+    }
+    fn monthEnd() { for (id in self.order) { self.find(id).monthEnd() } }
+    fn total() -> long {
+        let sum: long = 0
+        for (id in self.order) { sum += self.find(id).getBalance() }
+        return sum
+    }
+    fn report() {
+        for (id in self.order) { print(self.find(id).statement()) }
+        print("bank total: ${Money.fmt(self.total())}")
+    }
+}
+
+// Run an operation, reporting (not crashing on) rule violations.
+fn attempt(label: string, op: fn()) {
+    try {
+        op()
+        print("ok    ${label}")
+    } catch (e: BankError) {
+        print("FAIL  ${label}: ${e.describe()}")
+    }
+}
+
+fn main() {
+    let bank = new Bank()
+    bank.open(new Savings("S-1", "Ada", 125))
+    bank.open(new Checking("C-1", "Ada"))
+    bank.open(new Checking("C-2", "Grace"))
+
+    attempt("deposit 1000.00 to S-1", fn() => bank.find("S-1").deposit(100000, "salary"))
+    attempt("deposit 250.00 to C-1", fn() => bank.find("C-1").deposit(25000, "cash"))
+    attempt("transfer 300.00 S-1 -> C-2", fn() => bank.transfer("S-1", "C-2", 30000))
+    attempt("withdraw 290.00 from C-1", fn() => bank.find("C-1").withdraw(29000, "rent"))
+    attempt("withdraw 50.00 from C-1", fn() => bank.find("C-1").withdraw(5000, "groceries"))
+    attempt("deposit -5 to C-2", fn() => bank.find("C-2").deposit(-500, "typo"))
+    attempt("transfer to X-9", fn() => bank.transfer("C-2", "X-9", 100))
+
+    bank.monthEnd()
+    print("")
+    bank.report()
+}
