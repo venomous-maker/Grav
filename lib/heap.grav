@@ -1,0 +1,62 @@
+// lib/heap.grav — PriorityQueue<T>: a binary heap ordered by a comparison
+// function. push/pop are O(log n), peek is O(1). The element for which `cmp`
+// says "comes first" (cmp(a, b) < 0) is popped first:
+//
+//   let minFirst = new PriorityQueue<int>(fn(a, b) => a - b)
+//   let maxFirst = new PriorityQueue<int>(fn(a, b) => b - a)
+import "array.grav"
+
+class PriorityQueue<T> {
+    private items: Array<T>
+    private cmp: fn(T, T) -> int
+
+    constructor(cmp: fn(T, T) -> int) { self.items = new Array<T>(); self.cmp = cmp; }
+    destructor() { free(self.items); }
+
+    public fn push(item: T) {
+        self.items.push(item);
+        let i = self.items.size() - 1;
+        while (i > 0) {                                   // sift up
+            let parent = (i - 1) / 2;
+            if (self.cmp(self.items[i], self.items[parent]) >= 0) { break; }
+            self.items.swap(i, parent);
+            i = parent;
+        }
+    }
+    public fn pop() -> T {
+        if (self.items.isEmpty()) { panic("PriorityQueue.pop on an empty queue"); }
+        let top = self.items[0];
+        let last = self.items.pop();
+        let n = self.items.size();
+        if (n > 0) {
+            self.items[0] = last;
+            let i = 0;
+            while (true) {                                // sift down
+                let l = 2 * i + 1;
+                let r = l + 1;
+                let best = i;
+                if (l < n && self.cmp(self.items[l], self.items[best]) < 0) { best = l; }
+                if (r < n && self.cmp(self.items[r], self.items[best]) < 0) { best = r; }
+                if (best == i) { break; }
+                self.items.swap(i, best);
+                i = best;
+            }
+        }
+        return top;
+    }
+    public fn peek() -> T {
+        if (self.items.isEmpty()) { panic("PriorityQueue.peek on an empty queue"); }
+        return self.items[0];
+    }
+    public fn size() -> int { return self.items.size(); }
+    public fn length() -> int { return self.items.size(); }
+    public fn isEmpty() -> bool { return self.items.isEmpty(); }
+    public fn clear() { self.items.clear(); }
+    public fn contains(item: T) -> bool { return self.items.contains(item); }
+    // Every element, in priority order (the queue is left unchanged).
+    public fn toArray() -> Array<T> {
+        let out = self.items.copy();
+        out.sortBy(self.cmp);
+        return out;
+    }
+}
