@@ -235,6 +235,7 @@ bool TypeChecker::isDisplayable(const TypeRef &t) const {
         case TypeRef::Kind::Float:
         case TypeRef::Kind::Bool:
         case TypeRef::Kind::String:
+        case TypeRef::Kind::Any:
             return true;
         default: break;
     }
