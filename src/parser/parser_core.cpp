@@ -245,6 +245,8 @@ TypeRef Parser::parseType(const char *context) {
             base = TypeRef::named(parseQualifiedName(context));
             // Generic arguments: `Box<int>`, `Pair<int, string>`.
             if (check(TokenType::Less)) base.args = parseTypeArgs();
+            // `Future<T>`: the result of an async call, usable in any type position.
+            if (base.name == "Future" && base.args.size() == 1) base = TypeRef::future(base.args[0]);
             break;
         }
         default:
