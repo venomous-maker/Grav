@@ -56,6 +56,10 @@ struct NameExpr : Expr {
     // Set by the checker when the name resolves to a global / static value: the
     // C identifier to emit (otherwise the local `name` is used verbatim).
     std::string resolvedGlobal;
+    // Set when the name is a free function used as a value (`let f = double`):
+    // its fully-qualified name and chosen overload.
+    std::string fnRef;
+    int fnRefOverload = 0;
 };
 
 // `self` (or `this`) inside a method body.
@@ -69,6 +73,7 @@ enum class BinaryOp {
     BitAnd, BitOr, BitXor, Shl, Shr,
     Eq, NotEq, Greater, Less, GreaterEq, LessEq,
     And, Or,
+    Pow, // `a ** b`
 };
 const char *binaryOpSymbol(BinaryOp op);
 bool isComparison(BinaryOp op);
@@ -81,6 +86,12 @@ struct BinaryExpr : Expr {
     ExprPtr left;
     ExprPtr right;
     bool stringConcat = false; // set by checker: '+' on two strings
+    // Set by the checker when a class operator method implements this operator
+    // (`fn operator+(o: T)` is the method `op_add`). `negate` flips the result
+    // (`!=` falling back to `op_eq`).
+    std::string overloadMethod;
+    std::string overloadClass;
+    bool overloadNegate = false;
 };
 
 // Prefix unary: '!' (logical not) and '~' (bitwise not).
@@ -159,7 +170,11 @@ struct ArrayLiteralExpr : Expr {
 };
 
 // `base[index]` — element access on an array (or pointer). An lvalue.
+// On a class with `operator[]` it is a call to `op_index` (`op_index_set` when
+// assigned); `overloadClass` is then the receiver's class.
 struct IndexExpr : Expr {
+    std::string overloadClass;
+    std::string overloadMethod; // internal name of the chosen op_index / op_index_set
     ExprPtr base;
     ExprPtr index;
 };
@@ -184,6 +199,7 @@ struct MemberExpr : Expr {
 // `new ClassName(args)`.
 struct NewExpr : Expr {
     std::string className;   // as written; checker rewrites to FQ name
+    int ctorIndex = 0;       // chosen constructor overload (set by the checker)
     std::vector<TypeRef> typeArgs; // generic args, e.g. `new Box<int>(...)`
     std::vector<ExprPtr> args;
 };
@@ -208,6 +224,7 @@ enum class CallKind {
     Builtin,        // print(...)
     InstanceMethod, // obj.m(...)  -> virtual dispatch
     StaticMethod,   // Class.m(...)
+    FnValue,          // f(x) where f is a function value (lambda / function reference)
     SuperConstructor, // super(...)        -> run the parent constructor on self
     SuperMethod,    // super.m(...)        -> parent's method impl, non-virtual
 };
@@ -307,12 +324,30 @@ struct ForStmt : Stmt {
     Block body;
 };
 
-// `for (i in lo..hi) { ... }` — i takes lo, lo+1, …, hi-1 (`..`) or hi (`..=`).
+// `for (i in lo..hi [step s]) { ... }` — i takes lo, lo+s, … up to hi (exclusive
+// with `..`, inclusive with `..=`); s defaults to 1 and may be negative.
+// `for (x in xs)` / `for (i, x in xs)` iterate the elements of a fixed array, a
+// slice (variadic param), a `binary`, or a collection object exposing
+// `length()`/`size()` plus `get(i)`/`at(i)` (e.g. Array<T>, List<T>).
+enum class ForInKind { Range, Array, Slice, Bytes, Object };
 struct ForInStmt : Stmt {
     std::string var;
-    ExprPtr lo;
-    ExprPtr hi;
+    std::string indexVar;   // optional `i` in `for (i, x in xs)`
+    ExprPtr lo;             // range start, or the iterable for element loops
+    ExprPtr hi;             // null for element loops
+    ExprPtr step;           // optional `step` expression (ranges only)
     bool inclusive = false; // `..=` includes hi
+    Block body;
+    // Filled by the checker.
+    ForInKind iterKind = ForInKind::Range;
+    TypeRef varType;        // loop variable type (range counter / element)
+    std::string lenMethod;  // Object: `length` or `size`
+    std::string getMethod;  // Object: `get` or `at`
+};
+
+// `defer stmt` / `defer { ... }` — runs when the enclosing block exits (normal
+// fall-through, `return`, `break`, `continue`), last-registered first.
+struct DeferStmt : Stmt {
     Block body;
 };
 
@@ -324,13 +359,17 @@ struct ThrowStmt : Stmt {
     ExprPtr value;
 };
 
-// `try { ... } catch (e: Type) { ... } [finally { ... }]`.
+// `try { ... } catch (e: A) { ... } catch (e: B) { ... } [finally { ... }]`.
+// Catch clauses are tried in order; the first whose class matches handles it.
+struct CatchClause {
+    std::string var;
+    TypeRef type;          // a class type
+    Block block;
+    int line = 0, col = 0;
+};
 struct TryStmt : Stmt {
     Block tryBlock;
-    bool hasCatch = false;
-    std::string catchVar;
-    TypeRef catchType;     // a class type
-    Block catchBlock;
+    std::vector<CatchClause> catches;
     bool hasFinally = false;
     Block finallyBlock;
 };
@@ -360,16 +399,32 @@ struct MethodDecl {
     Access access = Access::Public;
     bool isStatic = false;
     bool isAbstract = false;
+    // `name` is the internal (C-level) name: overloads get a signature suffix
+    // during symbol registration. `sourceName` is the name as written ("" until
+    // registration; then equal to `name` for non-overloaded methods).
     std::string name;
+    std::string sourceName;
+    // `fn mapTo<U>(...)`: a generic method, instantiated per `obj.mapTo::<X>(...)`
+    // call (as `mapTo$X`) before symbol registration; the template is not emitted.
+    std::vector<std::string> typeParams;
     std::vector<Param> params;
     TypeRef returnType; // Void if omitted
     Block body;
     bool hasBody = true;
+    bool isFinal = false; // `final fn`: cannot be overridden
     int line = 0, col = 0;
 };
 
 struct ConstructorDecl {
     std::vector<Param> params;
+    Block body;
+    bool present = false;
+    int line = 0, col = 0;
+};
+
+// `destructor() { ... }` — runs when `free(obj)` releases an instance (virtually:
+// the dynamic type's destructor runs, then each base's, most-derived first).
+struct DestructorDecl {
     Block body;
     bool present = false;
     int line = 0, col = 0;
@@ -414,8 +469,11 @@ struct ClassDecl : Decl {
     std::vector<Param> delegates;
     std::vector<FieldDecl> fields;
     std::vector<StaticFieldDecl> staticFields;
-    ConstructorDecl constructor;
+    ConstructorDecl constructor;          // the first constructor (if any)
+    std::vector<ConstructorDecl> extraCtors; // further overloads, in source order
+    DestructorDecl destructor;
     std::vector<MethodDecl> methods;
+    bool isFinal = false; // `final class`: cannot be extended
 };
 
 struct InterfaceDecl : Decl {
@@ -480,6 +538,26 @@ struct TypeAliasDecl : Decl {
 // (for #includes, globals, and helper functions/macros).
 struct CBlockDecl : Decl {
     std::string code;
+};
+
+// `fn(x: int, y) => x + y` or `fn(x: int) -> int { ... }` — an anonymous
+// function value. Parameter types may be omitted when the expected function type
+// is known (an argument, a typed `let`, a `return`). Captured outer variables are
+// copied (by value) into a heap environment when the lambda is created.
+struct LambdaExpr : Expr {
+    std::vector<Param> params;     // untyped params have type Kind::Error
+    std::vector<bool> paramTyped;  // parallel: did the source give a type?
+    bool hasReturnType = false;
+    TypeRef returnType;
+    bool isArrow = false;          // `=> expr` form
+    ExprPtr exprBody;              // arrow form
+    Block body;                    // block form
+    // Filled by the checker.
+    struct Capture { std::string name; TypeRef type; };
+    std::vector<Capture> captures;
+    TypeRef fnType;
+    // Filled by codegen (lifting order); mutable because emission is const.
+    mutable int liftId = -1;
 };
 
 struct Program {
