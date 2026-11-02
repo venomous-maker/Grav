@@ -16,6 +16,7 @@ std::string typeRefName(const TypeRef &t) {
         case TypeRef::Kind::Bool: return "bool";
         case TypeRef::Kind::String: return "string";
         case TypeRef::Kind::Binary: return "binary";
+        case TypeRef::Kind::Any: return "any";
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Named: {
             if (t.args.empty()) return t.name;
