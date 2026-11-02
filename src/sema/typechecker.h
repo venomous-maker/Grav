@@ -48,7 +48,48 @@ private:
     void checkForIn(ForInStmt &s);
     void checkThrow(ThrowStmt &s);
     void checkTry(TryStmt &s);
+    void checkDefer(DeferStmt &s);
     void requireBool(Expr &cond, const char *ctx);
+    // Errors when a non-void body can fall off its end without returning.
+    void checkFallthrough(const Block &body, const TypeRef &ret, int line, int col,
+                          const std::string &what);
+
+    // typechecker_lambda.cpp — lambdas, captures, function values.
+    TypeRef checkLambda(LambdaExpr &e);
+    // checkExpr with an expected type, used to infer untyped lambda parameters.
+    TypeRef checkExprExpect(Expr &e, const TypeRef &expected);
+    // Records that local `name` (declared in scope `scopeIdx`) is used inside
+    // the lambdas nested deeper than it; returns true if it was captured.
+    bool noteCapture(const std::string &name, const TypeRef &type, size_t scopeIdx);
+    // Is local `name` captured by the innermost lambda (so it may not be assigned)?
+    bool isCapturedHere(const std::string &name);
+    // A free function named in value position: its type as a function value.
+    std::optional<TypeRef> tryFunctionRef(NameExpr &e);
+    // `f(args)` where f evaluates to a function value.
+    TypeRef checkFnValueCall(CallExpr &e, const TypeRef &fnType);
+
+    // typechecker_ops.cpp — operator overloading, element loops, printing.
+    // Picks among same-named method overloads for a call (exact match first, then
+    // a unique assignable one) and checks the arguments. Reports and returns null
+    // when nothing matches. `cands` must already be filtered to static/instance.
+    const MethodInfo *resolveMethodOverload(const std::vector<const MethodInfo *> &cands,
+                                            std::vector<ExprPtr> &args, int line, int col,
+                                            const std::string &what);
+    // Chooses a constructor overload of `classFq` for `args` (checks them); returns
+    // its index, or -1 after reporting an error.
+    int resolveCtor(const std::string &classFq, std::vector<ExprPtr> &args, int line, int col,
+                    const std::string &what);
+    // Overload choice for a single right-hand operand / index (no expressions).
+    const MethodInfo *pickByOperand(const std::vector<const MethodInfo *> &cands,
+                                    const TypeRef &operand) const;
+    // A class operator method (`fn operator+`) implementing `e`, if any.
+    std::optional<TypeRef> tryOperatorOverload(BinaryExpr &e, const TypeRef &lt,
+                                               const TypeRef &rt);
+    // `obj[i]` on a class with `operator[]`; nullopt when `base` is not such a class.
+    std::optional<TypeRef> tryIndexOverload(IndexExpr &e, const TypeRef &base);
+    // Values print/str/interpolation can render: primitives, enums (member name),
+    // and classes/interfaces with `toString() -> string`.
+    bool isDisplayable(const TypeRef &t) const;
 
     // expressions (typechecker_expr.cpp)
     TypeRef checkExpr(Expr &expr);
@@ -108,6 +149,7 @@ private:
                            const std::string &what);
 
     // A local binding tracked for type, const-ness, and use (for warnings).
+public:
     struct LocalVar {
         TypeRef type;
         bool used = false;
@@ -117,6 +159,8 @@ private:
         std::string name;
     };
     LocalVar *lookupLocal(const std::string &name);
+    LocalVar *lookupLocalAt(const std::string &name, size_t &scopeIdx);
+private:
 
     const Registry *reg_ = nullptr;
     std::vector<GravError> errors_;
@@ -130,6 +174,10 @@ private:
     bool inStatic_ = false;
     bool inAsync_ = false; // true while checking an `async fn` body
     int loopDepth_ = 0; // for validating break/continue
+    bool inDefer_ = false; // checking a `defer` body (no `return` allowed)
+    struct LambdaCtx { LambdaExpr *lam; size_t scopeBase; };
+    std::vector<LambdaCtx> lambdaStack_; // enclosing lambdas, innermost last
+    const TypeRef *expected_ = nullptr;  // expected type for the next lambda
 
 public:
     const std::vector<GravError> &warnings() const { return warnings_; }
