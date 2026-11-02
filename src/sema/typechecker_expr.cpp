@@ -418,10 +418,6 @@ TypeRef TypeChecker::checkIs(IsExpr &e) {
 TypeRef TypeChecker::checkAwait(AwaitExpr &e) {
     TypeRef t = checkExpr(*e.operand);
     if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
-    if (!inAsync_) {
-        error(e.line, e.col, "'await' is only allowed inside an 'async fn'");
-        return TypeRef::prim(TypeRef::Kind::Error);
-    }
     if (!t.isFuture()) {
         error(e.line, e.col,
               "'await' expects a Future (from an async call), but got " + typeRefName(t));
@@ -908,7 +904,8 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 error(e.line, e.col, "free expects exactly 1 argument");
             } else {
                 TypeRef t = checkExpr(*e.args[0]);
-                bool ok = t.isPointer() || t.isFunction() || (t.isNamed() && reg_->isClass(t.name));
+                bool ok = t.isPointer() || t.isFunction() || t.isFuture() ||
+                          (t.isNamed() && reg_->isClass(t.name));
                 if (!t.isError() && !ok)
                     error(e.args[0]->line, e.args[0]->col,
                           "free expects a class instance or pointer, got " + typeRefName(t));
