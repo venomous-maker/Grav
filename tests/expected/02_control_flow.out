@@ -1,0 +1,37 @@
+--- if / else ---
+-5 is negative
+0 is zero
+7 is small
+42 is large
+--- while & do/while ---
+w0 w1 w2 
+d3 d2 d1 
+--- C-style for ---
+1 2 4 8 16 32 64 
+--- ranges ---
+0 1 2 3 4 
+1 2 3 4 5 
+0 5 10 15 20 
+10 7 4 1 
+--- for-each ---
+sum of primes = 41
+[0]=2 [2]=5 [4]=11 
+--- break & continue ---
+1 2 4 5 7 8 10 
+--- switch / match ---
+Red -> Green -> Amber -> Red -> Green
+sat: weekend
+wed: weekday
+xyz: unknown
+--- defer ---
+  cleanup 2 (runs first)
+  cleanup 1 (runs last)
+normal return
+  cleanup 2 (runs first)
+  cleanup 1 (runs last)
+early return
+  body 0
+  end of iteration 0
+  end of iteration 1
+  body 2
+  end of iteration 2
