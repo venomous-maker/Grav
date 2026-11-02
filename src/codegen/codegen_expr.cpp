@@ -53,7 +53,63 @@ std::string CodeGen::escapeC(const std::string &s) {
     return out;
 }
 
+std::string CodeGen::boxAny(const Expr &e) const {
+    const TypeRef &t = e.type;
+    std::string v = emitExpr(e);
+    switch (t.kind) {
+        case TypeRef::Kind::Any: return v;
+        case TypeRef::Kind::Null: return "grav_any_null()";
+        case TypeRef::Kind::Int:
+            return t.isUnsigned ? "grav_any_uint((unsigned long long)(" + v + "))"
+                                : "grav_any_int((long long)(" + v + "))";
+        case TypeRef::Kind::Float: return "grav_any_float((double)(" + v + "))";
+        case TypeRef::Kind::Bool: return "grav_any_bool(" + v + ")";
+        case TypeRef::Kind::String: return "grav_any_str(" + v + ")";
+        case TypeRef::Kind::Function:
+            return "grav_any_fn(" + v + ", \"" + escapeC(typeRefName(t)) + "\")";
+        default: break;
+    }
+    if (t.isNamed() && reg_->isEnum(t.name))
+        return "grav_any_enum((long long)(" + v + "), \"" + t.name + "\", " + enumNameFn(t.name) + "_any)";
+    if (t.isNamed() && reg_->isInterface(t.name)) return "grav_any_obj((" + v + ").obj)";
+    return "grav_any_obj((void*)(" + v + "))";
+}
+
+std::string CodeGen::unboxAny(const std::string &c, const TypeRef &t) const {
+    switch (t.kind) {
+        case TypeRef::Kind::Any: return c;
+        case TypeRef::Kind::Int:
+            return "((" + cTy(t) + ")" + (t.isUnsigned ? "grav_any_to_uint(" : "grav_any_to_int(") + c + "))";
+        case TypeRef::Kind::Float: return "((" + cTy(t) + ")grav_any_to_float(" + c + "))";
+        case TypeRef::Kind::Bool: return "grav_any_to_bool(" + c + ")";
+        case TypeRef::Kind::String: return "grav_any_to_str(" + c + ")";
+        case TypeRef::Kind::Function:
+            return "grav_any_to_fn(" + c + ", \"" + escapeC(typeRefName(t)) + "\")";
+        default: break;
+    }
+    if (t.isNamed() && reg_->isEnum(t.name))
+        return "((" + cTy(t) + ")grav_any_to_enum(" + c + ", \"" + t.name + "\"))";
+    return "((" + cTy(t) + ")grav_any_to_obj(" + c + ", &" + mangle(t.name) + "_typeinfo))";
+}
+
+std::string CodeGen::isAnyTest(const std::string &c, const TypeRef &t) const {
+    switch (t.kind) {
+        case TypeRef::Kind::Any: return "1";
+        case TypeRef::Kind::Int: return "grav_any_is_int(" + c + ")";
+        case TypeRef::Kind::Float: return "grav_any_is_float(" + c + ")";
+        case TypeRef::Kind::Bool: return "grav_any_is_bool(" + c + ")";
+        case TypeRef::Kind::String: return "grav_any_is_str(" + c + ")";
+        case TypeRef::Kind::Function:
+            return "grav_any_is_fn(" + c + ", \"" + escapeC(typeRefName(t)) + "\")";
+        default: break;
+    }
+    if (t.isNamed() && reg_->isEnum(t.name)) return "grav_any_is_enum(" + c + ", \"" + t.name + "\")";
+    return "grav_any_is_obj(" + c + ", &" + mangle(t.name) + "_typeinfo)";
+}
+
 std::string CodeGen::emitAs(const Expr &expr, const TypeRef &target) const {
+    // Values flowing into an `any` slot are boxed.
+    if (target.isAny() && !expr.type.isAny()) return boxAny(expr);
     std::string e = emitExpr(expr);
     // A null function value.
     if (target.isFunction() && expr.type.kind == TypeRef::Kind::Null)
@@ -147,6 +203,16 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
                 iface = e->right.get();
             if (iface)
                 return "((" + emitExpr(*iface) + ").obj " + binaryOpSymbol(e->op) + " 0)";
+            // `x == null` on an any tests for an empty box.
+            const Expr *anyv = nullptr;
+            if (e->left->type.isAny() && e->right->type.kind == TypeRef::Kind::Null) anyv = e->left.get();
+            else if (e->right->type.isAny() && e->left->type.kind == TypeRef::Kind::Null) anyv = e->right.get();
+            if (anyv)
+                return "((" + emitExpr(*anyv) + ").tag " + binaryOpSymbol(e->op) + " GRAV_ANY_NULL)";
+            // `any == value`: box the other side and compare the boxed values.
+            if ((e->left->type.isAny() || e->right->type.isAny()) && e->overloadMethod.empty())
+                return std::string(e->op == BinaryOp::Eq ? "" : "!") + "grav_any_eq(" +
+                       boxAny(*e->left) + ", " + boxAny(*e->right) + ")";
             // Function values compare their code pointer against null.
             const Expr *fnv = nullptr;
             if (e->left->type.isFunction() && e->right->type.kind == TypeRef::Kind::Null)
@@ -214,6 +280,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
                emitAs(*e->elseExpr, e->type) + ")";
     }
     if (auto *e = dynamic_cast<const AsExpr *>(&expr)) {
+        // Into / out of `any`: box, or a checked unbox (panics on the wrong type).
+        if (e->target.isAny()) return boxAny(*e->operand);
+        if (e->operand->type.isAny()) return unboxAny(emitExpr(*e->operand), e->target);
         // Pointer casts spell out the C pointer type explicitly.
         if (e->target.isPointer())
             return "((" + cTy(e->target) + ")(" + emitExpr(*e->operand) + "))";
@@ -225,6 +294,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         return emitPrimCast(e->target, *e->operand, inner);
     }
     if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
+        if (e->operand->type.isAny()) return isAnyTest(emitExpr(*e->operand), e->target);
         return "grav_is_instance(" + emitExpr(*e->operand) + ", &" +
                mangle(e->className) + "_typeinfo)";
     }
@@ -370,6 +440,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
     switch (call.kind) {
         case CallKind::Builtin: {
             if (call.targetName == "typename") {
+                if (call.args[0]->type.isAny()) return "grav_any_typename(" + emitExpr(*call.args[0]) + ")";
                 return "grav_typename(" + emitExpr(*call.args[0]) + ")";
             }
             if (call.targetName == "isInstance") {
