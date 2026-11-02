@@ -166,9 +166,9 @@ Calling a `null` function value stops the program with an error message.
 |--------|------|
 | `forEach(f)`, `forEachIndexed(f)` | call `f` for each element |
 | `map(f)` | a new array of `f(x)` (same element type) |
-| `mapTo::<U>(f)` | a new array of `f(x)` with element type `U` |
+| `mapTo(f)` / `mapTo::<U>(f)` | a new array of `f(x)` with element type `U` (inferred from `f`) |
 | `filter(pred)` | the elements where `pred(x)` is true |
-| `reduce(init, f)`, `fold::<A>(init, f)` | combine all elements into one value |
+| `reduce(init, f)`, `fold(init, f)` | combine all elements into one value (`fold` may change the type) |
 | `any(pred)`, `all(pred)`, `countWhere(pred)`, `findIndex(pred)` | queries |
 | `sortBy(cmp)` | stable sort; `cmp(a, b) < 0` puts `a` first |
 
