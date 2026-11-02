@@ -56,9 +56,24 @@ TypeRef TypeChecker::numericPromote(const TypeRef &a, const TypeRef &b) {
     return TypeRef::integer(bits, a.isUnsigned || b.isUnsigned);
 }
 
+bool TypeChecker::isBoxable(const TypeRef &t) const {
+    switch (t.kind) {
+        case TypeRef::Kind::Int: case TypeRef::Kind::Float: case TypeRef::Kind::Bool:
+        case TypeRef::Kind::String: case TypeRef::Kind::Null: case TypeRef::Kind::Function:
+        case TypeRef::Kind::Any:
+            return true;
+        case TypeRef::Kind::Named:
+            return reg_->isClass(t.name) || reg_->isInterface(t.name) || reg_->isEnum(t.name);
+        default:
+            return false;
+    }
+}
+
 bool TypeChecker::isAssignable(const TypeRef &from, const TypeRef &to) const {
     if (from.isError() || to.isError()) return true; // suppress cascades
     if (from == to) return true;
+    // Anything boxable flows into `any`; getting it back out needs `as`.
+    if (to.isAny()) return isBoxable(from);
     // Numeric conversions follow C-like rules: any integer flows into any integer
     // or float (widening); float -> integer is narrowing and needs an explicit cast.
     if (from.isNumeric() && to.isNumeric()) {
@@ -95,6 +110,7 @@ bool TypeChecker::checkAccess(Access a, const std::string &definingClass) const 
 const std::vector<GravError> &TypeChecker::check(Program &program,
                                                  const Registry &reg) {
     reg_ = &reg;
+    program_ = &program;
     for (auto &declPtr : program.decls) {
         Decl *d = declPtr.get();
         if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
@@ -378,7 +394,7 @@ void TypeChecker::checkLet(LetStmt &s) {
 void TypeChecker::checkAssign(AssignStmt &s) {
     // A lambda assigned to a typed variable/field takes its parameter types from it.
     TypeRef valueType;
-    if (dynamic_cast<LambdaExpr *>(s.value.get())) {
+    if (dynamic_cast<LambdaExpr *>(s.value.get()) || dynamic_cast<NewExpr *>(s.value.get())) {
         TypeRef tt = checkExpr(*s.target);
         valueType = checkExprExpect(*s.value, tt);
     } else {
