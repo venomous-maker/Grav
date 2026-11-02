@@ -1,0 +1,23 @@
+--- catch by type ---
+withdrew 50, 150 left
+InsufficientFunds: short by 300 (needed 300)
+other: ValueError: amount must be positive
+--- catch by base class ---
+bank problem: InsufficientFunds: short by 89
+generic: ValueError: amount must be positive
+--- finally ---
+  (finally for 5)
+positive
+  (finally for -5)
+caught non-positive
+  loop 0
+  finally 0
+  loop 1
+  finally 1
+  finally 2
+--- re-throw and nesting ---
+inner saw: not a positive number: '-3'; re-throwing
+inner finally
+outer caught: ValueError: not a positive number: '-3'
+--- state survives into catch ---
+stopped after 2 values: not a positive number: 'x'
