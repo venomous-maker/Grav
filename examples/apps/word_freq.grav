@@ -1,0 +1,68 @@
+// apps/word_freq.grav — text statistics.
+//
+//   grav examples/apps/word_freq.grav --run
+//
+// Tokenizes a passage into lowercase words, counts them in a HashMap, then
+// reports the most frequent words (ties broken alphabetically) with a bar
+// chart, plus word-length statistics — using lambdas, sortBy, mapTo, and
+// StringBuilder.
+
+import "../../lib/std.grav"
+
+const TEXT: string = "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness."
+
+struct Entry { word: string  count: int }
+
+// Splits on anything that is not a letter, lowercasing as it goes.
+fn tokenize(text: string) -> Array<string> {
+    let words = new Array<string>()
+    let sb = new StringBuilder()
+    let n = Str.length(text)
+    for (i in 0..n) {
+        let c = Str.charAt(text, i)
+        let isUpper = c >= 65 && c <= 90
+        let isLower = c >= 97 && c <= 122
+        if (isUpper || isLower) {
+            sb.appendChar(isUpper ? c + 32 : c)
+        } else if (!sb.isEmpty()) {
+            words.push(sb.toString())
+            sb.clear()
+        }
+    }
+    if (!sb.isEmpty()) { words.push(sb.toString()) }
+    free(sb)
+    return words
+}
+
+fn bar(n: int, scale: int) -> string { return Str.repeat("#", n * scale) }
+
+fn main() {
+    let words = tokenize(TEXT)
+    print("words: ${words.length()}")
+
+    let counts = new HashMap<string, int>()
+    for (w in words) { counts[w] = counts.getOr(w, 0) + 1 }
+    print("distinct: ${counts.size()}")
+
+    // Build (word, count) entries and sort: count desc, then word asc.
+    let entries = counts.keys().mapTo::<Entry>(fn(w) => Entry { word: w, count: counts[w] })
+    entries.sortBy(fn(a, b) => a.count != b.count ? b.count - a.count : Str.compare(a.word, b.word))
+
+    print("")
+    print("top words:")
+    for (i, e in entries) {
+        if (i >= 8) { break }
+        print("  ${Str.padRight(e.word, 8, " ")} ${Str.padLeft(str(e.count), 2, " ")} ${bar(e.count, 2)}")
+    }
+
+    let lengths = words.mapTo::<int>(fn(w) => Str.length(w))
+    let total = lengths.reduce(0, fn(a, b) => a + b)
+    let longest = words.fold::<string>("", fn(best, w) => Str.length(w) > Str.length(best) ? w : best)
+    let singles = entries.countWhere(fn(e) => e.count == 1)
+    print("")
+    print("average word length: ${(total as double) / (words.length() as double)}")
+    print("longest word: ${longest} (${Str.length(longest)} letters)")
+    print("words used once: ${singles}")
+    let once = entries.filter(fn(e) => e.count == 1).mapTo::<string>(fn(e) => e.word)
+    print("  ${Str.join(once, ", ")}")
+}
