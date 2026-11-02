@@ -40,6 +40,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     if (!hoisted_.empty()) head += "/* hoisted includes */\n" + hoisted_ + "\n";
     std::string thunks;
     if (!lambdaDecls_.empty()) thunks += "/* closures: environments and constructors */\n" + lambdaDecls_;
+    if (!asyncDecls_.empty()) thunks += "/* async functions: task records and spawners */\n" + asyncDecls_;
     if (!thunks_.empty()) {
         thunks += "/* dispatch thunks: evaluate the receiver once, then dispatch */\n";
         for (const auto &[name, def] : thunks_) thunks += def;
@@ -94,8 +95,8 @@ std::string CodeGen::cTy(const TypeRef &t) const {
     if (t.isNamed() && reg_->isStruct(t.name)) return structName(t.name);
     // Enums lower to a C enum type (an int), spelled by their tag name.
     if (t.isNamed() && reg_->isEnum(t.name)) return structName(t.name);
-    // A Future<T> is resolved eagerly, so at the C level it *is* its value type.
-    if (t.isFuture()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void));
+    // A Future<T> is a handle to a task on the worker pool.
+    if (t.isFuture()) return "GravTask*";
     // A pointer is the C pointer to the (interface-aware) pointee spelling.
     if (t.isPointer()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void)) + "*";
     // A slice (variadic) is a bare pointer; a fixed-length array is a value struct.
