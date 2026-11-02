@@ -17,6 +17,7 @@ void CodeGen::emitPrelude() {
 #include <math.h>
 #include <setjmp.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 /* Locals at real risk across setjmp/longjmp are declared volatile by the
@@ -38,6 +39,16 @@ void CodeGen::emitPrelude() {
 #define GRAV_COLD
 #endif
 
+/* Grav has no garbage collector, so objects alive at exit are expected: keep
+   AddressSanitizer (`--sanitize`) focused on real memory errors. */
+#if defined(__SANITIZE_ADDRESS__)
+const char* __asan_default_options(void) { return "detect_leaks=0"; }
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+const char* __asan_default_options(void) { return "detect_leaks=0"; }
+#endif
+#endif
+
 static GRAV_COLD GRAV_NORETURN void grav_panic(const char* m) {
     fflush(stdout); fprintf(stderr, "panic: %s\n", m); exit(1);
 }
@@ -56,7 +67,7 @@ static void* grav_zalloc(size_t n) {
 }
 static const char* grav_env(const char* n) { const char* v = getenv(n); return v ? v : ""; }
 static const char* grav_cwd(void) {
-    static char b[4096]; return getcwd(b, sizeof b) ? b : "";
+    static _Thread_local char b[4096]; return getcwd(b, sizeof b) ? b : "";
 }
 
 typedef struct GravTypeInfo {
@@ -223,9 +234,10 @@ static const char* grav_input(void) {
    `grav_top` points at the innermost frame so a line mark is a single store. */
 typedef struct GravFrame { const char* fn; const char* file; int line; } GravFrame;
 #define GRAV_MAXFRAMES 512
-static GravFrame grav_frames[GRAV_MAXFRAMES + 1]; /* last slot absorbs overflow */
-static int grav_nframes = 0;
-static GravFrame* grav_top = &grav_frames[GRAV_MAXFRAMES];
+/* Per thread: every thread (main and async workers) has its own call stack. */
+static _Thread_local GravFrame grav_frames[GRAV_MAXFRAMES + 1]; /* last slot absorbs overflow */
+static _Thread_local int grav_nframes = 0;
+static _Thread_local GravFrame* grav_top = 0; /* set by the first grav_enter */
 #ifdef GRAV_NO_TRACE
 #define grav_enter(fn, file) ((void)0)
 #define grav_leave() ((void)0)
@@ -252,9 +264,10 @@ typedef struct GravExc {
     GravFrame trace[GRAV_MAXFRAMES]; int ntrace;
 } GravExc;
 #define GRAV_MAXTRY 256
-static jmp_buf grav_jmp_stack[GRAV_MAXTRY];
-static int grav_jmp_top = 0;
-static GravExc grav_current_exc;
+/* Per thread: handlers and the in-flight exception never leak across threads. */
+static _Thread_local jmp_buf grav_jmp_stack[GRAV_MAXTRY];
+static _Thread_local int grav_jmp_top = 0;
+static _Thread_local GravExc grav_current_exc;
 static inline int grav_try_push(void) {
     if (GRAV_UNLIKELY(grav_jmp_top >= GRAV_MAXTRY)) grav_panic("try blocks nested too deeply");
     return grav_jmp_top++;
@@ -294,6 +307,208 @@ static GRAV_NORETURN void grav_rethrow(void) {
                 : (grav_current_exc.type ? grav_current_exc.type->name : "?"));
     grav_print_trace(grav_current_exc.trace, grav_current_exc.ntrace);
     exit(1);
+}
+
+/* ---- async tasks: a worker pool of GRAV_MAXPROCS threads ------------------
+   An async call becomes a task queued for the pool; `await` waits for it. A task
+   that is awaited before any worker picked it up runs on the awaiting thread,
+   so a bounded pool can never deadlock on tasks waiting for tasks. An exception
+   escaping a task is stored and re-thrown by `await`. */
+typedef struct GravTask {
+    void (*run)(struct GravTask*);   /* executes the body, storing the result */
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int state;                       /* 0 queued, 1 running, 2 done */
+    int failed, awaited;
+    GravExc* exc;                    /* heap copy of the escaped exception */
+    void* result;                    /* the result slot inside the task record */
+    int refs;                        /* workers holding it (guarded by grav_pool_mu) */
+    struct GravTask* next;           /* run-queue link */
+    struct GravTask* allNext;        /* every task, for the join at exit */
+} GravTask;
+
+static pthread_mutex_t grav_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t grav_pool_cv = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t grav_refs_cv = PTHREAD_COND_INITIALIZER;  /* a worker released a task */
+static GravTask *grav_q_head = 0, *grav_q_tail = 0, *grav_all_tasks = 0;
+static int grav_workers = 0, grav_maxprocs = 0;
+
+/* Worker count: GRAV_MAXPROCS from the environment, else the CPU count. */
+static int grav_max_procs(void) {
+    pthread_mutex_lock(&grav_pool_mu);
+    if (grav_maxprocs <= 0) {
+        const char* e = getenv("GRAV_MAXPROCS");
+        int n = e ? atoi(e) : 0;
+        if (n <= 0) n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+        grav_maxprocs = n > 0 ? n : 1;
+    }
+    int n = grav_maxprocs;
+    pthread_mutex_unlock(&grav_pool_mu);
+    return n;
+}
+/* Change the limit; the pool grows lazily up to it (it never shrinks). */
+static void grav_set_max_procs(int n) {
+    pthread_mutex_lock(&grav_pool_mu);
+    grav_maxprocs = n > 0 ? n : 1;
+    pthread_mutex_unlock(&grav_pool_mu);
+}
+
+static void grav_task_exec(GravTask* t) {
+    pthread_mutex_lock(&t->mu);
+    if (t->state != 0) { pthread_mutex_unlock(&t->mu); return; }   /* someone else has it */
+    t->state = 1;
+    pthread_mutex_unlock(&t->mu);
+    /* Run under a handler of our own so an escaping exception is captured into
+       the task instead of unwinding whatever this thread was doing. */
+    int nf = grav_nframes;
+    int slot = grav_try_push();
+    if (setjmp(grav_jmp_stack[slot]) == 0) {
+        t->run(t);
+        grav_jmp_top = slot;
+    } else {
+        grav_jmp_top = slot;
+        grav_frames_restore(nf);
+        GravExc* copy = (GravExc*)grav_alloc(sizeof(GravExc));
+        memcpy(copy, &grav_current_exc, sizeof(GravExc));
+        t->exc = copy;
+        t->failed = 1;
+    }
+    pthread_mutex_lock(&t->mu);
+    t->state = 2;
+    pthread_cond_broadcast(&t->cv);
+    pthread_mutex_unlock(&t->mu);
+}
+
+static void* grav_worker(void* arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&grav_pool_mu);
+        while (!grav_q_head) pthread_cond_wait(&grav_pool_cv, &grav_pool_mu);
+        GravTask* t = grav_q_head;
+        grav_q_head = t->next;
+        if (!grav_q_head) grav_q_tail = 0;
+        t->refs++; /* keeps free(future) from releasing it while we look at it */
+        pthread_mutex_unlock(&grav_pool_mu);
+        grav_task_exec(t);
+        pthread_mutex_lock(&grav_pool_mu);
+        t->refs--;
+        pthread_cond_broadcast(&grav_refs_cv);
+        pthread_mutex_unlock(&grav_pool_mu);
+    }
+    return 0;
+}
+
+static GravTask* grav_spawn(GravTask* t, void (*run)(GravTask*), void* result) {
+    t->run = run;
+    t->result = result;
+    pthread_mutex_init(&t->mu, 0);
+    pthread_cond_init(&t->cv, 0);
+    int limit = grav_max_procs();
+    pthread_mutex_lock(&grav_pool_mu);
+    t->allNext = grav_all_tasks;
+    grav_all_tasks = t;
+    if (grav_q_tail) grav_q_tail->next = t; else grav_q_head = t;
+    grav_q_tail = t;
+    /* Start another worker while under the limit (lazily, one per spawn). */
+    if (grav_workers < limit) {
+        pthread_t th;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&th, &attr, grav_worker, 0) == 0) grav_workers++;
+        pthread_attr_destroy(&attr);
+    }
+    int none = grav_workers == 0;
+    pthread_cond_signal(&grav_pool_cv);
+    pthread_mutex_unlock(&grav_pool_mu);
+    if (none) grav_task_exec(t); /* no thread could be started: run it here */
+    return t;
+}
+
+/* `await t`: wait for completion (running it here if still queued), re-throw a
+   captured exception, and return a pointer to the result slot. */
+static void* grav_await(GravTask* t) {
+    if (!t) grav_panic("await on a null future");
+    grav_task_exec(t);
+    pthread_mutex_lock(&t->mu);
+    while (t->state != 2) pthread_cond_wait(&t->cv, &t->mu);
+    t->awaited = 1;
+    pthread_mutex_unlock(&t->mu);
+    if (t->failed) {
+        memcpy(&grav_current_exc, t->exc, sizeof(GravExc));
+        grav_rethrow();
+    }
+    return t->result;
+}
+
+/* `free(future)`: wait for the task, then release its record (the future must
+   not be awaited again afterwards). */
+static void grav_task_free(GravTask* t) {
+    if (!t) return;
+    grav_task_exec(t);
+    pthread_mutex_lock(&t->mu);
+    while (t->state != 2) pthread_cond_wait(&t->cv, &t->mu);
+    pthread_mutex_unlock(&t->mu);
+    pthread_mutex_lock(&grav_pool_mu);
+    for (GravTask** p = &grav_all_tasks; *p; p = &(*p)->allNext)
+        if (*p == t) { *p = t->allNext; break; }
+    /* A task run by its awaiter may still be queued: unlink it so no worker
+       ever pops the freed record. */
+    GravTask* prev = 0;
+    for (GravTask* q = grav_q_head; q; prev = q, q = q->next) {
+        if (q != t) continue;
+        if (prev) prev->next = q->next; else grav_q_head = q->next;
+        if (grav_q_tail == q) grav_q_tail = prev;
+        break;
+    }
+    while (t->refs > 0) pthread_cond_wait(&grav_refs_cv, &grav_pool_mu); /* a worker still holds it */
+    pthread_mutex_unlock(&grav_pool_mu);
+    pthread_mutex_destroy(&t->mu);
+    pthread_cond_destroy(&t->cv);
+    free(t->exc);
+    free(t); /* the task is the first member of its record */
+}
+
+static int grav_pending_tasks(void) {
+    int n = 0;
+    pthread_mutex_lock(&grav_pool_mu);
+    for (GravTask* t = grav_all_tasks; t; t = t->allNext) {
+        pthread_mutex_lock(&t->mu);
+        if (t->state != 2) n++;
+        pthread_mutex_unlock(&t->mu);
+    }
+    pthread_mutex_unlock(&grav_pool_mu);
+    return n;
+}
+
+/* At exit: finish every task (even ones never awaited) and report failures
+   nobody observed, like an uncaught exception. */
+static void grav_join_all(void) {
+    for (;;) {
+        pthread_mutex_lock(&grav_pool_mu);
+        GravTask* open = 0;
+        for (GravTask* t = grav_all_tasks; t && !open; t = t->allNext) {
+            pthread_mutex_lock(&t->mu);
+            if (t->state != 2) open = t;
+            pthread_mutex_unlock(&t->mu);
+        }
+        pthread_mutex_unlock(&grav_pool_mu);
+        if (!open) break;
+        grav_task_exec(open);
+        pthread_mutex_lock(&open->mu);
+        while (open->state != 2) pthread_cond_wait(&open->cv, &open->mu);
+        pthread_mutex_unlock(&open->mu);
+    }
+    for (GravTask* t = grav_all_tasks; t; t = t->allNext) {
+        if (t->failed && !t->awaited) {
+            fflush(stdout);
+            fprintf(stderr, "grav: uncaught exception in an async task: %s\n",
+                    (t->exc->message && t->exc->message[0]) ? t->exc->message
+                    : (t->exc->type ? t->exc->type->name : "?"));
+            grav_print_trace(t->exc->trace, t->exc->ntrace);
+            exit(1);
+        }
+    }
 }
 
 )C";
