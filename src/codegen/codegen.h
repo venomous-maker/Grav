@@ -188,6 +188,8 @@ private:
     // codegen_lambda.cpp — closures and function values.
     std::vector<const LambdaExpr *> lambdas_; // every lambda, inner before outer
     std::string lambdaDecls_;                 // env structs, prototypes, constructors
+    std::string asyncDecls_;                  // per-async-fn task record + spawner
+    void emitAsyncSpawner(const FunctionDecl &fn);
     void emitLambdas();                       // lift all lambdas (before other bodies)
     void emitLambda(const LambdaExpr &lam, int id);
     std::string emitLambdaValue(const LambdaExpr &lam) const;
