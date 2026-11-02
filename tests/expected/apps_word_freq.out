@@ -1,0 +1,17 @@
+words: 48
+distinct: 16
+
+top words:
+  it        8 ################
+  of        8 ################
+  the       8 ################
+  was       8 ################
+  age       2 ####
+  epoch     2 ####
+  season    2 ####
+  times     2 ####
+
+average word length: 3.625
+longest word: foolishness (11 letters)
+words used once: 8
+  belief, best, darkness, foolishness, incredulity, light, wisdom, worst
