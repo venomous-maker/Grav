@@ -55,6 +55,25 @@ class StringBuilder {
         return self.append(%{ grav_sb_g(f) %} as string);
     }
     public fn appendBool(b: bool) -> StringBuilder { return self.append(b ? "true" : "false"); }
+    // Any value, formatted like print()/str().
+    public fn append(value: any) -> StringBuilder { return self.append(str(value)); }
+    // Inserts text at a byte offset (clamped to the current length).
+    public fn insert(at: int, s: string) -> StringBuilder {
+        let n = %{ (int)strlen(s) %} as int;
+        let pos = at < 0 ? 0 : (at > self.len ? self.len : at);
+        %{ self->buf = grav_sb_grow(self->buf, &self->cap, self->len + n);
+           memmove(self->buf + pos + n, self->buf + pos, (size_t)(self->len - pos));
+           memcpy(self->buf + pos, s, (size_t)n);
+           self->len += n; self->buf[self->len] = 0; %};
+        return self;
+    }
+    // Keeps only the first `n` bytes.
+    public fn truncate(n: int) -> StringBuilder {
+        if (n >= 0 && n < self.len) { self.len = n; self.buf[n] = 0; }
+        return self;
+    }
+    // Pre-allocates room for `n` more bytes.
+    public fn reserve(n: int) { %{ self->buf = grav_sb_grow(self->buf, &self->cap, self->len + n); %}; }
     // Appends one byte (e.g. 10 for a newline, 65 for 'A').
     public fn appendChar(c: int) -> StringBuilder {
         %{ self->buf = grav_sb_grow(self->buf, &self->cap, self->len + 1);
