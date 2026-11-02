@@ -25,6 +25,7 @@ file). Import the umbrella `std.grav`, or individual modules.
 | `time.grav`      | **`Time`** — `now` (unix s), `nowMs`, `monotonicMs`, `monotonicNs`, `sleepMs`; **`Stopwatch`** — `reset`, `elapsedNs`/`elapsedMs`/`elapsedSeconds`. |
 | `term.grav`      | **`Term`** — ANSI styles `bold`/`dim`/`italic`/`underline`, colours `red`…`gray`, 256-colour `color(s, n)`, `clear`, `clearLine`, `moveTo`, `hideCursor`/`showCursor`. |
 | `io.grav`        | free functions `readLine`/`prompt`/`readInt`/`readFloat`/`readBool`/`promptInt`/`eprint`/`printRaw`, plus an **`IO`** class grouping them as static methods (`IO.print`, `IO.write`, `IO.eprint`, `IO.input`, `IO.prompt`, `IO.readInt`/`readLong`/`readFloat`/`readDouble`/`readBool`, `IO.promptInt`). |
+| `async.grav`     | concurrency: **`Async`** (`maxProcs`/`setMaxProcs` — default CPU cores, env `GRAV_MAXPROCS` — `pending`, `threadId`, `sleepMs`), **`Mutex`** (`lock`/`unlock`/`tryLock`/`withLock`), **`AtomicInt`**, **`Channel<T>`** (blocking bounded queue with `close`), and `awaitAll::<T>(futures)`. |
 | `std.grav`       | imports all of the above.                                            |
 
 Conversions live in **one** place: `Format` parses strings into values, and the
