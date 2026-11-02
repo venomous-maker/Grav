@@ -1,0 +1,18 @@
+--- polymorphism ---
+<circle area=3.14159>
+<rect area=6>
+[square] <square area=16>
+total area = 25.1416
+--- interfaces ---
+[square] <square area=1> / 12.5664
+--- traits ---
+x >= y? false  y >= x? true
+--- composition ---
+[svc] starting
+[svc] direct call through the forwarder
+--- multiple inheritance ---
+flying, diving, flying -> altitude 200, depth 5
+duck is Flyer: true, is Swimmer: true
+--- runtime type info ---
+Circle(rect? false, square? false) Rect(rect? true, square? false) Square(rect? true, square? true) 
+downcast ok: [square] <square area=16> kind=shape
