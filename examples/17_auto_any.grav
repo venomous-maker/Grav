@@ -1,0 +1,103 @@
+// 17_auto_any.grav — inferred generic types with `auto`, dynamic values with `any`.
+//
+//   grav examples/17_auto_any.grav --run
+//
+// `auto` (compile time): generic type arguments are inferred from call arguments,
+// lambda results, constructor arguments, or the expected type — so `maxOf(3, 9)`,
+// `new Box(5)`, `xs.mapTo(fn(n) => ...)` and `new Array<auto>()` need no `<...>`.
+// `any` (run time): one variable or collection slot can hold values of different
+// types; test with `is`, take out with `as` (checked), print and compare directly.
+
+import "../lib/std.grav"
+
+// ── auto: inference ─────────────────────────────────────────────────────────
+fn maxOf<T>(a: T, b: T) -> T { return a > b ? a : b }
+fn describePair<A, B>(a: A, b: B) -> string { return "(${a}, ${b})" }
+
+class Box<T> {
+    public value: T
+    constructor(value: T) { self.value = value }
+    fn map<U>(f: fn(T) -> U) -> Box<U> { return new Box<U>(f(self.value)) }
+}
+
+class Inventory {
+    private names: Array<string>
+    private counts: HashMap<string, int>
+    constructor() {
+        self.names = new Array<auto>()           // inferred from the field types
+        self.counts = new HashMap<auto, auto>()
+    }
+    fn add(name: string, n: int) {
+        if (!self.counts.containsKey(name)) { self.names.push(name) }
+        self.counts[name] = self.counts.getOr(name, 0) + n
+    }
+    fn report() -> string { return Str.join(self.names.mapTo(fn(k) => "${k}=${self.counts[k]}"), ", ") }
+}
+
+// ── any: dynamic values ─────────────────────────────────────────────────────
+enum Level { Low, High }
+class Point {
+    public x: int  public y: int
+    constructor(x: int, y: int) { self.x = x; self.y = y }
+    fn toString() -> string { return "Point(${self.x}, ${self.y})" }
+}
+
+fn render(v: any) -> string {
+    if (v == null) { return "null" }
+    if (v is int) { return "int ${v as int}" }
+    if (v is float) { return "float ${v as float}" }
+    if (v is bool) { return "bool ${v as bool}" }
+    if (v is string) { return "string \"${v as string}\"" }
+    if (v is Level) { return "level ${v as Level}" }
+    if (v is Point) {
+        let p = v as Point
+        return "point at ${p.x},${p.y}"
+    }
+    return "${typename(v)} ${v}"
+}
+
+fn main() {
+    print("--- auto ---")
+    print(maxOf(3, 9))                           // T = int
+    print(maxOf(2.5, 1.5))                       // T = float
+    print(describePair("id", 7))                 // A = string, B = int
+    let b = new Box(21)                          // Box<int>
+    let label = b.map(fn(v) => "#${v * 2}")      // Box<string>: U from the lambda
+    print(label.value)
+    let nums = new Array<int>()
+    for (n in [4, 8, 15]) { nums.push(n) }
+    let asText = nums.mapTo(fn(n) => "<${n}>")   // Array<string>
+    let total = nums.fold(0.0, fn(acc, n) => acc + (n as double))
+    print("${Str.join(asText, "")} total=${total}")
+    let inv = new Inventory()
+    inv.add("apple", 3)
+    inv.add("pear", 1)
+    inv.add("apple", 2)
+    print(inv.report())
+    let ratio: auto = 0.25                       // same as leaving the type off
+    print(ratio * 4.0)
+
+    print("--- any ---")
+    let values = new Array<any>()
+    values.push(42)
+    values.push(2.5)
+    values.push(true)
+    values.push("hello")
+    values.push(Level.High)
+    values.push(new Point(1, 2))
+    values.push(null)
+    for (v in values) { print("${typename(v)}: ${v}  -> ${render(v)}") }
+
+    let config = new HashMap<string, any>()
+    config["port"] = 8080
+    config["host"] = "localhost"
+    config["verbose"] = false
+    let port = config["port"] as int             // checked: panics if it is not an int
+    print("connect to ${config["host"]}:${port + 1} verbose=${config["verbose"]}")
+    print("port is int: ${config["port"] is int}, host is int: ${config["host"] is int}")
+
+    let x: any = 10
+    print("x == 10: ${x == 10}, x == 10.0: ${x == 10.0}, x == \"10\": ${x == "10"}")
+    x = "now text"                               // an any can change type
+    print("x is string: ${x is string}")
+}
