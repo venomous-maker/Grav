@@ -43,6 +43,24 @@ StmtPtr Parser::parseStatement() {
             s->line = t.line; s->col = t.col;
             return s;
         }
+        case TokenType::Identifier:
+            // `defer` is contextual (still usable as a name): it starts a defer
+            // statement only when followed by a block or another statement.
+            if (peek().lexeme == "defer" &&
+                (peekAt(1).type == TokenType::LBrace || peekAt(1).type == TokenType::Identifier ||
+                 peekAt(1).type == TokenType::Self || peekAt(1).type == TokenType::Return)) {
+                const Token &t = advance();
+                auto s = std::make_unique<DeferStmt>();
+                s->line = t.line; s->col = t.col;
+                if (check(TokenType::LBrace)) {
+                    s->body = parseBlock();
+                } else {
+                    s->body.statements.push_back(parseStatement());
+                    matchToken(TokenType::Semicolon);
+                }
+                return s;
+            }
+            return parseExprOrAssign();
         case TokenType::LBrace: {
             const Token &t = peek();
             auto s = std::make_unique<BlockStmt>();
@@ -68,20 +86,23 @@ StmtPtr Parser::parseTry() {
     auto s = std::make_unique<TryStmt>();
     s->line = kw.line; s->col = kw.col;
     s->tryBlock = parseBlock();
-    if (matchToken(TokenType::Catch)) {
-        s->hasCatch = true;
+    while (check(TokenType::Catch)) {
+        const Token &ck = advance();
+        CatchClause c;
+        c.line = ck.line; c.col = ck.col;
         expect(TokenType::LParen, "after 'catch'");
-        s->catchVar = expect(TokenType::Identifier, "as the caught variable").lexeme;
+        c.var = expect(TokenType::Identifier, "as the caught variable").lexeme;
         expect(TokenType::Colon, "after the caught variable");
-        s->catchType = parseType("for the caught exception");
+        c.type = parseType("for the caught exception");
         expect(TokenType::RParen, "after the catch type");
-        s->catchBlock = parseBlock();
+        c.block = parseBlock();
+        s->catches.push_back(std::move(c));
     }
     if (matchToken(TokenType::Finally)) {
         s->hasFinally = true;
         s->finallyBlock = parseBlock();
     }
-    if (!s->hasCatch && !s->hasFinally)
+    if (s->catches.empty() && !s->hasFinally)
         fail(kw, "'try' requires a 'catch' or 'finally' clause");
     return s;
 }
@@ -141,16 +162,29 @@ StmtPtr Parser::parseFor() {
     const Token &kw = advance(); // 'for'
     expect(TokenType::LParen, "after 'for'");
 
-    // Range form: `for (i in lo..hi)` / `for (i in lo..=hi)`.
-    if (check(TokenType::Identifier) && peekAt(1).type == TokenType::In) {
+    // `for (i in lo..hi [step s])`, `for (x in xs)`, `for (i, x in xs)`.
+    bool pairForm = check(TokenType::Identifier) && peekAt(1).type == TokenType::Comma &&
+                    peekAt(2).type == TokenType::Identifier && peekAt(3).type == TokenType::In;
+    if (pairForm || (check(TokenType::Identifier) && peekAt(1).type == TokenType::In)) {
         auto stmt = std::make_unique<ForInStmt>();
         stmt->line = kw.line; stmt->col = kw.col;
+        if (pairForm) {
+            stmt->indexVar = advance().lexeme;
+            advance(); // ','
+        }
         stmt->var = advance().lexeme; // loop variable
         advance();                    // 'in'
         stmt->lo = parseExpression();
-        if (matchToken(TokenType::DotDotEq)) stmt->inclusive = true;
-        else { expect(TokenType::DotDot, "in a 'for ... in' range"); stmt->inclusive = false; }
-        stmt->hi = parseExpression();
+        if (check(TokenType::DotDot) || check(TokenType::DotDotEq)) {
+            if (pairForm) fail(peek(), "the 'i, x in' form iterates a collection, not a range");
+            stmt->inclusive = advance().type == TokenType::DotDotEq;
+            stmt->hi = parseExpression();
+            // Optional contextual `step` (may be negative to count down).
+            if (check(TokenType::Identifier) && peek().lexeme == "step") {
+                advance();
+                stmt->step = parseExpression();
+            }
+        }
         expect(TokenType::RParen, "to close the for-header");
         stmt->body = parseBlock();
         return stmt;
