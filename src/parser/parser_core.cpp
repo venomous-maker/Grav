@@ -107,6 +107,16 @@ void Parser::parseTopLevel(Program &program) {
             parseNamespace(program);
             return;
         case TokenType::Class: program.decls.push_back(parseClass(false)); break;
+        case TokenType::Identifier:
+            // `final class X` — contextual: the class cannot be extended.
+            if (peek().lexeme == "final" && peekAt(1).type == TokenType::Class) {
+                advance();
+                program.decls.push_back(parseClass(false));
+                static_cast<ClassDecl *>(program.decls.back().get())->isFinal = true;
+                break;
+            }
+            fail(peek(), std::string("expected a top-level declaration, but found ") +
+                             tokenTypeName(peek().type));
         case TokenType::Abstract:
             advance(); // 'abstract'
             program.decls.push_back(parseClass(true));
@@ -210,6 +220,19 @@ TypeRef Parser::parseType(const char *context) {
             advance();
             base = TypeRef::named("Self");
             break;
+        case TokenType::Fn: { // `fn(A, B) -> R` — a function type (R defaults to void)
+            advance();
+            expect(TokenType::LParen, "after 'fn' in a function type");
+            std::vector<TypeRef> ps;
+            if (!check(TokenType::RParen)) {
+                do { ps.push_back(parseType("for a function-type parameter")); }
+                while (matchToken(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "to close the function type's parameters");
+            TypeRef ret = TypeRef::prim(TypeRef::Kind::Void);
+            if (matchToken(TokenType::Arrow)) ret = parseType("as the function type's result");
+            return TypeRef::function(std::move(ps), std::move(ret)); // no postfix ops
+        }
         case TokenType::Identifier: {
             // Built-in numeric / binary type names are recognized only in type
             // position, so they stay usable as ordinary identifiers elsewhere
@@ -468,8 +491,31 @@ DeclPtr Parser::parseClass(bool isAbstract) {
 
         if (check(TokenType::Constructor)) {
             if (sawAccess) fail(peek(), "constructors cannot have an access modifier");
-            cls->constructor = parseConstructor();
+            // A second `constructor(...)` is an overload (resolved by argument types).
+            if (cls->constructor.present) cls->extraCtors.push_back(parseConstructor());
+            else cls->constructor = parseConstructor();
             continue;
+        }
+        // `destructor() { ... }` (contextual) — runs when `free(obj)` releases it.
+        if (check(TokenType::Identifier) && peek().lexeme == "destructor" &&
+            peekAt(1).type == TokenType::LParen) {
+            const Token &dk = advance();
+            if (sawAccess) fail(dk, "destructors cannot have an access modifier");
+            if (cls->destructor.present) fail(dk, "a class can have only one destructor");
+            expect(TokenType::LParen, "after 'destructor'");
+            expect(TokenType::RParen, "a destructor takes no parameters");
+            cls->destructor.present = true;
+            cls->destructor.line = dk.line;
+            cls->destructor.col = dk.col;
+            cls->destructor.body = parseBlock();
+            continue;
+        }
+        // `final fn m()` (contextual) — the method cannot be overridden.
+        bool isFinalMethod = false;
+        if (check(TokenType::Identifier) && peek().lexeme == "final" &&
+            peekAt(1).type == TokenType::Fn) {
+            advance();
+            isFinalMethod = true;
         }
 
         bool isAbstractMethod = matchToken(TokenType::Abstract);
@@ -482,6 +528,9 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             m.access = access;
             m.isStatic = isStatic;
             m.isAbstract = isAbstractMethod;
+            m.isFinal = isFinalMethod;
+            if (isAbstractMethod && isFinalMethod)
+                fail(peek(), "a method cannot be both 'abstract' and 'final'");
             if (isAbstractMethod && isStatic)
                 fail(peek(), "a method cannot be both 'abstract' and 'static'");
             if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
@@ -545,6 +594,31 @@ MethodDecl Parser::parseMethod(bool inInterface) {
     m.line = kw.line;
     m.col = kw.col;
     m.name = expect(TokenType::Identifier, "after 'fn'").lexeme;
+    if (m.name != "operator" && check(TokenType::Less)) m.typeParams = parseTypeParams(); // generic method
+    // `fn operator+(o: T)` — an operator method, stored under a mangled name.
+    if (m.name == "operator" && !check(TokenType::LParen)) {
+        const Token &op = advance();
+        std::string n;
+        switch (op.type) {
+            case TokenType::Plus: n = "op_add"; break;
+            case TokenType::Minus: n = "op_sub"; break;
+            case TokenType::Star: n = "op_mul"; break;
+            case TokenType::Slash: n = "op_div"; break;
+            case TokenType::Percent: n = "op_mod"; break;
+            case TokenType::EqEq: n = "op_eq"; break;
+            case TokenType::NotEq: n = "op_ne"; break;
+            case TokenType::Less: n = "op_lt"; break;
+            case TokenType::LessEq: n = "op_le"; break;
+            case TokenType::Greater: n = "op_gt"; break;
+            case TokenType::GreaterEq: n = "op_ge"; break;
+            case TokenType::LBracket:
+                expect(TokenType::RBracket, "in 'operator[]'");
+                n = matchToken(TokenType::Assign) ? "op_index_set" : "op_index";
+                break;
+            default: fail(op, "this operator cannot be overloaded");
+        }
+        m.name = n;
+    }
     m.params = parseParams();
     if (matchToken(TokenType::Arrow)) {
         m.returnType = parseType("as the return type");
