@@ -1,0 +1,89 @@
+// 04_data_types.grav — value types, arrays, pointers, null, and binary data.
+//
+//   grav examples/04_data_types.grav --run
+//
+// Covers: enums (names and ordinals), structs (value semantics, nesting),
+// `type` aliases and `typedef`, fixed-length arrays (of values and structs,
+// nested), pointers (`&`, `*`, `->`), `null` with `??` and `?.`, `sizeof`,
+// `binary` blobs, and explicit casts between them.
+
+import "../lib/std.grav"
+
+enum Suit { Hearts, Diamonds, Clubs, Spades }
+
+struct Vec2 { x: int  y: int }
+struct Rect { origin: Vec2  size: Vec2 }        // structs nest by value
+
+type Grid = int[3]                               // alias for a fixed array
+typedef Meters = double                          // `typedef` is a synonym for `type`
+
+class Node {
+    public label: string
+    public next: Node
+    constructor(label: string) { self.label = label; self.next = null }
+}
+
+fn area(r: Rect) -> int { return r.size.x * r.size.y }
+fn grow(r: Rect*, by: int) { r->size.x = r->size.x + by; r->size.y = r->size.y + by }
+fn bump(p: int*) { *p = *p + 1; }
+
+fn main() {
+    print("--- enums ---")
+    let s = Suit.Clubs
+    print("suit ${s} has ordinal ${int(s)}")
+    print("is hearts? ${s == Suit.Hearts}")
+    for (k in 0..4) { printRaw("${k as Suit} ") }     // ordinal -> enum
+    print("")
+
+    print("--- structs (value semantics) ---")
+    let a = Vec2 { x: 1, y: 2 }
+    let b = a                    // a copy
+    b.x = 100
+    print("a=(${a.x}, ${a.y}) b=(${b.x}, ${b.y})")
+    let r = Rect { origin: Vec2 { x: 0, y: 0 }, size: Vec2 { x: 3, y: 4 } }
+    print("area=${area(r)}")
+
+    print("--- aliases ---")
+    let g: Grid = [7, 8, 9]
+    let d: Meters = 12.5
+    print("grid[1]=${g[1]} length=${g.length} distance=${d}m")
+
+    print("--- arrays ---")
+    let squares = [1, 4, 9, 16, 25]
+    squares[0] = 0
+    let total = 0
+    for (v in squares) { total += v }
+    print("squares total=${total} len=${squares.length}")
+    let pts = [Vec2 { x: 1, y: 1 }, Vec2 { x: 2, y: 4 }, Vec2 { x: 3, y: 9 }]
+    for (i, p in pts) { printRaw("p${i}=(${p.x},${p.y}) ") }
+    print("")
+    let matrix = [[1, 2, 3], [4, 5, 6]]          // nested arrays
+    print("matrix[1][2]=${matrix[1][2]}")
+
+    print("--- pointers ---")
+    let counter = 41
+    let cp: int* = &counter
+    bump(cp);
+    print("counter=${counter} via pointer=${*cp}")
+    grow(&r, 2);
+    print("grown area=${area(r)}")
+
+    print("--- null, ?? and ?. ---")
+    let head = new Node("first")
+    head.next = new Node("second")
+    let missing: Node = null
+    print("missing == null: ${missing == null}")
+    let use = missing ?? head                     // fallback when null
+    print("use=${use.label}")
+    print("head.next?.label=${head.next?.label}  missing?.label='${missing?.label}'")
+
+    print("--- sizeof ---")
+    print("sizeof(int)=${sizeof(int)} sizeof(long)=${sizeof(long)} sizeof(Vec2)=${sizeof(Vec2)}")
+
+    print("--- binary ---")
+    let blob: binary = "Grav\x01!" as binary
+    print("blob length=${blob.length}")
+    let sumBytes = 0
+    for (byteVal in blob) { sumBytes += byteVal }
+    print("byte sum=${sumBytes} back to text=${(blob as string) == "Grav\x01!"}")
+}
