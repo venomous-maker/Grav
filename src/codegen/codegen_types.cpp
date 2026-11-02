@@ -29,6 +29,8 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     emitTypeInfos();
     emitInterfaceTables();
     emitGlobals();
+    computeFreshFunctions(); // which string-returning functions hand back owned strings
+    emitLambdas(); // lifted closures (their creation sites come later)
     emitDefinitions(program);
     emitMainWrapper();
 
@@ -36,7 +38,14 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     // prelude's own includes so every block can rely on them.
     std::string head = typedefs_;
     if (!hoisted_.empty()) head += "/* hoisted includes */\n" + hoisted_ + "\n";
-    return head + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ +
+    std::string thunks;
+    if (!lambdaDecls_.empty()) thunks += "/* closures: environments and constructors */\n" + lambdaDecls_;
+    if (!thunks_.empty()) {
+        thunks += "/* dispatch thunks: evaluate the receiver once, then dispatch */\n";
+        for (const auto &[name, def] : thunks_) thunks += def;
+        thunks += "\n";
+    }
+    return head + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ + thunks +
            globals_ + defs_;
 }
 
@@ -50,9 +59,10 @@ void CodeGen::emitGlobals() {
     auto one = [&](const std::string &fq, const Expr *init) {
         const GlobalInfo *gi = reg_->global(fq);
         if (!gi) return;
-        globals_ += "static ";
-        if (gi->isConst) globals_ += "const ";
-        globals_ += cTy(gi->type) + " " + gi->cName + " = " + emitAs(*init, gi->type) + ";\n";
+        // `T const name`: qualifies the object itself (for strings that yields
+        // `const char* const`, not the invalid-looking `const const char*`).
+        globals_ += "static GRAV_UNUSED " + cTy(gi->type) + (gi->isConst ? " const " : " ") +
+                    gi->cName + " = " + emitAs(*init, gi->type) + ";\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *g = dynamic_cast<const GlobalVarDecl *>(declPtr.get())) {
@@ -65,134 +75,15 @@ void CodeGen::emitGlobals() {
     if (!globals_.empty()) globals_ += "\n";
 }
 
-void CodeGen::emitPrelude() {
-    typedefs_ +=
-        "/* Generated from Grav source by gravc. Do not edit. */\n"
-        "#include <stdbool.h>\n"
-        "#include <stdio.h>\n"
-        "#include <stdlib.h>\n"
-        "#include <string.h>\n"
-        "#include <setjmp.h>\n"
-        "#include <unistd.h>\n\n"
-        "static void grav_panic(const char* m) { fprintf(stderr, \"panic: %s\\n\", m); exit(1); }\n"
-        "static void grav_assert(bool c, const char* m) {\n"
-        "    if (!c) { fprintf(stderr, \"assertion failed: %s\\n\", m); exit(1); }\n"
-        "}\n"
-        "static const char* grav_env(const char* n) { const char* v = getenv(n); return v ? v : \"\"; }\n"
-        "static const char* grav_cwd(void) {\n"
-        "    static char b[4096]; return getcwd(b, sizeof b) ? b : \"\";\n"
-        "}\n\n"
-        "typedef struct GravTypeInfo {\n"
-        "    const char* name;\n"
-        "    const struct GravTypeInfo* base;            /* primary base */\n"
-        "    const struct GravTypeInfo* const* extra;    /* secondary bases (MI) */\n"
-        "    int nextra;\n"
-        "} GravTypeInfo;\n\n"
-        "/* Common object header: vtable pointer + runtime type descriptor. */\n"
-        "struct GravObject { const void* __vt; const GravTypeInfo* __type; };\n\n"
-        "/* An interface value: the object plus its per-class method table. */\n"
-        "struct GravIface { void* obj; const void* itab; };\n\n"
-        "/* A binary blob: byte buffer + length (may contain embedded NULs). */\n"
-        "typedef struct GravBytes { unsigned char* data; long long len; } GravBytes;\n"
-        "static GravBytes grav_bytes_from_str(const char* s) {\n"
-        "    long long n = (long long)strlen(s);\n"
-        "    unsigned char* d = (unsigned char*)malloc((size_t)n + 1);\n"
-        "    memcpy(d, s, (size_t)n + 1); GravBytes b; b.data = d; b.len = n; return b;\n"
-        "}\n"
-        "static const char* grav_bytes_to_str(GravBytes b) {\n"
-        "    char* r = (char*)malloc((size_t)b.len + 1);\n"
-        "    if (b.data) memcpy(r, b.data, (size_t)b.len);\n"
-        "    r[b.len] = 0; return r;\n"
-        "}\n\n"
-        "static const char* grav_str_concat(const char* a, const char* b) {\n"
-        "    size_t la = strlen(a), lb = strlen(b);\n"
-        "    char* r = (char*)malloc(la + lb + 1);\n"
-        "    memcpy(r, a, la);\n"
-        "    memcpy(r + la, b, lb + 1);\n"
-        "    return r;\n"
-        "}\n\n"
-        "static const char* grav_typename(const void* obj) {\n"
-        "    return ((const struct GravObject*)obj)->__type->name;\n"
-        "}\n\n"
-        "static bool grav_type_is(const GravTypeInfo* t, const GravTypeInfo* want) {\n"
-        "    while (t) {\n"
-        "        if (t == want) return true;\n"
-        "        for (int i = 0; i < t->nextra; i++)\n"
-        "            if (grav_type_is(t->extra[i], want)) return true;\n"
-        "        t = t->base;\n"
-        "    }\n"
-        "    return false;\n"
-        "}\n"
-        "static bool grav_is_instance(const void* obj, const GravTypeInfo* want) {\n"
-        "    return grav_type_is(((const struct GravObject*)obj)->__type, want);\n"
-        "}\n\n"
-        "/* Value-to-string helpers (used by string interpolation / str()). */\n"
-        "static const char* grav_int_to_str(long long v) {\n"
-        "    char* b = (char*)malloc(24); snprintf(b, 24, \"%lld\", v); return b;\n"
-        "}\n"
-        "static const char* grav_uint_to_str(unsigned long long v) {\n"
-        "    char* b = (char*)malloc(24); snprintf(b, 24, \"%llu\", v); return b;\n"
-        "}\n"
-        "static const char* grav_float_to_str(double v) {\n"
-        "    char* b = (char*)malloc(32); snprintf(b, 32, \"%g\", v); return b;\n"
-        "}\n\n"
-        "/* Command-line arguments and stdin. */\n"
-        "static int grav_argc = 0;\n"
-        "static char** grav_argv = 0;\n"
-        "static const char* grav_argv_at(int i) {\n"
-        "    return (i >= 0 && i < grav_argc) ? grav_argv[i] : \"\";\n"
-        "}\n"
-        "static const char* grav_input(void) {\n"
-        "    size_t cap = 128, n = 0; char* b = (char*)malloc(cap); int c;\n"
-        "    while ((c = getchar()) != EOF && c != '\\n') {\n"
-        "        if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }\n"
-        "        b[n++] = (char)c;\n"
-        "    }\n"
-        "    if (c == EOF && n == 0) { free(b); return \"\"; }\n"
-        "    b[n] = 0; return b;\n"
-        "}\n\n"
-        "/* Call stack for diagnostics: a frame per active function (name+file+line). */\n"
-        "typedef struct GravFrame { const char* fn; const char* file; int line; } GravFrame;\n"
-        "#define GRAV_MAXFRAMES 512\n"
-        "static GravFrame grav_frames[GRAV_MAXFRAMES];\n"
-        "static int grav_nframes = 0;\n"
-        "static void grav_enter(const char* fn, const char* file) {\n"
-        "    if (grav_nframes < GRAV_MAXFRAMES) {\n"
-        "        grav_frames[grav_nframes].fn = fn; grav_frames[grav_nframes].file = file;\n"
-        "        grav_frames[grav_nframes].line = 0;\n"
-        "    }\n"
-        "    grav_nframes++;\n"
-        "}\n"
-        "static void grav_leave(void) { if (grav_nframes > 0) grav_nframes--; }\n"
-        "#define GRAV_LINE(n) do { if (grav_nframes > 0 && grav_nframes <= GRAV_MAXFRAMES) \\\n"
-        "    grav_frames[grav_nframes - 1].line = (n); } while (0)\n\n"
-        "/* Exceptions: a jmp_buf stack, the in-flight exception, and a captured trace. */\n"
-        "typedef struct GravExc {\n"
-        "    void* value; const GravTypeInfo* type; const char* message;\n"
-        "    GravFrame trace[GRAV_MAXFRAMES]; int ntrace;\n"
-        "} GravExc;\n"
-        "static jmp_buf grav_jmp_stack[64];\n"
-        "static int grav_jmp_top = 0;\n"
-        "static GravExc grav_current_exc;\n"
-        "static void grav_print_trace(const GravFrame* fr, int n) {\n"
-        "    fprintf(stderr, \"  stack trace (most recent call last):\\n\");\n"
-        "    if (n > GRAV_MAXFRAMES) n = GRAV_MAXFRAMES;\n"
-        "    for (int i = 0; i < n; i++)\n"
-        "        fprintf(stderr, \"    at %s (%s:%d)\\n\",\n"
-        "                fr[i].fn ? fr[i].fn : \"?\", fr[i].file ? fr[i].file : \"?\", fr[i].line);\n"
-        "}\n"
-        "static void grav_throw(void* v, const GravTypeInfo* t, const char* msg) {\n"
-        "    grav_current_exc.value = v; grav_current_exc.type = t; grav_current_exc.message = msg;\n"
-        "    /* Snapshot the live call stack at the throw site (before any unwinding). */\n"
-        "    int n = grav_nframes > GRAV_MAXFRAMES ? GRAV_MAXFRAMES : grav_nframes;\n"
-        "    for (int i = 0; i < n; i++) grav_current_exc.trace[i] = grav_frames[i];\n"
-        "    grav_current_exc.ntrace = n;\n"
-        "    if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);\n"
-        "    fprintf(stderr, \"grav: uncaught exception: %s\\n\",\n"
-        "            (msg && msg[0]) ? msg : (t ? t->name : \"?\"));\n"
-        "    grav_print_trace(grav_current_exc.trace, grav_current_exc.ntrace);\n"
-        "    exit(1);\n"
-        "}\n\n";
+std::string CodeGen::equalExpr(const TypeRef &t, const std::string &a, const std::string &b) const {
+    if (t.kind == TypeRef::Kind::String) return "grav_streq(" + a + ", " + b + ")";
+    if (t.isBinary()) return "grav_bytes_eq(" + a + ", " + b + ")";
+    if (t.isFunction()) return "grav_fn_eq(" + a + ", " + b + ")";
+    if (t.isNamed() && reg_->isInterface(t.name)) return "grav_iface_eq(" + a + ", " + b + ")";
+    if (t.isNamed() && reg_->isStruct(t.name)) return structName(t.name) + "__eq(" + a + ", " + b + ")";
+    if (t.isArray() && !t.isSlice())
+        return "(memcmp(&(" + a + "), &(" + b + "), sizeof(" + a + ")) == 0)";
+    return "(" + a + " == " + b + ")";
 }
 
 std::string CodeGen::cTy(const TypeRef &t) const {
@@ -234,6 +125,9 @@ void CodeGen::collectType(const TypeRef &t) {
         if (t.elem) collectType(*t.elem); // nested arrays / element structs-of-arrays
     } else if ((t.isPointer() || t.isFuture()) && t.elem) {
         collectType(*t.elem);
+    } else if (t.isFunction()) {
+        for (const auto &p : t.fnParams) collectType(p);
+        if (t.elem) collectType(*t.elem);
     }
 }
 
@@ -277,6 +171,14 @@ void CodeGen::collectInExpr(const Expr &expr) {
         for (const auto &a : e->args) collectInExpr(*a);
     } else if (auto *e = dynamic_cast<const MemberExpr *>(&expr)) {
         if (e->object) collectInExpr(*e->object);
+    } else if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) {
+        // Inner lambdas first, so each is lifted before the code that creates it.
+        for (const auto &p : e->params) collectType(p.type);
+        for (const auto &c : e->captures) collectType(c.type);
+        collectType(e->returnType);
+        if (e->exprBody) collectInExpr(*e->exprBody);
+        collectInBlock(e->body);
+        lambdas_.push_back(e);
     }
 }
 
@@ -305,7 +207,19 @@ void CodeGen::collectInStmt(const Stmt &stmt) {
         if (s->update) collectInStmt(*s->update);
         collectInBlock(s->body);
     } else if (auto *s = dynamic_cast<const ForInStmt *>(&stmt)) {
-        collectInExpr(*s->lo); collectInExpr(*s->hi); collectInBlock(s->body);
+        collectInExpr(*s->lo);
+        if (s->hi) collectInExpr(*s->hi);
+        if (s->step) collectInExpr(*s->step);
+        collectType(s->varType);
+        collectInBlock(s->body);
+    } else if (auto *s = dynamic_cast<const DeferStmt *>(&stmt)) {
+        collectInBlock(s->body);
+    } else if (auto *s = dynamic_cast<const ThrowStmt *>(&stmt)) {
+        collectInExpr(*s->value);
+    } else if (auto *s = dynamic_cast<const TryStmt *>(&stmt)) {
+        collectInBlock(s->tryBlock);
+        for (const auto &c : s->catches) collectInBlock(c.block);
+        collectInBlock(s->finallyBlock);
     } else if (auto *s = dynamic_cast<const SwitchStmt *>(&stmt)) {
         collectInExpr(*s->subject);
         for (const auto &c : s->cases) {
@@ -335,6 +249,11 @@ void CodeGen::collectArrayTypes() {
                 for (const auto &p : c->constructor.params) collectType(p.type);
                 collectInBlock(c->constructor.body);
             }
+            for (const auto &x : c->extraCtors) {
+                for (const auto &p : x.params) collectType(p.type);
+                collectInBlock(x.body);
+            }
+            if (c->destructor.present) collectInBlock(c->destructor.body);
             for (const auto &m : c->methods) {
                 sig(m.params, m.returnType);
                 if (m.hasBody) collectInBlock(m.body);
@@ -363,6 +282,13 @@ void CodeGen::emitEnums() {
             typedefs_ += i + 1 < en->members.size() ? ",\n" : "\n";
         }
         typedefs_ += "} " + s + ";\n";
+        // Member-name lookup for print/str/interpolation of enum values.
+        typedefs_ += "static inline const char* " + enumNameFn(en->fqName) + "(" + s + " v) {\n";
+        typedefs_ += "    static const char* const names[] = { ";
+        for (size_t i = 0; i < en->members.size(); ++i)
+            typedefs_ += (i ? ", \"" : "\"") + en->members[i].name + "\"";
+        if (en->members.empty()) typedefs_ += "\"?\"";
+        typedefs_ += " };\n    return (unsigned)v < sizeof names / sizeof names[0] ? names[v] : \"?\";\n}\n";
     }
     if (any) typedefs_ += "\n";
 }
@@ -422,7 +348,16 @@ void CodeGen::emitValueStructs() {
             structs_ += "    char __empty; /* C has no zero-size structs */\n";
         for (const auto &f : si->fields)
             structs_ += "    " + cTy(f.type) + " " + memberCName(f.name) + ";\n";
-        structs_ += "};\n\n";
+        structs_ += "};\n";
+        // Member-wise `==` for the struct (C has no struct comparison).
+        std::string body = si->fields.empty() ? "1" : "";
+        for (size_t i = 0; i < si->fields.size(); ++i) {
+            const auto &f = si->fields[i];
+            std::string m = memberCName(f.name);
+            body += (i ? " && " : "") + equalExpr(f.type, "a." + m, "b." + m);
+        }
+        structs_ += "static inline GRAV_UNUSED bool " + key + "__eq(" + key + " a, " + key +
+                    " b) { (void)a; (void)b; return " + body + "; }\n\n";
     };
     std::function<void(const TypeRef &)> emitArray = [&](const TypeRef &t) {
         std::string key = arrayStructName(t);
@@ -523,9 +458,12 @@ void CodeGen::emitTypeInfos() {
             vtables_ += "static const GravTypeInfo* const " + arr + "[] = { " + elems + " };\n";
             extra = arr;
         }
+        // The destructor chain `free(obj)` runs (nearest class with a destructor).
+        std::string dtor = reg_->findDestructor(fq);
+        std::string drop = dtor.empty() ? "0" : "(void (*)(void*))" + mangle(dtor) + "__drop";
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
-                    std::to_string(nextra) + " };\n";
+                    std::to_string(nextra) + ", " + drop + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
@@ -572,17 +510,20 @@ void CodeGen::emitInterfaceTables() {
         for (const auto &ifq : ifaces) {
             const InterfaceInfo *ii = reg_->iface(ifq);
             if (!ii) continue;
-            vtables_ += "static " + itabType(ifq) + " " + mangle(c->fqName) +
+            vtables_ += "static const GRAV_UNUSED " + itabType(ifq) + " " + mangle(c->fqName) +
                         "__itab__" + mangle(ifq) + " = {\n";
             for (const auto &m : ii->methods) {
-                std::string impl = reg_->findMethodImpl(c->fqName, m.name);
+                // The class method implementing it (overloads: matched by signature).
+                std::string mname = reg_->implementingMethod(c->fqName, m);
+                if (mname.empty()) mname = m.name;
+                std::string impl = reg_->findMethodImpl(c->fqName, mname);
                 std::string sig = cTy(m.returnType) + " (*)(void*";
                 for (const auto &pt : m.paramTypes) sig += ", " + cTy(pt);
                 sig += ")";
                 if (impl.empty())
                     vtables_ += "    0,\n";
                 else
-                    vtables_ += "    (" + sig + ")" + methodCName(impl, m.name) + ",\n";
+                    vtables_ += "    (" + sig + ")" + methodCName(impl, mname) + ",\n";
             }
             vtables_ += "};\n\n";
         }
@@ -591,7 +532,8 @@ void CodeGen::emitInterfaceTables() {
 
 void CodeGen::emitVTableInstance(const ClassInfo &ci) {
     if (ci.slots.empty()) return;
-    vtables_ += "static " + vtableType(ci.fqName) + " " +
+    // Read-only tables let the C compiler fold loads and devirtualize calls.
+    vtables_ += "static const " + vtableType(ci.fqName) + " " +
                 vtableInstance(ci.fqName) + " = {\n";
     for (const auto &slot : ci.slots) {
         std::string impl = reg_->findMethodImpl(ci.fqName, slot.name);
