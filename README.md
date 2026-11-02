@@ -10,6 +10,14 @@ binary). The compiler — `gravc` — is written in C++20.
 
 ---
 
+## Documentation
+
+The full language guide lives in [`docs/`](docs/README.md): fifteen chapters from
+[getting started](docs/01-getting-started.md) to
+[how Grav compiles](docs/15-how-it-compiles.md), plus a [reference](docs/reference.md)
+of keywords, operator precedence, and built-ins. Every runnable snippet in the docs
+is compiled and checked by `tests/docs.sh`.
+
 ## Table of contents
 
 - [Quick start](#quick-start)
@@ -21,6 +29,12 @@ binary). The compiler — `gravc` — is written in C++20.
   - [Enums](#enums)
   - [Operators](#operators)
   - [Ranges (`for … in`)](#ranges-for--in)
+  - [For-each loops & `step`](#for-each-loops--step)
+  - [Operator overloading](#operator-overloading)
+  - [Memory: destructors & `defer`](#memory-destructors--defer)
+  - [Lambdas & function types](#lambdas--function-types)
+  - [Method overloading](#method-overloading)
+  - [`final`](#final)
   - [Null, `??` & optional chaining](#null----optional-chaining)
   - [Casts & type tests (`as` / `is`)](#casts--type-tests-as--is)
   - [Pointers](#pointers)
@@ -66,15 +80,18 @@ binary). The compiler — `gravc` — is written in C++20.
 cmake -S . -B build && cmake --build build
 
 # transpile a program to C
-./build/gravc examples/10_inheritance.grav            # writes examples/shapes.c
+./build/gravc examples/06_inheritance.grav -o /tmp/inheritance.c
 
 # …or compile straight to a native binary and run it
-./build/gravc examples/bank.grav --emit bin -o /tmp/animals
-/tmp/animals
+./build/gravc examples/apps/bank.grav --emit bin -o /tmp/bank
+/tmp/bank
+
+# …or build and run in one step
+./build/gravc examples/apps/life.grav --run
 ```
 
 ```grav
-// examples/10_inheritance.grav
+// examples/06_inheritance.grav
 interface Shape {
     fn area() -> int
 }
@@ -107,7 +124,10 @@ gravc -                       # read source from stdin, write C to stdout
 | `-c` / `-S` / `-b`,`--bin`   | Aliases for `--emit c` / `asm` / `bin`.                        |
 | `-r`, `--run`                | Build a binary and run it (args after `--` go to the program). |
 | `--keep-c`                   | Keep the generated `.c` when building a binary.                |
-| `-O0`…`-O3`, `-Os`           | Optimization level (passed to the C compiler).                 |
+| `-O0`…`-O3`, `-Os`, `-Ofast` | Optimization level (default `-O2`; `-O0` when only `-g` is given). |
+| `--release`                  | `-O3`, `-DNDEBUG`, and no stack-trace bookkeeping.             |
+| `--no-trace`                 | Drop call-stack tracing (uncaught exceptions print no trace).  |
+| `--native`                   | Tune for the build machine (`-march=native`).                  |
 | `-g`, `-g3`                  | Include debug info.                                            |
 | `--cc <compiler>`            | C compiler to use (default `$CC`, else `cc`).                  |
 | `-Werror`                    | Treat warnings (e.g. unused variables) as fatal.              |
@@ -116,29 +136,30 @@ gravc -                       # read source from stdin, write C to stdout
 | `-`                          | Read from stdin and print C to stdout.                         |
 
 For `asm`/`bin`/`both`, `gravc` invokes the system C compiler (`$CC`, default `cc`)
-as `cc -std=c11 [opts] <file>.c -o <out>`.
+as `cc -std=c11 -O2 [opts] <file>.c -o <out>`; the intermediate `.c` goes to a unique
+file in the temp directory (use `--keep-c` to keep it next to the source). `--run`
+exits with the program's own exit status.
+
+**What the generated C looks like.** Every generated function is `static` (one
+translation unit, so the C compiler can inline and drop freely); vtables and
+interface tables are `const`; a method call that no subclass overrides compiles to a
+direct call instead of a vtable lookup; virtual and interface calls go through tiny
+`static inline` thunks so the receiver is evaluated exactly once; string `+` chains
+and `"${…}"` interpolation are fused into a single allocation, and `print` of such a
+string is one `printf` with no allocation at all. Stack-trace bookkeeping is a single
+store per call-capable statement and disappears entirely under `--release`.
 
 ---
 
 ## Language tour
 
-> **See it all at once:** [`examples/comprehensive.grav`](examples/comprehensive.grav)
-> is a single runnable program that exercises (almost) every feature below —
-> macros, type aliases, enums, structs, arrays, pointers, classes/interfaces,
-> the full operator set, control flow, `null`/`??`/`?.`, `as`/`is`, async/await,
-> and `sizeof`. Build and run it with:
->
-> ```bash
-> ./build/gravc examples/comprehensive.grav --emit bin -o /tmp/comp && /tmp/comp
-> ```
->
-> For the **grand tour** — (almost) every language feature *and* every standard-library
-> module in one runnable file — see
-> [`examples/21_showcase.grav`](examples/21_showcase.grav)
-> (`grav examples/21_showcase.grav --run`). For a **multi-file** program (imports,
-> module-shared globals, inline-C variable sharing) see [`examples/qa/`](examples/qa/).
-> The numbered `examples/NN_*.grav` files are a growing, one-feature-at-a-time tour;
-> [`tests/run.sh`](tests/run.sh) compiles and runs them all with golden checks.
+> **Runnable examples for every section:** [`examples/`](examples/) has one program
+> per area of the language (`01_basics` … `15_inline_c_macros`), a multi-file
+> [`project/`](examples/project/) (imports, nested namespaces, shared globals), and
+> four complete programs in [`apps/`](examples/apps/) — a bank, a word-frequency
+> analyzer, Conway's Game of Life, and a command-driven task manager. See
+> [`examples/README.md`](examples/README.md) for the index;
+> [`tests/run.sh`](tests/run.sh) builds and runs them all against golden outputs.
 
 ### Primitive types & variables
 
@@ -249,7 +270,8 @@ Beyond `+ - * /` and the comparison/logical operators, Grav has:
 | Compound assignment | `+= -= *= /= %=` and `&= |= ^= <<= >>=` |
 | Ternary | `cond ? a : b` |
 
-Modulo, bitwise and shift operators require `int` operands. `string += string`
+Operands and arguments are evaluated **left to right**. Modulo, bitwise and shift
+operators require `int` operands. `string += string`
 concatenates in place. The ternary's branches must share a common type.
 
 ```grav
@@ -276,6 +298,181 @@ fn main() {
     print(sum)                       // 5050
 }
 ```
+
+### For-each loops & `step`
+
+`for … in` also walks collections: fixed arrays, variadic slices, `binary` bytes,
+and any object with `length()`/`size()` plus `get(i)`/`at(i)` (so `Array<T>`,
+`List<T>`, `StringBuilder`-style classes, your own types). The two-name form binds the
+index too. Ranges take an optional `step`, which may be negative to count down.
+
+```grav
+fn main() {
+    let xs = [3, 1, 4]
+    for (x in xs) { print(x) }                 // 3 1 4
+    for (i, x in xs) { print("${i}:${x}") }    // 0:3 1:1 2:4
+    for (i in 10..0 step -5) { print(i) }      // 10 5
+    for (i in 0..=10 step 5) { print(i) }      // 0 5 10
+}
+```
+
+### Operator overloading
+
+A class can implement `+ - * / %`, `== != < <= > >=`, and indexing with
+`fn operator<op>(other: T)`. `!=` falls back to `!(a == b)`; `operator[]` reads and
+`operator[]=` writes (`obj[k] = v`). Comparisons against `null` stay reference tests.
+
+```grav
+class Vec {
+    public x: int  public y: int
+    constructor(x: int, y: int) { self.x = x; self.y = y }
+    fn operator+(o: Vec) -> Vec { return new Vec(self.x + o.x, self.y + o.y) }
+    fn operator==(o: Vec) -> bool { return self.x == o.x && self.y == o.y }
+    fn toString() -> string { return "(${self.x}, ${self.y})" }
+}
+
+fn main() {
+    let v = new Vec(1, 2) + new Vec(3, 4)
+    print(v)                          // (4, 6)   — toString() is used by print/str/${}
+    print(v == new Vec(4, 6))         // true
+}
+```
+
+`**` is exponentiation (`2 ** 10` is `1024`; float operands use `pow`). It binds
+tighter than `*` and is right-associative.
+
+### Memory: destructors & `defer`
+
+There is no garbage collector: `new` allocates and `free(obj)` releases. A class may
+declare `destructor() { … }`; `free` runs the *dynamic* type's destructor, then each
+base class's, most-derived first. The standard collections free their buffers this
+way, so `free(list)` releases everything it owns.
+
+`defer stmt` (or `defer { … }`) schedules code to run when the enclosing block exits —
+normally or through `return`, `break`, or `continue` — in last-in, first-out order. A
+`return` value is computed before deferred code runs. (Deferred code does not run when
+an exception propagates; use `finally` for that.)
+
+```grav
+class Conn {
+    constructor() { print("open") }
+    destructor() { print("close") }
+}
+
+fn query(id: int) -> string {
+    let c = new Conn()
+    defer free(c)                     // always closes, whichever return is taken
+    if (id < 0) { return "bad id" }
+    return "row ${id}"
+}
+```
+
+**Strings are freed automatically** where the compiler can prove it is safe. A local
+`string` variable is *owned* when every use of it only reads or copies its characters
+(it is part of a `+`/`${}` chain, printed, compared, used as a `switch` subject, or
+passed to a known non-retaining call such as `IO.print`, `Str.length`, or
+`StringBuilder.append`). An owned variable frees its old value on reassignment
+(including `s += x`) and its final value when its block exits by any path, but only
+values the function itself allocated (literals and borrowed strings are never
+freed). Temporaries passed to those calls or compared with `==` are freed right
+after use. A variable that is returned, stored in a field/collection, captured by a
+lambda, or passed to other code is left alone (it may be shared), as is everything in
+a function that contains inline C.
+
+```grav
+fn main() {
+    let report = ""
+    for (i in 0..1000) {
+        let line = "item ${i}"           // freed at the end of every iteration
+        report += line + "; "            // the previous `report` is freed each time
+    }
+    IO.print("done: " + report)          // the temporary is freed after the call
+}                                        // `report` is freed here
+```
+
+Ownership also crosses function boundaries: a function whose every `return` yields a
+new string (a `+`/`${}` result, a call to another such function, or one of its own
+owned locals) hands that string to the caller, so `let s = banner("x")` is freed like
+any owned local, a discarded `banner("x");` result is freed immediately, and fresh
+strings used as pieces of a `+` chain or `print` are freed right after the statement.
+Inline C only disqualifies the variables it actually names.
+
+Closures follow the same rules: a local function value that is only ever called has
+its captured environment freed at scope exit, and a capturing lambda passed directly
+to `map`/`filter`/`forEach`/`reduce`/`sortBy`/… is freed after the call.
+
+Strings or closures that escape (stored in objects or collections, returned from a
+function that sometimes returns a borrowed string) are not reclaimed; for heavy text
+building, `StringBuilder` (lib/strbuf.grav) avoids the repeated copies.
+
+### Lambdas & function types
+
+Functions are values. A function type is written `fn(A, B) -> R` (`-> R` omitted for
+`void`). A lambda is `fn(x: T) => expr` or `fn(x: T) -> R { ... }`; parameter types
+may be left out when the expected type is known (an argument, a typed `let`, a field
+assignment, a `return`). Named functions can be used as values too.
+
+```grav
+fn square(x: int) -> int { return x * x }
+fn twice(f: fn(int) -> int) -> fn(int) -> int { return fn(x) => f(f(x)) }
+
+fn main() {
+    let k = 10
+    let addK = fn(x: int) => x + k        // captures k
+    print(addK(5))                        // 15
+    print(twice(square)(3))               // 81
+    let g: fn(int) -> int = square        // a named function as a value
+    let nums = new Array<int>()
+    for (n in [5, 3, 8]) { nums.push(n) }
+    print(nums.filter(fn(n) => n > 4).map(fn(n) => n * 10).reduce(0, fn(a, b) => a + b))  // 130
+}
+```
+
+Lambdas **capture by value**: outer variables are copied into the closure when it is
+created, so assigning to them inside the lambda is a compile error. Share mutable
+state through an object (`cell.value = cell.value + 1`). `self` can be captured inside
+methods. Function values can be stored in fields and collections (`Array<fn(string)>`),
+compared with `null`, and called like functions (`self.onClick(label)`); calling a null
+function value stops the program with an error. A closure's captured environment is
+heap-allocated; `free(f)` releases it.
+
+`Array<T>` has `forEach`, `forEachIndexed`, `map`, `filter`, `reduce`, `any`, `all`,
+`countWhere`, `findIndex`, `copy`, a stable `sortBy(cmp)`, and the generic methods
+`mapTo::<U>(f)` and `fold::<A>(init, f)` that change the element type.
+
+**Generic methods.** A method can declare its own type parameters
+(`fn map<U>(f: fn(T) -> U) -> Box<U>`) — on generic or plain classes, instance or
+static. Call it with explicit type arguments: `box.map::<string>(fn(v) => str(v))`,
+`Conv.pair::<int, string>(1, "a")`. Each distinct argument list is compiled once.
+
+### Method overloading
+
+Methods (instance and static) and operator methods can be overloaded by parameter
+types. The best match is chosen at compile time: an exact match wins, otherwise the
+single candidate whose parameters accept the arguments; otherwise the call is
+reported as ambiguous or unmatched. A subclass can override one overload and add new
+ones; overriding is by exact signature. Constructors overload the same way
+(`new Color()`, `new Color(128)`, `new Color(255, 64, 0)`), and `super(...)` picks
+the matching parent constructor.
+
+```grav
+class Fmt {
+    static fn show(x: int) -> string { return "int ${x}" }
+    static fn show(s: string) -> string { return "string ${s}" }
+    static fn show(a: int, b: int) -> string { return "pair ${a},${b}" }
+}
+class Vec2 {
+    public x: float  public y: float
+    constructor(x: float, y: float) { self.x = x; self.y = y }
+    fn operator*(k: float) -> Vec2 { return new Vec2(self.x * k, self.y * k) }
+    fn operator*(o: Vec2) -> float { return self.x * o.x + self.y * o.y }
+}
+```
+
+### `final`
+
+`final class C` cannot be extended and `final fn m()` cannot be overridden. Besides
+documenting intent, it guarantees the compiler can call such methods directly.
 
 ### Null, `??` & optional chaining
 
@@ -505,8 +702,8 @@ in the generated C (no runtime type erasure). Type arguments are explicit: `Box<
 in type positions and the turbofish `id::<int>(x)` on a call. Generic inheritance
 (`extends Base<T>`, `implements Iface<T>`), generic aliases (`type Vec<T> = T[3]`),
 and `T: Bound` constraints are all supported. See
-[generics.grav](examples/11_generics.grav) and
-[generic_classes.grav](examples/11_generics.grav).
+[08_generics.grav](examples/08_generics.grav) and
+[08_generics.grav](examples/08_generics.grav).
 
 ```grav
 class Box<T> {
@@ -535,7 +732,7 @@ fn main() {
 A function's last parameter may be variadic (`...name: T`), collecting the trailing
 arguments into a runtime-length slice: `name.length` is the count and `name[i]`
 indexes elements. It lowers to a `(int count, T* ptr)` pair with a C compound
-literal at each call — no heap allocation. See [variadics.grav](examples/12_variadics.grav).
+literal at each call — no heap allocation. See [03_functions.grav](examples/03_functions.grav).
 
 ```grav
 fn sum(...nums: int) -> int {
@@ -553,9 +750,14 @@ fn main() {
 ### Exceptions
 
 `throw` raises a class instance; `try { } catch (e: Type) { }` catches it (matching
-the type or any subclass); `finally { }` runs on the normal and handled paths. It
-lowers to a `setjmp`/`longjmp` runtime; an uncaught exception prints a message and
-exits. See [exceptions.grav](examples/13_exceptions.grav).
+the type or any subclass). A `try` may have several `catch` clauses, tried in order
+(a clause made unreachable by an earlier, broader one is a compile error);
+`finally { }` always runs — on normal completion, after a
+handled exception, while an unhandled one propagates, when a handler itself throws,
+and when `return`, `break`, or `continue` leaves the `try`/`catch`. It lowers to a `setjmp`/`longjmp` runtime (locals
+written inside `try` are made `volatile` so they keep their values in `catch` at any
+optimization level); an uncaught exception prints a message and the stack trace of
+the original `throw`, then exits. See [10_exceptions.grav](examples/10_exceptions.grav).
 
 ```grav
 class AppError { public msg: string  constructor(m: string) { self.msg = m; } }
@@ -576,7 +778,7 @@ fn main() {
 A module-level `const`/`let` is a global; a class `static x: T = value` is a
 class-level field accessed as `Class.x`. Both need an explicit type and a constant
 initializer, and lower to C globals. `const`/`readonly` ones are immutable. See
-[globals.grav](examples/09_classes.grav).
+[05_classes.grav](examples/05_classes.grav).
 
 ```grav
 const PI: float = 3.14159
@@ -735,13 +937,13 @@ import "shapes.grav"
 fn main() { let s: Shape = new Square(6)  print(s.area()) }
 ```
 
-A runnable, multi-file example lives in
-[`examples/import_demo/`](examples/import_demo): `app.grav` imports `geometry.grav`,
-which in turn imports `mathutil.grav` (a transitive import), and `app.grav` also
-re-imports `mathutil.grav` to show that duplicate imports are a safe no-op.
+A runnable, multi-file example lives in [`examples/project/`](examples/project/):
+`main.grav` imports `util/text.grav` and `model/shapes.grav` (which itself imports
+`util/text.grav` — a transitive import), uses their nested namespaces, and re-imports
+a module to show that duplicate imports are a safe no-op.
 
 ```bash
-./build/gravc examples/import_demo/app.grav --emit bin -o /tmp/app && /tmp/app
+./build/gravc examples/project/main.grav --run
 ```
 
 ### Runtime type info (RTTI)
@@ -759,14 +961,14 @@ print(isInstance(a, zoo.Animal)) // true  (walks the base chain)
 
 | Built-in                  | Description                                                  |
 |---------------------------|--------------------------------------------------------------|
-| `print(x)`                | Prints an `int`/`float`/`bool`/`string` and a newline.       |
-| `str(x)`                  | Converts an `int`/`float`/`bool`/`string`/enum to a `string`.|
+| `print(x)`                | Prints a value and a newline: primitives, enums (member name), and any class/interface with `toString() -> string`. |
+| `str(x)`                  | Converts the same set of values to a `string`.               |
 | `typename(obj)`           | Returns the runtime class name as a `string`.                |
 | `isInstance(obj, Type)`   | `true` if `obj` is a `Type` or a subclass of it.             |
 | `input()`                 | Reads one line from stdin (without the newline) as a `string`.|
 | `argc()`                  | Number of command-line arguments (incl. the program name).   |
 | `argv(i)`                 | The `i`-th command-line argument as a `string` (`""` if OOB). |
-| `free(obj)`               | Releases a heap object created with `new` (no GC; use with care).|
+| `free(obj)`               | Runs the object's destructor chain, then releases it (no GC; see [Memory](#memory-destructors--defer)).|
 
 ### String interpolation
 
@@ -876,9 +1078,11 @@ See [`src/codegen/README.md`](src/codegen/README.md) for the gory details.
 .
 ├── main.cpp                 # gravc driver: args, imports, pipeline, --emit
 ├── CMakeLists.txt
-├── examples/                # numbered feature tour + comprehensive/ qa/ programs
+├── examples/                # per-section programs, project/ (multi-file), apps/
 ├── lib/                     # standard library (collections, strings, math, fs, datetime, …)
-├── tests/run.sh             # compile + run every example with golden checks
+├── docs/                    # the language guide (chapters + reference)
+├── tests/run.sh             # build + run every example against tests/expected/*.out
+├── tests/docs.sh            # compile + run every snippet in docs/ and check its output
 ├── editors/                 # Neovim, VS Code, and JetBrains/CLion integrations
 ├── mcp_server/              # dependency-free MCP server wrapping gravc
 └── src/
@@ -966,6 +1170,43 @@ navigation stay consistent.
 
 ## Roadmap / not yet implemented
 
+`v1.2` also defined **left-to-right evaluation** (call arguments, receivers, and
+the pieces of `+`/`${}` strings — C leaves argument order unspecified), multiple
+`catch` clauses, `==` on structs (member-wise), interfaces and functions (identity),
+and `binary` (bytes), integer-to-enum casts (`2 as Suit`), `sizeof` of any built-in
+type name, mixed-width compound assignment (`int += byte`), C-safe renaming of locals
+named like C keywords, and fixed generic instantiation inside namespaces. The
+examples were rewritten — see [examples/README.md](examples/README.md).
+
+`v1.2` added **constructor overloading**, **generic methods** (`fn map<U>(…)`, called
+as `obj.map::<U>(…)`), caller-owned string results (functions that always return a
+fresh string), statement-level freeing of temporary strings, automatic freeing of
+local closures and of capturing lambdas passed to collection methods, and narrower
+inline-C handling in the ownership analysis.
+
+`v1.1` added **lambdas and first-class functions** (`fn(A) -> R` types, closures that
+capture by value, named functions as values, function-typed fields), **higher-order
+collection methods** (`map` / `filter` / `reduce` / `forEach` / `any` / `all` /
+`sortBy` / … plus generic `mapTo` / `fold`), **method overloading** (instance,
+static, and operator methods), and **automatic freeing of owned strings** (see
+[Memory](#memory-destructors--defer)). See
+[09_lambdas.grav](examples/09_lambdas.grav).
+
+`v1.0` added **for-each loops** (`for (x in xs)`, `for (i, x in xs)`), range **`step`**,
+**`defer`**, **destructors** run by `free`, **operator overloading** (arithmetic,
+comparison, `[]`/`[]=`), **`toString()`** integration with `print`/`str`/interpolation,
+enum values printing as their member names, the **`**`** power operator, **`final`**
+classes and methods, string escapes `\r \0 \' \e \xHH \u{…}`, and a missing-return
+check. Codegen now devirtualizes non-overridden calls, fuses string building into one
+allocation, makes everything `static`/`const`, and builds at `-O2` by default
+(`--release` for `-O3` without tracing). New libraries: `StringBuilder`, `HashMap<K,V>`,
+`OS`, `Time`/`Stopwatch`, and `Term`. Fixes: `finally` now runs on `return`/`break`/
+`continue`, exception handling is correct at `-O2`, `break`/`continue` out of a `try` no
+longer corrupt the handler stack, a re-thrown exception keeps its original stack trace,
+method calls on temporaries evaluate the receiver once, errors inside `${…}` report the
+right line, `DateTime` is 2038-safe, and `Array`/`Map` accesses are bounds-checked. See
+[02_control_flow.grav](examples/02_control_flow.grav).
+
 `v0.9` widened the **numeric types** (`long`/`int64`, `uint`/`unsigned`/`ulong`,
 `byte`, `double`/`float64`, `float32`, with C-like width promotion), added a
 **`binary`** blob type, `typedef` (an alias for `type`), an object-oriented
@@ -973,21 +1214,20 @@ standard library (an **instance `File`** class, an **`IO`** class, and `Format`
 type conversions), plus **`super`** (`super(...)` to run the parent constructor and
 `super.method(...)` to call a parent's implementation) and **free-function
 overloading** (same name, different parameter signatures) — see
-[19_types_io.grav](examples/19_types_io.grav) and
-[20_super_overload.grav](examples/20_super_overload.grav). (Overloading is for free
-functions; overloading *methods* is not supported yet, since the vtable keeps one
-slot per method name.)
+[01_basics.grav](examples/01_basics.grav) and
+[07_overloading.grav](examples/07_overloading.grav). (Method overloading
+followed in v1.1.)
 
 `v0.8` added the three multiple-inheritance forms (see
-[17_multiple_inheritance.grav](examples/17_multiple_inheritance.grav)): **traits**
+[06_inheritance.grav](examples/06_inheritance.grav)): **traits**
 (`trait` interfaces with default method bodies + `Self`), **composition** (`uses
 field: T`, auto-forwarding), and **true multiple inheritance** (`extends A, B`,
 flattening fields/methods with multi-base RTTI). `v0.7` completed **generics** —
 generic classes/interfaces, generic inheritance (`extends Base<T>`), generic type
 aliases, and `T: Bound` constraints (see
-[generic_classes.grav](examples/11_generics.grav)) — and added **variadics**
-(`fn f(...xs: T)`, see [variadics.grav](examples/12_variadics.grav)) and **exceptions**
-(`try`/`catch`/`throw`/`finally`, see [exceptions.grav](examples/13_exceptions.grav)).
+[08_generics.grav](examples/08_generics.grav)) — and added **variadics**
+(`fn f(...xs: T)`, see [03_functions.grav](examples/03_functions.grav)) and **exceptions**
+(`try`/`catch`/`throw`/`finally`, see [10_exceptions.grav](examples/10_exceptions.grav)).
 `v0.6` added generic structs/functions and **globals + static fields**. `v0.5`
 added [string interpolation](#string-interpolation), the
 [`str`/`input`/`argc`/`argv`](#built-ins) built-ins, an
@@ -1005,9 +1245,13 @@ implemented yet — using them is a parse/type error today:
   generic classes plus a small inline-C runtime (`realloc` buffers). Construct them
   with `new Array<int>()` etc.; only the literal syntax is outstanding. Fixed-length
   `T[N]` arrays *are* implemented — see [Arrays](#arrays).
-- **Functional iteration & first-class functions** — `map` / `filter` / `reduce`,
-  lambdas, and `Iterator` / `Generator` / `Stream` are not implemented; they need
-  first-class function values, which the type system does not model yet.
+- **Lazy iteration** — `Iterator` / `Generator` / `Stream` are not implemented
+  (lambdas and eager `map` / `filter` / `reduce` are). Generic methods need explicit
+  type arguments (`xs.mapTo::<string>(f)`); they are not inferred.
+- **Garbage collection** — there is no collector: objects are released with `free` /
+  destructors, and strings/closures are freed automatically only where the compiler
+  proves ownership (see [Memory](#memory-destructors--defer)); values that escape into
+  objects or collections are not reclaimed.
 - **`Dynamic` / `any` and reflection** — and the libraries that depend on them (JSON,
   a general-purpose serializer) are not implemented. `Option<T>` / `Result<T,E>` exist
   only as much as plain generics allow — there is no pattern-match binding (`match`).
@@ -1015,11 +1259,12 @@ implemented yet — using them is a parse/type error today:
   real threads, channels, HTTP, and sockets are not implemented.
 
 What *is* in the standard library now (see [lib/README.md](lib/README.md)): the
-collections above, an expanded `Str` (trim/replace/split/join/pad/…), floating-point
-`Math` (`<math.h>`), `Random`, `DateTime` (`<time.h>`), `File`
-(`fs`), `Path`, and `Process` (`popen`/`system`).
+collections above plus `HashMap<K,V>`, `StringBuilder`, an expanded `Str`
+(trim/replace/split/join/pad/…), floating-point `Math` (`<math.h>`), `Random`,
+`DateTime` (`<time.h>`), `Time`/`Stopwatch`, `File` (`fs`), `Path`, `Process`
+(`popen`/`system`), `OS`, and `Term` (ANSI styling).
 
-A note on [multiple inheritance](examples/17_multiple_inheritance.grav): the primary
+A note on [multiple inheritance](examples/06_inheritance.grav): the primary
 base in `extends A, B` keeps prefix layout (full polymorphism through `A`), while
 secondary bases are flattened (fields + methods copied in) with multi-base RTTI. For
 polymorphism through a *secondary* base, use an interface or `trait`.
