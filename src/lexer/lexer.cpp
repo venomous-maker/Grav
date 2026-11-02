@@ -202,6 +202,60 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
                 case '\\': lit += '\\'; break;
                 case '"': lit += '"'; break;
                 case '$': lit += '$'; break; // escaped interpolation
+                case 'r': lit += '\r'; break;
+                case '0': lit += '\0'; break;
+                case '\'': lit += '\''; break;
+                case 'a': lit += '\a'; break;
+                case 'b': lit += '\b'; break;
+                case 'f': lit += '\f'; break;
+                case 'v': lit += '\v'; break;
+                case 'e': lit += '\x1b'; break; // ESC, for ANSI terminal codes
+                case 'x': { // \xHH — one byte
+                    auto hex = [](char h) {
+                        return std::isxdigit(static_cast<unsigned char>(h))
+                                   ? (std::isdigit(static_cast<unsigned char>(h)) ? h - '0'
+                                                                                  : (std::tolower(h) - 'a' + 10))
+                                   : -1;
+                    };
+                    int hi = atEnd() ? -1 : hex(peek());
+                    int lo = hi < 0 ? -1 : hex(peekNext());
+                    if (hi < 0 || lo < 0)
+                        throw GravError("lex", line_, col_, "'\\x' needs two hex digits");
+                    advance(); advance();
+                    lit += static_cast<char>(hi * 16 + lo);
+                    break;
+                }
+                case 'u': { // \u{XXXX} — a Unicode code point, encoded as UTF-8
+                    if (atEnd() || peek() != '{')
+                        throw GravError("lex", line_, col_, "'\\u' must be written \\u{XXXX}");
+                    advance();
+                    unsigned long cp = 0;
+                    int digits = 0;
+                    while (!atEnd() && std::isxdigit(static_cast<unsigned char>(peek())) && digits < 6) {
+                        char h = advance();
+                        cp = cp * 16 + (std::isdigit(static_cast<unsigned char>(h)) ? h - '0'
+                                                                                    : std::tolower(h) - 'a' + 10);
+                        digits++;
+                    }
+                    if (atEnd() || peek() != '}' || digits == 0 || cp > 0x10FFFF)
+                        throw GravError("lex", line_, col_, "malformed \\u{...} escape");
+                    advance();
+                    if (cp < 0x80) lit += static_cast<char>(cp);
+                    else if (cp < 0x800) {
+                        lit += static_cast<char>(0xC0 | (cp >> 6));
+                        lit += static_cast<char>(0x80 | (cp & 0x3F));
+                    } else if (cp < 0x10000) {
+                        lit += static_cast<char>(0xE0 | (cp >> 12));
+                        lit += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                        lit += static_cast<char>(0x80 | (cp & 0x3F));
+                    } else {
+                        lit += static_cast<char>(0xF0 | (cp >> 18));
+                        lit += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+                        lit += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                        lit += static_cast<char>(0x80 | (cp & 0x3F));
+                    }
+                    break;
+                }
                 default:
                     throw GravError("lex", line_, col_,
                                     std::string("invalid escape sequence '\\") + esc + "'");
@@ -258,8 +312,14 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
             emit(TokenType::Identifier, "str");
             emit(TokenType::LParen, "(");
             Lexer sub(p.text);
-            for (auto &tk : sub.tokenize())
-                if (tk.type != TokenType::EndOfFile) out.push_back(tk);
+            // Re-anchor the embedded tokens at the string's position so errors
+            // inside `${...}` point at the right line (not line 1).
+            for (auto &tk : sub.tokenize()) {
+                if (tk.type == TokenType::EndOfFile) continue;
+                tk.line = sLine;
+                tk.col = sCol + tk.col;
+                out.push_back(tk);
+            }
             emit(TokenType::RParen, ")");
         }
     }
