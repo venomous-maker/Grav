@@ -229,9 +229,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
                mangle(e->className) + "_typeinfo)";
     }
     if (auto *e = dynamic_cast<const AwaitExpr *>(&expr)) {
-        // Futures resolve eagerly, so the awaited value is already computed:
-        // `await e` lowers to `e` itself.
-        return emitExpr(*e->operand);
+        // `await f`: wait for the task (re-throwing its exception) and read the result.
+        if (e->type.isVoid()) return "((void)grav_await(" + emitExpr(*e->operand) + "))";
+        return "(*(" + cTy(e->type) + "*)grav_await(" + emitExpr(*e->operand) + "))";
     }
     if (auto *e = dynamic_cast<const AddrOfExpr *>(&expr)) {
         return "(&" + emitExpr(*e->operand) + ")";
@@ -381,6 +381,8 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 const TypeRef &ft = call.args[0]->type;
                 if (ft.isNamed() && reg_->isClass(ft.name))
                     return "grav_free_obj((void*)(" + emitExpr(*call.args[0]) + "))";
+                if (ft.isFuture()) // waits for the task, then releases its record
+                    return "grav_task_free(" + emitExpr(*call.args[0]) + ")";
                 if (ft.isFunction()) // releases a closure's captured environment
                     return "free((" + emitExpr(*call.args[0]) + ").env)";
                 return "free((void*)(" + emitExpr(*call.args[0]) + "))";
@@ -412,7 +414,9 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             for (const auto &cand : set)
                 if (cand.overloadIndex == call.resolvedOverload) { fi = &cand; break; }
             std::vector<TypeRef> params = fi ? fi->paramTypes : std::vector<TypeRef>{};
-            std::string out = funcCName(call.targetName, call.resolvedOverload) + "(";
+            // An async function call queues a task and yields its future.
+            std::string out = funcCName(call.targetName, call.resolvedOverload) +
+                              (fi && fi->isAsync ? "__spawn(" : "(");
             if (fi && fi->isVariadic) {
                 emitVariadicArgs(out, call, params);
             } else {
