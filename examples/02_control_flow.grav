@@ -1,0 +1,101 @@
+// 02_control_flow.grav — every way to branch and loop.
+//
+//   grav examples/02_control_flow.grav --run
+//
+// Covers: if / else if / else, while, do/while, C-style for, ranges (`..`,
+// `..=`, `step`, counting down), for-each over arrays (with and without the
+// index), switch / match on ints, strings and enums (multi-value cases),
+// break / continue, and `defer`.
+
+import "../lib/std.grav"   // for printRaw (print without a newline)
+
+enum Light { Red, Amber, Green }
+
+fn classify(n: int) -> string {
+    if (n < 0) { return "negative" }
+    else if (n == 0) { return "zero" }
+    else if (n < 10) { return "small" }
+    else { return "large" }
+}
+
+fn next(l: Light) -> Light {
+    match (l) {                                   // `match` and `switch` are synonyms
+        case Light.Red:   { return Light.Green }
+        case Light.Green: { return Light.Amber }
+        default:          { return Light.Red }
+    }
+}
+
+fn dayType(day: string) -> string {
+    switch (day) {
+        case "sat", "sun":                    { return "weekend" }
+        case "mon", "tue", "wed", "thu", "fri": { return "weekday" }
+        default:                              { return "unknown" }
+    }
+}
+
+// `defer` runs when the block exits, in reverse order, on every path.
+fn withCleanup(fail: bool) -> string {
+    defer print("  cleanup 1 (runs last)")
+    defer { print("  cleanup 2 (runs first)") }
+    if (fail) { return "early return" }
+    return "normal return"
+}
+
+fn main() {
+    print("--- if / else ---")
+    for (n in [-5, 0, 7, 42]) { print("${n} is ${classify(n)}") }
+
+    print("--- while & do/while ---")
+    let i = 0
+    while (i < 3) { printRaw("w${i} ")  i++ }
+    print("")
+    let j = 3
+    do { printRaw("d${j} ")  j-- } while (j > 0)
+    print("")
+
+    print("--- C-style for ---")
+    for (let k = 1; k <= 64; k *= 2) { printRaw("${k} ") }
+    print("")
+
+    print("--- ranges ---")
+    for (k in 0..5) { printRaw("${k} ") }               // 0..4
+    print("")
+    for (k in 1..=5) { printRaw("${k} ") }              // 1..5
+    print("")
+    for (k in 0..=20 step 5) { printRaw("${k} ") }      // 0 5 10 15 20
+    print("")
+    for (k in 10..0 step -3) { printRaw("${k} ") }      // 10 7 4 1
+    print("")
+
+    print("--- for-each ---")
+    let primes = [2, 3, 5, 7, 11, 13]
+    let sum = 0
+    for (p in primes) { sum += p }
+    print("sum of primes = ${sum}")
+    for (idx, p in primes) { if (idx % 2 == 0) { printRaw("[${idx}]=${p} ") } }
+    print("")
+
+    print("--- break & continue ---")
+    for (k in 1..100) {
+        if (k % 3 == 0) { continue }
+        if (k > 10) { break }
+        printRaw("${k} ")
+    }
+    print("")
+
+    print("--- switch / match ---")
+    let l = Light.Red
+    for (step in 0..4) { printRaw("${l} -> ")  l = next(l) }
+    print("${l}")
+    for (d in ["sat", "wed", "xyz"]) { print("${d}: ${dayType(d)}") }
+
+    print("--- defer ---")
+    print(withCleanup(false))
+    print(withCleanup(true))
+    for (k in 0..3) {
+        defer print("  end of iteration ${k}")
+        if (k == 1) { continue }
+        print("  body ${k}")
+    }
+}
