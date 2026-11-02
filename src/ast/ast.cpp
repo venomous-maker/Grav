@@ -68,4 +68,73 @@ const char *accessName(Access a) {
     return "public";
 }
 
+namespace {
+struct Visitor {
+    const std::function<void(Expr &)> &f;
+    void block(Block &b) { for (auto &s : b.statements) stmt(s.get()); }
+    void stmt(Stmt *s) {
+        if (!s) return;
+        if (auto *x = dynamic_cast<LetStmt *>(s)) expr(x->init.get());
+        else if (auto *x = dynamic_cast<AssignStmt *>(s)) { expr(x->target.get()); expr(x->value.get()); }
+        else if (auto *x = dynamic_cast<ReturnStmt *>(s)) expr(x->value.get());
+        else if (auto *x = dynamic_cast<ExprStmt *>(s)) expr(x->expr.get());
+        else if (auto *x = dynamic_cast<BlockStmt *>(s)) block(x->block);
+        else if (auto *x = dynamic_cast<IfStmt *>(s)) { expr(x->cond.get()); block(x->thenBlock); stmt(x->elseStmt.get()); }
+        else if (auto *x = dynamic_cast<WhileStmt *>(s)) { expr(x->cond.get()); block(x->body); }
+        else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) { block(x->body); expr(x->cond.get()); }
+        else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+            stmt(x->init.get()); expr(x->cond.get()); stmt(x->update.get()); block(x->body);
+        } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+            expr(x->lo.get()); expr(x->hi.get()); expr(x->step.get()); block(x->body);
+        } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+            expr(x->subject.get());
+            for (auto &c : x->cases) { for (auto &v : c.values) expr(v.get()); block(c.body); }
+            block(x->defaultBody);
+        } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value.get());
+        else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+            block(x->tryBlock);
+            for (auto &c : x->catches) block(c.block);
+            block(x->finallyBlock);
+        } else if (auto *x = dynamic_cast<DeferStmt *>(s)) block(x->body);
+    }
+    void expr(Expr *e) {
+        if (!e) return;
+        f(*e);
+        if (auto *x = dynamic_cast<BinaryExpr *>(e)) { expr(x->left.get()); expr(x->right.get()); }
+        else if (auto *x = dynamic_cast<UnaryExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<TernaryExpr *>(e)) { expr(x->cond.get()); expr(x->thenExpr.get()); expr(x->elseExpr.get()); }
+        else if (auto *x = dynamic_cast<AsExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<IsExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<AwaitExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<DerefExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) { expr(x->left.get()); expr(x->right.get()); }
+        else if (auto *x = dynamic_cast<IncDecExpr *>(e)) expr(x->target.get());
+        else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand.get());
+        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el.get()); }
+        else if (auto *x = dynamic_cast<IndexExpr *>(e)) { expr(x->base.get()); expr(x->index.get()); }
+        else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a.get()); }
+        else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value.get()); }
+        else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee.get()); for (auto &a : x->args) expr(a.get()); }
+        else if (auto *x = dynamic_cast<MemberExpr *>(e)) expr(x->object.get());
+        else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody.get()); block(x->body); }
+    }
+};
+} // namespace
+
+void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
+    Visitor v{f};
+    for (auto &d : program.decls) {
+        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) v.block(fn->body);
+        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+            v.block(c->constructor.body);
+            for (auto &x : c->extraCtors) v.block(x.body);
+            v.block(c->destructor.body);
+            for (auto &m : c->methods) v.block(m.body);
+            for (auto &sf : c->staticFields) v.expr(sf.init.get());
+        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) v.expr(g->init.get());
+    }
+}
+
 } // namespace grav
