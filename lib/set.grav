@@ -4,6 +4,7 @@ import "array.grav"
 class Set<T> {
     private items: Array<T>
     constructor() { self.items = new Array<T>(); }
+    destructor() { free(self.items); }
 
     public fn add(item: T) { if (!self.items.contains(item)) { self.items.push(item); } }
     public fn contains(item: T) -> bool { return self.items.contains(item); }
