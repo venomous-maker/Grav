@@ -1,0 +1,688 @@
+// lib/net/http.grav — an HTTP/1.1 server and client (plain HTTP; no TLS yet).
+//
+//   let app = new HttpServer()
+//   app.get("/", fn(req: HttpRequest) => HttpResponse.text("hello"))
+//   app.get("/users/:id", fn(req: HttpRequest) => HttpResponse.json(
+//       Json.object().set("id", req.param("id"))))
+//   app.post("/echo", fn(req: HttpRequest) => HttpResponse.text(req.body()))
+//   app.listen(8080)                    // blocks; app.start(8080) runs in the background
+//
+//   let r = HttpClient.fetch("http://127.0.0.1:8080/users/7")
+//   print(r.status)                     // 200
+//   print(r.json()["id"].asString())    // 7
+//
+// Routes match by method and path: `:name` captures one segment (req.param),
+// a trailing `*` captures the rest. Each connection is served on its own thread
+// with keep-alive; a handler that throws produces a 500 response. Query string
+// values are available as req.query("name").
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "../data/bytes.grav"
+import "../text/strbuf.grav"
+import "../data/json.grav"
+import "../concurrency/thread.grav"
+import "tcp.grav"
+
+// URL parsing and percent-encoding.
+
+namespace std.net {
+
+    class Url {
+        public scheme: string
+        public host: string
+        public port: int
+        public path: string      // includes the query string, e.g. "/search?q=x"
+        constructor(scheme: string, host: string, port: int, path: string) {
+            self.scheme = scheme; self.host = host; self.port = port; self.path = path;
+        }
+        // "http://host[:port]/path?query"; the port defaults to 80 (443 for https).
+        static fn parse(text: string) -> Url {
+            let rest = text;
+            let scheme = "http";
+            let sep = Str.indexOf(rest, "://");
+            if (sep >= 0) {
+                scheme = Str.lower(Str.slice(rest, 0, sep));
+                rest = Str.slice(rest, sep + 3, Str.length(rest));
+            }
+            let slash = Str.indexOf(rest, "/");
+            let hostPort = slash >= 0 ? Str.slice(rest, 0, slash) : rest;
+            let path = slash >= 0 ? Str.slice(rest, slash, Str.length(rest)) : "/";
+            let q = Str.indexOf(hostPort, "?");
+            if (q >= 0) { path = "/" + Str.slice(hostPort, q, Str.length(hostPort)); hostPort = Str.slice(hostPort, 0, q); }
+            let port = scheme == "https" ? 443 : 80;
+            let host = hostPort;
+            if (Str.startsWith(hostPort, "[")) {                 // [::1]:8080
+                let close = Str.indexOf(hostPort, "]");
+                host = Str.slice(hostPort, 1, close);
+                if (close + 1 < Str.length(hostPort)) { port = Format.toIntOr(Str.slice(hostPort, close + 2, Str.length(hostPort)), port); }
+            } else {
+                let colon = Str.lastIndexOf(hostPort, ":");
+                if (colon >= 0) {
+                    host = Str.slice(hostPort, 0, colon);
+                    port = Format.toIntOr(Str.slice(hostPort, colon + 1, Str.length(hostPort)), port);
+                }
+            }
+            if (host == "") { throw new ValueError("URL has no host: " + text); }
+            return new Url(scheme, host, port, path);
+        }
+        fn toString() -> string {
+            let defaultPort = self.scheme == "https" ? 443 : 80;
+            let p = self.port == defaultPort ? "" : ":${self.port}";
+            return self.scheme + "://" + self.host + p + self.path;
+        }
+        // Percent-encode everything except unreserved characters (RFC 3986).
+        static fn encode(s: string) -> string { return %{ grav_url_encode(s) %} as string; }
+        // Decode %XX escapes and '+' (as a space).
+        static fn decode(s: string) -> string { return %{ grav_url_decode(s) %} as string; }
+        // "a=1&b=two" -> {a: "1", b: "two"} (decoded).
+        static fn parseQuery(q: string) -> HashMap<string, string> {
+            let out = new HashMap<string, string>();
+            if (q == "") { return out; }
+            for (pair in Str.split(q, "&")) {
+                if (pair == "") { continue; }
+                let eq = Str.indexOf(pair, "=");
+                if (eq < 0) { out.put(Url.decode(pair), ""); }
+                else { out.put(Url.decode(Str.slice(pair, 0, eq)), Url.decode(Str.slice(pair, eq + 1, Str.length(pair)))); }
+            }
+            return out;
+        }
+    }
+
+    %{
+    #include <ctype.h>
+    #include <stdlib.h>
+    #include <string.h>
+    static const char* grav_url_encode(const char* s) {
+        static const char* hex = "0123456789ABCDEF";
+        size_t n = strlen(s), o = 0;
+        char* out = (char*)malloc(n * 3 + 1);
+        if (!out) abort();
+        for (size_t i = 0; i < n; i++) {
+            unsigned char c = (unsigned char)s[i];
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out[o++] = (char)c;
+            else { out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 15]; }
+        }
+        out[o] = 0;
+        return out;
+    }
+    static int grav_hexval(int c) {
+        return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    }
+    static const char* grav_url_decode(const char* s) {
+        size_t n = strlen(s), o = 0;
+        char* out = (char*)malloc(n + 1);
+        if (!out) abort();
+        for (size_t i = 0; i < n; i++) {
+            if (s[i] == '%' && i + 2 < n + 0 + 1 && grav_hexval((unsigned char)s[i + 1]) >= 0 && grav_hexval((unsigned char)s[i + 2]) >= 0) {
+                out[o++] = (char)(grav_hexval((unsigned char)s[i + 1]) * 16 + grav_hexval((unsigned char)s[i + 2]));
+                i += 2;
+            } else out[o++] = s[i] == '+' ? ' ' : s[i];
+        }
+        out[o] = 0;
+        return out;
+    }
+    %}
+
+    // HTTP headers: ordered, case-insensitive names, repeatable.
+    class Headers {
+        private names: Array<string>
+        private values: Array<string>
+        constructor() { self.names = new Array<string>(); self.values = new Array<string>(); }
+        destructor() { free(self.names); free(self.values); }
+        private fn find(name: string) -> int {
+            for (i, n in self.names) { if (Str.equalsIgnoreCase(n, name)) { return i; } }
+            return -1;
+        }
+        // The first value of `name`, or "".
+        public fn get(name: string) -> string {
+            let i = self.find(name);
+            return i < 0 ? "" : self.values.get(i);
+        }
+        public fn has(name: string) -> bool { return self.find(name) >= 0; }
+        // Replace every value of `name` with one value.
+        public fn set(name: string, value: string) {
+            self.remove(name);
+            self.add(name, value);
+        }
+        // Add a value (keeps existing ones, e.g. several Set-Cookie headers).
+        public fn add(name: string, value: string) { self.names.push(name); self.values.push(value); }
+        public fn remove(name: string) {
+            let i = self.find(name);
+            while (i >= 0) {
+                self.names.removeAt(i);
+                self.values.removeAt(i);
+                i = self.find(name);
+            }
+        }
+        public fn size() -> int { return self.names.size(); }
+        public fn nameAt(i: int) -> string { return self.names.get(i); }
+        public fn valueAt(i: int) -> string { return self.values.get(i); }
+        public fn forEach(f: fn(string, string)) {
+            for (i, n in self.names) { f(n, self.values.get(i)); }
+        }
+    }
+
+    // An incoming request (server side).
+    class HttpRequest {
+        public method: string
+        public target: string                 // as sent: "/users/7?x=1"
+        public path: string                   // decoded path without the query: "/users/7"
+        public version: string
+        public headers: Headers
+        public bodyBytes: Bytes
+        public remote: string                 // the client's address
+        private queryText: string
+        private queryMap: HashMap<string, string>
+        private params: HashMap<string, string>
+
+        constructor(method: string, target: string, version: string) {
+            self.method = method;
+            self.target = target;
+            self.version = version;
+            self.headers = new Headers();
+            self.bodyBytes = new Bytes();
+            self.remote = "";
+            let q = Str.indexOf(target, "?");
+            self.path = Url.decode(q >= 0 ? Str.slice(target, 0, q) : target);
+            self.queryText = q >= 0 ? Str.slice(target, q + 1, Str.length(target)) : "";
+            self.queryMap = null;
+            self.params = new HashMap<string, string>();
+        }
+        public fn header(name: string) -> string { return self.headers.get(name); }
+        // The body as text.
+        public fn body() -> string { return self.bodyBytes.toString(); }
+        // The body parsed as JSON (throws ValueError when it is not JSON).
+        public fn json() -> JsonValue { return Json.parse(self.body()); }
+        // A route parameter: for the route "/users/:id", param("id").
+        public fn param(name: string) -> string { return self.params.getOr(name, ""); }
+        public fn setParam(name: string, value: string) { self.params.put(name, value); }
+        // A query-string value ("" when absent).
+        public fn query(name: string) -> string {
+            if (self.queryMap == null) { self.queryMap = Url.parseQuery(self.queryText); }
+            return self.queryMap.getOr(name, "");
+        }
+        public fn hasQuery(name: string) -> bool {
+            if (self.queryMap == null) { self.queryMap = Url.parseQuery(self.queryText); }
+            return self.queryMap.containsKey(name);
+        }
+        // Form fields of an application/x-www-form-urlencoded body.
+        public fn form() -> HashMap<string, string> { return Url.parseQuery(self.body()); }
+        // The client wants the connection kept open after this request.
+        public fn keepAlive() -> bool {
+            let c = Str.lower(self.headers.get("Connection"));
+            if (self.version == "HTTP/1.0") { return c == "keep-alive"; }
+            return c != "close";
+        }
+    }
+
+    // A response: built by server handlers, or returned by HttpClient.
+    class HttpResponse {
+        public status: int
+        public headers: Headers
+        public bodyBytes: Bytes
+
+        constructor(status: int) {
+            self.status = status;
+            self.headers = new Headers();
+            self.bodyBytes = new Bytes();
+        }
+        // ── builders ───────────────────────────────────────────────────────────
+        static fn text(body: string) -> HttpResponse { return HttpResponse.of(200, "text/plain; charset=utf-8", body); }
+        static fn html(body: string) -> HttpResponse { return HttpResponse.of(200, "text/html; charset=utf-8", body); }
+        static fn json(value: JsonValue) -> HttpResponse {
+            return HttpResponse.of(200, "application/json", value.toJson());
+        }
+        static fn of(status: int, contentType: string, body: string) -> HttpResponse {
+            let r = new HttpResponse(status);
+            r.headers.set("Content-Type", contentType);
+            r.bodyBytes.appendString(body);
+            return r;
+        }
+        static fn status(code: int) -> HttpResponse {
+            return HttpResponse.of(code, "text/plain; charset=utf-8", HttpResponse.reason(code));
+        }
+        static fn notFound() -> HttpResponse { return HttpResponse.status(404); }
+        static fn badRequest(message: string) -> HttpResponse {
+            return HttpResponse.of(400, "text/plain; charset=utf-8", message);
+        }
+        static fn redirect(location: string) -> HttpResponse {
+            let r = HttpResponse.status(302);
+            r.headers.set("Location", location);
+            return r;
+        }
+        // Chainable tweaks.
+        public fn header(name: string, value: string) -> HttpResponse { self.headers.set(name, value); return self; }
+        public fn withStatus(code: int) -> HttpResponse { self.status = code; return self; }
+
+        // ── reading ────────────────────────────────────────────────────────────
+        public fn ok() -> bool { return self.status >= 200 && self.status < 300; }
+        public fn body() -> string { return self.bodyBytes.toString(); }
+        public fn json() -> JsonValue { return Json.parse(self.body()); }
+        public fn getHeader(name: string) -> string { return self.headers.get(name); }
+        fn toString() -> string { return "HttpResponse(${self.status} ${HttpResponse.reason(self.status)})"; }
+
+        static fn reason(code: int) -> string {
+            switch (code) {
+                case 100: return "Continue"
+                case 101: return "Switching Protocols"
+                case 200: return "OK"
+                case 201: return "Created"
+                case 202: return "Accepted"
+                case 204: return "No Content"
+                case 301: return "Moved Permanently"
+                case 302: return "Found"
+                case 304: return "Not Modified"
+                case 400: return "Bad Request"
+                case 401: return "Unauthorized"
+                case 403: return "Forbidden"
+                case 404: return "Not Found"
+                case 405: return "Method Not Allowed"
+                case 408: return "Request Timeout"
+                case 409: return "Conflict"
+                case 413: return "Payload Too Large"
+                case 415: return "Unsupported Media Type"
+                case 422: return "Unprocessable Entity"
+                case 429: return "Too Many Requests"
+                case 500: return "Internal Server Error"
+                case 501: return "Not Implemented"
+                case 502: return "Bad Gateway"
+                case 503: return "Service Unavailable"
+                default: return "Status"
+            }
+        }
+    }
+
+    // Reading and writing HTTP messages on a TcpStream (shared by server and client).
+    class Http {
+        // Headers up to the blank line. Throws NetError on malformed input.
+        static fn readHeaders(conn: TcpStream, into: Headers) {
+            let count = 0;
+            while (true) {
+                let line = conn.readLine();
+                if (line == "") {
+                    if (conn.eof()) { throw new NetError("connection closed in the middle of the headers"); }
+                    return;
+                }
+                count += 1;
+                if (count > 200) { throw new NetError("too many headers"); }
+                let colon = Str.indexOf(line, ":");
+                if (colon <= 0) { throw new NetError("malformed header line: " + line); }
+                into.add(Str.trim(Str.slice(line, 0, colon)), Str.trim(Str.slice(line, colon + 1, Str.length(line))));
+            }
+        }
+        // The body described by `headers` (Content-Length or chunked). With
+        // `untilClose`, a body with neither is read until the connection closes.
+        static fn readBody(conn: TcpStream, headers: Headers, untilClose: bool, limit: int) -> Bytes {
+            if (Str.contains(Str.lower(headers.get("Transfer-Encoding")), "chunked")) {
+                let out = new Bytes();
+                while (true) {
+                    let sizeLine = Str.trim(conn.readLine());
+                    let semi = Str.indexOf(sizeLine, ";");
+                    if (semi >= 0) { sizeLine = Str.slice(sizeLine, 0, semi); }
+                    let n = %{ (int)strtol(sizeLine, 0, 16) %} as int;
+                    if (n <= 0) {
+                        // trailers, up to a blank line
+                        while (true) {
+                            let t = conn.readLine();
+                            if (t == "") { break; }
+                        }
+                        return out;
+                    }
+                    if (out.size() + n > limit) { throw new NetError("body is larger than ${limit} bytes"); }
+                    let chunk = conn.readExactly(n);
+                    out.append(chunk);
+                    free(chunk);
+                    conn.readLine();   // the CRLF after each chunk
+                }
+            }
+            if (headers.has("Content-Length")) {
+                let n = Format.toIntOr(headers.get("Content-Length"), -1);
+                if (n < 0) { throw new NetError("bad Content-Length"); }
+                if (n > limit) { throw new NetError("body is larger than ${limit} bytes"); }
+                return n == 0 ? new Bytes() : conn.readExactly(n);
+            }
+            let out = new Bytes();
+            if (!untilClose) { return out; }
+            while (true) {
+                let chunk = conn.readBytes(65536);
+                if (chunk.isEmpty()) { break; }
+                out.append(chunk);
+                free(chunk);
+                if (out.size() > limit) { throw new NetError("body is larger than ${limit} bytes"); }
+            }
+            return out;
+        }
+        static fn writeHead(conn: TcpStream, firstLine: string, headers: Headers) {
+            let sb = new StringBuilder();
+            sb.append(firstLine).append("\r\n");
+            headers.forEach(fn(k: string, v: string) { sb.append(k).append(": ").append(v).append("\r\n"); });
+            sb.append("\r\n");
+            conn.write(sb.toString());
+            free(sb);
+        }
+    }
+
+    // One route: method + path pattern -> handler.
+    class Route {
+        public method: string                 // "*" for any
+        public parts: Array<string>
+        public handler: fn(HttpRequest) -> HttpResponse
+        public upgrader: fn(HttpRequest, TcpStream)
+        public isUpgrade: bool
+        constructor(method: string, pattern: string) {
+            self.method = method;
+            self.parts = Route.split(pattern);
+            self.isUpgrade = false;
+        }
+        static fn split(path: string) -> Array<string> {
+            return Str.split(path, "/").filter(fn(s: string) => s != "");
+        }
+        // Does `segs` match? Captures go into `req`.
+        public fn matches(segs: Array<string>, req: HttpRequest) -> bool {
+            let n = self.parts.size();
+            for (i in 0..n) {
+                let p = self.parts.get(i);
+                if (p == "*") {
+                    let rest = Str.join(segs.slice(i, segs.size()), "/");
+                    if (req != null) { req.setParam("*", rest); }
+                    return true;
+                }
+                if (i >= segs.size()) { return false; }
+                if (Str.startsWith(p, ":")) {
+                    if (req != null) { req.setParam(Str.slice(p, 1, Str.length(p)), segs.get(i)); }
+                } else if (p != segs.get(i)) {
+                    return false;
+                }
+            }
+            return n == segs.size();
+        }
+    }
+
+    // An HTTP/1.1 server with a router.
+    class HttpServer {
+        private routes: Array<Route>
+        private middleware: Array<fn(HttpRequest) -> HttpResponse>
+        private listener: TcpListener
+        private acceptThread: Thread
+        private running: AtomicInt
+        private log: bool
+        private logLock: Mutex
+        // Largest request body accepted (bytes); larger ones get 413.
+        public maxBodyBytes: int
+        // Idle keep-alive connections are closed after this many milliseconds.
+        public idleTimeoutMs: int
+
+        constructor() {
+            self.routes = new Array<Route>();
+            self.middleware = new Array<fn(HttpRequest) -> HttpResponse>();
+            self.listener = null;
+            self.acceptThread = null;
+            self.running = new AtomicInt(0);
+            self.log = false;
+            self.logLock = new Mutex();
+            self.maxBodyBytes = 10 * 1024 * 1024;
+            self.idleTimeoutMs = 15000;
+        }
+
+        // ── routes ─────────────────────────────────────────────────────────────
+        public fn route(method: string, pattern: string, handler: fn(HttpRequest) -> HttpResponse) -> HttpServer {
+            let r = new Route(Str.upper(method), pattern);
+            r.handler = handler;
+            self.routes.push(r);
+            return self;
+        }
+        public fn get(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("GET", pattern, h); }
+        public fn post(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("POST", pattern, h); }
+        public fn put(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("PUT", pattern, h); }
+        public fn patch(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("PATCH", pattern, h); }
+        public fn delete(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("DELETE", pattern, h); }
+        // Any method.
+        public fn any(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("*", pattern, h); }
+        // Hand the raw connection to `handler` when a request for `pattern` asks to
+        // upgrade the protocol (lib/net/websocket.grav uses this).
+        public fn upgrade(pattern: string, handler: fn(HttpRequest, TcpStream)) -> HttpServer {
+            let r = new Route("GET", pattern);
+            r.upgrader = handler;
+            r.isUpgrade = true;
+            self.routes.push(r);
+            return self;
+        }
+        // Runs before routing; return a response to answer immediately, or null to continue.
+        public fn use(f: fn(HttpRequest) -> HttpResponse) -> HttpServer { self.middleware.push(f); return self; }
+        // Print one line per request ("GET /path -> 200").
+        public fn logRequests(on: bool) -> HttpServer { self.log = on; return self; }
+
+        // ── running ────────────────────────────────────────────────────────────
+        // Serve on host:port, blocking until stop().
+        public fn listen(host: string, port: int) {
+            self.bind(host, port);
+            self.acceptLoop();
+        }
+        public fn listen(port: int) { self.listen("*", port); }
+        // Serve on a background thread and return at once (port 0 picks a free port).
+        public fn start(host: string, port: int) -> HttpServer {
+            self.bind(host, port);
+            self.acceptThread = Thread.spawn("http-accept", fn() { self.acceptLoop(); });
+            return self;
+        }
+        public fn start(port: int) -> HttpServer { return self.start("127.0.0.1", port); }
+        // The port being served.
+        public fn port() -> int { return self.listener == null ? 0 : self.listener.port(); }
+        // Stop accepting connections (in-flight requests finish on their threads).
+        public fn stop() {
+            self.running.set(0);
+            if (self.listener != null) { self.listener.close(); }
+            if (self.acceptThread != null) { self.acceptThread.join(); self.acceptThread = null; }
+        }
+
+        private fn bind(host: string, port: int) {
+            if (self.running.get() == 1) { throw new StateError("HttpServer is already running"); }
+            self.listener = TcpListener.bind(host, port);
+            self.running.set(1);
+        }
+        private fn acceptLoop() {
+            while (self.running.get() == 1) {
+                let conn: TcpStream = null;
+                try {
+                    conn = self.listener.accept();
+                } catch (e: NetError) {
+                    if (self.running.get() == 0) { break; }
+                    continue;
+                }
+                let c = conn;
+                Thread.spawn("http-conn", fn() { self.serveConnection(c); }).detach();
+            }
+        }
+
+        // Requests on one connection, until it closes or asks not to be kept alive.
+        private fn serveConnection(conn: TcpStream) {
+            conn.setNoDelay(true);
+            conn.setTimeoutMs(self.idleTimeoutMs);
+            let keepOpen = true;
+            while (keepOpen) {
+                let req: HttpRequest = null;
+                try {
+                    req = self.readRequest(conn);
+                } catch (e: Exception) {
+                    if (!conn.isClosed()) {
+                        let bad = HttpResponse.badRequest(e.message());
+                        try { self.send(conn, bad, false, "GET"); } catch (e2: Exception) {}
+                    }
+                    break;
+                }
+                if (req == null) { break; }
+                req.remote = conn.peerAddress();
+                let res = self.dispatch(req, conn);
+                if (res == null) { return; }   // an upgrade handler now owns the connection
+                keepOpen = req.keepAlive() && !Str.equalsIgnoreCase(res.headers.get("Connection"), "close");
+                try {
+                    self.send(conn, res, keepOpen, req.method);
+                } catch (e: Exception) {
+                    keepOpen = false;
+                }
+                if (self.log) {
+                    let line = req.method + " " + req.target + " -> ${res.status}";
+                    self.logLock.withLock(fn() { print(line); });
+                }
+            }
+            conn.close();
+        }
+
+        private fn readRequest(conn: TcpStream) -> HttpRequest {
+            let line = conn.readLine();
+            while (line == "" && !conn.eof()) { line = conn.readLine(); }  // tolerate stray CRLFs
+            if (line == "" && conn.eof()) { return null; }
+            let parts = Str.split(line, " ");
+            if (parts.size() != 3 || !Str.startsWith(parts.get(2), "HTTP/")) {
+                throw new NetError("malformed request line: " + line);
+            }
+            let req = new HttpRequest(Str.upper(parts.get(0)), parts.get(1), parts.get(2));
+            Http.readHeaders(conn, req.headers);
+            if (Str.equalsIgnoreCase(req.headers.get("Expect"), "100-continue")) {
+                conn.write(req.version + " 100 Continue\r\n\r\n");
+            }
+            req.bodyBytes = Http.readBody(conn, req.headers, false, self.maxBodyBytes);
+            return req;
+        }
+
+        // The response for `req`, or null when an upgrade handler took the connection.
+        private fn dispatch(req: HttpRequest, conn: TcpStream) -> HttpResponse {
+            for (m in self.middleware) {
+                try {
+                    let early = m(req);
+                    if (early != null) { return early; }
+                } catch (e: Exception) {
+                    return HttpResponse.of(500, "text/plain; charset=utf-8", "internal error: " + e.describe());
+                }
+            }
+            let segs = Route.split(req.path);
+            let pathMatched = false;
+            for (r in self.routes) {
+                if (!r.matches(segs, null)) { continue; }
+                pathMatched = true;
+                if (r.method != "*" && r.method != req.method && !(r.method == "GET" && req.method == "HEAD")) { continue; }
+                r.matches(segs, req);                     // capture the parameters
+                if (r.isUpgrade) {
+                    if (req.headers.get("Upgrade") == "") { continue; }
+                    r.upgrader(req, conn);
+                    return null;
+                }
+                try {
+                    let res = r.handler(req);
+                    return res == null ? HttpResponse.status(204) : res;
+                } catch (e: Exception) {
+                    return HttpResponse.of(500, "text/plain; charset=utf-8", "internal error: " + e.describe());
+                }
+            }
+            return pathMatched ? HttpResponse.status(405) : HttpResponse.notFound();
+        }
+
+        private fn send(conn: TcpStream, res: HttpResponse, keepOpen: bool, method: string) {
+            res.headers.set("Content-Length", "${res.bodyBytes.size()}");
+            if (!res.headers.has("Content-Type")) { res.headers.set("Content-Type", "text/plain; charset=utf-8"); }
+            res.headers.set("Connection", keepOpen ? "keep-alive" : "close");
+            if (!res.headers.has("Server")) { res.headers.set("Server", "grav"); }
+            Http.writeHead(conn, "HTTP/1.1 ${res.status} " + HttpResponse.reason(res.status), res.headers);
+            if (method != "HEAD" && res.bodyBytes.size() > 0) { conn.writeBytes(res.bodyBytes); }
+        }
+    }
+
+    // An HTTP/1.1 client. One connection per request.
+    class HttpClient {
+        // Give up on connecting or waiting for data after this long (0 = never).
+        public timeoutMs: int
+        // Sent with every request.
+        public headers: Headers
+        // Follow 301/302/303/307/308 redirects up to this many times.
+        public maxRedirects: int
+
+        constructor() {
+            self.timeoutMs = 30000;
+            self.headers = new Headers();
+            self.maxRedirects = 5;
+        }
+
+        // One-off GET with default settings.
+        static fn fetch(url: string) -> HttpResponse { return new HttpClient().get(url); }
+
+        public fn get(url: string) -> HttpResponse { return self.request("GET", url, "", ""); }
+        public fn delete(url: string) -> HttpResponse { return self.request("DELETE", url, "", ""); }
+        public fn post(url: string, body: string, contentType: string) -> HttpResponse {
+            return self.request("POST", url, body, contentType);
+        }
+        public fn put(url: string, body: string, contentType: string) -> HttpResponse {
+            return self.request("PUT", url, body, contentType);
+        }
+        public fn postJson(url: string, value: JsonValue) -> HttpResponse {
+            return self.request("POST", url, value.toJson(), "application/json");
+        }
+        public fn postForm(url: string, fields: HashMap<string, string>) -> HttpResponse {
+            let parts = new Array<string>();
+            fields.forEach(fn(k: string, v: string) { parts.push(Url.encode(k) + "=" + Url.encode(v)); });
+            return self.request("POST", url, Str.join(parts, "&"), "application/x-www-form-urlencoded");
+        }
+
+        // Send a request and read the whole response. Throws NetError (or
+        // TimeoutError) when the server cannot be reached or answers garbage.
+        public fn request(method: string, url: string, body: string, contentType: string) -> HttpResponse {
+            let target = Url.parse(url);
+            let m = Str.upper(method);
+            let hops = 0;
+            while (true) {
+                let res = self.once(m, target, body, contentType);
+                let code = res.status;
+                let loc = res.headers.get("Location");
+                if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) && loc != "" &&
+                    hops < self.maxRedirects) {
+                    hops += 1;
+                    target = Str.startsWith(loc, "/") ? new Url(target.scheme, target.host, target.port, loc) : Url.parse(loc);
+                    if (code == 303 || ((code == 301 || code == 302) && m == "POST")) { m = "GET"; body = ""; }
+                    continue;
+                }
+                return res;
+            }
+        }
+
+        private fn once(method: string, url: Url, body: string, contentType: string) -> HttpResponse {
+            if (url.scheme == "https") {
+                throw new NetError("https is not supported yet (no TLS); use http:// (" + url.toString() + ")");
+            }
+            let conn = TcpStream.connect(url.host, url.port, self.timeoutMs > 0 ? self.timeoutMs : -1);
+            try {
+                conn.setTimeoutMs(self.timeoutMs);
+                let h = new Headers();
+                let defaultPort = 80;
+                h.set("Host", url.port == defaultPort ? url.host : url.host + ":${url.port}");
+                h.set("User-Agent", "grav-http/1.0");
+                h.set("Accept", "*/*");
+                h.set("Connection", "close");
+                self.headers.forEach(fn(k: string, v: string) { h.set(k, v); });
+                let n = Str.length(body);
+                if (n > 0 || method == "POST" || method == "PUT" || method == "PATCH") {
+                    h.set("Content-Length", "${n}");
+                    if (contentType != "") { h.set("Content-Type", contentType); }
+                }
+                Http.writeHead(conn, method + " " + url.path + " HTTP/1.1", h);
+                if (n > 0) { conn.write(body); }
+
+                let status = conn.readLine();
+                let parts = Str.split(status, " ");
+                if (parts.size() < 2 || !Str.startsWith(parts.get(0), "HTTP/")) {
+                    throw new NetError("not an HTTP response from " + url.toString() + ": " + status);
+                }
+                let res = new HttpResponse(Format.toIntOr(parts.get(1), 0));
+                Http.readHeaders(conn, res.headers);
+                let noBody = method == "HEAD" || res.status == 204 || res.status == 304 || res.status < 200;
+                if (!noBody) { res.bodyBytes = Http.readBody(conn, res.headers, true, 512 * 1024 * 1024); }
+                conn.close();
+                return res;
+            } catch (e: Exception) {
+                conn.close();
+                throw e;
+            }
+        }
+    }
+
+}
