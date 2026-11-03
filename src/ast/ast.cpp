@@ -134,6 +134,7 @@ void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
             for (auto &m : c->methods) v.block(m.body);
             for (auto &sf : c->staticFields) v.expr(sf.init.get());
         } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) v.expr(g->init.get());
+        else if (auto *t = dynamic_cast<TestDecl *>(d.get())) v.block(t->body);
     }
 }
 
