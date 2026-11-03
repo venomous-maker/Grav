@@ -40,7 +40,7 @@ Hello, Grace!
 | 2 | [Basics](02-basics.md) | types, variables, operators, casts, strings and interpolation |
 | 3 | [Control flow](03-control-flow.md) | `if`, loops, ranges, for-each, `switch`/`match`, `defer` |
 | 4 | [Functions](04-functions.md) | parameters, overloading, variadics, recursion, globals, `async` basics |
-| 5 | [Data types](05-data-types.md) | enums, structs, aliases, arrays, pointers, `null`, `binary` |
+| 5 | [Data types](05-data-types.md) | enums, data enums & pattern matching, `Result`/`Option`, structs, aliases, arrays, pointers, `null`, `binary` |
 | 6 | [Classes](06-classes.md) | fields, methods, access control, statics, constructors, destructors |
 | 7 | [Inheritance & interfaces](07-inheritance.md) | subclasses, abstract classes, interfaces, traits, composition, RTTI |
 | 8 | [Overloading & operators](08-overloading.md) | method/constructor overloading, operator methods, `toString` |
@@ -48,10 +48,11 @@ Hello, Grace!
 | 10 | [Lambdas & closures](10-lambdas.md) | function types, closures, callbacks, higher-order collections |
 | 11 | [Exceptions](11-exceptions.md) | `throw`, `try`/`catch`/`finally`, custom error hierarchies |
 | 12 | [Memory](12-memory.md) | `new`/`free`, destructors, `defer`, automatic string freeing |
-| 13 | [Modules, namespaces & C interop](13-modules.md) | `import`, `namespace`, `export`, macros, inline C |
+| 13 | [Modules, namespaces & C interop](13-modules.md) | `import`, `import "std"`, `grav.toml`, `namespace`, `export`, macros, inline C |
 | 14 | [Standard library](14-standard-library.md) | conventions, 16 collection types, strings, formatting, math, random, files, processes, dates, terminal |
 | 15 | [How Grav compiles](15-how-it-compiles.md) | the pipeline, the generated C, performance, diagnostics |
 | 16 | [Concurrency](16-concurrency.md) | async tasks on a worker pool, `GRAV_MAXPROCS`, mutexes, atomics, channels, `--race` |
+| 17 | [Testing](17-testing.md) | `test` blocks, `assertEq`, `grav test`, filtering |
 | — | [Reference](reference.md) | keywords, operator precedence, built-ins, grammar summary |
 
 Runnable programs for every chapter live in [`../examples/`](../examples/README.md).
