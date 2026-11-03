@@ -84,12 +84,8 @@ const GlobalInfo *Registry::global(const std::string &fq) const {
 
 std::string Registry::resolveGlobal(const std::string &name,
                                     const std::string &nsContext) const {
-    auto parts = splitDots(nsContext);
-    for (size_t i = parts.size() + 1; i-- > 0;) {
-        std::string prefix = joinDots(parts, i);
-        std::string cand = prefix.empty() ? name : prefix + "." + name;
+    for (const auto &cand : nameCandidates(name, nsContext, uses_))
         if (globals_.count(cand)) return cand;
-    }
     return "";
 }
 
@@ -113,12 +109,8 @@ const GlobalInfo *Registry::findStaticField(const std::string &classFq,
 
 std::string Registry::resolveType(const std::string &name,
                                   const std::string &nsContext) const {
-    auto parts = splitDots(nsContext);
-    for (size_t i = parts.size() + 1; i-- > 0;) {
-        std::string prefix = joinDots(parts, i);
-        std::string cand = prefix.empty() ? name : prefix + "." + name;
+    for (const auto &cand : nameCandidates(name, nsContext, uses_))
         if (isType(cand)) return cand;
-    }
     // `Shape.Circle` names the data enum variant class `Shape$Circle`.
     if (auto dot = name.rfind('.'); dot != std::string::npos)
         return resolveType(name.substr(0, dot) + "$" + name.substr(dot + 1), nsContext);
@@ -127,21 +119,14 @@ std::string Registry::resolveType(const std::string &name,
 
 std::string Registry::resolveFunc(const std::string &name,
                                   const std::string &nsContext) const {
-    auto parts = splitDots(nsContext);
-    for (size_t i = parts.size() + 1; i-- > 0;) {
-        std::string prefix = joinDots(parts, i);
-        std::string cand = prefix.empty() ? name : prefix + "." + name;
+    for (const auto &cand : nameCandidates(name, nsContext, uses_))
         if (functions_.count(cand)) return cand;
-    }
     return "";
 }
 
 std::string Registry::resolveNamespace(const std::string &name,
                                        const std::string &nsContext) const {
-    auto parts = splitDots(nsContext);
-    for (size_t i = parts.size() + 1; i-- > 0;) {
-        std::string prefix = joinDots(parts, i);
-        std::string cand = prefix.empty() ? name : prefix + "." + name;
+    for (const auto &cand : nameCandidates(name, nsContext, uses_)) {
         if (std::find(namespaces_.begin(), namespaces_.end(), cand) !=
             namespaces_.end()) {
             return cand;
@@ -276,6 +261,7 @@ bool Registry::classImplements(const std::string &classFq,
 // ---------------------------------------------------------------------------
 
 const std::vector<GravError> &Registry::build(Program &program) {
+    uses_ = program.uses;
     registerDecls(program);
     canonicalizeAliases();
     canonicalize();
@@ -653,12 +639,8 @@ void Registry::registerDecls(Program &program) {
 
 std::string Registry::resolveTypeOrAlias(const std::string &name,
                                          const std::string &nsContext) const {
-    auto parts = splitDots(nsContext);
-    for (size_t i = parts.size() + 1; i-- > 0;) {
-        std::string prefix = joinDots(parts, i);
-        std::string cand = prefix.empty() ? name : prefix + "." + name;
+    for (const auto &cand : nameCandidates(name, nsContext, uses_))
         if (isType(cand) || isAlias(cand)) return cand;
-    }
     if (auto dot = name.rfind('.'); dot != std::string::npos) // `Shape.Circle` -> `Shape$Circle`
         return resolveTypeOrAlias(name.substr(0, dot) + "$" + name.substr(dot + 1), nsContext);
     return "";
