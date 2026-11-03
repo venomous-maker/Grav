@@ -6,23 +6,27 @@ every editor:
 
 | Feature | LSP method |
 | ------- | ---------- |
-| Go to declaration | `textDocument/definition` |
-| Find references (project-wide) | `textDocument/references` |
-| Rename / refactor | `textDocument/rename` (+ `prepareRename`) |
-| Document outline | `textDocument/documentSymbol` |
-| Hover (shows the declaration line) | `textDocument/hover` |
-| Diagnostics | runs the `grav` compiler on open/save |
+| Go to definition / declaration — follows `import` lines into the standard library, `grav.toml` paths and installed packages; resolves `import { A as B }` and `use … as` aliases; on an import string, opens the module | `textDocument/definition`, `declaration` |
+| Hover — signature, doc comment, namespace and module | `textDocument/hover` |
+| Completion — members by inferred type, static members, namespace/alias members, import paths, keywords, built-ins | `textDocument/completion` |
+| Signature help for calls and constructors | `textDocument/signatureHelp` |
+| Outline with classes, members and enum variants nested | `textDocument/documentSymbol` |
+| Workspace symbols, including the standard library | `workspace/symbol` |
+| Find references, rename | `textDocument/references`, `rename` (+ `prepareRename`) |
+| Formatting (`grav fmt -`) | `textDocument/formatting` |
+| Diagnostics (`grav check --json`, with "declared in std.x" notes) on open and save | `textDocument/publishDiagnostics` |
 
-It is heuristic (regex-based, no full parse) — accurate for the common cases and
-fast, with zero npm dependencies. Files:
+It is a careful scanner rather than a full parser: strings, comments and inline C
+are masked first, then declarations are matched with a bracket stack for nesting.
+Zero npm dependencies. Files:
 
-- [`grav-index.js`](grav-index.js) — the shared symbol index (also used directly
-  by the VS Code extension's providers).
-- [`server.js`](server.js) — the stdio LSP server (used by Neovim and CLion).
+- [`grav-index.js`](grav-index.js) — the index and import resolver (a copy is
+  bundled into the VS Code extension; `editors/sync.sh` refreshes it).
+- [`server.js`](server.js) — the stdio LSP server (Neovim, JetBrains, any client).
 
 ## Requirements
 
-Node.js on `PATH`. Diagnostics also need the `grav` compiler — set it with the
+Node.js on `PATH`. Diagnostics, formatting, and locating the standard library (`grav env --json`) need the `grav` compiler — set it with the
 `GRAV_COMPILER` env var or the `compilerPath` init option (default: `grav`).
 
 ## Use it
@@ -30,8 +34,8 @@ Node.js on `PATH`. Diagnostics also need the `grav` compiler — set it with the
 - **Neovim** — starts automatically for `.grav` buffers (see
   [`../nvim/`](../nvim/)); override the server path with `g:grav_lsp_server` or
   `$GRAV_LSP_SERVER`.
-- **VS Code** — the [extension](../vscode/) calls `grav-index.js` directly, so no
-  server process is spawned.
+- **VS Code** — the [extension](../vscode/) runs the same `grav-index.js`
+  in-process (no server process).
 - **CLion / JetBrains** — the [plugin](../jetbrains/) registers this server
   through the IDE's LSP API (paid IDEs only).
 
