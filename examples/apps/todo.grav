@@ -1,13 +1,13 @@
 // apps/todo.grav — a task manager driven by a script of commands.
 //
-//   grav examples/apps/todo.grav --run
+//   grav run examples/apps/todo.grav
 //
 // Parses text commands ("add", "done", "tag", "list", ...) with a string
 // switch, keeps tasks in an Array with an id index in a HashMap, filters and
 // sorts with lambdas, compares priorities with operator overloading, and
 // reports bad commands through exceptions — like a tiny CLI.
 
-import "../../lib/std.grav"
+import "std"
 
 enum Priority { Low, Normal, High, Urgent }
 
@@ -33,7 +33,7 @@ class Task {
     fn toString() -> string {
         let sb = new StringBuilder()
         sb.append(self.done ? "[x] " : "[ ] ").append("#${self.id} ").append(self.title)
-          .append(" (${self.priority})")
+            .append(" (${self.priority})")
         for (i in 0..self.tags.size()) { sb.append(" @").append(self.tags.at(i)) }
         let out = sb.toString()
         free(sb)
