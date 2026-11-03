@@ -50,6 +50,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
     }
 
     // The body.
+    defs_ += lineDirective(lam.line);
     defs_ += head + " {\n";
     cur_ = &defs_;
     indent_ = 1;
@@ -87,7 +88,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
         if (trace_) line("grav_leave();");
     }
     indent_ = 0;
-    defs_ += "}\n\n";
+    endFunction();
 }
 
 std::string CodeGen::emitLambdaValue(const LambdaExpr &lam) const {
