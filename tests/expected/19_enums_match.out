@@ -1,0 +1,8 @@
+(x + 4) * 3 = Ok(30)
+10 / y = Err(division by zero in 10 / y)
+e3 failed: unknown variable 'z'
+1 * (2 + 3) simplifies to 5
+same tree: true
+x is Some(6), z is None
+z or 0: 0
+scaled: 3000
