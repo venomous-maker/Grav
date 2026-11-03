@@ -1,13 +1,13 @@
 // 08_generics.grav — generic types and functions.
 //
-//   grav examples/08_generics.grav --run
+//   grav run examples/08_generics.grav
 //
 // Covers: generic structs, classes, and interfaces; generic inheritance
 // (`extends Base<T>`); `T: Bound` constraints; generic type aliases; generic
 // free functions and generic *methods* (both called with `::<...>`); and the
 // standard generic collections.
 
-import "../lib/std.grav"
+import "std"
 
 struct Pair<A, B> { first: A  second: B }
 
