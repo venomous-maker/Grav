@@ -1,0 +1,362 @@
+// lib/net/websocket.grav — WebSocket (RFC 6455) servers and clients.
+//
+//   // server: attach to an HttpServer route
+//   let app = new HttpServer()
+//   WebSocket.route(app, "/chat", fn(ws: WebSocket) {
+//       ws.messages(fn(m: WsMessage) { ws.send("echo: " + m.text()) })
+//   })
+//   app.listen(8080)
+//
+//   // client
+//   let ws = WebSocket.connect("ws://127.0.0.1:8080/chat")
+//   ws.send("hello")
+//   print(ws.receive().text())     // echo: hello
+//   ws.close()
+//
+// receive() returns null once the connection is closed. Pings are answered
+// automatically; fragmented messages are reassembled. send() may be called from
+// several threads at once. Only ws:// is supported (no TLS yet).
+import "../collections/array.grav"
+import "../text/string.grav"
+import "../data/bytes.grav"
+import "../concurrency/async.grav"
+import "tcp.grav"
+import "http.grav"
+
+namespace std.net {
+
+    %{
+    #include <stdint.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <unistd.h>
+    #include <time.h>
+    #include <sys/random.h>
+    static void grav_sha1(const unsigned char* data, size_t len, unsigned char out[20]) {
+        uint32_t h[5] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0};
+        size_t total = ((len + 8) / 64 + 1) * 64;
+        unsigned char* m = (unsigned char*)calloc(total, 1);
+        if (!m) abort();
+        memcpy(m, data, len);
+        m[len] = 0x80;
+        uint64_t bits = (uint64_t)len * 8;
+        for (int i = 0; i < 8; i++) m[total - 1 - i] = (unsigned char)(bits >> (8 * i));
+        for (size_t off = 0; off < total; off += 64) {
+            uint32_t w[80];
+            for (int i = 0; i < 16; i++)
+                w[i] = (uint32_t)m[off + 4 * i] << 24 | (uint32_t)m[off + 4 * i + 1] << 16 |
+                       (uint32_t)m[off + 4 * i + 2] << 8 | (uint32_t)m[off + 4 * i + 3];
+            for (int i = 16; i < 80; i++) {
+                uint32_t x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+                w[i] = (x << 1) | (x >> 31);
+            }
+            uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+            for (int i = 0; i < 80; i++) {
+                uint32_t f, k;
+                if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+                else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+                else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+                else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+                uint32_t t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+                e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = t;
+            }
+            h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+        }
+        free(m);
+        for (int i = 0; i < 5; i++) {
+            out[4 * i] = (unsigned char)(h[i] >> 24); out[4 * i + 1] = (unsigned char)(h[i] >> 16);
+            out[4 * i + 2] = (unsigned char)(h[i] >> 8); out[4 * i + 3] = (unsigned char)h[i];
+        }
+    }
+    static const char* grav_base64(const unsigned char* d, size_t n) {
+        static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        char* out = (char*)malloc((n + 2) / 3 * 4 + 1);
+        if (!out) abort();
+        size_t o = 0;
+        for (size_t i = 0; i < n; i += 3) {
+            uint32_t v = (uint32_t)d[i] << 16 | (i + 1 < n ? (uint32_t)d[i + 1] << 8 : 0) | (i + 2 < n ? d[i + 2] : 0);
+            out[o++] = t[v >> 18 & 63];
+            out[o++] = t[v >> 12 & 63];
+            out[o++] = i + 1 < n ? t[v >> 6 & 63] : '=';
+            out[o++] = i + 2 < n ? t[v & 63] : '=';
+        }
+        out[o] = 0;
+        return out;
+    }
+    /* Sec-WebSocket-Accept for a Sec-WebSocket-Key. */
+    static const char* grav_ws_accept_key(const char* key) {
+        static const char* guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        size_t kl = strlen(key), gl = strlen(guid);
+        unsigned char* buf = (unsigned char*)malloc(kl + gl);
+        if (!buf) abort();
+        memcpy(buf, key, kl); memcpy(buf + kl, guid, gl);
+        unsigned char dig[20];
+        grav_sha1(buf, kl + gl, dig);
+        free(buf);
+        return grav_base64(dig, 20);
+    }
+    static void grav_ws_random(unsigned char* p, size_t n) {
+        if (getrandom(p, n, 0) == (ssize_t)n) return;
+        for (size_t i = 0; i < n; i++) p[i] = (unsigned char)(rand() ^ (int)time(0));
+    }
+    static const char* grav_ws_new_key(void) {
+        unsigned char k[16];
+        grav_ws_random(k, 16);
+        return grav_base64(k, 16);
+    }
+    static void grav_ws_mask(unsigned char* p, long long n, const unsigned char key[4]) {
+        for (long long i = 0; i < n; i++) p[i] ^= key[i & 3];
+    }
+    %}
+
+    // One complete message.
+    class WsMessage {
+        public binary: bool
+        public data: Bytes
+        constructor(binary: bool, data: Bytes) { self.binary = binary; self.data = data; }
+        public fn isText() -> bool { return !self.binary; }
+        public fn isBinary() -> bool { return self.binary; }
+        public fn text() -> string { return self.data.toString(); }
+        fn toString() -> string { return self.binary ? "WsMessage(${self.data.size()} bytes)" : "WsMessage(" + self.text() + ")"; }
+    }
+
+    // A WebSocket connection (either end).
+    class WebSocket {
+        private conn: TcpStream
+        private client: bool          // clients mask what they send
+        private open: bool
+        private sendLock: Mutex
+        // The close code the peer sent (1000 = normal), or 0.
+        public closeCode: int
+        public closeReason: string
+        // Messages larger than this (bytes) close the connection with 1009.
+        public maxMessageBytes: int
+        // The request path (server side) or URL (client side).
+        public path: string
+
+        constructor(conn: TcpStream, client: bool, path: string) {
+            self.conn = conn;
+            self.client = client;
+            self.open = true;
+            self.sendLock = new Mutex();
+            self.closeCode = 0;
+            self.closeReason = "";
+            self.maxMessageBytes = 16 * 1024 * 1024;
+            self.path = path;
+        }
+
+        // ── opening ────────────────────────────────────────────────────────────
+        // Connect to "ws://host[:port]/path". Throws NetError if the server refuses.
+        static fn connect(url: string) -> WebSocket { return WebSocket.connect(url, 30000); }
+        static fn connect(url: string, timeoutMs: int) -> WebSocket {
+            let httpUrl = url;
+            if (Str.startsWith(url, "wss://")) { throw new NetError("wss:// is not supported yet (no TLS): " + url); }
+            if (Str.startsWith(url, "ws://")) { httpUrl = "http://" + Str.slice(url, 5, Str.length(url)); }
+            let u = Url.parse(httpUrl);
+            let conn = TcpStream.connect(u.host, u.port, timeoutMs);
+            conn.setTimeoutMs(timeoutMs);
+            let key = %{ grav_ws_new_key() %} as string;
+            let h = new Headers();
+            h.set("Host", u.port == 80 ? u.host : u.host + ":${u.port}");
+            h.set("Upgrade", "websocket");
+            h.set("Connection", "Upgrade");
+            h.set("Sec-WebSocket-Key", key);
+            h.set("Sec-WebSocket-Version", "13");
+            Http.writeHead(conn, "GET " + u.path + " HTTP/1.1", h);
+            let status = conn.readLine();
+            let res = new Headers();
+            Http.readHeaders(conn, res);
+            let want = %{ grav_ws_accept_key(key) %} as string;
+            if (!Str.contains(status, " 101 ") && !Str.endsWith(status, " 101")) {
+                conn.close();
+                throw new NetError("WebSocket handshake refused by " + url + ": " + status);
+            }
+            if (res.get("Sec-WebSocket-Accept") != want) {
+                conn.close();
+                throw new NetError("WebSocket handshake failed: bad Sec-WebSocket-Accept from " + url);
+            }
+            conn.setTimeoutMs(0);
+            conn.setNoDelay(true);
+            return new WebSocket(conn, true, url);
+        }
+
+        // Complete the server side of the handshake for an upgrade request.
+        static fn accept(req: HttpRequest, conn: TcpStream) -> WebSocket {
+            let key = req.header("Sec-WebSocket-Key");
+            if (!Str.equalsIgnoreCase(req.header("Upgrade"), "websocket") || key == "") {
+                let bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                conn.write(bad);
+                conn.close();
+                throw new NetError("not a WebSocket upgrade request");
+            }
+            let h = new Headers();
+            h.set("Upgrade", "websocket");
+            h.set("Connection", "Upgrade");
+            h.set("Sec-WebSocket-Accept", %{ grav_ws_accept_key(key) %} as string);
+            Http.writeHead(conn, "HTTP/1.1 101 Switching Protocols", h);
+            conn.setTimeoutMs(0);
+            conn.setNoDelay(true);
+            return new WebSocket(conn, false, req.path);
+        }
+
+        // Serve WebSockets on `path` of an HttpServer: `handler` runs on the
+        // connection's thread; the socket is closed when it returns.
+        static fn route(server: HttpServer, path: string, handler: fn(WebSocket)) {
+            server.upgrade(path, fn(req: HttpRequest, conn: TcpStream) {
+                let ws: WebSocket = null;
+                try { ws = WebSocket.accept(req, conn); } catch (e: NetError) { return; }
+                try {
+                    handler(ws);
+                } catch (e: Exception) {
+                    ws.close(1011, "server error");
+                }
+                ws.close();
+            });
+        }
+
+        // ── sending ────────────────────────────────────────────────────────────
+        public fn send(text: string) { self.sendFrame(1, Bytes.fromString(text)); }
+        public fn sendBytes(data: Bytes) { self.sendFrame(2, data); }
+        public fn ping() { self.sendFrame(9, new Bytes()); }
+        public fn isOpen() -> bool { return self.open; }
+
+        private fn sendFrame(opcode: int, payload: Bytes) {
+            if (!self.open) { throw new NetError("send on a closed WebSocket (" + self.path + ")"); }
+            self.writeFrame(opcode, payload);
+        }
+        private fn writeFrame(opcode: int, payload: Bytes) {
+            let n = payload.size();
+            let frame = new Bytes(n + 14);
+            frame.appendByte(128 | opcode);                  // FIN + opcode
+            let maskBit = self.client ? 128 : 0;
+            if (n < 126) { frame.appendByte(maskBit | n); }
+            else if (n < 65536) { frame.appendByte(maskBit | 126); frame.appendUint(n as long, 2); }
+            else { frame.appendByte(maskBit | 127); frame.appendUint(n as long, 8); }
+            if (self.client) {
+                let key = new Bytes();
+                %{ unsigned char k[4]; grav_ws_random(k, 4); %};
+                for (i in 0..4) { key.appendByte(%{ (int)k[i] %} as int); }
+                frame.append(key);
+                let start = frame.size();
+                frame.append(payload);
+                let p = frame.rawData();
+                let kp = key.rawData();
+                %{ grav_ws_mask(p + start, n, kp); %};
+                free(key);
+            } else {
+                frame.append(payload);
+            }
+            self.sendLock.withLock(fn() { self.conn.writeBytes(frame); });
+            free(frame);
+        }
+
+        // ── receiving ──────────────────────────────────────────────────────────
+        // The next message, or null once the connection has closed.
+        public fn receive() -> WsMessage {
+            let assembled: Bytes = null;
+            let binaryMsg = false;
+            while (self.open) {
+                let head: Bytes = null;
+                try {
+                    head = self.conn.readExactly(2);
+                } catch (e: Exception) {
+                    self.open = false;
+                    self.conn.close();
+                    if (self.closeCode == 0) { self.closeCode = 1006; }   // abnormal closure
+                    return null;
+                }
+                let b0 = head.get(0);
+                let b1 = head.get(1);
+                free(head);
+                let fin = (b0 & 128) != 0;
+                let opcode = b0 & 15;
+                let masked = (b1 & 128) != 0;
+                let len: long = (b1 & 127) as long;
+                if (len == 126) { let ext = self.conn.readExactly(2); len = ext.readUint(0, 2); free(ext); }
+                else if (len == 127) { let ext = self.conn.readExactly(8); len = ext.readUint(0, 8); free(ext); }
+                if (len > (self.maxMessageBytes as long)) {
+                    self.close(1009, "message too big");
+                    return null;
+                }
+                let key: Bytes = null;
+                if (masked) { key = self.conn.readExactly(4); }
+                let payload = len > 0 ? self.conn.readExactly(len as int) : new Bytes();
+                if (masked) {
+                    let p = payload.rawData();
+                    let kp = key.rawData();
+                    let n = payload.size();
+                    %{ grav_ws_mask(p, n, kp); %};
+                    free(key);
+                }
+                if (opcode == 9) { if (self.open) { self.writeFrame(10, payload); } continue; }   // ping -> pong
+                if (opcode == 10) { continue; }                                                 // pong
+                if (opcode == 8) {                                                              // close
+                    if (payload.size() >= 2) {
+                        self.closeCode = payload.readUint(0, 2) as int;
+                        self.closeReason = payload.slice(2, payload.size()).toString();
+                    } else {
+                        self.closeCode = 1005;
+                    }
+                    if (self.open) {
+                        let reply = new Bytes();
+                        reply.appendUint(self.closeCode == 1005 ? 1000 : self.closeCode as long, 2);
+                        try { self.writeFrame(8, reply); } catch (e: Exception) {}
+                        self.open = false;
+                    }
+                    self.conn.close();
+                    return null;
+                }
+                if (opcode == 1 || opcode == 2) {
+                    binaryMsg = opcode == 2;
+                    assembled = payload;
+                } else if (opcode == 0 && assembled != null) {
+                    assembled.append(payload);
+                    free(payload);
+                } else {
+                    self.close(1002, "protocol error");
+                    return null;
+                }
+                if (assembled.size() > self.maxMessageBytes) {
+                    self.close(1009, "message too big");
+                    return null;
+                }
+                if (fin) { return new WsMessage(binaryMsg, assembled); }
+            }
+            return null;
+        }
+        // Calls `f` with each message until the connection closes.
+        public fn messages(f: fn(WsMessage)) {
+            while (true) {
+                let m = self.receive();
+                if (m == null) { break; }
+                f(m);
+            }
+        }
+
+        // ── closing ────────────────────────────────────────────────────────────
+        public fn close() { self.close(1000, ""); }
+        // Send a close frame with a status code and reason, then close the socket.
+        public fn close(code: int, reason: string) {
+            if (!self.open) { self.conn.close(); return; }
+            self.open = false;
+            let body = new Bytes();
+            body.appendUint(code as long, 2).appendString(reason);
+            try { self.writeFrame(8, body); } catch (e: Exception) {}
+            // Give the peer a moment to answer with its own close frame.
+            self.conn.setTimeoutMs(1000);
+            try {
+                while (true) {
+                    let head = self.conn.readExactly(2);
+                    let len = head.get(1) & 127;
+                    let masked = (head.get(1) & 128) != 0;
+                    let rest = self.conn.readExactly((len < 126 ? len : (len == 126 ? 2 : 8)) + (masked ? 4 : 0));
+                    if (len < 126 && len > 0) { self.conn.readExactly(len); }
+                    free(rest);
+                    if ((head.get(0) & 15) == 8) { break; }
+                }
+            } catch (e: Exception) {}
+            self.conn.close();
+        }
+    }
+
+}
