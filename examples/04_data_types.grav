@@ -1,13 +1,13 @@
 // 04_data_types.grav — value types, arrays, pointers, null, and binary data.
 //
-//   grav examples/04_data_types.grav --run
+//   grav run examples/04_data_types.grav
 //
 // Covers: enums (names and ordinals), structs (value semantics, nesting),
 // `type` aliases and `typedef`, fixed-length arrays (of values and structs,
 // nested), pointers (`&`, `*`, `->`), `null` with `??` and `?.`, `sizeof`,
 // `binary` blobs, and explicit casts between them.
 
-import "../lib/std.grav"
+import "std"
 
 enum Suit { Hearts, Diamonds, Clubs, Spades }
 
