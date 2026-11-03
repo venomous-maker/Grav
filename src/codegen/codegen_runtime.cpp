@@ -49,11 +49,33 @@ const char* __asan_default_options(void) { return "detect_leaks=0"; }
 #endif
 #endif
 
+/* `grav test`: failures inside a test jump back to the runner instead of exiting. */
+static _Thread_local int grav_testing = 0; /* runner thread only */
+static jmp_buf grav_test_jmp;
+static char grav_test_msg[2048];
+static GRAV_COLD GRAV_NORETURN void grav_test_fail(const char* m) {
+    snprintf(grav_test_msg, sizeof grav_test_msg, "%s", m);
+    longjmp(grav_test_jmp, 1);
+}
 static GRAV_COLD GRAV_NORETURN void grav_panic(const char* m) {
+    if (grav_testing) {
+        char b[2048]; snprintf(b, sizeof b, "panic: %s", m); grav_test_fail(b);
+    }
     fflush(stdout); fprintf(stderr, "panic: %s\n", m); exit(1);
 }
 static inline void grav_assert(bool c, const char* m) {
-    if (GRAV_UNLIKELY(!c)) { fflush(stdout); fprintf(stderr, "assertion failed: %s\n", m); exit(1); }
+    if (GRAV_UNLIKELY(!c)) {
+        if (grav_testing) grav_test_fail(m);
+        fflush(stdout); fprintf(stderr, "assertion failed: %s\n", m); exit(1);
+    }
+}
+static GRAV_COLD GRAV_NORETURN void grav_assert_fail_at(const char* m, const char* loc) {
+    char b[2048]; snprintf(b, sizeof b, "%s (%s)", m, loc);
+    if (grav_testing) grav_test_fail(b);
+    fflush(stdout); fprintf(stderr, "assertion failed: %s\n", b); exit(1);
+}
+static inline void grav_assert_at(bool c, const char* m, const char* loc) {
+    if (GRAV_UNLIKELY(!c)) grav_assert_fail_at(m, loc);
 }
 static void* grav_alloc(size_t n) {
     void* p = malloc(n ? n : 1);
@@ -334,6 +356,7 @@ static const char* grav_any_to_string(GravAny a) {
         default: return "null";
     }
 }
+static void grav_assert_eq(GravAny actual, GravAny expected, const char* msg, const char* loc);
 static bool grav_any_eq(GravAny a, GravAny b) {
     bool an = a.tag == GRAV_ANY_INT || a.tag == GRAV_ANY_UINT || a.tag == GRAV_ANY_FLOAT;
     bool bn = b.tag == GRAV_ANY_INT || b.tag == GRAV_ANY_UINT || b.tag == GRAV_ANY_FLOAT;
@@ -415,6 +438,11 @@ static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char*
     }
 #endif
     if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_testing) {
+        char b[2048];
+        snprintf(b, sizeof b, "uncaught exception: %s", (msg && msg[0]) ? msg : (t ? t->name : "?"));
+        grav_test_fail(b);
+    }
     fflush(stdout);
     fprintf(stderr, "grav: uncaught exception: %s\n",
             (msg && msg[0]) ? msg : (t ? t->name : "?"));
@@ -424,6 +452,12 @@ static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char*
 /* Re-raise the in-flight exception, keeping the trace from its original throw. */
 static GRAV_NORETURN void grav_rethrow(void) {
     if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_testing) {
+        char b[2048];
+        snprintf(b, sizeof b, "uncaught exception: %s", (grav_current_exc.message && grav_current_exc.message[0])
+                 ? grav_current_exc.message : (grav_current_exc.type ? grav_current_exc.type->name : "?"));
+        grav_test_fail(b);
+    }
     fflush(stdout);
     fprintf(stderr, "grav: uncaught exception: %s\n",
             (grav_current_exc.message && grav_current_exc.message[0])
@@ -633,6 +667,41 @@ static void grav_join_all(void) {
             exit(1);
         }
     }
+}
+
+/* ---- assertEq and the test runner ---------------------------------------- */
+static void grav_assert_eq(GravAny actual, GravAny expected, const char* msg, const char* loc) {
+    if (grav_any_eq(actual, expected)) return;
+    char b[1024];
+    snprintf(b, sizeof b, "%s%sexpected %s but got %s", msg, (msg && msg[0]) ? ": " : "",
+             grav_any_to_string(expected), grav_any_to_string(actual));
+    grav_assert_fail_at(b, loc);
+}
+static int grav_run_tests(const char* const* names, void (*const* fns)(void), int n) {
+    const char* filter = getenv("GRAV_TEST_FILTER");
+    volatile int passed = 0, failed = 0, skipped = 0;
+    printf("running %d test%s\n", n, n == 1 ? "" : "s");
+    fflush(stdout);
+    grav_testing = 1;
+    for (int i = 0; i < n; i++) {
+        if (filter && filter[0] && !strstr(names[i], filter)) { skipped++; continue; }
+        grav_jmp_top = 0;
+        grav_frames_restore(0);
+        if (setjmp(grav_test_jmp) == 0) {
+            fns[i]();
+            printf("  ok    %s\n", names[i]);
+            passed++;
+        } else {
+            printf("  FAIL  %s\n        %s\n", names[i], grav_test_msg);
+            failed++;
+        }
+        fflush(stdout);
+    }
+    grav_testing = 0;
+    printf("result: %d passed, %d failed", passed, failed);
+    if (skipped) printf(", %d filtered out", skipped);
+    printf("\n");
+    return failed ? 1 : 0;
 }
 
 )C";
