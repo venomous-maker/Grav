@@ -215,6 +215,12 @@ private:
     bool inStatic_ = false;
     bool inAsync_ = false; // true while checking an `async fn` body
     int loopDepth_ = 0; // for validating break/continue
+    // `match` on a data enum is replaced by an if/else chain (typechecker_match.cpp):
+    // checkSwitch leaves the replacement here and checkBlock swaps it in.
+    StmtPtr matchReplacement_;
+    int matchCounter_ = 0;
+    const ClassDecl *dataEnumOf(const TypeRef &t) const;
+    void lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const ClassDecl &base);
     bool inDefer_ = false; // checking a `defer` body (no `return` allowed)
     struct LambdaCtx { LambdaExpr *lam; size_t scopeBase; };
     std::vector<LambdaCtx> lambdaStack_; // enclosing lambdas, innermost last
