@@ -1,0 +1,128 @@
+// lib/collections/linkedlist.grav — LinkedList<T>: a doubly linked list. Adding/removing at
+// either end is O(1); get(i) walks from the nearer end. Prefer Array for
+// index-heavy work; use LinkedList when you mostly add/remove at the ends or
+// splice through an iteration.
+import "array.grav"
+
+namespace std.collections {
+
+    class LinkedNode<T> {
+        public value: T
+        public prev: LinkedNode<T>
+        public next: LinkedNode<T>
+        constructor(value: T) { self.value = value; self.prev = null; self.next = null; }
+    }
+
+    class LinkedList<T> {
+        private head: LinkedNode<T>
+        private tail: LinkedNode<T>
+        private len: int
+
+        constructor() { self.head = null; self.tail = null; self.len = 0; }
+        destructor() { self.clear(); }
+
+        public fn size() -> int { return self.len; }
+        public fn length() -> int { return self.len; }
+        public fn isEmpty() -> bool { return self.len == 0; }
+        public fn clear() {
+            let n = self.head;
+            while (n != null) { let next = n.next; free(n); n = next; }
+            self.head = null;
+            self.tail = null;
+            self.len = 0;
+        }
+
+        public fn addFirst(item: T) {
+            let n = new LinkedNode<T>(item);
+            n.next = self.head;
+            if (self.head != null) { self.head.prev = n; } else { self.tail = n; }
+            self.head = n;
+            self.len = self.len + 1;
+        }
+        public fn addLast(item: T) {
+            let n = new LinkedNode<T>(item);
+            n.prev = self.tail;
+            if (self.tail != null) { self.tail.next = n; } else { self.head = n; }
+            self.tail = n;
+            self.len = self.len + 1;
+        }
+        public fn add(item: T) { self.addLast(item); }
+
+        private fn unlink(n: LinkedNode<T>) -> T {
+            if (n.prev != null) { n.prev.next = n.next; } else { self.head = n.next; }
+            if (n.next != null) { n.next.prev = n.prev; } else { self.tail = n.prev; }
+            let v = n.value;
+            free(n);
+            self.len = self.len - 1;
+            return v;
+        }
+        public fn removeFirst() -> T {
+            if (self.head == null) { panic("LinkedList.removeFirst on an empty list"); }
+            return self.unlink(self.head);
+        }
+        public fn removeLast() -> T {
+            if (self.tail == null) { panic("LinkedList.removeLast on an empty list"); }
+            return self.unlink(self.tail);
+        }
+        public fn first() -> T {
+            if (self.head == null) { panic("LinkedList.first on an empty list"); }
+            return self.head.value;
+        }
+        public fn last() -> T {
+            if (self.tail == null) { panic("LinkedList.last on an empty list"); }
+            return self.tail.value;
+        }
+
+        private fn nodeAt(i: int) -> LinkedNode<T> {
+            if (i < 0 || i >= self.len) { panic("LinkedList index ${i} out of range (size ${self.len})"); }
+            if (i < self.len / 2) {
+                let n = self.head;
+                for (k in 0..i) { n = n.next; }
+                return n;
+            }
+            let n = self.tail;
+            for (k in 0..self.len - 1 - i) { n = n.prev; }
+            return n;
+        }
+        public fn get(i: int) -> T { return self.nodeAt(i).value; }
+        public fn set(i: int, item: T) { self.nodeAt(i).value = item; }
+        public fn removeAt(i: int) -> T { return self.unlink(self.nodeAt(i)); }
+        // Removes the first element equal to `item`; reports whether one was found.
+        public fn remove(item: T) -> bool {
+            let n = self.head;
+            while (n != null) {
+                if (n.value == item) { self.unlink(n); return true; }
+                n = n.next;
+            }
+            return false;
+        }
+        public fn contains(item: T) -> bool {
+            let n = self.head;
+            while (n != null) { if (n.value == item) { return true; } n = n.next; }
+            return false;
+        }
+        public fn forEach(f: fn(T)) {
+            let n = self.head;
+            while (n != null) { f(n.value); n = n.next; }
+        }
+        public fn reverse() {
+            let n = self.head;
+            while (n != null) {
+                let next = n.next;
+                n.next = n.prev;
+                n.prev = next;
+                n = next;
+            }
+            let h = self.head;
+            self.head = self.tail;
+            self.tail = h;
+        }
+        public fn toArray() -> Array<T> {
+            let out = new Array<T>(self.len);
+            let n = self.head;
+            while (n != null) { out.push(n.value); n = n.next; }
+            return out;
+        }
+    }
+
+}
