@@ -1,0 +1,270 @@
+// lib/collections/array.grav — Array<T>: a growable, generic dynamic array (heap-backed).
+// Each instantiation (Array<int>, Array<string>, …) is monomorphized to a
+// concrete struct holding a `T*` buffer that doubles on demand.
+//
+// Iterate with `for (x in arr)` / `for (i, x in arr)`, index with `arr[i]`.
+// Element access is bounds-checked (an out-of-range index panics). `free(arr)`
+// releases the buffer (via the destructor) — not the objects stored in it.
+//
+// Collection conventions shared by the library: size() (length() is an alias
+// here), isEmpty(), clear(), contains(), forEach(), toArray().
+//
+// Higher-order methods take lambdas: `xs.filter(fn(x) => x > 2).map(fn(x) => x * 10)`.
+// `xs.mapTo(f)` maps into another element type and `xs.fold(init, f)` reduces into
+// any type (both infer their type parameter; `::<U>` can still be written).
+
+namespace std.collections {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    %}
+
+    class Array<T> {
+        private data: T*
+        private len: int
+        private cap: int
+
+        constructor() { self.len = 0; self.cap = 0; self.data = null; }
+        // Pre-sized: room for `capacity` elements before the first reallocation.
+        constructor(capacity: int) {
+            self.len = 0; self.cap = 0; self.data = null;
+            if (capacity > 0) { self.ensure(capacity); }
+        }
+        destructor() { free(self.data); }
+
+        private fn check(i: int) {
+            if (i < 0 || i >= self.len) { panic("Array index ${i} out of range (length ${self.len})"); }
+        }
+
+        private fn ensure(need: int) {
+            if (self.cap >= need) { return; }
+            let nc = self.cap < 4 ? 4 : self.cap * 2;
+            if (nc < need) { nc = need; }
+            let old = self.data;
+            let bytes = nc * sizeof(T);
+            self.data = %{ (void*)realloc((void*)old, (size_t)bytes) %} as T*;
+            if (self.data == null) { panic("Array: out of memory"); }
+            self.cap = nc;
+        }
+        // Make room for at least `capacity` elements in total.
+        public fn reserve(capacity: int) { self.ensure(capacity); }
+
+        // ── size ───────────────────────────────────────────────────────────────
+        public fn size() -> int { return self.len; }
+        public fn length() -> int { return self.len; }
+        public fn isEmpty() -> bool { return self.len == 0; }
+        public fn clear() { self.len = 0; }
+
+        // ── element access ─────────────────────────────────────────────────────
+        public fn get(i: int) -> T { self.check(i); return self.data[i]; }
+        public fn set(i: int, item: T) { self.check(i); self.data[i] = item; }
+        fn operator[](i: int) -> T { self.check(i); return self.data[i]; }
+        fn operator[]=(i: int, item: T) { self.check(i); self.data[i] = item; }
+        public fn first() -> T { self.check(0); return self.data[0]; }
+        public fn last() -> T { self.check(self.len - 1); return self.data[self.len - 1]; }
+        public fn getOr(i: int, fallback: T) -> T {
+            return i >= 0 && i < self.len ? self.data[i] : fallback;
+        }
+
+        // ── adding and removing ────────────────────────────────────────────────
+        public fn push(item: T) {
+            if (self.len == self.cap) { self.ensure(self.len + 1); }
+            self.data[self.len] = item;
+            self.len = self.len + 1;
+        }
+        public fn add(item: T) { self.push(item); }
+        public fn addAll(other: Array<T>) {
+            let n = other.length();
+            self.ensure(self.len + n);
+            for (i in 0..n) { self.data[self.len + i] = other.get(i); }
+            self.len = self.len + n;
+        }
+        public fn pop() -> T {
+            if (self.len == 0) { panic("Array.pop on an empty array"); }
+            self.len = self.len - 1;
+            return self.data[self.len];
+        }
+        public fn insert(index: int, item: T) {
+            if (index < 0 || index > self.len) { panic("Array.insert index ${index} out of range"); }
+            self.ensure(self.len + 1);
+            let n = self.len - index;
+            %{ memmove(self->data + index + 1, self->data + index, (size_t)n * sizeof(*self->data)); %};
+            self.data[index] = item;
+            self.len = self.len + 1;
+        }
+        public fn removeAt(index: int) -> T {
+            self.check(index);
+            let item = self.data[index];
+            let n = self.len - index - 1;
+            %{ memmove(self->data + index, self->data + index + 1, (size_t)n * sizeof(*self->data)); %};
+            self.len = self.len - 1;
+            return item;
+        }
+        // Removes the first element equal to `item`; reports whether one was found.
+        public fn remove(item: T) -> bool {
+            let i = self.indexOf(item);
+            if (i < 0) { return false; }
+            self.removeAt(i);
+            return true;
+        }
+        // Removes every element matching `pred` (keeping order); returns how many.
+        public fn removeWhere(pred: fn(T) -> bool) -> int {
+            let w = 0;
+            for (r in 0..self.len) {
+                if (!pred(self.data[r])) { self.data[w] = self.data[r]; w += 1; }
+            }
+            let removed = self.len - w;
+            self.len = w;
+            return removed;
+        }
+        public fn swap(i: int, j: int) {
+            self.check(i);
+            self.check(j);
+            let t = self.data[i];
+            self.data[i] = self.data[j];
+            self.data[j] = t;
+        }
+        public fn fill(item: T) { for (i in 0..self.len) { self.data[i] = item; } }
+
+        // ── searching ──────────────────────────────────────────────────────────
+        public fn indexOf(item: T) -> int {
+            for (i in 0..self.len) { if (self.data[i] == item) { return i; } }
+            return -1;
+        }
+        public fn lastIndexOf(item: T) -> int {
+            for (i in self.len - 1..=0 step -1) { if (self.data[i] == item) { return i; } }
+            return -1;
+        }
+        public fn contains(item: T) -> bool { return self.indexOf(item) >= 0; }
+
+        // ── whole-array operations ─────────────────────────────────────────────
+        public fn reverse() {
+            let i = 0;
+            let j = self.len - 1;
+            while (i < j) {
+                let t = self.data[i]; self.data[i] = self.data[j]; self.data[j] = t;
+                i += 1;
+                j -= 1;
+            }
+        }
+        public fn copy() -> Array<T> {
+            let out = new Array<T>(self.len);
+            let n = self.len;
+            %{ if (n > 0) memcpy(out->data, self->data, (size_t)n * sizeof(*self->data)); %};
+            out.len = n;
+            return out;
+        }
+        public fn toArray() -> Array<T> { return self.copy(); }
+        // Elements [start, end) as a new array (bounds are clamped).
+        public fn slice(start: int, end: int) -> Array<T> {
+            let s = start < 0 ? 0 : start;
+            let e = end > self.len ? self.len : end;
+            let out = new Array<T>(e > s ? e - s : 0);
+            for (i in s..e) { out.push(self.data[i]); }
+            return out;
+        }
+        public fn dispose() { free(self.data); self.data = null; self.len = 0; self.cap = 0; }
+
+        // ── higher-order operations ────────────────────────────────────────────
+        public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.data[i]); } }
+        public fn forEachIndexed(f: fn(int, T)) { for (i in 0..self.len) { f(i, self.data[i]); } }
+        public fn map(f: fn(T) -> T) -> Array<T> {
+            let out = new Array<T>(self.len);
+            for (i in 0..self.len) { out.push(f(self.data[i])); }
+            return out;
+        }
+        public fn filter(keep: fn(T) -> bool) -> Array<T> {
+            let out = new Array<T>();
+            for (i in 0..self.len) { if (keep(self.data[i])) { out.push(self.data[i]); } }
+            return out;
+        }
+        public fn reduce(init: T, f: fn(T, T) -> T) -> T {
+            let acc = init;
+            for (i in 0..self.len) { acc = f(acc, self.data[i]); }
+            return acc;
+        }
+        public fn any(pred: fn(T) -> bool) -> bool {
+            for (i in 0..self.len) { if (pred(self.data[i])) { return true; } }
+            return false;
+        }
+        public fn all(pred: fn(T) -> bool) -> bool {
+            for (i in 0..self.len) { if (!pred(self.data[i])) { return false; } }
+            return true;
+        }
+        public fn countWhere(pred: fn(T) -> bool) -> int {
+            let n = 0;
+            for (i in 0..self.len) { if (pred(self.data[i])) { n += 1; } }
+            return n;
+        }
+        // Index of the first element matching `pred`, or -1.
+        public fn findIndex(pred: fn(T) -> bool) -> int {
+            for (i in 0..self.len) { if (pred(self.data[i])) { return i; } }
+            return -1;
+        }
+        // The first element matching `pred`, or `fallback`.
+        public fn findFirst(pred: fn(T) -> bool, fallback: T) -> T {
+            for (i in 0..self.len) { if (pred(self.data[i])) { return self.data[i]; } }
+            return fallback;
+        }
+        // Map into another element type.
+        public fn mapTo<U>(f: fn(T) -> U) -> Array<U> {
+            let out = new Array<U>(self.len);
+            for (i in 0..self.len) { out.push(f(self.data[i])); }
+            return out;
+        }
+        // Reduce into an accumulator of any type.
+        public fn fold<A>(init: A, f: fn(A, T) -> A) -> A {
+            let acc = init;
+            for (i in 0..self.len) { acc = f(acc, self.data[i]); }
+            return acc;
+        }
+        // The largest element by `cmp` (panics when empty).
+        public fn maxBy(cmp: fn(T, T) -> int) -> T {
+            self.check(0);
+            let best = self.data[0];
+            for (i in 1..self.len) { if (cmp(self.data[i], best) > 0) { best = self.data[i]; } }
+            return best;
+        }
+        public fn minBy(cmp: fn(T, T) -> int) -> T {
+            self.check(0);
+            let best = self.data[0];
+            for (i in 1..self.len) { if (cmp(self.data[i], best) < 0) { best = self.data[i]; } }
+            return best;
+        }
+        // Stable merge sort; `cmp(a, b)` < 0 puts a first. O(n log n).
+        public fn sortBy(cmp: fn(T, T) -> int) {
+            if (self.len < 2) { return; }
+            let n = self.len;
+            let bytes = n * sizeof(T);
+            let tmp = %{ (void*)malloc((size_t)bytes) %} as T*;
+            let width = 1;
+            while (width < n) {
+                let lo = 0;
+                while (lo < n) {
+                    let mid = lo + width < n ? lo + width : n;
+                    let hi = lo + 2 * width < n ? lo + 2 * width : n;
+                    let i = lo;
+                    let j = mid;
+                    let k = lo;
+                    while (i < mid && j < hi) {
+                        if (cmp(self.data[j], self.data[i]) < 0) { tmp[k] = self.data[j]; j += 1; }
+                        else { tmp[k] = self.data[i]; i += 1; }
+                        k += 1;
+                    }
+                    while (i < mid) { tmp[k] = self.data[i]; i += 1; k += 1; }
+                    while (j < hi) { tmp[k] = self.data[j]; j += 1; k += 1; }
+                    lo = hi;
+                }
+                %{ memcpy(self->data, tmp, (size_t)bytes); %};
+                width = width * 2;
+            }
+            free(tmp);
+        }
+    }
+
+    // Free-function forms (kept for compatibility; prefer xs.mapTo(f) / xs.fold(init, f)).
+    fn mapTo<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U> { return xs.mapTo::<U>(f); }
+    fn fold<T, A>(xs: Array<T>, init: A, f: fn(A, T) -> A) -> A { return xs.fold::<A>(init, f); }
+
+}
