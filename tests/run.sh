@@ -42,6 +42,17 @@ run examples/project/main.grav ''
 # Library tests: every standard-library module, golden-checked like the examples.
 for f in tests/lib/*.grav; do run "$f" ''; done
 
+# `grav test` files: the runner's report is golden-checked (it may exit 1 on
+# purpose, since some of these tests are meant to fail).
+for f in tests/unit/*.grav; do
+  name="unit_$(basename "$f" .grav)"; gold="tests/expected/$name.out"
+  "$GRAV" test "$f" >"$TMP/$name.out" 2>&1
+  if [ $UPDATE = 1 ]; then cp "$TMP/$name.out" "$gold"; echo "updated $gold"; pass=$((pass+1)); continue; fi
+  if [ ! -f "$gold" ] || ! diff -q "$gold" "$TMP/$name.out" >/dev/null; then
+    echo "FAIL (test)    $f"; diff "$gold" "$TMP/$name.out" 2>&1 | sed 's/^/    /' | head -30; fail=$((fail+1))
+  else echo "ok   $f (grav test)"; pass=$((pass+1)); fi
+done
+
 # Every example must also build in release mode (no tracing, -O3).
 for f in examples/*.grav examples/apps/*.grav examples/project/main.grav; do
   if ! "$GRAV" "$f" --release --emit bin -o "$TMP/rel" >"$TMP/err" 2>&1; then
