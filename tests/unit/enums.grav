@@ -1,0 +1,109 @@
+// Data enums, pattern matching, and lib/result.grav.
+import "std"
+
+enum Shape {
+    Circle(radius: float),
+    Rect(w: float, h: float),
+    Empty,
+}
+enum Pair<A, B> { Both(A, B), Left(A), Neither }
+enum Tree { Leaf(int), Node(left: Tree, right: Tree) }
+enum Light { Red, Green, fn next() -> Light { match (self) { case Red: return Light.Green; case Green: return Light.Red } } }
+
+fn sum(t: Tree) -> int {
+    match (t) {
+        case Leaf(v): return v
+        case Node(l, r): return sum(l) + sum(r)
+    }
+}
+
+test "construct, print, compare" {
+    assertEq(Shape.Circle(1.5).toString(), "Circle(1.5)")
+    assertEq(Shape.Rect(1.0, 2.0).toString(), "Rect(1, 2)")
+    assertEq(Shape.Empty.toString(), "Empty")
+    assert(Shape.Rect(1.0, 2.0) == Shape.Rect(1.0, 2.0))
+    assert(Shape.Rect(1.0, 2.0) != Shape.Rect(2.0, 1.0))
+    assert(Shape.Empty != Shape.Circle(0.0))
+    assertEq(Shape.Rect(1.0, 2.0).variantName(), "Rect")
+}
+
+test "match binds fields, skips with _, and multi-pattern cases" {
+    let shapes = [Shape.Circle(2.0), Shape.Rect(3.0, 4.0), Shape.Empty]
+    let out = ""
+    for (s in shapes) {
+        match (s) {
+            case Circle(r): out = out + "c${r} "
+            case Rect(_, h): out = out + "r${h} "
+            case Empty: out = out + "e"
+        }
+    }
+    assertEq(out, "c2 r4 e")
+    let n = 0
+    for (s in shapes) {
+        match (s) {
+            case Circle, Rect: n += 1
+            default: n += 100
+        }
+    }
+    assertEq(n, 102)
+}
+
+test "generic enums with unnamed fields" {
+    let p: Pair<int, string> = Pair.Both(1, "one")
+    assertEq((p as Pair.Both<int, string>)._1, "one")
+    let q: Pair<int, string> = Pair.Left(7)
+    assertEq((q as Pair.Left<int, string>).value, 7)
+    let r: Pair<int, string> = Pair.Neither
+    assert(r is Pair.Neither<int, string>)
+    assertEq(p.toString(), "Both(1, one)")
+}
+
+test "recursive enums" {
+    let t = Tree.Node(Tree.Leaf(1), Tree.Node(Tree.Leaf(2), Tree.Leaf(3)))
+    assertEq(sum(t), 6)
+    assertEq(t.toString(), "Node(Leaf(1), Node(Leaf(2), Leaf(3)))")
+}
+
+test "payload-free enums with methods" {
+    assertEq(Light.Red.next(), Light.Green)
+    assertEq(Light.Red.next().next().toString(), "Red")
+}
+
+test "variants in collections" {
+    let xs = new Array<Shape>()
+    xs.push(Shape.Empty)
+    xs.push(Shape.Circle(1.0))
+    assert(xs.contains(Shape.Circle(1.0)))
+    assertEq(xs.indexOf(Shape.Empty), 0)
+}
+
+test "Result" {
+    let ok: Result<int, string> = Result.Ok(4)
+    let err: Result<int, string> = Result.Err("bad")
+    assert(ok.isOk() && err.isErr())
+    assertEq(ok.unwrap(), 4)
+    assertEq(err.unwrapOr(9), 9)
+    assertEq(err.unwrapErr(), "bad")
+    assertEq(ok.map(fn(n: int) => n * 2).unwrap(), 8)
+    assertEq(err.mapErr(fn(e: string) => e + "!").unwrapErr(), "bad!")
+    assertEq(ok.andThen(fn(n: int) => n > 3 ? Result.Ok::<int, string>(n) : Result.Err::<int, string>("small")).toString(), "Ok(4)")
+    assertEq(ok.ok().toString(), "Some(4)")
+    assertEq(err.ok().toString(), "None")
+    assertEq(err.unwrapOrElse(fn(e: string) => Str.length(e)), 3)
+}
+
+test "Option" {
+    let some: Option<string> = Option.Some("x")
+    let none: Option<string> = Option.None
+    assert(some.isSome() && none.isNone())
+    assertEq(none.unwrapOr("d"), "d")
+    assertEq(some.map(fn(s: string) => s + s).unwrap(), "xx")
+    assertEq(some.filter(fn(s: string) => s == "y").isNone(), true)
+    assertEq(none.okOr(404).toString(), "Err(404)")
+    assertEq(some, Option.Some("x"))
+}
+
+test "unwrap on Err panics with the error" {
+    let err: Result<int, string> = Result.Err("disk full")
+    err.unwrap()
+}
