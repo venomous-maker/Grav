@@ -121,7 +121,76 @@ struct Visitor {
         else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody.get()); block(x->body); }
     }
 };
+// Like Visitor, but hands out the owning ExprPtr so expressions can be replaced.
+struct Rewriter {
+    const std::function<void(ExprPtr &)> &f;
+    void block(Block &b) { for (auto &s : b.statements) stmt(s.get()); }
+    void stmt(Stmt *s) {
+        if (!s) return;
+        if (auto *x = dynamic_cast<LetStmt *>(s)) expr(x->init);
+        else if (auto *x = dynamic_cast<AssignStmt *>(s)) { expr(x->target); expr(x->value); }
+        else if (auto *x = dynamic_cast<ReturnStmt *>(s)) expr(x->value);
+        else if (auto *x = dynamic_cast<ExprStmt *>(s)) expr(x->expr);
+        else if (auto *x = dynamic_cast<BlockStmt *>(s)) block(x->block);
+        else if (auto *x = dynamic_cast<IfStmt *>(s)) { expr(x->cond); block(x->thenBlock); stmt(x->elseStmt.get()); }
+        else if (auto *x = dynamic_cast<WhileStmt *>(s)) { expr(x->cond); block(x->body); }
+        else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) { block(x->body); expr(x->cond); }
+        else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+            stmt(x->init.get()); expr(x->cond); stmt(x->update.get()); block(x->body);
+        } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+            expr(x->lo); expr(x->hi); expr(x->step); block(x->body);
+        } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+            expr(x->subject);
+            for (auto &c : x->cases) block(c.body);
+            block(x->defaultBody);
+        } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value);
+        else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+            block(x->tryBlock);
+            for (auto &c : x->catches) block(c.block);
+            block(x->finallyBlock);
+        } else if (auto *x = dynamic_cast<DeferStmt *>(s)) block(x->body);
+    }
+    void expr(ExprPtr &slot) {
+        if (!slot) return;
+        f(slot);
+        Expr *e = slot.get();
+        if (auto *x = dynamic_cast<BinaryExpr *>(e)) { expr(x->left); expr(x->right); }
+        else if (auto *x = dynamic_cast<UnaryExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<TernaryExpr *>(e)) { expr(x->cond); expr(x->thenExpr); expr(x->elseExpr); }
+        else if (auto *x = dynamic_cast<AsExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<IsExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<AwaitExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<DerefExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) { expr(x->left); expr(x->right); }
+        else if (auto *x = dynamic_cast<IncDecExpr *>(e)) expr(x->target);
+        else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand);
+        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el); }
+        else if (auto *x = dynamic_cast<IndexExpr *>(e)) { expr(x->base); expr(x->index); }
+        else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a); }
+        else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value); }
+        else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee); for (auto &a : x->args) expr(a); }
+        else if (auto *x = dynamic_cast<MemberExpr *>(e)) expr(x->object);
+        else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody); block(x->body); }
+    }
+};
 } // namespace
+
+void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f) {
+    Rewriter v{f};
+    for (auto &d : program.decls) {
+        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) v.block(fn->body);
+        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+            v.block(c->constructor.body);
+            for (auto &x : c->extraCtors) v.block(x.body);
+            v.block(c->destructor.body);
+            for (auto &m : c->methods) v.block(m.body);
+            for (auto &sf : c->staticFields) v.expr(sf.init);
+        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) v.expr(g->init);
+        else if (auto *t = dynamic_cast<TestDecl *>(d.get())) v.block(t->body);
+    }
+}
 
 void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
     Visitor v{f};
