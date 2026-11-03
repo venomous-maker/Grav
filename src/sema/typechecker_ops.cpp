@@ -104,12 +104,36 @@ void TypeChecker::checkFallthrough(const Block &body, const TypeRef &ret, int li
                              typeRefName(ret));
 }
 
+// "(key: long) -> bool": how a callable is declared, for error messages.
+std::string signatureText(const std::vector<std::string> &names, const std::vector<TypeRef> &types,
+                          const TypeRef &ret, bool variadic) {
+    std::string s = "(";
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (i) s += ", ";
+        if (i < names.size() && !names[i].empty()) s += names[i] + ": ";
+        if (variadic && i + 1 == types.size()) s += "...";
+        s += typeRefName(types[i]);
+    }
+    s += ")";
+    if (!ret.isVoid() && !ret.isError()) s += " -> " + typeRefName(ret);
+    return s;
+}
+
+// "method 'A.m'" + "(x: int)" -> "method 'A.m(x: int)'".
+std::string withSignature(const std::string &what, const std::string &sig) {
+    if (!what.empty() && what.back() == '\'') return what.substr(0, what.size() - 1) + sig + "'";
+    return what + " " + sig;
+}
+
 const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const MethodInfo *> &cands,
                                                      std::vector<ExprPtr> &args, int line, int col,
                                                      const std::string &what) {
     if (cands.empty()) return nullptr;
+    auto sigOf = [](const MethodInfo *m) {
+        return signatureText(m->paramNames, m->paramTypes, m->returnType, false);
+    };
     if (cands.size() == 1) {
-        checkArgs(args, cands[0]->paramTypes, line, col, what);
+        checkArgs(args, cands[0]->paramTypes, line, col, withSignature(what, sigOf(cands[0])));
         return cands[0];
     }
     std::vector<TypeRef> argTypes;
@@ -134,11 +158,13 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
         std::string got;
         for (size_t i = 0; i < argTypes.size(); ++i)
             got += (i ? ", " : "") + typeRefName(argTypes[i]);
+        std::string options;
+        for (const MethodInfo *m : cands) options += "\n    " + sigOf(m);
         error(line, col, std::string(nAssignable > 1 ? "ambiguous call to " : "no overload of ") +
-                             what + " matches (" + got + ")");
+                             what + " matches (" + got + "); candidates are:" + options);
         return nullptr;
     }
-    validateArgTypes(args, argTypes, mi->paramTypes, false, line, col, what);
+    validateArgTypes(args, argTypes, mi->paramTypes, false, line, col, withSignature(what, sigOf(mi)));
     return mi;
 }
 
@@ -152,7 +178,11 @@ int TypeChecker::resolveCtor(const std::string &classFq, std::vector<ExprPtr> &a
     std::vector<MethodInfo> sigs(ci->ctors.size());
     std::vector<const MethodInfo *> cands;
     for (size_t i = 0; i < ci->ctors.size(); ++i) {
-        for (const auto &p : ci->ctors[i]->params) sigs[i].paramTypes.push_back(p.type);
+        for (const auto &p : ci->ctors[i]->params) {
+            sigs[i].paramTypes.push_back(p.type);
+            sigs[i].paramNames.push_back(p.name);
+        }
+        sigs[i].returnType = TypeRef::prim(TypeRef::Kind::Void);
         cands.push_back(&sigs[i]);
     }
     const MethodInfo *mi = resolveMethodOverload(cands, args, line, col, what);
