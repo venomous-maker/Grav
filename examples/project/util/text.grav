@@ -1,6 +1,6 @@
 // util/text.grav — small text helpers in the `text` namespace (a library
 // module: no `main`). Paths in `import` are relative to the importing file.
-import "../../../lib/string.grav"
+import { Str } from "std/text"
 
 namespace text {
     export fn banner(title: string) -> string {
