@@ -1,0 +1,34 @@
+// lib/core/optional.grav — Optional<T>: a value that may be absent, as an explicit
+// alternative to sentinel values. Works for any T (including int and structs).
+//
+//   fn find(id: int) -> Optional<string> {
+//       return id == 1 ? new Optional("ada") : new Optional<string>()
+//   }
+//   let name = find(2).getOr("nobody")
+
+namespace std.core {
+
+    class Optional<T> {
+        private present: bool
+        private value: T
+
+        constructor() { self.present = false; }
+        constructor(value: T) { self.present = true; self.value = value; }
+
+        public fn isPresent() -> bool { return self.present; }
+        public fn isEmpty() -> bool { return !self.present; }
+        public fn get() -> T {
+            if (!self.present) { panic("Optional.get on an empty Optional"); }
+            return self.value;
+        }
+        public fn getOr(fallback: T) -> T { return self.present ? self.value : fallback; }
+        public fn ifPresent(f: fn(T)) { if (self.present) { f(self.value); } }
+        public fn map<U>(f: fn(T) -> U) -> Optional<U> {
+            return self.present ? new Optional<U>(f(self.value)) : new Optional<U>();
+        }
+        public fn filter(pred: fn(T) -> bool) -> Optional<T> {
+            return self.present && pred(self.value) ? self : new Optional<T>();
+        }
+    }
+
+}
