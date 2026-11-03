@@ -8,7 +8,8 @@ plus optional registration of the `gravc` MCP server with
 
 ```
 editors/nvim/
-├── syntax/grav.vim      # highlighting (keywords, strings + ${} interpolation, %{ %} C blocks, decorators)
+├── syntax/grav.vim      # highlighting: declarations, generics, type annotations, import forms, use, test blocks,
+│                        #   case variants, hex/binary/exponent numbers, ${} interpolation, %{ %} C blocks
 ├── ftdetect/grav.lua    # *.grav -> filetype=grav
 ├── ftplugin/grav.{vim,lua} # comments/indent + nav keymaps + LSP autostart
 ├── lua/grav.lua         # LazyVim plugin spec: build/run keymaps + MCP server
@@ -65,6 +66,15 @@ project-wide). `gr`/`gO`/`K` work the same way.
 
 **Inline C** (`%{ … %}`) is highlighted with the real C syntax, and `${ … }`
 string interpolation highlights its inner tokens.
+
+### New in 1.6
+
+`<leader>mt` runs the file's tests, `<leader>mk` type-checks, `<leader>mf`
+formats with `grav fmt`, and `<leader>mp` / `<leader>mP` run / test the project
+(`grav.toml`). With the language server you also get `<leader>cf` (format),
+`<leader>ws` (workspace symbols, including the standard library), `<C-k>` in
+insert mode (signature help), and LSP completion for members, namespaces and
+import paths.
 
 ### MCP server
 
