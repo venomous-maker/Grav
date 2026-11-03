@@ -5,9 +5,26 @@
 namespace grav {
 
 void CodeGen::line(const std::string &text) {
+    // Every C line of a statement maps to its .grav line, so multi-line
+    // expansions (temporaries, trace marks) do not drift.
+    if (lines_ && curSrcLine_ > 0) cur_->append(lineDirective(curSrcLine_));
     cur_->append(static_cast<size_t>(indent_) * 4, ' ');
     cur_->append(text);
     cur_->push_back('\n');
+}
+
+std::string CodeGen::lineDirective(int combinedLine) const {
+    if (!lines_ || combinedLine <= 0) return "";
+    SourceMapEntry o = origin(combinedLine);
+    if (o.file == "<unknown>") return "";
+    return "#line " + std::to_string(o.line) + " \"" + escapeC(o.file) + "\"\n";
+}
+
+void CodeGen::endFunction() {
+    curSrcLine_ = 0;
+    defs_ += "}\n";
+    if (lines_) defs_ += std::string(kLineReset) + "\n";
+    defs_ += "\n";
 }
 
 void CodeGen::emitLineMark(int combinedLine) {
@@ -37,6 +54,7 @@ std::string CodeGen::emitDescribe(const std::string &objExpr, const TypeRef &typ
 void CodeGen::emitStmt(const Stmt &stmt) {
     // Record the current source line in the active frame for stack traces (only
     // where the statement can call out; pure computation never shows in a trace).
+    if (stmt.line > 0) curSrcLine_ = stmt.line;
     if (trace_ && stmtMayCall(stmt)) emitLineMark(stmt.line);
     if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
         auto temps = hoistTemps(s->init.get());
