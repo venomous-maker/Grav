@@ -370,7 +370,11 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
             out += (i < params.size()) ? emitAs(*e->args[i], params[i])
                                        : emitExpr(*e->args[i]);
         }
-        return out + ")";
+        out += ")";
+        // A data enum variant is typed as its enum: `Shape.Circle(1.0)` is a Shape.
+        if (e->type.isNamed() && e->type.name != e->className)
+            out = "((" + cType(e->type) + ")" + out + ")";
+        return out;
     }
     if (auto *e = dynamic_cast<const StructLiteralExpr *>(&expr)) {
         std::string out = "(" + structName(e->typeName) + "){ ";
@@ -467,6 +471,13 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 std::string loc = "\"" + escapeC(o.file) + ":" + std::to_string(o.line) + "\"";
                 std::string msg = call.args.size() == 2 ? emitExpr(*call.args[1]) : ("\"" + escapeC(cond) + "\"");
                 return "grav_assert_at(" + cond + ", " + msg + ", " + loc + ")";
+            }
+            if (call.targetName == "__show") {
+                const TypeRef &t = call.args[0]->type;
+                bool boxable = !(t.isNamed() && reg_->isStruct(t.name)) && !t.isArray() &&
+                               !t.isBinary() && !t.isPointer();
+                if (boxable) return "grav_any_to_string(" + boxAny(*call.args[0]) + ")";
+                return "\"" + escapeC(prettyNames(typeRefName(t))) + "\"";
             }
             if (call.targetName == "assertEq") {
                 SourceMapEntry o = origin(call.line);
