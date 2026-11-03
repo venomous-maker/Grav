@@ -21,9 +21,11 @@
 
 #include "codegen/codegen.h"
 #include "common/diagnostics.h"
+#include "driver/modules.h"
 #include "lexer/lexer.h"
 #include "lexer/preprocess.h"
 #include "parser/parser.h"
+#include "sema/enums.h"
 #include "sema/monomorph.h"
 #include "sema/sanitize.h"
 #include "sema/symbols.h"
@@ -41,60 +43,7 @@ std::string readStream(std::istream &in) {
     return ss.str();
 }
 
-// Trim leading whitespace.
-std::string ltrim(const std::string &s) {
-    size_t i = 0;
-    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) i++;
-    return s.substr(i);
-}
-
-// Where a line of the combined source originally came from.
-struct SrcLoc { std::string file; int line; };
-
-// Recursively load a module, expanding `import "path"` lines (relative to the
-// importing file) before the rest of the file. De-duplicates by canonical path
-// so a module is included at most once, which also breaks import cycles. Fills
-// `srcMap` so combined line N (1-based) maps to its original file:line.
-bool loadModule(const fs::path &path, std::set<std::string> &visited,
-                std::string &out, std::vector<SrcLoc> &srcMap, std::string &err) {
-    std::error_code ec;
-    fs::path canon = fs::weakly_canonical(path, ec);
-    std::string key = ec ? path.string() : canon.string();
-    if (visited.count(key)) return true;
-    visited.insert(key);
-
-    std::ifstream file(path);
-    if (!file) {
-        err = "cannot open '" + path.string() + "'";
-        return false;
-    }
-
-    std::string lineText;
-    int lineNo = 0;
-    while (std::getline(file, lineText)) {
-        ++lineNo;
-        std::string t = ltrim(lineText);
-        if (t.rfind("import", 0) == 0 &&
-            (t.size() == 6 || t[6] == ' ' || t[6] == '\t')) {
-            auto q1 = t.find('"');
-            auto q2 = t.find('"', q1 + 1);
-            if (q1 == std::string::npos || q2 == std::string::npos) {
-                err = "malformed import directive: " + lineText;
-                return false;
-            }
-            std::string rel = t.substr(q1 + 1, q2 - q1 - 1);
-            fs::path imported = path.parent_path() / rel;
-            if (!loadModule(imported, visited, out, srcMap, err)) return false;
-            out += "\n"; // keep imported decls separated
-            srcMap.push_back({path.string(), lineNo});
-        } else {
-            out += lineText;
-            out += '\n';
-            srcMap.push_back({path.string(), lineNo});
-        }
-    }
-    return true;
-}
+using grav::SrcLoc;
 
 // Print a diagnostic, mapping its combined-source line back to the real file:line
 // and showing the offending source line with a caret.
@@ -135,8 +84,23 @@ void registerDisplayNames(const grav::GenericTables &g) {
     for (const auto &[inst, origin] : g.methodInstances) all.push_back({inst, &origin});
     std::sort(all.begin(), all.end(),
               [](const auto &a, const auto &b) { return a.first.size() < b.first.size(); });
-    for (const auto &[inst, origin] : all)
-        grav::setDisplayName(inst, readable(origin->first, origin->second));
+    for (const auto &[inst, origin] : all) {
+        // Data enum variants read as `Option.Some<int>`, not `Option$Some<int>`.
+        std::string name = origin->first;
+        std::replace(name.begin(), name.end(), '$', '.');
+        grav::setDisplayName(inst, readable(name, origin->second));
+    }
+}
+
+// Non-generic data enum variants: `Shape$Circle` reads as `Shape.Circle`.
+void registerVariantNames(const grav::Program &program) {
+    for (const auto &d : program.decls)
+        if (auto *c = dynamic_cast<const grav::ClassDecl *>(d.get()); c && c->variantTag >= 0 &&
+                                                                    c->typeParams.empty()) {
+            std::string shown = c->fqName;
+            std::replace(shown.begin(), shown.end(), '$', '.');
+            if (shown != c->fqName) grav::setDisplayName(c->fqName, shown);
+        }
 }
 
 int usage(const char *prog) {
@@ -298,6 +262,15 @@ int main(int argc, char **argv) {
         }
     }
 
+    // grav.toml (searched upward from the input file, or the current directory)
+    // supplies extra import roots and the default file for run/build/test.
+    std::string projErr;
+    fs::path projStart = inputPath.empty() ? fs::current_path() : fs::path(inputPath).parent_path();
+    if (projStart.empty()) projStart = fs::current_path();
+    grav::ProjectConfig project = grav::findProject(projStart, projErr);
+    if (!projErr.empty()) { std::cerr << "gravc: " << projErr << "\n"; return 1; }
+    if (!useStdin && inputPath.empty() && first == 2 && project.found && !project.main.empty())
+        inputPath = project.main.string();
     if (!useStdin && inputPath.empty()) return usage(argv[0]);
 
     // ---- load source (with imports) ----
@@ -306,9 +279,9 @@ int main(int argc, char **argv) {
     if (useStdin) {
         source = readStream(std::cin);
     } else {
-        std::set<std::string> visited;
+        grav::ModuleLoader loader(project);
         std::string err;
-        if (!loadModule(inputPath, visited, source, srcMap, err)) {
+        if (!loader.load(inputPath, source, srcMap, err)) {
             std::cerr << "gravc: " << err << "\n";
             return 1;
         }
@@ -329,11 +302,13 @@ int main(int argc, char **argv) {
             tokens = grav::preprocess(std::move(tokens));
             grav::Parser parser(std::move(tokens));
             programPtr = std::make_unique<grav::Program>(parser.parseProgram());
+            grav::lowerEnumConstructors(*programPtr); // Shape.Circle(r) -> new Shape$Circle(r)
             grav::applyInferences(*programPtr, inference);
 
             // Expand generic structs/functions into concrete instances before symbols.
             errors = grav::monomorphize(*programPtr);
             registerDisplayNames(programPtr->generics);
+            registerVariantNames(*programPtr);
             // A failed expansion leaves half-made instances; checking them would only
             // bury the real error under follow-on errors from library code.
             if (!errors.empty()) {
