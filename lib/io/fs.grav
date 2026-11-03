@@ -1,0 +1,158 @@
+// lib/io/fs.grav — files and directories (C <stdio.h> and POSIX).
+//
+//   let f = new File("notes.txt")
+//   f.write("hello")
+//   if (f.exists()) { print(f.read()) }
+//   for (name in Dir.list(".")) { print(name) }
+//
+// A File is bound to a path; the OS file is opened per operation, so there's no
+// handle to close. Writes report success as a bool. Text helpers work on
+// `string`; readBinary/writeBinary move raw `binary` blobs (NUL-safe).
+
+import "../text/string.grav"
+import "../collections/array.grav"
+
+namespace std.io {
+
+    %{
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <errno.h>
+    #include <dirent.h>
+    #include <sys/stat.h>
+    #include <unistd.h>
+
+    static GravBytes grav_file_read_bytes(const char* path) {
+        GravBytes out; out.data = 0; out.len = 0;
+        FILE* f = fopen(path, "rb"); if (!f) return out;
+        size_t cap = 4096, n = 0; unsigned char* b = (unsigned char*)malloc(cap + 1);
+        for (;;) {                                  /* works for pipes and /proc files too */
+            size_t got = fread(b + n, 1, cap - n, f); n += got;
+            if (n < cap) break;
+            cap *= 2; b = (unsigned char*)realloc(b, cap + 1);
+        }
+        fclose(f); b[n] = 0; out.data = b; out.len = (long long)n; return out;
+    }
+    static const char* grav_file_read(const char* path) {
+        GravBytes b = grav_file_read_bytes(path);
+        return b.data ? (const char*)b.data : "";
+    }
+    static int grav_file_write_bytes(const char* path, const unsigned char* data, long long len, const char* mode) {
+        FILE* f = fopen(path, mode); if (!f) return 0;
+        size_t put = len > 0 ? fwrite(data, 1, (size_t)len, f) : 0;
+        return (fclose(f) == 0) && (long long)put == (len > 0 ? len : 0);
+    }
+    static long long grav_file_size(const char* path) {
+        struct stat st; return stat(path, &st) == 0 ? (long long)st.st_size : -1;
+    }
+    static int grav_path_kind(const char* path) {          /* 0 missing, 1 file, 2 dir, 3 other */
+        struct stat st; if (stat(path, &st) != 0) return 0;
+        return S_ISREG(st.st_mode) ? 1 : S_ISDIR(st.st_mode) ? 2 : 3;
+    }
+    static long long grav_file_mtime(const char* path) {
+        struct stat st; return stat(path, &st) == 0 ? (long long)st.st_mtime : -1;
+    }
+    static int grav_file_copy(const char* src, const char* dst) {
+        GravBytes b = grav_file_read_bytes(src);
+        int ok = b.data != 0 && grav_file_write_bytes(dst, b.data, b.len, "wb");
+        free(b.data);
+        return ok;
+    }
+    /* The next entry name of an open directory (heap copy), or 0 at the end. */
+    static const char* grav_dir_next(void* d) {
+        struct dirent* e = readdir((DIR*)d);
+        return e ? strdup(e->d_name) : 0;
+    }
+    static int grav_mkdirs(const char* path) {
+        char buf[4096]; size_t n = strlen(path); if (n == 0 || n >= sizeof buf) return 0;
+        memcpy(buf, path, n + 1);
+        for (size_t i = 1; i <= n; i++) {
+            if (buf[i] == '/' || buf[i] == 0) {
+                char c = buf[i]; buf[i] = 0;
+                if (mkdir(buf, 0777) != 0 && errno != EEXIST) return 0;
+                buf[i] = c;
+            }
+        }
+        return 1;
+    }
+    %}
+
+    class File {
+        private path: string
+        constructor(path: string) { self.path = path; }
+
+        public fn name() -> string { return self.path; }
+        public fn path() -> string { return self.path; }
+        public fn exists() -> bool { return %{ grav_path_kind(self->path) == 1 %} as bool; }
+        // Size in bytes (-1 if it does not exist); 64-bit, so large files are fine.
+        public fn size() -> long { return %{ grav_file_size(self->path) %} as long; }
+        // Last modification time (unix seconds), or -1.
+        public fn modified() -> long { return %{ grav_file_mtime(self->path) %} as long; }
+
+        // Text I/O. read() returns "" when the file cannot be read.
+        public fn read() -> string { return %{ grav_file_read(self->path) %} as string; }
+        public fn write(data: string) -> bool {
+            return %{ grav_file_write_bytes(self->path, (const unsigned char*)data, (long long)strlen(data), "wb") %} as bool;
+        }
+        public fn append(data: string) -> bool {
+            return %{ grav_file_write_bytes(self->path, (const unsigned char*)data, (long long)strlen(data), "ab") %} as bool;
+        }
+        public fn writeLine(line: string) -> bool { return self.append(line + "\n"); }
+        public fn appendLine(line: string) -> bool { return self.append(line + "\n"); }
+        // Lines of the file (handles \n and \r\n).
+        public fn readLines() -> Array<string> { return Str.lines(self.read()); }
+        public fn writeLines(lines: Array<string>) -> bool {
+            let body = Str.join(lines, "\n");
+            return self.write(lines.isEmpty() ? body : body + "\n");
+        }
+
+        // Whole-file binary I/O (NUL-safe).
+        public fn readBinary() -> binary { return %{ grav_file_read_bytes(self->path) %} as binary; }
+        public fn writeBinary(data: binary) -> bool {
+            return %{ grav_file_write_bytes(self->path, data.data, data.len, "wb") %} as bool;
+        }
+        public fn appendBinary(data: binary) -> bool {
+            return %{ grav_file_write_bytes(self->path, data.data, data.len, "ab") %} as bool;
+        }
+
+        public fn delete() -> bool { return %{ remove(self->path) == 0 %} as bool; }
+        // Byte-for-byte copy (works for binary files).
+        public fn copyTo(dest: string) -> bool {
+            return %{ grav_file_copy(self->path, dest) %} as bool;
+        }
+        public fn moveTo(dest: string) -> bool { return %{ rename(self->path, dest) == 0 %} as bool; }
+    }
+
+    // Directory operations on paths.
+    class Dir {
+        static fn exists(path: string) -> bool { return %{ grav_path_kind(path) == 2 %} as bool; }
+        // Creates the directory and any missing parents (like mkdir -p).
+        static fn create(path: string) -> bool { return %{ grav_mkdirs(path) %} as bool; }
+        // Removes an empty directory.
+        static fn remove(path: string) -> bool { return %{ rmdir(path) == 0 %} as bool; }
+        // Entry names (not paths), sorted, without "." and "..".
+        static fn list(path: string) -> Array<string> {
+            let out = new Array<string>();
+            let d = %{ (void*)opendir(path) %} as byte*;
+            if (d == null) { return out; }
+            while (true) {
+                let name = %{ grav_dir_next(d) %} as string;
+                if (%{ name == 0 %} as bool) { break; }
+                if (name != "." && name != "..") { out.push(name); }
+            }
+            %{ closedir((DIR*)d); %};
+            out.sortBy(fn(a, b) => Str.compare(a, b));
+            return out;
+        }
+        static fn isFile(path: string) -> bool { return %{ grav_path_kind(path) == 1 %} as bool; }
+        static fn current() -> string { return cwd(); }
+        static fn change(path: string) -> bool { return %{ chdir(path) == 0 %} as bool; }
+        // The system temporary directory ($TMPDIR, else /tmp).
+        static fn temp() -> string {
+            let t = env("TMPDIR");
+            return Str.isEmpty(t) ? "/tmp" : t;
+        }
+    }
+
+}
