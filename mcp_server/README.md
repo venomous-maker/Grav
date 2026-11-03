@@ -11,13 +11,20 @@ speaking the MCP stdio transport (newline-delimited JSON-RPC 2.0). No
 
 ## Tools
 
-| Tool          | What it does                                                        |
-|---------------|--------------------------------------------------------------------|
-| `grav_to_c`   | Transpile Grav source to C and return the generated C.             |
-| `grav_check`  | Type-check a snippet; returns `ok: no errors` or diagnostics.      |
-| `grav_run`    | Compile a program to a native binary and run it; returns output.   |
+| Tool              | What it does                                                                 |
+|-------------------|------------------------------------------------------------------------------|
+| `grav_to_c`       | Transpile Grav source to C and return the generated C.                       |
+| `grav_check`      | Type-check inline `source`, a `.grav` file, or a project directory (`path`). |
+| `grav_run`        | Build and run a program (inline, file, or project) with `args` and `stdin`.  |
+| `grav_test`       | Run the `test` blocks of a program or project (optional `filter`).           |
+| `grav_lib_search` | Find standard-library classes, functions, and methods by name or doc text.   |
+| `grav_lib_module` | Show a module's documentation and declarations (`std/net/http`, `json`, …).  |
+| `grav_docs`       | Search the language documentation (`docs/*.md`) by topic.                    |
+| `grav_packages`   | `list` / `add` / `install` / `update` / `remove` packages, or `new` project. |
 
-Each tool takes a single `source` string (Grav source text).
+`grav_check`, `grav_run` and `grav_test` take either `source` (Grav text) or
+`path`. A directory path means the project there: its `grav.toml` main file,
+import paths and dependencies apply.
 
 ## Prerequisites
 
