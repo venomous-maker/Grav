@@ -537,6 +537,12 @@ struct TypeAliasDecl : Decl {
     TypeRef target; // as written; canonicalized by the registry
 };
 
+// `test "name" { ... }` — a unit test, compiled and run only by `grav test`.
+struct TestDecl : Decl {
+    std::string name;
+    Block body;
+};
+
 // A top-level `%{ ... %}` block: verbatim C emitted into the translation unit
 // (for #includes, globals, and helper functions/macros).
 struct CBlockDecl : Decl {
@@ -577,6 +583,8 @@ struct GenericTables {
     std::map<std::string, std::vector<GenericSig>> methods;   // "Class.method" -> generic methods
     // Instance name -> (template, type arguments), e.g. "Array$int" -> ("Array", [int]).
     std::map<std::string, std::pair<std::string, std::vector<TypeRef>>> instances;
+    // Generic method instances ("fold$string" -> ("fold", [string])), for diagnostics.
+    std::map<std::string, std::pair<std::string, std::vector<TypeRef>>> methodInstances;
 };
 
 struct Program {
