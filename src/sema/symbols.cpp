@@ -119,6 +119,9 @@ std::string Registry::resolveType(const std::string &name,
         std::string cand = prefix.empty() ? name : prefix + "." + name;
         if (isType(cand)) return cand;
     }
+    // `Shape.Circle` names the data enum variant class `Shape$Circle`.
+    if (auto dot = name.rfind('.'); dot != std::string::npos)
+        return resolveType(name.substr(0, dot) + "$" + name.substr(dot + 1), nsContext);
     return "";
 }
 
@@ -656,6 +659,8 @@ std::string Registry::resolveTypeOrAlias(const std::string &name,
         std::string cand = prefix.empty() ? name : prefix + "." + name;
         if (isType(cand) || isAlias(cand)) return cand;
     }
+    if (auto dot = name.rfind('.'); dot != std::string::npos) // `Shape.Circle` -> `Shape$Circle`
+        return resolveTypeOrAlias(name.substr(0, dot) + "$" + name.substr(dot + 1), nsContext);
     return "";
 }
 
