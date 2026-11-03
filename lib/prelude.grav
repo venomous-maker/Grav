@@ -1,0 +1,13 @@
+// lib/prelude.grav — loaded before the first standard-library module. Inside
+// `namespace std`, these `use` lines let each module refer to the others
+// unqualified; programs never see them (they apply only to std.* code).
+namespace std {
+    use std.core.*
+    use std.collections.*
+    use std.text.*
+    use std.data.*
+    use std.io.*
+    use std.sys.*
+    use std.concurrency.*
+    use std.net.*
+}
