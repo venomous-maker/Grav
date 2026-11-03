@@ -1,0 +1,60 @@
+// lib/sys/process.grav — running commands and process information.
+//
+//   let r = Process.run("ls /tmp")
+//   if (r.code == 0) { print(r.output) }
+import "../collections/array.grav"
+
+namespace std.sys {
+
+    %{
+    #include <stdlib.h>
+    #include <unistd.h>
+    #include <stdio.h>
+    #include <sys/wait.h>
+    static int grav_exit_code(int status) {
+        if (status == -1) return -1;
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+        return status;
+    }
+    static const char* grav_exec_capture(const char* cmd, int* code) {
+        FILE* p = popen(cmd, "r"); if (!p) { *code = -1; return ""; }
+        size_t cap = 4096, n = 0; char* b = (char*)malloc(cap); int c;
+        while ((c = fgetc(p)) != EOF) {
+            if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            b[n++] = (char)c;
+        }
+        b[n] = 0; *code = grav_exit_code(pclose(p)); return b;
+    }
+    %}
+
+    // The result of Process.run: the exit code and everything the command printed.
+    class ProcessResult {
+        readonly code: int
+        readonly output: string
+        constructor(code: int, output: string) { self.code = code; self.output = output; }
+        public fn ok() -> bool { return self.code == 0; }
+    }
+
+    class Process {
+        // Runs a shell command; returns its exit code (output goes to the terminal).
+        static fn exec(cmd: string) -> int { return %{ grav_exit_code(system(cmd)) %} as int; }
+        // Runs a shell command and captures its standard output.
+        static fn execOutput(cmd: string) -> string { let c = 0; return %{ grav_exec_capture(cmd, &c) %} as string; }
+        static fn run(cmd: string) -> ProcessResult {
+            let c = 0;
+            let out = %{ grav_exec_capture(cmd, &c) %} as string;
+            return new ProcessResult(c, out);
+        }
+        static fn pid() -> int { return %{ (int)getpid() %} as int; }
+        // The program's command-line arguments (without the program name).
+        static fn args() -> Array<string> {
+            let out = new Array<string>();
+            for (i in 1..argc()) { out.push(argv(i)); }
+            return out;
+        }
+        static fn sleepMs(ms: int) { %{ usleep((unsigned)ms * 1000); %}; }
+        static fn exit(code: int) { exit(code); }
+    }
+
+}
