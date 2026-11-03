@@ -1,0 +1,6 @@
+// lib/core.grav — `import "std/core"`: exceptions, Math, Random, Result/Option, Optional.
+import "core/exception.grav"
+import "core/math.grav"
+import "core/random.grav"
+import "core/result.grav"
+import "core/optional.grav"
