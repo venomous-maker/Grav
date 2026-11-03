@@ -1,0 +1,279 @@
+// lib/concurrency/thread.grav — OS threads and the synchronization primitives that go with
+// them. `async fn` (lib/async.grav) runs short tasks on a shared worker pool; a
+// Thread is a dedicated OS thread for long-running or blocking work (a server's
+// accept loop, a background worker).
+//
+//   let t = Thread.spawn(fn() { print("hello from a thread") })
+//   t.join()
+//
+//   let wg = new WaitGroup()
+//   for (i in 0..4) {
+//       wg.add(1)
+//       Thread.spawn(fn() { work(i); wg.done() })
+//   }
+//   wg.wait()
+//
+// Share data between threads only through these types, lib/async.grav's Mutex,
+// AtomicInt and Channel, or values nobody mutates.
+import "../core/exception.grav"
+import "async.grav"
+
+namespace std.concurrency {
+
+    %{
+    #include <pthread.h>
+    #include <sched.h>
+    #include <stdlib.h>
+    #include <errno.h>
+    #include <time.h>
+    #include <unistd.h>
+    typedef struct { void (*run)(void*); void* obj; } GravThreadStart;
+    static void* grav_thread_tramp(void* p) {
+        GravThreadStart s = *(GravThreadStart*)p;
+        free(p);
+        s.run(s.obj);
+        return 0;
+    }
+    /* A counter guarded by a mutex + condition variable (WaitGroup, Semaphore, Latch). */
+    typedef struct { pthread_mutex_t mu; pthread_cond_t cv; long long n; } GravCounter;
+    static GravCounter* grav_counter_new(long long n) {
+        GravCounter* c = (GravCounter*)malloc(sizeof(GravCounter));
+        if (!c) abort();
+        pthread_mutex_init(&c->mu, 0);
+        pthread_cond_init(&c->cv, 0);
+        c->n = n;
+        return c;
+    }
+    static void grav_counter_free(GravCounter* c) {
+        if (!c) return;
+        pthread_mutex_destroy(&c->mu);
+        pthread_cond_destroy(&c->cv);
+        free(c);
+    }
+    /* Wait until n <= 0 (WaitGroup/Latch). With ms >= 0, give up after ms; reports success. */
+    static int grav_counter_wait_zero(GravCounter* c, long long ms) {
+        struct timespec dl;
+        if (ms >= 0) {
+            clock_gettime(CLOCK_REALTIME, &dl);
+            dl.tv_sec += ms / 1000;
+            dl.tv_nsec += (ms % 1000) * 1000000L;
+            if (dl.tv_nsec >= 1000000000L) { dl.tv_sec++; dl.tv_nsec -= 1000000000L; }
+        }
+        pthread_mutex_lock(&c->mu);
+        int ok = 1;
+        while (c->n > 0) {
+            if (ms < 0) pthread_cond_wait(&c->cv, &c->mu);
+            else if (pthread_cond_timedwait(&c->cv, &c->mu, &dl) == ETIMEDOUT) { ok = c->n <= 0; break; }
+        }
+        pthread_mutex_unlock(&c->mu);
+        return ok;
+    }
+    static void grav_counter_add(GravCounter* c, long long d) {
+        pthread_mutex_lock(&c->mu);
+        c->n += d;
+        pthread_cond_broadcast(&c->cv);
+        pthread_mutex_unlock(&c->mu);
+    }
+    /* Semaphore: take one permit, waiting while there are none. */
+    static int grav_counter_take(GravCounter* c, int block) {
+        pthread_mutex_lock(&c->mu);
+        while (c->n <= 0) {
+            if (!block) { pthread_mutex_unlock(&c->mu); return 0; }
+            pthread_cond_wait(&c->cv, &c->mu);
+        }
+        c->n--;
+        pthread_mutex_unlock(&c->mu);
+        return 1;
+    }
+    %}
+
+    // A dedicated OS thread running `body`. An exception that escapes the body is
+    // caught and kept: join() reports it.
+    class Thread {
+        private h: byte*
+        private body: fn()
+        private started: bool
+        private joined: bool
+        private failure: string
+        private name: string
+
+        constructor(body: fn()) {
+            self.body = body;
+            self.h = null;
+            self.started = false;
+            self.joined = false;
+            self.failure = "";
+            self.name = "thread";
+        }
+        constructor(name: string, body: fn()) {
+            self.body = body;
+            self.h = null;
+            self.started = false;
+            self.joined = false;
+            self.failure = "";
+            self.name = name;
+        }
+        destructor() { %{ free(self->h); %}; }
+
+        // Create and start a thread in one step.
+        static fn spawn(body: fn()) -> Thread {
+            let t = new Thread(body);
+            t.start();
+            return t;
+        }
+        static fn spawn(name: string, body: fn()) -> Thread {
+            let t = new Thread(name, body);
+            t.start();
+            return t;
+        }
+
+        // The thread's entry point (called from C on the new thread).
+        private fn runBody() {
+            try {
+                self.body();
+            } catch (e: Exception) {
+                self.failure = e.describe();
+            }
+        }
+
+        public fn start() {
+            if (self.started) { throw new StateError("Thread '" + self.name + "' was already started"); }
+            self.started = true;
+            let rc = 0;
+            %{
+                self->h = (unsigned char*)malloc(sizeof(pthread_t));
+                GravThreadStart* st = (GravThreadStart*)malloc(sizeof(GravThreadStart));
+                if (!self->h || !st) abort();
+                st->run = (void (*)(void*))std__concurrency__Thread_m_runBody;
+                st->obj = self;
+                rc = pthread_create((pthread_t*)self->h, 0, grav_thread_tramp, st);
+                if (rc != 0) free(st);
+            %};
+            if (rc != 0) { throw new StateError("could not start thread '" + self.name + "'"); }
+        }
+
+        // Wait for the thread to finish. Throws StateError if its body threw.
+        public fn join() {
+            if (!self.started) { throw new StateError("Thread '" + self.name + "' was never started"); }
+            if (!self.joined) {
+                %{ pthread_join(*(pthread_t*)self->h, 0); %};
+                self.joined = true;
+            }
+            if (self.failure != "") {
+                throw new StateError("thread '" + self.name + "' failed: " + self.failure);
+            }
+        }
+        // Like join(), but returns the failure ("" when the body finished normally).
+        public fn joinResult() -> string {
+            if (!self.started) { return "never started"; }
+            if (!self.joined) {
+                %{ pthread_join(*(pthread_t*)self->h, 0); %};
+                self.joined = true;
+            }
+            return self.failure;
+        }
+        // Let the thread run on its own; it can no longer be joined.
+        public fn detach() {
+            if (self.started && !self.joined) {
+                %{ pthread_detach(*(pthread_t*)self->h); %};
+                self.joined = true;
+            }
+        }
+        public fn getName() -> string { return self.name; }
+        public fn isStarted() -> bool { return self.started; }
+
+        static fn sleepMs(ms: int) { %{ usleep((useconds_t)ms * 1000); %}; }
+        // Give other threads a chance to run.
+        static fn yieldNow() { %{ sched_yield(); %}; }
+        static fn currentId() -> long { return %{ (long long)(uintptr_t)pthread_self() %} as long; }
+        static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
+    }
+
+    // Waits for a group of threads or tasks: add(n) before starting each, done()
+    // when one finishes, wait() until the count drops to zero.
+    class WaitGroup {
+        private c: byte*
+        constructor() { self.c = %{ (unsigned char*)grav_counter_new(0) %} as byte*; }
+        destructor() { %{ grav_counter_free((GravCounter*)self->c); %}; }
+        public fn add(n: int) { %{ grav_counter_add((GravCounter*)self->c, n); %}; }
+        public fn done() { %{ grav_counter_add((GravCounter*)self->c, -1); %}; }
+        public fn wait() { %{ grav_counter_wait_zero((GravCounter*)self->c, -1); %}; }
+        // Wait at most `ms` milliseconds; reports whether the count reached zero.
+        public fn waitFor(ms: int) -> bool { return %{ grav_counter_wait_zero((GravCounter*)self->c, ms) %} as bool; }
+        public fn count() -> int {
+            return %{ (int)__atomic_load_n(&((GravCounter*)self->c)->n, __ATOMIC_SEQ_CST) %} as int;
+        }
+    }
+
+    // A one-shot gate: countDown() `n` times opens it, and every wait() returns.
+    class CountDownLatch {
+        private c: byte*
+        constructor(n: int) { self.c = %{ (unsigned char*)grav_counter_new(n) %} as byte*; }
+        destructor() { %{ grav_counter_free((GravCounter*)self->c); %}; }
+        public fn countDown() { %{ grav_counter_add((GravCounter*)self->c, -1); %}; }
+        public fn wait() { %{ grav_counter_wait_zero((GravCounter*)self->c, -1); %}; }
+        public fn waitFor(ms: int) -> bool { return %{ grav_counter_wait_zero((GravCounter*)self->c, ms) %} as bool; }
+    }
+
+    // Limits how many threads use a resource at once: acquire() takes a permit
+    // (waiting if none are left), release() returns it.
+    class Semaphore {
+        private c: byte*
+        constructor(permits: int) { self.c = %{ (unsigned char*)grav_counter_new(permits) %} as byte*; }
+        destructor() { %{ grav_counter_free((GravCounter*)self->c); %}; }
+        public fn acquire() { %{ grav_counter_take((GravCounter*)self->c, 1); %}; }
+        public fn tryAcquire() -> bool { return %{ grav_counter_take((GravCounter*)self->c, 0) %} as bool; }
+        public fn release() { %{ grav_counter_add((GravCounter*)self->c, 1); %}; }
+        // Run `body` holding a permit (released even if it throws).
+        public fn withPermit(body: fn()) {
+            self.acquire();
+            try { body(); } finally { self.release(); }
+        }
+    }
+
+    // Many readers or one writer.
+    class RWLock {
+        private h: byte*
+        constructor() {
+            %{
+                self->h = (unsigned char*)malloc(sizeof(pthread_rwlock_t));
+                if (!self->h) abort();
+                pthread_rwlock_init((pthread_rwlock_t*)self->h, 0);
+            %};
+        }
+        destructor() { %{ pthread_rwlock_destroy((pthread_rwlock_t*)self->h); free(self->h); %}; }
+        public fn readLock() { %{ pthread_rwlock_rdlock((pthread_rwlock_t*)self->h); %}; }
+        public fn writeLock() { %{ pthread_rwlock_wrlock((pthread_rwlock_t*)self->h); %}; }
+        public fn unlock() { %{ pthread_rwlock_unlock((pthread_rwlock_t*)self->h); %}; }
+        public fn withRead(body: fn()) {
+            self.readLock();
+            try { body(); } finally { self.unlock(); }
+        }
+        public fn withWrite(body: fn()) {
+            self.writeLock();
+            try { body(); } finally { self.unlock(); }
+        }
+    }
+
+    // Runs a function exactly once, however many threads call run().
+    class Once {
+        private done: AtomicInt
+        private m: Mutex
+        constructor() { self.done = new AtomicInt(0); self.m = new Mutex(); }
+        destructor() { free(self.done); free(self.m); }
+        public fn run(body: fn()) {
+            if (self.done.get() == 1) { return; }
+            self.m.lock();
+            try {
+                if (self.done.get() == 0) {
+                    body();
+                    self.done.set(1);
+                }
+            } finally {
+                self.m.unlock();
+            }
+        }
+        public fn isDone() -> bool { return self.done.get() == 1; }
+    }
+
+}
