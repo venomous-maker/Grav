@@ -1,0 +1,15 @@
+--- selective import ---
+ada is 36, 2 people
+deque front 0, size 2
+sorted: a, b
+--- module alias ---
+built with text.StringBuilder
+--- use ---
+(1, 2) to (4, 6): 7 steps
+rect area 12
+old point 10,20
+--- your names next to the library's ---
+GRAV!
+4
+--- the rest of std.core ---
+Ok(55)
