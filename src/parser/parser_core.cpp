@@ -108,6 +108,17 @@ void Parser::parseTopLevel(Program &program) {
             return;
         case TokenType::Class: program.decls.push_back(parseClass(false)); break;
         case TokenType::Identifier:
+            // `test "name" { ... }` — contextual: a unit test.
+            if (peek().lexeme == "test" && peekAt(1).type == TokenType::StringLiteral) {
+                const Token &kw = advance();
+                auto t = std::make_unique<TestDecl>();
+                t->line = kw.line; t->col = kw.col;
+                t->name = advance().lexeme;
+                t->fqName = qualify("test$" + std::to_string(kw.line));
+                t->body = parseBlock();
+                program.decls.push_back(std::move(t));
+                break;
+            }
             // `final class X` — contextual: the class cannot be extended.
             if (peek().lexeme == "final" && peekAt(1).type == TokenType::Class) {
                 advance();
