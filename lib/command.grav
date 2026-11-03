@@ -1,0 +1,2 @@
+// lib/command.grav — moved to lib/sys/command.grav (namespace std.sys); kept so old imports work.
+import "sys/command.grav"
