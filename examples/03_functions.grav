@@ -1,12 +1,12 @@
 // 03_functions.grav — functions in all their forms.
 //
-//   grav examples/03_functions.grav --run
+//   grav run examples/03_functions.grav
 //
 // Covers: parameters and return types, `void`, recursion, overloading by
 // parameter types, variadic parameters, generic functions (with a `T: Bound`
 // constraint, called with `::<T>`), module-level globals, and async/await.
 
-import "../lib/std.grav"
+import "std"
 
 // Module-level state: `let` globals are mutable, `const` globals are not.
 let callCount: int = 0
