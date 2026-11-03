@@ -26,6 +26,110 @@ Blue
 true
 ```
 
+## Data enums and pattern matching
+
+When variants carry data, an enum is a *data enum* (a tagged union, like Rust's
+enums or Swift's enums with associated values). Variants may name their fields
+(`Circle(radius: float)`) or not: a single unnamed field is called `value`, and
+several are `_0`, `_1`, …. An enum may also have methods, written after the variants.
+
+```grav
+enum Shape {
+    Circle(radius: float),
+    Rect(w: float, h: float),
+    Empty,
+
+    fn area() -> float {
+        match (self) {
+            case Circle(r): return 3.0 * r * r
+            case Rect(w, h): return w * h
+            case Empty: return 0.0
+        }
+    }
+}
+
+fn main() {
+    let shapes = [Shape.Circle(1.0), Shape.Rect(2.0, 3.0), Shape.Empty]
+    for (s in shapes) {
+        print("${s} has area ${s.area()}")
+    }
+    print(Shape.Rect(2.0, 3.0) == Shape.Rect(2.0, 3.0))
+    let first = shapes[0]
+    if (first is Shape.Circle) {
+        print("radius ${(first as Shape.Circle).radius}")
+    }
+}
+```
+
+Output:
+
+```text
+Circle(1) has area 3
+Rect(2, 3) has area 6
+Empty has area 0
+true
+radius 1
+```
+
+- `Shape.Circle(1.0)` builds a value; a variant without fields is just `Shape.Empty`.
+  Every variant has the enum's type, so they mix in arrays and return values.
+- `match` takes one case per variant and binds its fields by position. Use `_`
+  to skip a field, and leave off the parentheses to ignore all of them.
+- Without a `default`, a match must handle every variant. Leaving one out is a
+  compile error that names the missing variants.
+- Values print as `Circle(1)`, and `==` compares variant and fields. Defining
+  `toString` or `operator==` in the enum replaces the generated ones.
+- `variantName()` returns the variant's name. `x is Shape.Circle` and
+  `x as Shape.Circle` test for a variant and reach its fields directly.
+
+Data enums can be generic. The standard library's `Result<T, E>` and `Option<T>`
+(`import "std/result"`, included in `import "std"`) are written this way:
+
+```grav
+import "std/result"
+
+fn parseAge(s: string) -> Result<int, string> {
+    if (s == "") { return Result.Err("empty input") }
+    if (s == "42") { return Result.Ok(42) }
+    return Result.Err("not a number: " + s)
+}
+
+fn main() {
+    match (parseAge("42")) {
+        case Ok(age): print("age ${age}")
+        case Err(msg): print("error: ${msg}")
+    }
+    print(parseAge("").unwrapOr(0))
+    print(parseAge("x"))
+    let doubled = parseAge("42").map(fn(n: int) => n * 2)
+    print(doubled)
+
+    let nick: Option<string> = Option.None
+    print(nick.unwrapOr("anonymous"))
+}
+```
+
+Output:
+
+```text
+age 42
+0
+Err(not a number: x)
+Ok(84)
+anonymous
+```
+
+The type arguments of `Result.Ok(42)` and `Option.None` are inferred from the
+arguments or from the expected type (the declared variable, parameter or return
+type). `Result` has `isOk`, `isErr`, `unwrap`, `expect`, `unwrapOr`,
+`unwrapOrElse`, `unwrapErr`, `map`, `mapErr`, `andThen` and `ok`. `Option` has
+`isSome`, `isNone`, `unwrap`, `expect`, `unwrapOr`, `unwrapOrElse`, `map`,
+`andThen`, `filter`, `ifSome` and `okOr`.
+
+A data enum compiles to an abstract base class plus one final class per
+variant, so matching is a tag check followed by a cast. Data enums are heap
+objects like class instances.
+
 ## Structs
 
 A struct is a plain value type: named fields, no methods, copied on assignment.
@@ -193,7 +297,8 @@ Output:
 or `null`, together with its runtime type. Values go in implicitly; `x is T` tests
 what is inside and `x as T` takes it out (stopping the program with a clear message
 if the type is wrong). `print`, interpolation, `str`, `==`, and `typename` work on
-`any` directly.
+`any` directly. `==` compares the values inside: numbers by value, strings by
+content, and objects with their class's `operator==` (or by identity without one).
 
 ```grav
 import "../lib/std.grav"
