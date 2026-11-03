@@ -1,0 +1,4 @@
+// lib/net.grav — `import "std/net"`: TcpStream/TcpListener, HttpServer/HttpClient, WebSocket, Url.
+import "net/tcp.grav"
+import "net/http.grav"
+import "net/websocket.grav"
