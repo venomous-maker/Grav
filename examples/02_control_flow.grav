@@ -1,13 +1,13 @@
 // 02_control_flow.grav — every way to branch and loop.
 //
-//   grav examples/02_control_flow.grav --run
+//   grav run examples/02_control_flow.grav
 //
 // Covers: if / else if / else, while, do/while, C-style for, ranges (`..`,
 // `..=`, `step`, counting down), for-each over arrays (with and without the
 // index), switch / match on ints, strings and enums (multi-value cases),
 // break / continue, and `defer`.
 
-import "../lib/std.grav"   // for printRaw (print without a newline)
+import "std"            // for printRaw (print without a newline)
 
 enum Light { Red, Amber, Green }
 
