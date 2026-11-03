@@ -134,14 +134,56 @@ Token Lexer::makeToken(TokenType type, std::string lexeme) const {
 }
 
 Token Lexer::scanNumber() {
+    auto digitOf = [](char c, int base) -> int {
+        int v = std::isdigit(static_cast<unsigned char>(c)) ? c - '0'
+              : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+              : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 99;
+        return v < base ? v : -1;
+    };
+    // 0x1F (hex) and 0b1010 (binary); `_` may separate digits: 1_000_000.
+    if (peek() == '0' && (peekNext() == 'x' || peekNext() == 'X' || peekNext() == 'b' || peekNext() == 'B')) {
+        advance();
+        char prefix = advance();
+        int base = (prefix == 'x' || prefix == 'X') ? 16 : 2;
+        unsigned long long v = 0;
+        int n = 0;
+        while (peek() == '_' || digitOf(peek(), base) >= 0 ||
+               (base == 2 && std::isalnum(static_cast<unsigned char>(peek())))) {
+            char c = advance();
+            if (c == '_') continue;
+            int d = digitOf(c, base);
+            if (d < 0) throw GravError("lex", line_, col_, std::string("invalid digit '") + c + "' in a " +
+                                                             (base == 16 ? "hex" : "binary") + " literal");
+            v = v * base + static_cast<unsigned>(d);
+            ++n;
+        }
+        if (n == 0) throw GravError("lex", line_, col_, "a number literal needs digits after its prefix");
+        // Normalized to decimal text; values above the signed range wrap like C.
+        return makeToken(TokenType::IntLiteral, std::to_string(static_cast<long long>(v)));
+    }
     std::string text;
-    while (std::isdigit(static_cast<unsigned char>(peek()))) text += advance();
-
+    auto digits = [&] {
+        while (std::isdigit(static_cast<unsigned char>(peek())) ||
+               (peek() == '_' && std::isdigit(static_cast<unsigned char>(peekNext())))) {
+            char c = advance();
+            if (c != '_') text += c;
+        }
+    };
+    digits();
     bool isFloat = false;
     if (peek() == '.' && std::isdigit(static_cast<unsigned char>(peekNext()))) {
         isFloat = true;
         text += advance(); // '.'
-        while (std::isdigit(static_cast<unsigned char>(peek()))) text += advance();
+        digits();
+    }
+    // Exponent: 1e9, 2.5e-3.
+    if ((peek() == 'e' || peek() == 'E') &&
+        (std::isdigit(static_cast<unsigned char>(peekNext())) ||
+         ((peekNext() == '-' || peekNext() == '+') && (pos_ + 2 < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_ + 2])))))) {
+        isFloat = true;
+        text += advance();
+        if (peek() == '-' || peek() == '+') text += advance();
+        digits();
     }
 
     return makeToken(isFloat ? TokenType::FloatLiteral : TokenType::IntLiteral,
