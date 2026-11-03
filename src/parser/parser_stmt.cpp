@@ -202,6 +202,15 @@ StmtPtr Parser::parseFor() {
     return stmt;
 }
 
+// A case body: a `{ block }`, or a single statement (`case Some(x): return x`).
+Block Parser::parseCaseBody() {
+    if (check(TokenType::LBrace)) return parseBlock();
+    Block b;
+    b.statements.push_back(parseStatement());
+    matchToken(TokenType::Semicolon);
+    return b;
+}
+
 StmtPtr Parser::parseSwitch() {
     const Token &kw = advance(); // 'switch' or 'match'
     auto stmt = std::make_unique<SwitchStmt>();
@@ -215,14 +224,14 @@ StmtPtr Parser::parseSwitch() {
             if (stmt->hasDefault) fail(previous(), "duplicate 'default' case");
             stmt->hasDefault = true;
             expect(TokenType::Colon, "after 'default'");
-            stmt->defaultBody = parseBlock();
+            stmt->defaultBody = parseCaseBody();
         } else {
             expect(TokenType::Case, "to begin a switch case");
             SwitchCase c;
             c.values.push_back(parseExpression());
             while (matchToken(TokenType::Comma)) c.values.push_back(parseExpression());
             expect(TokenType::Colon, "after the case value");
-            c.body = parseBlock();
+            c.body = parseCaseBody();
             stmt->cases.push_back(std::move(c));
         }
     }
