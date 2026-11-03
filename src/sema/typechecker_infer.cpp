@@ -197,7 +197,9 @@ std::optional<TypeRef> TypeChecker::tryInferCall(CallExpr &e, const std::string 
 
 std::optional<TypeRef> TypeChecker::tryInferNew(NewExpr &e, const TypeRef *expected) {
     if (!program_) return std::nullopt;
-    auto it = program_->generics.ctors.find(e.className);
+    auto it = program_->generics.ctors.end();
+    for (const auto &cand : nameCandidates(e.className, currentNs_, program_->uses))
+        if ((it = program_->generics.ctors.find(cand)) != program_->generics.ctors.end()) break;
     if (it == program_->generics.ctors.end()) return std::nullopt;
     std::string lastWhy = "no constructor matches the arguments";
     for (const auto &sig : it->second) {
