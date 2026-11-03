@@ -30,10 +30,12 @@ grav examples/01_basics.grav --run        # or: ./build/gravc <file> --run
 | [17_auto_any.grav](17_auto_any.grav) | inferred generic type arguments (`auto`), dynamic values (`any`) with `is`/`as` |
 | [18_data_structures.grav](18_data_structures.grav) | choosing a collection: `Array`, `Deque`, `Stack`/`Queue`, `HashMap`/`HashSet`, `SortedMap`, `PriorityQueue`, `LinkedList`, `BitSet`, `Pair`, `Optional` |
 | [19_enums_match.grav](19_enums_match.grav) | data enums as a syntax tree, recursive `match`, `Result`/`Option` for errors, constant folding |
+| [20_networking.grav](20_networking.grav) | a JSON REST API with `HttpServer`, `HttpClient` calls, a WebSocket chat room, raw TCP, threads and a `Mutex` |
+| [21_modules.grav](21_modules.grav) | the three import forms (`import { A as B } from`, `import "x" as y`, `import "std/core"`), `use` with globs/renames/aliases, library categories, shadowing a library name |
 
 ## A multi-file project
 
-[project/](project/) — `main.grav` imports modules from sub-folders
+[project/](project/) — a project with a `grav.toml` (run it with `grav run` inside the folder); `main.grav` imports modules from sub-folders
 (`util/text.grav`, `model/shapes.grav`) that use nested namespaces, `export`, and a
 module-level global shared across files.
 
