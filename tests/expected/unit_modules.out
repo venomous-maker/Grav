@@ -1,0 +1,7 @@
+running 5 tests
+  ok    selective import and renaming
+  ok    module alias
+  ok    local names shadow the library, which keeps its own
+  ok    use globs, renames, and namespace aliases
+  ok    fully qualified library names
+result: 5 passed, 0 failed
