@@ -626,6 +626,10 @@ TypeRef TypeChecker::checkNew(NewExpr &e) {
     }
     int idx = resolveCtor(fq, e.args, e.line, e.col, "constructor of '" + fq + "'");
     e.ctorIndex = idx < 0 ? 0 : idx;
+    // A data enum variant's constructor yields the enum (`Shape.Circle(1.0)` is a
+    // Shape), so variants mix freely in arrays, returns and reassignments.
+    if (ci->decl && ci->decl->variantTag >= 0 && !ci->baseClass.empty())
+        return TypeRef::named(ci->baseClass);
     return TypeRef::named(fq);
 }
 
@@ -851,6 +855,14 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                       name->name + " cannot display a value of type " + typeRefName(argTypes[0]));
             }
             return TypeRef::prim(TypeRef::Kind::Void);
+        }
+        if (name->name == "__show" && e.args.size() == 1) {
+            // Internal (generated data-enum toString): any value as text; values
+            // that cannot be boxed show their type name.
+            e.kind = CallKind::Builtin;
+            e.targetName = "__show";
+            checkExpr(*e.args[0]);
+            return TypeRef::prim(TypeRef::Kind::String);
         }
         if (name->name == "assertEq") {
             // assertEq(actual, expected[, message]) — reports both values on failure.
