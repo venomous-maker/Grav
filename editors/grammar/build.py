@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Generates the Grav TextMate grammar (grav.tmLanguage.json) and copies it to
+the editors that use it (VS Code, JetBrains). Run: python3 editors/grammar/build.py"""
+import json, os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ID = r"[A-Za-z_][A-Za-z0-9_]*"
+PRIM = r"(?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)"
+
+def type_patterns():
+    return [
+        {"include": "#comments"},
+        {"match": r"\bfn\b", "name": "storage.type.function.grav"},
+        {"match": r"\b" + PRIM + r"\b", "name": "storage.type.primitive.grav"},
+        {"match": r"\b(" + ID + r")(?=\s*\.)", "name": "entity.name.namespace.grav"},
+        {"match": r"\b" + ID + r"\b", "name": "entity.name.type.grav"},
+        {"match": r"->", "name": "punctuation.separator.return.grav"},
+        {"match": r"[<>]", "name": "punctuation.definition.generic.grav"},
+        {"match": r"[\[\]*?]", "name": "keyword.operator.type.grav"},
+        {"match": r"\d+", "name": "constant.numeric.grav"},
+        {"match": r"[(),:.]", "name": "punctuation.separator.grav"},
+    ]
+
+repo = {
+    "comments": {"patterns": [
+        {"name": "comment.line.double-slash.grav", "begin": r"//", "end": r"$",
+         "patterns": [{"match": r"\b(TODO|FIXME|NOTE|XXX|HACK)\b", "name": "keyword.other.todo.grav"}]},
+        {"name": "comment.block.grav", "begin": r"/\*", "end": r"\*/"},
+    ]},
+    "inline-c": {
+        "comment": "Inline C escape hatch %{ ... %}, highlighted with the C grammar.",
+        "name": "meta.embedded.block.c.grav", "begin": r"%\{", "end": r"%\}",
+        "beginCaptures": {"0": {"name": "punctuation.section.embedded.begin.grav"}},
+        "endCaptures": {"0": {"name": "punctuation.section.embedded.end.grav"}},
+        "patterns": [{"include": "source.c"}],
+    },
+    "strings": {"patterns": [
+        {"name": "string.quoted.double.grav", "begin": r'"', "end": r'"',
+         "patterns": [
+             {"match": r"\\(?:[ntr0\\\"'$]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\})", "name": "constant.character.escape.grav"},
+             {"name": "meta.interpolation.grav", "begin": r"\$\{", "end": r"\}",
+              "beginCaptures": {"0": {"name": "punctuation.section.interpolation.begin.grav"}},
+              "endCaptures": {"0": {"name": "punctuation.section.interpolation.end.grav"}},
+              "contentName": "source.grav.embedded", "patterns": [{"include": "#expression"}]},
+         ]},
+        {"name": "string.quoted.single.grav", "match": r"'(?:\\.|[^'\\])'"},
+    ]},
+    "imports": {"patterns": [
+        {"comment": "import { A, B as C } from \"path\"",
+         "begin": r"^\s*(import)\s*(\{)", "end": r"(\})\s*(from)\s*(\"[^\"]*\")",
+         "beginCaptures": {"1": {"name": "keyword.control.import.grav"}, "2": {"name": "punctuation.definition.block.grav"}},
+         "endCaptures": {"1": {"name": "punctuation.definition.block.grav"}, "2": {"name": "keyword.control.from.grav"},
+                         "3": {"name": "string.quoted.double.import.grav"}},
+         "patterns": [{"match": r"\bas\b", "name": "keyword.control.as.grav"},
+                      {"match": ID, "name": "entity.name.type.import.grav"},
+                      {"match": ",", "name": "punctuation.separator.grav"}]},
+        {"comment": "import \"path\" [as name]",
+         "match": r"^\s*(import)\s*(\"[^\"]*\")(?:\s+(as)\s+(" + ID + r"))?",
+         "captures": {"1": {"name": "keyword.control.import.grav"}, "2": {"name": "string.quoted.double.import.grav"},
+                      "3": {"name": "keyword.control.as.grav"}, "4": {"name": "entity.name.namespace.grav"}}},
+        {"comment": "use a.b.*, use a::b::C as D, use a.b as x",
+         "begin": r"^\s*(use)\b", "end": r"$|;",
+         "beginCaptures": {"1": {"name": "keyword.control.import.use.grav"}},
+         "patterns": [{"match": r"\bas\b\s*(" + ID + ")", "captures": {"0": {"name": "keyword.control.as.grav"}, "1": {"name": "entity.name.type.alias.grav"}}},
+                      {"match": r"\*", "name": "keyword.operator.wildcard.grav"},
+                      {"match": r"::|\.", "name": "punctuation.separator.namespace.grav"},
+                      {"match": ID + r"(?=\s*(?:\.|::))", "name": "entity.name.namespace.grav"},
+                      {"match": ID, "name": "entity.name.type.grav"}]},
+    ]},
+    "decorators": {"match": r"(@)(" + ID + r")", "captures": {"1": {"name": "punctuation.definition.decorator.grav"}, "2": {"name": "entity.name.function.decorator.grav"}}},
+    "type-params": {
+        "comment": "<T, U: Bound> after a declaration name",
+        "begin": r"<", "end": r">",
+        "beginCaptures": {"0": {"name": "punctuation.definition.generic.begin.grav"}},
+        "endCaptures": {"0": {"name": "punctuation.definition.generic.end.grav"}},
+        "patterns": [{"match": r"(" + ID + r")\s*(:)\s*(" + ID + r")",
+                      "captures": {"1": {"name": "entity.name.type.parameter.grav"}, "2": {"name": "punctuation.separator.grav"}, "3": {"name": "entity.name.type.grav"}}},
+                     {"match": ID, "name": "entity.name.type.parameter.grav"}, {"match": ",", "name": "punctuation.separator.grav"}],
+    },
+    "type-args": {
+        "begin": r"<(?=[\w\s,.<>\[\]*?():\->]*>)", "end": r">",
+        "beginCaptures": {"0": {"name": "punctuation.definition.generic.begin.grav"}},
+        "endCaptures": {"0": {"name": "punctuation.definition.generic.end.grav"}},
+        "patterns": [{"include": "#type-args"}] + type_patterns(),
+    },
+    "type-annotation": {
+        "comment": "`: Type` in parameters, fields, lets; `-> Type` for returns",
+        "patterns": [
+            {"begin": r"(->)\s*", "end": r"(?=[{=;]|=>|$)", "beginCaptures": {"1": {"name": "punctuation.separator.return.grav"}},
+             "patterns": [{"include": "#type-args"}] + type_patterns()},
+            {"begin": r"(?<![:?])(:)(?!:)\s*(?=fn\b|" + PRIM + r"\b|[A-Z]|[a-z_][\w.]*\s*(?:<|[,)=\]]|$))",
+             "end": r"(?=[,)=;{}]|$)", "beginCaptures": {"1": {"name": "punctuation.separator.type.grav"}},
+             "patterns": [{"include": "#type-args"},
+                          {"begin": r"\b(fn)\s*(\()", "end": r"\)",
+                           "beginCaptures": {"1": {"name": "storage.type.function.grav"}, "2": {"name": "punctuation.separator.grav"}},
+                           "endCaptures": {"0": {"name": "punctuation.separator.grav"}},
+                           "patterns": [{"include": "#type-args"}] + type_patterns()}] + type_patterns()},
+        ]},
+    "declarations": {"patterns": [
+        {"comment": "namespace a.b",
+         "match": r"\b(namespace)\s+(" + ID + r"(?:\." + ID + r")*)",
+         "captures": {"1": {"name": "storage.type.namespace.grav"}, "2": {"name": "entity.name.namespace.grav"}}},
+        {"comment": "test \"name\"",
+         "match": r"^\s*(test)\s+(\"[^\"]*\")",
+         "captures": {"1": {"name": "keyword.other.test.grav"}, "2": {"name": "string.quoted.double.test.grav"}}},
+        {"comment": "class / struct / interface / trait / enum Name<T>",
+         "begin": r"\b(class|struct|interface|trait|enum)\s+(" + ID + r")", "end": r"(?=\{)|$",
+         "beginCaptures": {"1": {"name": "storage.type.$1.grav"}, "2": {"name": "entity.name.type.declaration.grav"}},
+         "patterns": [{"include": "#type-params"},
+                      {"match": r"\b(extends|implements)\b", "name": "storage.modifier.inherit.grav"},
+                      {"match": r"\b(uses)\s+(" + ID + r")", "captures": {"1": {"name": "storage.modifier.uses.grav"}, "2": {"name": "variable.other.property.grav"}}},
+                      {"include": "#type-annotation"}, {"include": "#type-args"},
+                      {"match": ID, "name": "entity.other.inherited-class.grav"}, {"match": ",", "name": "punctuation.separator.grav"}]},
+        {"comment": "type Name<T> = ...",
+         "begin": r"\b(type)\s+(" + ID + r")", "end": r"=",
+         "beginCaptures": {"1": {"name": "storage.type.alias.grav"}, "2": {"name": "entity.name.type.alias.grav"}},
+         "endCaptures": {"0": {"name": "keyword.operator.assignment.grav"}},
+         "patterns": [{"include": "#type-params"}]},
+        {"comment": "fn operator+(...)",
+         "match": r"\b(fn)\s+(operator)\s*(\[\]=?|==|!=|<=|>=|\*\*|[-+*/%<>!&|^~]=?)",
+         "captures": {"1": {"name": "storage.type.function.grav"}, "2": {"name": "keyword.other.operator.grav"}, "3": {"name": "entity.name.function.operator.grav"}}},
+        {"comment": "fn name<T>(",
+         "begin": r"\b(fn)\s+(" + ID + r")", "end": r"(?=\()",
+         "beginCaptures": {"1": {"name": "storage.type.function.grav"}, "2": {"name": "entity.name.function.declaration.grav"}},
+         "patterns": [{"include": "#type-params"}]},
+        {"match": r"\b(constructor|destructor)\b", "name": "entity.name.function.constructor.grav"},
+        {"comment": "let / const name",
+         "match": r"\b(let|const)\s+(" + ID + r")",
+         "captures": {"1": {"name": "storage.type.variable.grav"}, "2": {"name": "variable.other.declaration.grav"}}},
+        {"comment": "field / parameter name before `: Type`",
+         "match": r"(?<![\w.?])(" + ID + r")(?=\s*:(?!:)\s*(?:fn\b|" + PRIM + r"\b|[A-Z]))",
+         "name": "variable.parameter.grav"},
+    ]},
+    "keywords": {"patterns": [
+        {"match": r"\b(if|else|while|for|in|step|do|switch|match|case|default|break|continue|return|try|catch|finally|throw|defer)\b", "name": "keyword.control.grav"},
+        {"match": r"\b(async|await)\b", "name": "keyword.control.async.grav"},
+        {"match": r"\b(public|private|protected|static|readonly|abstract|final|export)\b", "name": "storage.modifier.grav"},
+        {"match": r"\b(new|free|sizeof|typename)\b", "name": "keyword.operator.new.grav"},
+        {"match": r"\b(is|as)\s+(" + PRIM + r")\b", "captures": {"1": {"name": "keyword.operator.type.grav"}, "2": {"name": "storage.type.primitive.grav"}}},
+        {"match": r"\b(is|as)\s+((?:" + ID + r"\.)*[A-Z]\w*)", "captures": {"1": {"name": "keyword.operator.type.grav"}, "2": {"name": "entity.name.type.grav"}}},
+        {"match": r"\b(is|as)\b", "name": "keyword.operator.type.grav"},
+        {"match": r"\b(import|from|use)\b", "name": "keyword.control.import.grav"},
+    ]},
+    "constants": {"patterns": [
+        {"match": r"\b(true|false)\b", "name": "constant.language.boolean.grav"},
+        {"match": r"\bnull\b", "name": "constant.language.null.grav"},
+        {"match": r"\b(self|super)\b", "name": "variable.language.self.grav"},
+    ]},
+    "numbers": {"patterns": [
+        {"match": r"\b0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*\b", "name": "constant.numeric.hex.grav"},
+        {"match": r"\b0[bB][01](?:_?[01])*\b", "name": "constant.numeric.binary.grav"},
+        {"match": r"\b\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d+)?\b", "name": "constant.numeric.decimal.grav"},
+    ]},
+    "builtins": {"match": r"\b(print|str|input|assert|assertEq|panic|exit|argc|argv|isInstance)\b(?=\s*\()", "name": "support.function.builtin.grav"},
+    "case-pattern": {
+        "comment": "case Circle(r, _): / case Shape.Empty:",
+        "match": r"\b(case)\s+((?:" + ID + r"\.)*)(" + ID + r")(?=\s*[(:,])",
+        "captures": {"1": {"name": "keyword.control.grav"}, "2": {"name": "entity.name.type.grav"}, "3": {"name": "variable.other.enummember.grav"}}},
+    "new-expr": {
+        "begin": r"\b(new)\s+((?:" + ID + r"\.)*" + ID + r")", "end": r"(?=\()|(?=[^<\s])",
+        "beginCaptures": {"1": {"name": "keyword.operator.new.grav"}, "2": {"name": "entity.name.type.grav"}},
+        "patterns": [{"include": "#type-args"}]},
+    "turbofish": {
+        "begin": r"(::)(<)", "end": r">",
+        "beginCaptures": {"1": {"name": "punctuation.separator.turbofish.grav"}, "2": {"name": "punctuation.definition.generic.begin.grav"}},
+        "endCaptures": {"0": {"name": "punctuation.definition.generic.end.grav"}},
+        "patterns": [{"include": "#type-args"}] + type_patterns()},
+    "calls": {"patterns": [
+        {"match": r"(?<=\.)\s*(" + ID + r")(?=\s*(?:::<[^>]*>)?\s*\()", "name": "entity.name.function.method.grav"},
+        {"match": r"\b(" + ID + r")(?=\s*(?:::<[^>]*>)?\s*\()", "name": "entity.name.function.call.grav"},
+    ]},
+    "names": {"patterns": [
+        {"match": r"\b([A-Z][A-Z0-9_]{2,})\b", "name": "variable.other.constant.grav"},
+        {"match": r"\b([A-Z]\w*)(?=\s*<[\w\s,.<>\[\]*?]*>)", "name": "entity.name.type.grav"},
+        {"match": r"\b([A-Z]\w*)\b", "name": "entity.name.type.grav"},
+        {"match": r"(?<=\.)\s*(" + ID + r")\b", "name": "variable.other.property.grav"},
+        {"match": ID, "name": "variable.other.grav"},
+    ]},
+    "operators": {"patterns": [
+        {"match": r"=>|->", "name": "keyword.operator.arrow.grav"},
+        {"match": r"\?\?|\?\.", "name": "keyword.operator.null.grav"},
+        {"match": r"\.\.=?", "name": "keyword.operator.range.grav"},
+        {"match": r"==|!=|<=|>=|<|>", "name": "keyword.operator.comparison.grav"},
+        {"match": r"&&|\|\||!", "name": "keyword.operator.logical.grav"},
+        {"match": r"(?:\+|-|\*|/|%|&|\||\^|<<|>>|\*\*)?=", "name": "keyword.operator.assignment.grav"},
+        {"match": r"\+\+|--|\*\*|[-+*/%&|^~]|<<|>>", "name": "keyword.operator.arithmetic.grav"},
+    ]},
+    "punctuation": {"patterns": [
+        {"match": r"[{}]", "name": "punctuation.definition.block.grav"},
+        {"match": r"[()]", "name": "punctuation.definition.parens.grav"},
+        {"match": r"[\[\]]", "name": "punctuation.definition.brackets.grav"},
+        {"match": r"[,;]", "name": "punctuation.separator.grav"},
+        {"match": r"::|\.", "name": "punctuation.accessor.grav"},
+        {"match": r"[:?]", "name": "punctuation.separator.grav"},
+    ]},
+    "expression": {"patterns": [
+        {"include": "#comments"}, {"include": "#inline-c"}, {"include": "#strings"}, {"include": "#numbers"},
+        {"include": "#case-pattern"}, {"include": "#new-expr"}, {"include": "#turbofish"}, {"include": "#declarations"},
+        {"include": "#type-annotation"}, {"include": "#keywords"}, {"include": "#constants"}, {"include": "#builtins"},
+        {"include": "#calls"}, {"include": "#names"}, {"include": "#operators"}, {"include": "#punctuation"},
+    ]},
+}
+
+grammar = {
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Grav", "scopeName": "source.grav", "fileTypes": ["grav"],
+    "comment": "Generated by editors/grammar/build.py — edit that file, not this one.",
+    "patterns": [{"include": "#comments"}, {"include": "#inline-c"}, {"include": "#imports"},
+                 {"include": "#decorators"}, {"include": "#expression"}],
+    "repository": repo,
+}
+text = json.dumps(grammar, indent=2) + "\n"
+for dst in ["../vscode/syntaxes/grav.tmLanguage.json", "../jetbrains/textmate/grav.tmLanguage.json"]:
+    p = os.path.normpath(os.path.join(HERE, dst))
+    open(p, "w").write(text)
+    print("wrote", os.path.relpath(p, os.path.join(HERE, "..", "..")))
