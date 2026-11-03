@@ -148,9 +148,10 @@ Output:
 
 ## switch / match
 
-`switch` and `match` are synonyms. Each case has a block, there is no
-fall-through, a case may list several values, and `default` handles the rest.
-Subjects can be integers, strings, or enums.
+`switch` and `match` are synonyms. Each case has a block (or a single statement),
+there is no fall-through, a case may list several values, and `default` handles
+the rest. Subjects can be integers, strings, enums, or data enums; matching a data
+enum binds the variant's fields (see [Data enums](05-data-types.md#data-enums-and-pattern-matching)).
 
 ```grav
 enum Shape { Circle, Square, Triangle }
