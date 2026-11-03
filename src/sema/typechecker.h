@@ -28,6 +28,11 @@ struct InferenceTable {
 // Fills recorded inferences into a freshly parsed program as explicit type arguments.
 void applyInferences(Program &program, const InferenceTable &table);
 
+// "(key: long) -> bool" and "method 'A.m'" -> "method 'A.m(key: long) -> bool'".
+std::string signatureText(const std::vector<std::string> &names, const std::vector<TypeRef> &types,
+                          const TypeRef &ret, bool variadic);
+std::string withSignature(const std::string &what, const std::string &sig);
+
 class TypeChecker {
 public:
     void setInference(InferenceTable *table) { infer_ = table; }
