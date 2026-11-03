@@ -759,6 +759,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
                 if (!methodReqSeen_.count(key)) {
                     methodReqSeen_[key] = true;
                     methodRequests_.push_back({mem->member, x->typeArgs});
+                    program_.generics.methodInstances[key] = {mem->member, x->typeArgs};
                 }
                 mem->member = key;
             } else {
@@ -870,6 +871,7 @@ bool Mono::rejectUnknownArgs(const std::string &generic, const std::vector<TypeR
 
 void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
     NsScope nsScope(currentNs_, nsOf(d->fqName));
+    if (auto *t = dynamic_cast<TestDecl *>(d)) { walkBlock(t->body, subst); return; }
     if (auto *st = dynamic_cast<StructDecl *>(d)) {
         for (auto &f : st->fields) rewriteType(f.type, subst, f.line, f.col);
     } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
