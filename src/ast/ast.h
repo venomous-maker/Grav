@@ -593,9 +593,34 @@ struct GenericTables {
     std::map<std::string, std::pair<std::string, std::vector<TypeRef>>> methodInstances;
 };
 
+// `use` declarations, per namespace ("" = the global scope):
+//   use std.collections.*                 every name in a namespace
+//   use std.collections.HashMap           one name (as HashMap)
+//   use std.collections.HashMap as Dict   one name under another name
+//   use std.collections as col            a namespace alias: col.HashMap
+// `::` may be written for `.` (use std::collections::*).
+struct UseEntry {
+    std::string target; // fully qualified name or namespace
+    std::string alias;  // the name it is visible as ("" for a glob)
+    bool glob = false;
+};
+struct UseTable {
+    std::map<std::string, std::vector<UseEntry>> byNamespace;
+    bool empty() const { return byNamespace.empty(); }
+};
+
+// The fully qualified names `name` (as written in namespace `ns`) may refer to,
+// in lookup order: at each enclosing level from `ns` outwards, that level's own
+// declarations come first, then the names its `use` declarations bring in. So a
+// library's code always finds its own names before anything a program defines
+// globally, and a program's own global names win over imported ones.
+std::vector<std::string> nameCandidates(const std::string &name, const std::string &ns,
+                                        const UseTable &uses);
+
 struct Program {
     std::vector<DeclPtr> decls;
     GenericTables generics;
+    UseTable uses;
 };
 
 // Calls `f` on every expression in the program (pre-order, including lambda
