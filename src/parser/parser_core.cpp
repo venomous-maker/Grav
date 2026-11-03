@@ -135,7 +135,7 @@ void Parser::parseTopLevel(Program &program) {
         case TokenType::Interface:
         case TokenType::Trait: program.decls.push_back(parseInterface()); break;
         case TokenType::Struct: program.decls.push_back(parseStruct()); break;
-        case TokenType::Enum: program.decls.push_back(parseEnum()); break;
+        case TokenType::Enum: parseEnum(program); break;
         case TokenType::Type: program.decls.push_back(parseTypeAlias()); break;
         case TokenType::Const:
         case TokenType::Let: program.decls.push_back(parseGlobalVar()); break;
@@ -418,26 +418,6 @@ DeclPtr Parser::parseStruct() {
     return st;
 }
 
-DeclPtr Parser::parseEnum() {
-    const Token &kw = expect(TokenType::Enum, "to begin an enum");
-    auto en = std::make_unique<EnumDecl>();
-    en->line = kw.line;
-    en->col = kw.col;
-    en->name = expect(TokenType::Identifier, "after 'enum'").lexeme;
-    en->fqName = qualify(en->name);
-    expect(TokenType::LBrace, "to open the enum body");
-    if (!check(TokenType::RBrace)) {
-        do {
-            // Allow a trailing comma before the closing brace.
-            if (check(TokenType::RBrace)) break;
-            const Token &m = expect(TokenType::Identifier, "as an enum member");
-            en->members.push_back(EnumMember{m.lexeme, m.line, m.col});
-        } while (matchToken(TokenType::Comma));
-    }
-    expect(TokenType::RBrace, "to close the enum body");
-    return en;
-}
-
 DeclPtr Parser::parseTypeAlias() {
     const Token &kw = expect(TokenType::Type, "to begin a type alias");
     auto alias = std::make_unique<TypeAliasDecl>();
@@ -569,6 +549,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                 cls->staticFields.push_back(std::move(sf));
             } else {
                 cls->fields.push_back(parseField(access, isReadonly));
+                matchToken(TokenType::Semicolon); // `x: int;` is accepted too
             }
         } else {
             fail(peek(), std::string("expected a field or method in the class "
