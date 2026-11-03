@@ -22,6 +22,8 @@
 #include "codegen/codegen.h"
 #include "common/diagnostics.h"
 #include "driver/modules.h"
+#include "driver/format.h"
+#include "driver/packages.h"
 #include "lexer/lexer.h"
 #include "lexer/preprocess.h"
 #include "parser/parser.h"
@@ -45,18 +47,110 @@ std::string readStream(std::istream &in) {
 
 using grav::SrcLoc;
 
+// Set while compiling, so diagnostics can suggest where an unknown name lives.
+const grav::ModuleLoader *gLoader = nullptr;
+
+// "unknown ... 'Deque'" -> a hint naming the namespace that declares Deque.
+std::string unknownNameHint(const std::string &msg) {
+    if (!gLoader || msg.find("unknown") == std::string::npos) return "";
+    auto q1 = msg.find('\'');
+    auto q2 = q1 == std::string::npos ? q1 : msg.find('\'', q1 + 1);
+    if (q2 == std::string::npos) return "";
+    std::string name = msg.substr(q1 + 1, q2 - q1 - 1);
+    name = name.substr(0, name.find('<'));
+    if (name.empty() || name.find('.') != std::string::npos) return "";
+    auto where = gLoader->whereIs(name);
+    if (where.empty()) return "";
+    const std::string &ns = where.front();
+    return "\n    note: '" + name + "' is declared in " + ns + "; write `use " + ns + "." + name +
+           "`, add it to the import list, or call it " + ns + "." + name;
+}
+
 // Print a diagnostic, mapping its combined-source line back to the real file:line
 // and showing the offending source line with a caret.
+// `grav check --json`: diagnostics are collected and printed as one JSON
+// document when the driver exits (see JsonReport).
+bool gJson = false;
+struct JsonDiag { std::string file; int line = 0, col = 0; std::string severity, stage, message, note; };
+std::vector<JsonDiag> gJsonDiags;
+
+std::string jsonEscape(const std::string &s) {
+    std::string o;
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"': o += "\\\""; break;
+            case '\\': o += "\\\\"; break;
+            case '\n': o += "\\n"; break;
+            case '\t': o += "\\t"; break;
+            case '\r': o += "\\r"; break;
+            default:
+                if (c < 0x20) { char b[8]; snprintf(b, sizeof b, "\\u%04x", c); o += b; }
+                else o += static_cast<char>(c);
+        }
+    }
+    return o;
+}
+
+struct JsonReport {
+    ~JsonReport() {
+        if (!gJson) return;
+        int errors = 0, warnings = 0;
+        std::cout << "{\"diagnostics\": [";
+        for (size_t i = 0; i < gJsonDiags.size(); ++i) {
+            const auto &d = gJsonDiags[i];
+            (d.severity == "error" ? errors : warnings)++;
+            std::cout << (i ? ",\n  " : "\n  ") << "{\"file\": \"" << jsonEscape(d.file) << "\", \"line\": " << d.line
+                      << ", \"column\": " << d.col << ", \"severity\": \"" << d.severity << "\", \"stage\": \""
+                      << d.stage << "\", \"message\": \"" << jsonEscape(d.message) << "\""
+                      << (d.note.empty() ? "" : ", \"note\": \"" + jsonEscape(d.note) + "\"") << "}";
+        }
+        std::cout << (gJsonDiags.empty() ? "" : "\n") << "], \"errors\": " << errors << ", \"warnings\": " << warnings << "}\n";
+    }
+};
+
+// A driver-level error ("file:line: message" or plain text).
+void reportError(const std::string &msg) {
+    if (!gJson) { std::cerr << "gravc: " << msg << "\n"; return; }
+    JsonDiag d;
+    d.severity = "error";
+    d.stage = "import";
+    std::string first = msg.substr(0, msg.find('\n'));
+    size_t c1 = first.find(':'), c2 = c1 == std::string::npos ? c1 : first.find(':', c1 + 1);
+    if (c2 != std::string::npos && c2 > c1 + 1 &&
+        first.find_first_not_of("0123456789", c1 + 1) == c2) {
+        d.file = first.substr(0, c1);
+        d.line = std::stoi(first.substr(c1 + 1, c2 - c1 - 1));
+        d.col = 1;
+        d.message = msg.substr(c2 + 2);
+    } else {
+        d.message = msg;
+    }
+    gJsonDiags.push_back(d);
+}
+
 void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
     std::string label = (d.stage() == "warning") ? "warning" : d.stage() + " error";
     int combined = d.line();
     SrcLoc loc;
     bool mapped = combined >= 1 && combined <= (int)srcMap.size();
     if (mapped) loc = srcMap[combined - 1];
+    if (gJson) {
+        JsonDiag j;
+        j.file = mapped ? loc.file : "<input>";
+        j.line = mapped ? loc.line : combined;
+        j.col = d.col();
+        j.severity = d.stage() == "warning" ? "warning" : "error";
+        j.stage = d.stage();
+        j.message = grav::prettyNames(d.message());
+        std::string hint = unknownNameHint(d.message());
+        if (!hint.empty()) j.note = hint.substr(hint.find("note: ") + 6);
+        gJsonDiags.push_back(j);
+        return;
+    }
     std::string where = mapped ? (loc.file + ":" + std::to_string(loc.line))
                                : ("line " + std::to_string(combined));
     std::cerr << "gravc: " << where << ":" << d.col() << ": " << label << ": "
-              << grav::prettyNames(d.message()) << "\n";
+              << grav::prettyNames(d.message()) << unknownNameHint(d.message()) << "\n";
     if (mapped) {
         std::ifstream f(loc.file);
         std::string ln;
@@ -87,6 +181,8 @@ void registerDisplayNames(const grav::GenericTables &g) {
     for (const auto &[inst, origin] : all) {
         // Data enum variants read as `Option.Some<int>`, not `Option$Some<int>`.
         std::string name = origin->first;
+        if (name.rfind("std.", 0) == 0 && name.find('.', 4) != std::string::npos)
+            name = name.substr(name.find('.', 4) + 1); // std.collections.Array -> Array
         std::replace(name.begin(), name.end(), '$', '.');
         grav::setDisplayName(inst, readable(name, origin->second));
     }
@@ -109,6 +205,10 @@ int usage(const char *prog) {
         "       " << prog << " run <file.grav> [-- args]   build and run\n"
         "       " << prog << " build <file.grav>           build a binary\n"
         "       " << prog << " test <file.grav> [--filter text]   run the file's test blocks\n"
+        "       " << prog << " new <name> | add <repo>[@version] | install | update | remove <name> | packages\n"
+        "       " << prog << " check [--json] [file.grav]      type-check only (JSON diagnostics for editors)\n"
+        "       " << prog << " fmt [--check] [paths]           format source files (fmt - : stdin to stdout)\n"
+        "       " << prog << " env [--json]                    where the standard library and packages are\n"
         "       " << prog << " -                 read stdin, write C to stdout\n"
         "\n"
         "output:\n"
@@ -184,11 +284,41 @@ int main(int argc, char **argv) {
 
     // Subcommands: `grav run f.grav`, `grav build f.grav`, `grav test f.grav`.
     int first = 1;
+    bool checkOnly = false;
+    JsonReport jsonReport; // prints the --json diagnostics on every exit path
+    if (argc > 1 && std::string(argv[1]) == "fmt") {
+        std::vector<std::string> args(argv + 2, argv + argc);
+        return grav::runFormat(args);
+    }
+    if (argc > 1 && std::string(argv[1]) == "env") {
+        // Where things are, for editors and scripts.
+        bool json = argc > 2 && std::string(argv[2]) == "--json";
+        std::error_code ec;
+        fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+        std::string stdDir = grav::stdLibDir().string(), pkgs = grav::packagesDir().string();
+        std::string projErr2;
+        grav::ProjectConfig pc = grav::findProject(fs::current_path(), projErr2);
+        if (json) {
+            std::cout << "{\"version\": \"" << GRAV_VERSION << "\", \"compiler\": \"" << jsonEscape(exe.string())
+                      << "\", \"std\": \"" << jsonEscape(stdDir) << "\", \"packages\": \"" << jsonEscape(pkgs)
+                      << "\", \"project\": \"" << (pc.found ? jsonEscape(pc.root.string()) : "") << "\"}\n";
+        } else {
+            std::cout << "GRAV_VERSION  " << GRAV_VERSION << "\nGRAV_COMPILER " << exe.string() << "\nGRAV_STD      "
+                      << stdDir << "\nGRAV_PACKAGES " << pkgs << "\nproject       "
+                      << (pc.found ? pc.root.string() : "(none)") << "\n";
+        }
+        return 0;
+    }
+    if (argc > 1 && grav::isPackageCommand(argv[1])) {
+        std::vector<std::string> args(argv + 1, argv + argc);
+        return grav::runPackageCommand(args);
+    }
     if (argc > 1) {
         std::string sub = argv[1];
         if (sub == "run") { runAfter = true; emit = EmitMode::Bin; first = 2; }
         else if (sub == "build") { emit = EmitMode::Bin; first = 2; }
         else if (sub == "test") { testMode = true; runAfter = true; emit = EmitMode::Bin; first = 2; }
+        else if (sub == "check") { checkOnly = true; first = 2; }
     }
 
     for (int i = first; i < argc; ++i) {
@@ -236,6 +366,11 @@ int main(int argc, char **argv) {
             trace = false;
         } else if (arg == "--native") {
             native = true;
+        } else if (arg == "--json") {
+            gJson = true;
+        } else if (arg == "--version") {
+            std::cout << "grav " << GRAV_VERSION << "\n";
+            return 0;
         } else if (arg == "--filter") {
             if (i + 1 >= argc) return usage(argv[0]);
             testFilter = argv[++i];
@@ -268,7 +403,7 @@ int main(int argc, char **argv) {
     fs::path projStart = inputPath.empty() ? fs::current_path() : fs::path(inputPath).parent_path();
     if (projStart.empty()) projStart = fs::current_path();
     grav::ProjectConfig project = grav::findProject(projStart, projErr);
-    if (!projErr.empty()) { std::cerr << "gravc: " << projErr << "\n"; return 1; }
+    if (!projErr.empty()) { reportError(projErr); return 1; }
     if (!useStdin && inputPath.empty() && first == 2 && project.found && !project.main.empty())
         inputPath = project.main.string();
     if (!useStdin && inputPath.empty()) return usage(argv[0]);
@@ -279,10 +414,11 @@ int main(int argc, char **argv) {
     if (useStdin) {
         source = readStream(std::cin);
     } else {
-        grav::ModuleLoader loader(project);
+        static grav::ModuleLoader loader(project);
+        gLoader = &loader;
         std::string err;
         if (!loader.load(inputPath, source, srcMap, err)) {
-            std::cerr << "gravc: " << err << "\n";
+            reportError(err);
             return 1;
         }
     }
@@ -313,7 +449,7 @@ int main(int argc, char **argv) {
             // bury the real error under follow-on errors from library code.
             if (!errors.empty()) {
                 for (const auto &err : errors) printDiag(err, srcMap);
-                std::cerr << "gravc: " << errors.size() << " error(s); aborting\n";
+                if (!gJson) std::cerr << "gravc: " << errors.size() << " error(s); aborting\n";
                 return 1;
             }
             registryPtr = std::make_unique<grav::Registry>();
@@ -338,8 +474,13 @@ int main(int argc, char **argv) {
         if (!errors.empty() || (werror && !warnings.empty())) {
             for (const auto &err : errors) printDiag(err, srcMap);
             size_t n = errors.size() + (werror ? warnings.size() : 0);
-            std::cerr << "gravc: " << n << " error(s); aborting\n";
+            if (!gJson) std::cerr << "gravc: " << n << " error(s); aborting\n";
             return 1;
+        }
+        // `grav check`: the program is valid; stop before generating code.
+        if (checkOnly) {
+            if (!gJson) std::cerr << "gravc: ok" << (warnings.empty() ? "" : " (" + std::to_string(warnings.size()) + " warning(s))") << "\n";
+            return 0;
         }
 
         // Locals named like C keywords/library functions get C-safe spellings.
