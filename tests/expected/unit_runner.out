@@ -1,0 +1,17 @@
+running 10 tests
+  ok    assert passes
+  ok    assertEq on ints, strings, floats, bools
+  ok    assertEq on structs and objects
+  ok    caught exceptions are fine
+  FAIL  assert fails
+        two plus two (tests/unit/runner.grav:27)
+  FAIL  assertEq fails
+        sum: expected 5 but got 4 (tests/unit/runner.grav:28)
+  FAIL  string mismatch
+        expected "Grav" but got "GRAV" (tests/unit/runner.grav:29)
+  FAIL  panic fails
+        panic: Array index 3 out of range (length 0)
+  FAIL  uncaught exception fails
+        uncaught exception: StateError: cart is empty
+  ok    still runs after failures
+result: 5 passed, 5 failed
