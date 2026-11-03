@@ -463,9 +463,26 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return "grav_panic(" + emitExpr(*call.args[0]) + ")";
             if (call.targetName == "assert") {
                 std::string cond = emitExpr(*call.args[0]);
-                std::string msg = call.args.size() == 2 ? emitExpr(*call.args[1])
-                                                        : ("\"" + escapeC(cond) + "\"");
-                return "grav_assert(" + cond + ", " + msg + ")";
+                SourceMapEntry o = origin(call.line);
+                std::string loc = "\"" + escapeC(o.file) + ":" + std::to_string(o.line) + "\"";
+                std::string msg = call.args.size() == 2 ? emitExpr(*call.args[1]) : ("\"" + escapeC(cond) + "\"");
+                return "grav_assert_at(" + cond + ", " + msg + ", " + loc + ")";
+            }
+            if (call.targetName == "assertEq") {
+                SourceMapEntry o = origin(call.line);
+                std::string loc = "\"" + escapeC(o.file) + ":" + std::to_string(o.line) + "\"";
+                std::string msg = call.args.size() == 3 ? emitExpr(*call.args[2]) : "\"\"";
+                const TypeRef &at = call.args[0]->type;
+                const TypeRef &bt = call.args[1]->type;
+                bool boxable = !(at.isNamed() && reg_->isStruct(at.name)) && !at.isArray() &&
+                               !at.isBinary() && !at.isPointer() &&
+                               !(bt.isNamed() && reg_->isStruct(bt.name)) && !bt.isArray() &&
+                               !bt.isBinary() && !bt.isPointer();
+                if (boxable)
+                    return "grav_assert_eq(" + boxAny(*call.args[0]) + ", " + boxAny(*call.args[1]) +
+                           ", " + msg + ", " + loc + ")";
+                return "grav_assert_at(" + equalExpr(at, emitExpr(*call.args[0]), emitExpr(*call.args[1])) +
+                       ", \"assertEq: the values differ\", " + loc + ")";
             }
             if (call.targetName == "cwd") return "grav_cwd()";
             if (call.targetName == "env") return "grav_env(" + emitExpr(*call.args[0]) + ")";
