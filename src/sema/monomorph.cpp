@@ -442,6 +442,13 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
             t = expanded;
             return;
         }
+        // `Opt.Some<int>` names the data enum variant template `Opt$Some`.
+        if (auto dot = t.name.rfind('.'); dot != std::string::npos && !classTpl_.count(t.name)) {
+            std::string v = t.name.substr(0, dot) + "$" + t.name.substr(dot + 1);
+            std::string simple = v.substr(v.rfind('.') == std::string::npos ? 0 : v.rfind('.') + 1);
+            if (classTpl_.count(v)) t.name = v;
+            else if (classTpl_.count(simple)) t.name = simple;
+        }
         if (structTpl_.count(t.name)) {
             t.name = instantiateStruct(t.name, t.args, line, col);
             t.args.clear();
@@ -599,6 +606,11 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     out->name = inst; out->fqName = inst;
     out->isAbstract = tpl->isAbstract;
     out->isFinal = tpl->isFinal;
+    out->enumVariants = tpl->enumVariants;
+    out->enumTemplate = tpl->enumTemplate.empty() ? "" : name; // instances: the base template
+    if (tpl->variantTag >= 0) out->enumTemplate = tpl->baseName;
+    out->variantTag = tpl->variantTag;
+    out->variantFields = tpl->variantFields;
     out->baseName = tpl->baseName;
     out->baseArgs = tpl->baseArgs;
     rewriteSuper(out->baseName, out->baseArgs, subst, /*isClass=*/true, tpl->line, tpl->col);
@@ -660,7 +672,10 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
         if (nm.hasBody) walkBlock(nm.body, subst);
         out->methods.push_back(std::move(nm));
     }
+    std::vector<std::string> variants = out->enumVariants;
     instances_.push_back(std::move(out));
+    // A data enum's variants exist whenever the enum does: `match` needs them all.
+    for (const auto &v : variants) instantiateClass(name + "$" + v, args, line, col);
     return inst;
 }
 
@@ -954,6 +969,9 @@ void Mono::run() {
         NsScope ns(currentNs_, nsOf(cd->fqName));
         TypeRef self = TypeRef::named(name);
         for (const auto &tp : cd->typeParams) self.args.push_back(TypeRef::named(tp));
+        // A data enum variant's constructor produces the enum, so the expected
+        // type infers it: `let o: Option<int> = Option.None`.
+        if (cd->variantTag >= 0) { self = TypeRef::named(cd->baseName); self.args = cd->baseArgs; }
         auto add = [&](const std::vector<Param> &ps) {
             program_.generics.ctors[name].push_back(exportSig(cd->typeParams, ps, self, {}));
         };
