@@ -1,13 +1,13 @@
 // apps/bank.grav — a small banking system.
 //
-//   grav examples/apps/bank.grav --run
+//   grav run examples/apps/bank.grav
 //
 // An abstract Account with Savings and Checking subclasses, an interface for
 // anything that can produce a statement, custom exceptions for rule
 // violations, a HashMap index of accounts, a transaction log, monthly
 // interest/fees, and a formatted report built with StringBuilder.
 
-import "../../lib/std.grav"
+import "std"
 
 enum Kind { Deposit, Withdrawal, Transfer, Interest, Fee }
 
@@ -79,8 +79,8 @@ abstract class Account implements Statement {
         for (t in self.log) {
             let sign = t.kind == Kind.Withdrawal || t.kind == Kind.Fee ? "-" : "+"
             sb.append("  ").append(Str.padRight("${t.kind}", 11, " "))
-              .append(Str.padLeft("${sign}${Money.fmt(t.amount)}", 10, " "))
-              .append("  ").append(t.note).append("\n")
+                .append(Str.padLeft("${sign}${Money.fmt(t.amount)}", 10, " "))
+                .append("  ").append(t.note).append("\n")
         }
         sb.append("  balance: ${Money.fmt(self.balance)}")
         let out = sb.toString()
