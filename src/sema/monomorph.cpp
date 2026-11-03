@@ -361,6 +361,14 @@ private:
         return dot == std::string::npos ? "" : fq.substr(0, dot);
     }
     void instantiateGenericMethods();
+    // The template `name` (as written in the current namespace) refers to,
+    // following namespaces and `use` declarations; "" when it is not one.
+    template <typename M> std::string findTpl(const std::string &name, const M &map) const {
+        if (map.count(name)) return name;
+        for (const auto &c : nameCandidates(name, currentNs_, program_.uses))
+            if (map.count(c)) return c;
+        return "";
+    }
     void flattenBases();     // copy secondary bases' fields+methods (multiple inheritance)
 };
 
@@ -426,8 +434,8 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
     if (t.kind == TypeRef::Kind::Named && !t.args.empty()) {
         // A generic alias expands transparently: `Vec<int>` -> the target with
         // its type parameters substituted (no instance declaration emitted).
-        if (aliasTpl_.count(t.name)) {
-            TypeAliasDecl *tpl = aliasTpl_[t.name];
+        if (std::string al = findTpl(t.name, aliasTpl_); !al.empty()) {
+            TypeAliasDecl *tpl = aliasTpl_[al];
             if (tpl->typeParams.size() != t.args.size()) {
                 error(line, col, "generic alias '" + t.name + "' expects " +
                                      std::to_string(tpl->typeParams.size()) +
@@ -442,13 +450,20 @@ void Mono::rewriteType(TypeRef &t, const Subst &subst, int line, int col) {
             t = expanded;
             return;
         }
-        // `Opt.Some<int>` names the data enum variant template `Opt$Some`.
-        if (auto dot = t.name.rfind('.'); dot != std::string::npos && !classTpl_.count(t.name)) {
-            std::string v = t.name.substr(0, dot) + "$" + t.name.substr(dot + 1);
-            std::string simple = v.substr(v.rfind('.') == std::string::npos ? 0 : v.rfind('.') + 1);
-            if (classTpl_.count(v)) t.name = v;
-            else if (classTpl_.count(simple)) t.name = simple;
+        // Resolve the template through namespaces and `use`; `Opt.Some<int>`
+        // names the data enum variant template `Opt$Some`.
+        std::string found;
+        for (const std::string &cand : {t.name, [&] {
+                 auto dot = t.name.rfind('.');
+                 return dot == std::string::npos ? std::string()
+                                                 : t.name.substr(0, dot) + "$" + t.name.substr(dot + 1);
+             }()}) {
+            if (cand.empty() || !found.empty()) continue;
+            for (const std::string &f : {findTpl(cand, structTpl_), findTpl(cand, classTpl_),
+                                         findTpl(cand, ifaceTpl_), findTpl(cand, fnTpl_)})
+                if (found.empty() && !f.empty()) found = f;
         }
+        if (!found.empty()) t.name = found;
         if (structTpl_.count(t.name)) {
             t.name = instantiateStruct(t.name, t.args, line, col);
             t.args.clear();
@@ -543,8 +558,9 @@ void Mono::rewriteSuper(std::string &name, std::vector<TypeRef> &args, const Sub
                         bool isClass, int line, int col) {
     if (args.empty()) return;
     for (auto &a : args) rewriteType(a, subst, line, col);
-    if (isClass && classTpl_.count(name)) name = instantiateClass(name, args, line, col);
-    else if (!isClass && ifaceTpl_.count(name)) name = instantiateInterface(name, args, line, col);
+    std::string fq = isClass ? findTpl(name, classTpl_) : findTpl(name, ifaceTpl_);
+    if (isClass && !fq.empty()) name = instantiateClass(fq, args, line, col);
+    else if (!isClass && !fq.empty()) name = instantiateInterface(fq, args, line, col);
     else error(line, col, "unknown generic supertype '" + name + "'");
     args.clear();
 }
@@ -744,15 +760,16 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
     } else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty()) {
-            x->typeName = instantiateStruct(x->typeName, x->typeArgs, e->line, e->col);
+            std::string fq = findTpl(x->typeName, structTpl_);
+            x->typeName = instantiateStruct(fq.empty() ? x->typeName : fq, x->typeArgs, e->line, e->col);
             x->typeArgs.clear();
         }
         for (auto &f : x->fields) walkExpr(f.value.get(), subst);
     } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
-            if (classTpl_.count(x->className))
-                x->className = instantiateClass(x->className, x->typeArgs, e->line, e->col);
+            if (std::string fq = findTpl(x->className, classTpl_); !fq.empty())
+                x->className = instantiateClass(fq, x->typeArgs, e->line, e->col);
             else
                 error(e->line, e->col, "unknown generic class '" + x->className + "'");
             x->typeArgs.clear();
@@ -762,8 +779,8 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
             if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get())) {
-                if (fnTpl_.count(callee->name)) {
-                    callee->name = instantiateFn(callee->name, x->typeArgs, e->line, e->col);
+                if (std::string fq = findTpl(callee->name, fnTpl_); !fq.empty()) {
+                    callee->name = instantiateFn(fq, x->typeArgs, e->line, e->col);
                 } else {
                     error(e->line, e->col, "'" + callee->name + "' is not a generic function");
                 }
@@ -821,15 +838,14 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
 }
 
 void Mono::qualifyArg(TypeRef &t) const {
+    // Nested types (fn(A) -> B, Future<T>, T*) are qualified too.
+    if (t.elem) { t.elem = std::make_shared<TypeRef>(*t.elem); qualifyArg(*t.elem); }
+    for (auto &p : t.fnParams) qualifyArg(p);
+    for (auto &a : t.args) qualifyArg(a);
     if (t.kind != TypeRef::Kind::Named || !t.args.empty() || knownTypes_.count(t.name)) return;
-    // Innermost enclosing namespace first, then outwards.
-    std::string ns = currentNs_;
-    for (;;) {
-        std::string cand = ns.empty() ? t.name : ns + "." + t.name;
+    // Through enclosing namespaces and `use` declarations.
+    for (const auto &cand : nameCandidates(t.name, currentNs_, program_.uses))
         if (knownTypes_.count(cand)) { t.name = cand; return; }
-        if (ns.empty()) return;
-        ns = nsOf(ns);
-    }
 }
 
 TypeRef Mono::exportType(TypeRef t, const std::vector<std::string> &own, const Subst &cls) const {
@@ -946,15 +962,15 @@ void Mono::run() {
     std::vector<DeclPtr> kept;
     for (auto &d : program_.decls) {
         if (auto *st = dynamic_cast<StructDecl *>(d.get()); st && !st->typeParams.empty()) {
-            structTpl_[st->name] = st; templates_.push_back(std::move(d));
+            structTpl_[st->fqName] = st; templates_.push_back(std::move(d));
         } else if (auto *fn = dynamic_cast<FunctionDecl *>(d.get()); fn && !fn->typeParams.empty()) {
-            fnTpl_[fn->name] = fn; templates_.push_back(std::move(d));
+            fnTpl_[fn->fqName] = fn; templates_.push_back(std::move(d));
         } else if (auto *cd = dynamic_cast<ClassDecl *>(d.get()); cd && !cd->typeParams.empty()) {
-            classTpl_[cd->name] = cd; templates_.push_back(std::move(d));
+            classTpl_[cd->fqName] = cd; templates_.push_back(std::move(d));
         } else if (auto *id = dynamic_cast<InterfaceDecl *>(d.get()); id && !id->typeParams.empty()) {
-            ifaceTpl_[id->name] = id; templates_.push_back(std::move(d));
+            ifaceTpl_[id->fqName] = id; templates_.push_back(std::move(d));
         } else if (auto *al = dynamic_cast<TypeAliasDecl *>(d.get()); al && !al->typeParams.empty()) {
-            aliasTpl_[al->name] = al; templates_.push_back(std::move(d));
+            aliasTpl_[al->fqName] = al; templates_.push_back(std::move(d));
         } else {
             kept.push_back(std::move(d));
         }
