@@ -122,6 +122,13 @@ struct TypeRef {
 // Human-readable name for diagnostics, e.g. "int", "string", "geometry.Circle".
 std::string typeRefName(const TypeRef &t);
 
+// Diagnostics show generic instances as written (`HashMap<long, int>`), not by
+// their internal mangled names (`HashMap$i64$int`). The driver registers each
+// instance's readable name; prettyNames() rewrites any mangled name in a message.
+void setDisplayName(const std::string &mangled, const std::string &readable);
+void clearDisplayNames();
+std::string prettyNames(const std::string &text);
+
 } // namespace grav
 
 #endif // GRAV_COMMON_TYPES_H
