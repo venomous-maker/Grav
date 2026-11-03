@@ -1,12 +1,12 @@
 // apps/life.grav — Conway's Game of Life on a wrapping (toroidal) grid.
 //
-//   grav examples/apps/life.grav --run
+//   grav run examples/apps/life.grav
 //
 // A Grid class over a flat Array<bool> with `[]`-style access, neighbour
 // counting with wrap-around, double-buffered generations, pattern stamping
 // from strings, and simple population statistics.
 
-import "../../lib/std.grav"
+import "std"
 
 class Grid {
     readonly w: int
