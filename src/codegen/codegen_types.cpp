@@ -439,6 +439,10 @@ void CodeGen::emitVTableInstances() {
 }
 
 void CodeGen::emitTypeInfos() {
+    // Forward declarations: hooks may name another class's descriptor.
+    for (const auto &declPtr : program_->decls)
+        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get()))
+            vtables_ += "static const GravTypeInfo " + mangle(c->fqName) + "_typeinfo;\n";
     std::unordered_set<std::string> done;
     std::function<void(const std::string &)> emit = [&](const std::string &fq) {
         if (done.count(fq)) return;
@@ -480,9 +484,24 @@ void CodeGen::emitTypeInfos() {
                 strHook = w;
             }
         }
+        // operator==(other) for comparing boxed `any` values (and assertEq).
+        std::string eqHook = "0";
+        if (const MethodInfo *eq = reg_->findMethod(fq, "op_eq");
+            eq && !eq->isStatic && eq->paramTypes.size() == 1 && eq->paramTypes[0].isNamed() &&
+            reg_->isClass(eq->paramTypes[0].name) && eq->returnType.kind == TypeRef::Kind::Bool) {
+            std::string impl = reg_->findMethodImpl(fq, eq->name);
+            const std::string &pt = eq->paramTypes[0].name;
+            if (!impl.empty()) {
+                std::string w = mangle(fq) + "__any_eq";
+                vtables_ += "static bool " + w + "(void* a, void* b) { return grav_is_instance(b, &" +
+                            mangle(pt) + "_typeinfo) && " + methodCName(impl, eq->name) + "((" +
+                            structName(impl) + "*)a, (" + structName(pt) + "*)b); }\n";
+                eqHook = w;
+            }
+        }
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
-                    std::to_string(nextra) + ", " + drop + ", " + strHook + " };\n";
+                    std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
