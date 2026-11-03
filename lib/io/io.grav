@@ -1,0 +1,72 @@
+// lib/io/io.grav — console input/output.
+//
+//   IO.print("hello")                  // any value: IO.print(42), IO.print(user)
+//   let name = IO.prompt("Name? ")      // prompts never add a newline
+//   let n = IO.readInt()
+//
+// The free functions (readLine, prompt, readInt, eprint, printRaw, …) mirror IO.
+import "../text/convert.grav"
+import "../collections/array.grav"
+
+namespace std.io {
+
+    %{
+    #include <stdio.h>
+    #include <stdlib.h>
+    static const char* grav_read_all(void) {
+        size_t cap = 4096, n = 0; char* b = (char*)malloc(cap); int c;
+        while ((c = getchar()) != EOF) {
+            if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            b[n++] = (char)c;
+        }
+        b[n] = 0; return b;
+    }
+    %}
+
+    class IO {
+        // Printing: a string, or any other value (formatted like print()).
+        static fn print(message: string) { print(message); }
+        static fn print(value: any) { print(value); }
+        static fn write(message: string) { %{ fputs(message, stdout); %}; }       // no newline
+        static fn write(value: any) { let s = str(value); %{ fputs(s, stdout); %}; }
+        static fn eprint(message: string) { %{ fflush(stdout); fprintf(stderr, "%s\n", message); %}; }
+        static fn eprint(value: any) { let s = str(value); %{ fflush(stdout); fprintf(stderr, "%s\n", s); %}; }
+        static fn flush() { %{ fflush(stdout); %}; }
+
+        // Reading (each read takes one line; "" at end of input).
+        static fn input() -> string { return input(); }
+        static fn readLine() -> string { return input(); }
+        static fn prompt(message: string) -> string { IO.write(message); IO.flush(); return input(); }
+        static fn readInt() -> int { return Format.toInt(input()); }
+        static fn readLong() -> long { return Format.toLong(input()); }
+        static fn readFloat() -> float { return Format.toFloat(input()); }
+        static fn readDouble() -> double { return Format.toDouble(input()); }
+        static fn readBool() -> bool { return Format.toBool(input()); }
+        static fn promptInt(message: string) -> int { IO.write(message); IO.flush(); return Format.toInt(input()); }
+        static fn promptFloat(message: string) -> float { IO.write(message); IO.flush(); return Format.toFloat(input()); }
+        // Everything left on standard input.
+        static fn readAll() -> string { return %{ grav_read_all() %} as string; }
+        // The remaining input, line by line.
+        static fn readLines() -> Array<string> {
+            let out = new Array<string>();
+            let line = input();
+            while (line != "" || %{ !feof(stdin) %} as bool) {
+                out.push(line);
+                line = input();
+            }
+            return out;
+        }
+    }
+
+    fn readLine() -> string { return input(); }
+    fn prompt(message: string) -> string { return IO.prompt(message); }
+    fn readInt() -> int { return Format.toInt(input()); }
+    fn readFloat() -> float { return Format.toFloat(input()); }
+    fn readBool() -> bool { return Format.toBool(input()); }
+    fn promptInt(message: string) -> int { return IO.promptInt(message); }
+    // Print to standard error (diagnostics) instead of stdout.
+    fn eprint(message: string) { IO.eprint(message); }
+    // Print without a trailing newline.
+    fn printRaw(message: string) { %{ fputs(message, stdout); %}; }
+
+}
