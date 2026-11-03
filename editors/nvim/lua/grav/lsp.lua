@@ -43,6 +43,14 @@ local function on_attach(_, bufnr)
   map("gO", vim.lsp.buf.document_symbol, "Grav: document symbols")
   map("grn", vim.lsp.buf.rename, "Grav: rename")
   map("K", vim.lsp.buf.hover, "Grav: hover")
+  map("<leader>cf", function() vim.lsp.buf.format({ bufnr = bufnr }) end, "Grav: format (grav fmt)")
+  map("<leader>ws", vim.lsp.buf.workspace_symbol, "Grav: workspace symbols (incl. std)")
+  vim.keymap.set("i", "<C-k>", vim.lsp.buf.signature_help, { buffer = bufnr, silent = true, desc = "Grav: signature help" })
+  -- Completion from the server (members, namespaces, import paths, keywords).
+  vim.bo[bufnr].omnifunc = "v:lua.vim.lsp.omnifunc"
+  if vim.lsp.completion and vim.lsp.completion.enable then
+    pcall(vim.lsp.completion.enable, true, _, bufnr, { autotrigger = true })
+  end
 end
 
 function M.start(bufnr)
@@ -53,7 +61,7 @@ function M.start(bufnr)
 
   local root = nil
   if vim.fs.root then
-    root = vim.fs.root(bufnr, { ".git", "CMakeLists.txt", "lib" })
+    root = vim.fs.root(bufnr, { "grav.toml", ".git", "CMakeLists.txt" })
   end
   root = root or vim.fn.getcwd()
 
