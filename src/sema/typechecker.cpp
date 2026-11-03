@@ -118,6 +118,16 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
         } else if (auto *cls = dynamic_cast<ClassDecl *>(d)) {
             checkStaticFields(*cls);
             checkClass(*cls);
+        } else if (auto *t = dynamic_cast<TestDecl *>(d)) {
+            // A test is checked like a parameterless void function.
+            currentClass_.clear();
+            currentNs_ = Registry::namespaceOf(t->fqName);
+            currentReturn_ = TypeRef::prim(TypeRef::Kind::Void);
+            inConstructor_ = false; inStatic_ = false; inAsync_ = true;
+            pushScope();
+            checkBlock(t->body);
+            popScope();
+            inAsync_ = false;
         } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
             checkGlobal(*g);
         }
