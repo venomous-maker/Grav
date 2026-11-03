@@ -1,13 +1,13 @@
 // 12_collections.grav — the standard collections in practice.
 //
-//   grav examples/12_collections.grav --run
+//   grav run examples/12_collections.grav
 //
 // Covers: Array<T> (push/pop/insert/remove/index/reverse/sort/search, `[]`),
 // List<T>, Stack<T>, Queue<T>, Set<T> (union/intersect), Map<K,V> (ordered,
 // linear), HashMap<K,V> (hashed, `[]`/`[]=`, remove, keys/values), and
 // iterating all of them with `for (x in coll)` and `for (i, x in coll)`.
 
-import "../lib/std.grav"
+import "std"
 
 fn show(label: string, xs: Array<int>) {
     printRaw("${label}: [")
