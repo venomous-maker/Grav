@@ -517,16 +517,31 @@ void CodeGen::orderChain(const Expr &chain, bool allocates, std::vector<const Ex
             return c->args[0].get();
         return l;
     };
-    int calls = 0;
-    for (const Expr *l : leaves) if (exprMayCall(valueOf(l))) calls++;
-    for (const Expr *l : leaves) {
+    int calls = 0, lastCall = -1;
+    for (size_t i = 0; i < leaves.size(); ++i)
+        if (exprMayCall(valueOf(leaves[i]))) { calls++; lastCall = static_cast<int>(i); }
+    // A read of mutable state before a later call must see the value from before it.
+    // Any such read next to a call needs the call pinned in order as well.
+    bool earlyRead = false, anyRead = false;
+    for (size_t i = 0; i < leaves.size(); ++i) {
+        const Expr *v = valueOf(leaves[i]);
+        if (exprMayCall(v) || !readsMutable(v)) continue;
+        anyRead = true;
+        if (static_cast<int>(i) < lastCall) earlyRead = true;
+    }
+    bool ordered = calls >= 2 || (calls >= 1 && anyRead);
+    for (size_t i = 0; i < leaves.size(); ++i) {
+        const Expr *l = leaves[i];
         bool isChain = dynamic_cast<const BinaryExpr *>(l) &&
                        static_cast<const BinaryExpr *>(l)->stringConcat;
         const Expr *v = valueOf(l);
         if (!isChain && v == l && isFreshString(*l) && allocates) {
             collectHoists(l, out);
             out.push_back(l); // freed after the statement
-        } else if (calls >= 2 && exprMayCall(v)) {
+        } else if (earlyRead && static_cast<int>(i) < lastCall && !exprMayCall(v) && readsMutable(v)) {
+            out.push_back(v);              // snapshot the read before the call runs
+            orderOnly_.insert(v);
+        } else if (ordered && exprMayCall(v)) {
             // C leaves argument order unspecified; Grav evaluates left to right.
             collectHoists(v, out);
             out.push_back(v);
@@ -535,6 +550,23 @@ void CodeGen::orderChain(const Expr &chain, bool allocates, std::vector<const Ex
             collectHoists(l, out);
         }
     }
+}
+
+// Does reading `e` depend on state a call could change (fields, elements,
+// pointers, globals)? Locals cannot change: closures capture copies.
+bool CodeGen::readsMutable(const Expr *e) const {
+    if (!e) return false;
+    if (dynamic_cast<const MemberExpr *>(e) || dynamic_cast<const IndexExpr *>(e) ||
+        dynamic_cast<const DerefExpr *>(e))
+        return true;
+    if (auto *n = dynamic_cast<const NameExpr *>(e)) return !n->resolvedGlobal.empty();
+    if (auto *x = dynamic_cast<const BinaryExpr *>(e)) return readsMutable(x->left.get()) || readsMutable(x->right.get());
+    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) return readsMutable(x->operand.get());
+    if (auto *x = dynamic_cast<const AsExpr *>(e)) return readsMutable(x->operand.get());
+    if (auto *x = dynamic_cast<const CastExpr *>(e)) return readsMutable(x->operand.get());
+    if (auto *x = dynamic_cast<const TernaryExpr *>(e))
+        return readsMutable(x->cond.get()) || readsMutable(x->thenExpr.get()) || readsMutable(x->elseExpr.get());
+    return false;
 }
 
 void CodeGen::collectHoists(const Expr *e, std::vector<const Expr *> &out) const {
@@ -573,10 +605,29 @@ void CodeGen::collectHoists(const Expr *e, std::vector<const Expr *> &out) const
         // Left-to-right evaluation: with 2+ operands that can run code (receiver
         // included), each such operand is computed in order before the call.
         int calls = (mem && exprMayCall(mem->object.get())) ? 1 : 0;
-        for (const auto &a : c->args) if (exprMayCall(a.get())) calls++;
-        if (calls >= 2 && c->kind != CallKind::Builtin) {
+        int lastCall = -1;
+        for (size_t i = 0; i < c->args.size(); ++i)
+            if (exprMayCall(c->args[i].get())) { calls++; lastCall = static_cast<int>(i); }
+        // A read of mutable state in an earlier argument must happen before a later call.
+        bool earlyRead = false, anyRead = false;
+        for (size_t i = 0; i < c->args.size(); ++i) {
+            if (exprMayCall(c->args[i].get()) || !readsMutable(c->args[i].get())) continue;
+            anyRead = true;
+            if (static_cast<int>(i) < lastCall) earlyRead = true;
+        }
+        if ((calls >= 2 || (calls >= 1 && anyRead)) && c->kind != CallKind::Builtin) {
+            size_t argIndex = 0;
             auto order = [&](const Expr *x) {
-                if (!exprMayCall(x)) { collectHoists(x, out); return; }
+                size_t idx = argIndex++;
+                if (!exprMayCall(x)) {
+                    if (earlyRead && static_cast<int>(idx) < lastCall && readsMutable(x)) {
+                        out.push_back(x);
+                        orderOnly_.insert(x);
+                        return;
+                    }
+                    collectHoists(x, out);
+                    return;
+                }
                 auto *lam = dynamic_cast<const LambdaExpr *>(x);
                 if (nonRetaining && isFreshString(*x)) { collectHoists(x, out); out.push_back(x); return; }
                 if (fnSafe && lam && !lam->captures.empty()) { out.push_back(x); return; }
