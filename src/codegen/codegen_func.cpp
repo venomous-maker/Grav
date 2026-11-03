@@ -108,6 +108,20 @@ void CodeGen::emitDefinitions(const Program &program) {
             emitFunction(*fn);
         } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
             emitClassBodies(*c);
+        } else if (auto *t = dynamic_cast<const TestDecl *>(declPtr.get()); t && testMode_) {
+            std::string fn = "grav_test_" + std::to_string(tests_.size());
+            tests_.push_back({t->name, fn});
+            defs_ += lineDirective(t->line);
+            defs_ += "static void " + fn + "(void) {\n";
+            cur_ = &defs_;
+            indent_ = 1;
+            currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
+            beginBody(t->body);
+            emitEnter("test \\\"" + escapeC(t->name) + "\\\"", t->line);
+            emitBlock(t->body);
+            if (trace_) line("grav_leave();");
+            indent_ = 0;
+            endFunction();
         }
     }
 }
@@ -119,6 +133,7 @@ void CodeGen::emitEnter(const std::string &displayName, int declLine) {
 
 void CodeGen::emitFunction(const FunctionDecl &fn) {
     if (fn.fqName == "main") hasMain_ = true;
+    defs_ += lineDirective(fn.line);
     defs_ += "static " + cTy(fn.returnType) + " " + funcCName(fn.fqName, fn.overloadIndex) +
              paramList(fn.params, "") + " {\n";
     cur_ = &defs_;
@@ -131,7 +146,7 @@ void CodeGen::emitFunction(const FunctionDecl &fn) {
     emitBlock(fn.body);
     if (trace_) line("grav_leave();");
     indent_ = 0;
-    defs_ += "}\n\n";
+    endFunction();
 }
 
 void CodeGen::emitClassBodies(const ClassDecl &cls) {
@@ -165,6 +180,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
     // The constructor body runs as a separate `_init(self, ...)` so a subclass can
     // delegate to it through `super(...)` without re-allocating the object.
     if (ctor) {
+        defs_ += lineDirective(ctor->line);
         defs_ += "static void " + ctorInitCName(cls.fqName, idx) + paramList(params, S) + " {\n";
         cur_ = &defs_;
         indent_ = 1;
@@ -176,7 +192,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
         emitBlock(ctor->body);
         if (trace_) line("grav_leave();");
         indent_ = 0;
-        defs_ += "}\n\n";
+        endFunction();
     }
 
     // `_new(...)` allocates, installs the vtable / type info, then runs `_init`.
@@ -202,6 +218,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
 void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     std::string S = structName(cls.fqName);
     std::string self = m.isStatic ? "" : S;
+    defs_ += lineDirective(m.line);
     defs_ += "static " + cTy(m.returnType) + " " + methodCName(cls.fqName, m.name) +
              paramList(m.params, self) + " {\n";
     cur_ = &defs_;
@@ -214,7 +231,7 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     emitBlock(m.body);
     if (trace_) line("grav_leave();");
     indent_ = 0;
-    defs_ += "}\n\n";
+    endFunction();
 }
 
 // `destructor() { ... }` -> `Class__drop(self)`: the body, then the nearest base
@@ -222,6 +239,7 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
 void CodeGen::emitDestructor(const ClassDecl &cls) {
     if (!cls.destructor.present) return;
     std::string S = structName(cls.fqName);
+    defs_ += lineDirective(cls.destructor.line);
     defs_ += "static void " + mangle(cls.fqName) + "__drop(" + S + "* self) {\n";
     cur_ = &defs_;
     indent_ = 1;
@@ -263,6 +281,25 @@ void CodeGen::emitAsyncSpawner(const FunctionDecl &fn) {
 }
 
 void CodeGen::emitMainWrapper() {
+    if (testMode_) {
+        // The test runner: each test runs in isolation; a failed assert, panic,
+        // or uncaught exception fails that test and the runner moves on.
+        defs_ += "static const char* const grav_test_names[] = { ";
+        for (size_t i = 0; i < tests_.size(); ++i)
+            defs_ += (i ? ", \"" : "\"") + escapeC(tests_[i].first) + "\"";
+        if (tests_.empty()) defs_ += "0";
+        defs_ += " };\nstatic void (*const grav_test_fns[])(void) = { ";
+        for (size_t i = 0; i < tests_.size(); ++i) defs_ += (i ? ", " : "") + tests_[i].second;
+        if (tests_.empty()) defs_ += "0";
+        defs_ += " };\n";
+        defs_ += "int main(int argc, char** argv) {\n";
+        defs_ += "    grav_argc = argc; grav_argv = argv;\n";
+        defs_ += "    int rc = grav_run_tests(grav_test_names, grav_test_fns, " +
+                 std::to_string(tests_.size()) + ");\n";
+        if (!asyncDecls_.empty()) defs_ += "    grav_join_all();\n";
+        defs_ += "    return rc;\n}\n";
+        return;
+    }
     defs_ += "int main(int argc, char** argv) {\n";
     defs_ += "    grav_argc = argc; grav_argv = argv;\n";
     if (hasMain_) defs_ += "    " + funcCName("main") + "();\n";
