@@ -12,7 +12,7 @@ syn region  gravBlockComment start="/\*" end="\*/" contains=gravTodo
 
 " Declaration / structure keywords
 syn keyword gravKeyword fn class struct enum type typedef interface abstract namespace
-syn keyword gravKeyword constructor extends implements uses new return import export
+syn keyword gravKeyword constructor extends implements uses new return import export from use test
 syn keyword gravKeyword trait destructor operator final
 syn keyword gravStorage  let const static readonly public private protected
 syn keyword gravKeyword async await
@@ -38,11 +38,14 @@ syn keyword gravConstant null self this Self super
 
 " Built-in functions
 syn keyword gravBuiltin print println typename isInstance str input argc argv len
-syn keyword gravBuiltin free panic assert exit cwd env
+syn keyword gravBuiltin free panic assert assertEq exit cwd env
 
-" Numbers
-syn match gravNumber "\<\d\+\>"
-syn match gravFloat  "\<\d\+\.\d\+\>"
+" Numbers: 42, 1_000_000, 0xff_ff, 0b1010, 2.5, 1e9, 2.5e-3
+syn match gravNumber "\<\d\%(_\=\d\)*\>"
+syn match gravNumber "\<0[xX]\x\%(_\=\x\)*\>"
+syn match gravNumber "\<0[bB][01]\%(_\=[01]\)*\>"
+syn match gravFloat  "\<\d\%(_\=\d\)*\.\d\+\%([eE][-+]\=\d\+\)\=\>"
+syn match gravFloat  "\<\d\%(_\=\d\)*[eE][-+]\=\d\+\>"
 
 " Strings with ${...} interpolation. The interpolated expression highlights its
 " own numbers / booleans / builtins / types / operators (not nested strings).
@@ -61,15 +64,26 @@ syn region gravCBlock matchgroup=gravCBlockDelim start="%{" end="%}" keepend con
 " Decorators
 syn match gravDecorator "@\w\+"
 
-" Semantic matches (later definitions win on overlap; `syn keyword` always wins,
-" so control-flow keywords and built-ins keep their own colors).
-syn match gravFuncCall   "\<\w\+\ze\s*("                       " foo(
-syn match gravTypeRef     "\<\%(new\|extends\|implements\)\s\+\zs\%(\w\|\.\)\+" " new Type / extends Base
-syn match gravField       "\%(\.\|->\)\zs\w\+"                  " obj.field / ptr->field
-syn match gravMethodCall  "\%(\.\|->\)\zs\w\+\ze\s*("           " obj.method(
-syn match gravEnumMember  "\<\u\w*\.\zs\u\w*"                   " Enum.Member
-syn match gravFuncDef     "\<fn\s\+\zs\w\+"                     " fn name
-syn match gravTypeDef     "\<\%(class\|struct\|enum\|interface\|type\|typedef\|namespace\)\s\+\zs\w\+"
+" Semantic matches. `syn keyword` always wins at its own position, so names
+" after a keyword are matched with a look-behind (the match starts at the name).
+" Among matches starting at the same column, the one defined last wins.
+syn match gravFuncCall    "\<\w\+\ze\s*\%(::<[^>]*>\)\=\s*("     " foo( / foo::<int>(
+syn match gravField       "\%(\.\|->\)\@<=\w\+"                  " obj.field
+syn match gravMethodCall  "\%(\.\)\@<=\w\+\ze\s*\%(::<[^>]*>\)\=\s*("   " obj.method(
+syn match gravEnumMember  "\%(\<\u\w*\.\)\@<=\u\w*\>"            " Enum.Member
+syn match gravTypeRef     "\%(\<\%(new\|extends\|implements\|as\|is\)\s\+\)\@<=\%(\w\+\.\)*\u\w*"
+syn match gravTypeRef     "\%(\%(^\|[^:]\):\s*\)\@<=\%(\w\+\.\)*\u\w*"   " x: Type
+syn match gravTypeRef     "\%(->\s*\)\@<=\%(\w\+\.\)*\u\w*"              " -> Type
+syn match gravTypeRef     "\%([<,]\s*\)\@<=\u\w*\ze\s*[<>,\[*]"           " Array<Type>, Map<K, V>
+syn match gravTypeParam   "\%(\<\%(class\|struct\|enum\|interface\|trait\|type\|fn\)\s\+\w\+\s*<\s*\%(\w\+\s*\%(:\s*\w\+\s*\)\=,\s*\)*\)\@<=\u\w*"
+syn match gravFuncDef     "\%(\<fn\s\+\)\@<=\w\+"                " fn name
+syn match gravFuncDef     "\%(\<fn\s\+operator\s*\)\@<=\S\{1,3}\ze\s*("    " fn operator==
+syn match gravTypeDef     "\%(\<\%(class\|struct\|enum\|interface\|trait\|type\)\s\+\)\@<=\w\+"
+syn match gravNamespace   "\%(\<\%(namespace\|use\)\s\+\)\@<=\w\+\%(\%(\.\|::\)\w\+\)*"
+syn match gravNamespace   "\%(\<import\s\+"[^"]*"\s\+as\s\+\)\@<=\w\+"
+syn match gravEnumMember  "\%(\<case\s\+\%(\w\+\.\)*\)\@<=\u\w*"   " case Circle(r):
+syn match gravImportPath  +\%(\<\%(import\|from\)\s*\)\@<="[^"]*"+
+syn match gravTestName    +\%(^\s*test\s\+\)\@<="[^"]*"+
 
 " Operators
 syn match gravOperator "[-+*/%<>=!&|^~?:.]"
@@ -105,5 +119,9 @@ hi def link gravTypeDef       Structure
 hi def link gravTypeRef       Type
 hi def link gravField         Identifier
 hi def link gravEnumMember    Constant
+hi def link gravImportPath    Include
+hi def link gravNamespace     Identifier
+hi def link gravTypeParam     Type
+hi def link gravTestName      Title
 
 let b:current_syntax = "grav"
