@@ -1,6 +1,6 @@
 // 18_data_structures.grav — choosing the right collection.
 //
-//   grav examples/18_data_structures.grav --run
+//   grav run examples/18_data_structures.grav
 //
 // Covers the standard data structures and when to use each:
 //   Array (growable list) · Deque (both ends) · Stack / Queue · HashMap / HashSet
@@ -10,7 +10,7 @@
 // Every collection shares size(), isEmpty(), clear(), contains(), forEach(), and
 // toArray(), and works with `for (x in coll)`.
 
-import "../lib/std.grav"
+import "std"
 
 struct Task { name: string  priority: int }
 
