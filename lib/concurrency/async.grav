@@ -1,0 +1,171 @@
+// lib/concurrency/async.grav — concurrency: worker-pool control, mutual exclusion, atomics,
+// channels, and helpers for futures.
+//
+// `async fn` calls run on a pool of GRAV_MAXPROCS worker threads (default: the
+// number of CPU cores; override with the GRAV_MAXPROCS environment variable or
+// Async.setMaxProcs). Share data between tasks only through these types (or
+// values that are not mutated) — plain fields and globals are not synchronized.
+//
+//   let m = new Mutex()
+//   m.withLock(fn() { counter.value = counter.value + 1 })
+import "../collections/array.grav"
+
+namespace std.concurrency {
+
+    %{
+    #include <pthread.h>
+    #include <stdlib.h>
+    #include <stdint.h>
+    typedef struct { pthread_mutex_t mu; pthread_cond_t notEmpty, notFull; } GravSync;
+    static GravSync* grav_sync_new(void) {
+        GravSync* s = (GravSync*)malloc(sizeof(GravSync));
+        if (!s) abort();
+        pthread_mutex_init(&s->mu, 0);
+        pthread_cond_init(&s->notEmpty, 0);
+        pthread_cond_init(&s->notFull, 0);
+        return s;
+    }
+    static void grav_sync_free(GravSync* s) {
+        if (!s) return;
+        pthread_mutex_destroy(&s->mu);
+        pthread_cond_destroy(&s->notEmpty);
+        pthread_cond_destroy(&s->notFull);
+        free(s);
+    }
+    %}
+
+    // Worker-pool settings and thread info.
+    class Async {
+        // How many worker threads async calls may use.
+        static fn maxProcs() -> int { return %{ grav_max_procs() %} as int; }
+        // Change the limit (takes effect for workers started from now on).
+        static fn setMaxProcs(n: int) { %{ grav_set_max_procs(n); %}; }
+        // Tasks spawned but not finished yet.
+        static fn pending() -> int { return %{ grav_pending_tasks() %} as int; }
+        static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
+        // An identifier for the calling thread (differs between workers).
+        static fn threadId() -> long { return %{ (long long)(uintptr_t)pthread_self() %} as long; }
+        static fn sleepMs(ms: int) { %{ usleep((useconds_t)ms * 1000); %}; }
+    }
+
+    // A mutual-exclusion lock. Prefer withLock, which unlocks even on exceptions.
+    class Mutex {
+        private h: byte*
+        constructor() { self.h = %{ (unsigned char*)grav_sync_new() %} as byte*; }
+        destructor() { %{ grav_sync_free((GravSync*)self->h); %}; }
+        public fn lock() { %{ pthread_mutex_lock(&((GravSync*)self->h)->mu); %}; }
+        public fn unlock() { %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %}; }
+        public fn tryLock() -> bool { return %{ pthread_mutex_trylock(&((GravSync*)self->h)->mu) == 0 %} as bool; }
+        public fn withLock(body: fn()) {
+            self.lock();
+            try { body(); } finally { self.unlock(); }
+        }
+    }
+
+    // A 64-bit integer updated atomically (no lock needed).
+    class AtomicInt {
+        private v: long
+        constructor(initial: long) { self.v = initial; }
+        public fn get() -> long { return %{ __atomic_load_n(&self->v, __ATOMIC_SEQ_CST) %} as long; }
+        public fn set(n: long) { %{ __atomic_store_n(&self->v, n, __ATOMIC_SEQ_CST); %}; }
+        // Adds and returns the new value.
+        public fn add(n: long) -> long { return %{ __atomic_add_fetch(&self->v, n, __ATOMIC_SEQ_CST) %} as long; }
+        public fn increment() -> long { return self.add(1); }
+        public fn decrement() -> long { return self.add(-1); }
+        // Sets to `desired` only if the value is `expected`; reports success.
+        public fn compareAndSet(expected: long, desired: long) -> bool {
+            return %{ __atomic_compare_exchange_n(&self->v, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) %} as bool;
+        }
+    }
+
+    // A bounded, blocking, thread-safe queue for handing values between tasks.
+    // send() waits while full; receive() waits while empty. After close(), sends
+    // fail and receivers drain what is left; hasNext() reports whether more will come.
+    class Channel<T> {
+        private buf: T*
+        private cap: int
+        private head: int
+        private count: int
+        private closed: bool
+        private h: byte*
+
+        constructor(capacity: int) {
+            self.cap = capacity < 1 ? 1 : capacity;
+            let bytes = self.cap * sizeof(T);
+            self.buf = %{ (void*)calloc(1, (size_t)bytes) %} as T*;
+            self.head = 0;
+            self.count = 0;
+            self.closed = false;
+            self.h = %{ (unsigned char*)grav_sync_new() %} as byte*;
+        }
+        destructor() { free(self.buf); %{ grav_sync_free((GravSync*)self->h); %}; }
+
+        // Blocks while the channel is full. Returns false if it has been closed.
+        public fn send(v: T) -> bool {
+            %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu);
+               while (self->count == self->cap && !self->closed) pthread_cond_wait(&s->notFull, &s->mu); %};
+            if (self.closed) { %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %}; return false; }
+            self.buf[(self.head + self.count) % self.cap] = v;
+            self.count = self.count + 1;
+            %{ pthread_cond_signal(&((GravSync*)self->h)->notEmpty); pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
+            return true;
+        }
+
+        // Blocks until a value is available or the channel is closed and empty.
+        public fn hasNext() -> bool {
+            %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu);
+               while (self->count == 0 && !self->closed) pthread_cond_wait(&s->notEmpty, &s->mu); %};
+            let more = self.count > 0;
+            %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
+            return more;
+        }
+
+        // Takes the next value, or returns `fallback` once closed and drained.
+        public fn receiveOr(fallback: T) -> T {
+            %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu);
+               while (self->count == 0 && !self->closed) pthread_cond_wait(&s->notEmpty, &s->mu); %};
+            if (self.count == 0) { %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %}; return fallback; }
+            let v = self.buf[self.head];
+            self.head = (self.head + 1) % self.cap;
+            self.count = self.count - 1;
+            %{ pthread_cond_signal(&((GravSync*)self->h)->notFull); pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
+            return v;
+        }
+
+        // Takes the next value; panics if the channel is closed and empty.
+        public fn receive() -> T {
+            %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu);
+               while (self->count == 0 && !self->closed) pthread_cond_wait(&s->notEmpty, &s->mu); %};
+            if (self.count == 0) {
+                %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
+                panic("receive on a closed, empty channel");
+            }
+            let v = self.buf[self.head];
+            self.head = (self.head + 1) % self.cap;
+            self.count = self.count - 1;
+            %{ pthread_cond_signal(&((GravSync*)self->h)->notFull); pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
+            return v;
+        }
+
+        // No more sends; wakes every waiting sender and receiver.
+        public fn close() {
+            %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu); self->closed = 1;
+               pthread_cond_broadcast(&s->notEmpty); pthread_cond_broadcast(&s->notFull);
+               pthread_mutex_unlock(&s->mu); %};
+        }
+        public fn size() -> int {
+            %{ pthread_mutex_lock(&((GravSync*)self->h)->mu); %};
+            let n = self.count;
+            %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
+            return n;
+        }
+    }
+
+    // Waits for every future, in order, and collects the results.
+    fn awaitAll<T>(futures: Array<Future<T>>) -> Array<T> {
+        let out = new Array<T>();
+        for (f in futures) { out.push(await f); }
+        return out;
+    }
+
+}
