@@ -200,6 +200,7 @@ public:
     static std::string namespaceOf(const std::string &fqName);
 
 private:
+    UseTable uses_; // `use` declarations, consulted by every resolve*()
     void registerDecls(Program &program);
     void canonicalize();
     void canonicalizeAliases();
