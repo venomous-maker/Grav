@@ -1016,8 +1016,10 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         }
         std::string fnFq = reg_->resolveFunc(name->name, currentNs_);
         // A generic function called without (or with `auto`) type arguments.
-        if (fnFq.empty() && program_ && program_->generics.functions.count(name->name))
-            return *tryInferCall(e, name->name, program_->generics.functions.at(name->name), expCall);
+        if (fnFq.empty() && program_)
+            for (const auto &cand : nameCandidates(name->name, currentNs_, program_->uses))
+                if (program_->generics.functions.count(cand))
+                    return *tryInferCall(e, name->name, program_->generics.functions.at(cand), expCall);
         if (fnFq.empty()) {
             error(e.line, e.col, "unknown function '" + name->name + "'");
             for (auto &a : e.args) checkExpr(*a);
