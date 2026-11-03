@@ -1,6 +1,6 @@
 // 17_auto_any.grav — inferred generic types with `auto`, dynamic values with `any`.
 //
-//   grav examples/17_auto_any.grav --run
+//   grav run examples/17_auto_any.grav
 //
 // `auto` (compile time): generic type arguments are inferred from call arguments,
 // lambda results, constructor arguments, or the expected type — so `maxOf(3, 9)`,
@@ -8,7 +8,7 @@
 // `any` (run time): one variable or collection slot can hold values of different
 // types; test with `is`, take out with `as` (checked), print and compare directly.
 
-import "../lib/std.grav"
+import "std"
 
 // ── auto: inference ─────────────────────────────────────────────────────────
 fn maxOf<T>(a: T, b: T) -> T { return a > b ? a : b }
