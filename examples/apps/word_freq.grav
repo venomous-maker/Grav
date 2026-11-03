@@ -1,13 +1,13 @@
 // apps/word_freq.grav — text statistics.
 //
-//   grav examples/apps/word_freq.grav --run
+//   grav run examples/apps/word_freq.grav
 //
 // Tokenizes a passage into lowercase words, counts them in a HashMap, then
 // reports the most frequent words (ties broken alphabetically) with a bar
 // chart, plus word-length statistics — using lambdas, sortBy, mapTo, and
 // StringBuilder.
 
-import "../../lib/std.grav"
+import "std"
 
 const TEXT: string = "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness."
 
