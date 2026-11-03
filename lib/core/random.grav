@@ -1,0 +1,102 @@
+// lib/core/random.grav — pseudo-random numbers from xoshiro256** (fast, high quality,
+// and identical on every platform — unlike C rand()). Each thread has its own
+// generator; Random.seed(n) makes a run reproducible, Random.seedTime() varies it.
+// The default seed is fixed, so an unseeded program is deterministic.
+//
+// For an independent stream (e.g. one per simulation), create an `Rng`.
+import "../collections/array.grav"
+
+namespace std.core {
+
+    %{
+    #include <stdint.h>
+    #include <math.h>
+    #include <time.h>
+    typedef struct { uint64_t s[4]; } GravRng;
+    static uint64_t grav_rng_split(uint64_t* x) {          /* splitmix64, for seeding */
+        uint64_t z = (*x += 0x9e3779b97f4a7c15ULL);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return z ^ (z >> 31);
+    }
+    static void grav_rng_seed(GravRng* r, uint64_t seed) {
+        for (int i = 0; i < 4; i++) r->s[i] = grav_rng_split(&seed);
+    }
+    static inline uint64_t grav_rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+    static uint64_t grav_rng_next(GravRng* r) {
+        uint64_t* s = r->s;
+        uint64_t out = grav_rotl(s[1] * 5, 7) * 9, t = s[1] << 17;
+        s[2] ^= s[0]; s[3] ^= s[1]; s[1] ^= s[2]; s[0] ^= s[3]; s[2] ^= t; s[3] = grav_rotl(s[3], 45);
+        return out;
+    }
+    /* An unbiased integer in [lo, hi] (Lemire's method with rejection). */
+    static long long grav_rng_range(GravRng* r, long long lo, long long hi) {
+        if (hi <= lo) return lo;
+        uint64_t span = (uint64_t)(hi - lo) + 1;
+        if (span == 0) return (long long)grav_rng_next(r);   /* the full 64-bit range */
+        uint64_t limit = (uint64_t)-span % span, x;
+        do { x = grav_rng_next(r); } while (x < limit);
+        return lo + (long long)(x % span);
+    }
+    static double grav_rng_float(GravRng* r) { return (double)(grav_rng_next(r) >> 11) * 0x1.0p-53; }
+    static _Thread_local GravRng grav_rng_tls;
+    static _Thread_local int grav_rng_tls_ready = 0;
+    static GravRng* grav_rng_global(void) {
+        if (!grav_rng_tls_ready) { grav_rng_seed(&grav_rng_tls, 0x5eed); grav_rng_tls_ready = 1; }
+        return &grav_rng_tls;
+    }
+    %}
+
+    // An independent random number generator with its own state.
+    class Rng {
+        private state: byte*
+        constructor(seed: long) {
+            self.state = %{ (unsigned char*)malloc(sizeof(GravRng)) %} as byte*;
+            %{ grav_rng_seed((GravRng*)self->state, (uint64_t)seed); %};
+        }
+        destructor() { free(self.state); }
+        // A random integer in [min, max] (both inclusive).
+        public fn nextInt(min: int, max: int) -> int {
+            return %{ (int)grav_rng_range((GravRng*)self->state, min, max) %} as int;
+        }
+        public fn nextLong(min: long, max: long) -> long {
+            return %{ grav_rng_range((GravRng*)self->state, min, max) %} as long;
+        }
+        // A random float in [0, 1).
+        public fn nextFloat() -> float { return %{ grav_rng_float((GravRng*)self->state) %} as float; }
+        public fn nextBool() -> bool { return %{ (grav_rng_next((GravRng*)self->state) >> 63) != 0 %} as bool; }
+    }
+
+    class Random {
+        static fn seed(n: long) { %{ grav_rng_seed(grav_rng_global(), (uint64_t)n); %}; }
+        static fn seedTime() {
+            %{ { struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
+                 grav_rng_seed(grav_rng_global(), (uint64_t)t.tv_sec * 1000000000ULL + (uint64_t)t.tv_nsec); } %};
+        }
+        // A random integer in [min, max] (both inclusive), without modulo bias.
+        static fn nextInt(min: int, max: int) -> int { return %{ (int)grav_rng_range(grav_rng_global(), min, max) %} as int; }
+        static fn nextLong(min: long, max: long) -> long { return %{ grav_rng_range(grav_rng_global(), min, max) %} as long; }
+        // A random float in [0, 1), or in [min, max).
+        static fn nextFloat() -> float { return %{ grav_rng_float(grav_rng_global()) %} as float; }
+        static fn nextFloat(min: float, max: float) -> float { return min + Random.nextFloat() * (max - min); }
+        static fn nextBool() -> bool { return %{ (grav_rng_next(grav_rng_global()) >> 63) != 0 %} as bool; }
+        // true with the given probability (0..1).
+        static fn chance(p: float) -> bool { return Random.nextFloat() < p; }
+        // Normally distributed (Box–Muller).
+        static fn nextGaussian(mean: float, stddev: float) -> float {
+            let u1 = Random.nextFloat();
+            let u2 = Random.nextFloat();
+            if (u1 <= 0.0) { u1 = 0.000000000001; }
+            return mean + stddev * (%{ sqrt(-2.0 * log(u1)) * cos(6.283185307179586 * u2) %} as float);
+        }
+        // Shuffle in place (Fisher–Yates) / pick a random element.
+        static fn shuffle<T>(xs: Array<T>) {
+            for (i in xs.size() - 1..0 step -1) { xs.swap(i, Random.nextInt(0, i)); }
+        }
+        static fn choice<T>(xs: Array<T>) -> T {
+            if (xs.isEmpty()) { panic("Random.choice on an empty array"); }
+            return xs.get(Random.nextInt(0, xs.size() - 1));
+        }
+    }
+
+}
