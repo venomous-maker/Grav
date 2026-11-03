@@ -1,6 +1,6 @@
 // 05_classes.grav — classes and objects.
 //
-//   grav examples/05_classes.grav --run
+//   grav run examples/05_classes.grav
 //
 // Covers: fields and methods, `self` (and its alias `this`), access modifiers
 // (public / private / protected) and `readonly`, auto-generated getters and
@@ -8,7 +8,7 @@
 // overloading, destructors run by `free`, `toString()` integration with
 // print/str/interpolation, and `final` classes.
 
-import "../lib/std.grav"
+import "std"
 
 class Account {
     readonly id: int                     // assignable only in a constructor
