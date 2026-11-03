@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <unordered_map>
+#include <vector>
 
 namespace grav {
 
@@ -17,19 +18,36 @@ void setDisplayName(const std::string &mangled, const std::string &readable) {
 }
 void clearDisplayNames() { displayNames().clear(); }
 
-std::string prettyNames(const std::string &text) {
+// One dotted name: the longest registered prefix is replaced; standard-library
+// names lose their `std.<category>.` prefix.
+static std::string prettyToken(const std::string &tok) {
     const auto &names = displayNames();
-    if (names.empty() || text.find('$') == std::string::npos) return text;
+    std::vector<size_t> ends{tok.size()};                 // longest prefix first
+    for (size_t p = tok.rfind('.'); p != std::string::npos && p > 0; p = tok.rfind('.', p - 1)) ends.push_back(p);
+    for (size_t end : ends) {
+        auto it = names.find(tok.substr(0, end));
+        if (it != names.end()) return it->second + tok.substr(end);
+    }
+    if (tok.rfind("std.", 0) == 0) {                     // std.collections.Array -> Array
+        size_t second = tok.find('.', 4);
+        if (second != std::string::npos && second + 1 < tok.size()) return prettyToken(tok.substr(second + 1));
+    }
+    return tok;
+}
+
+std::string prettyNames(const std::string &text) {
+    if (displayNames().empty() && text.find("std.") == std::string::npos) return text;
     std::string out;
     size_t i = 0;
+    auto isName = [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '$'; };
     while (i < text.size()) {
         unsigned char ch = (unsigned char)text[i];
-        if (!(std::isalnum(ch) || ch == '_' || ch == '$')) { out += text[i++]; continue; }
+        if (!isName(ch)) { out += text[i++]; continue; }
         size_t j = i;
-        while (j < text.size() && (std::isalnum((unsigned char)text[j]) || text[j] == '_' || text[j] == '$')) ++j;
-        std::string tok = text.substr(i, j - i);
-        auto it = names.find(tok);
-        out += it != names.end() ? it->second : tok;
+        while (j < text.size() && (isName((unsigned char)text[j]) ||
+                                   (text[j] == '.' && j + 1 < text.size() && isName((unsigned char)text[j + 1]))))
+            ++j;
+        out += prettyToken(text.substr(i, j - i));
         i = j;
     }
     return out;
