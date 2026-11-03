@@ -11,6 +11,10 @@ cmake --build build -j
 cmake --install build --prefix ~/.local   # optional: installs bin/grav and the standard library
 ```
 
+Start a project with `grav new hello && cd hello && grav run`. Third-party
+packages come from git repositories: `grav add github.com/owner/repo@v1.0.0`
+(chapter 13).
+
 The installed `grav` finds the standard library in `<prefix>/share/grav/lib`. A
 `gravc` run from the build tree uses the `lib/` directory it was built from; set
 `GRAV_STD=/path/to/lib` to point either one somewhere else.
@@ -44,6 +48,8 @@ command-line arguments) and returns nothing; call `exit(code)` to set an exit st
 grav run hello.grav -- a b c        # build and run, passing arguments after `--`
 grav build hello.grav               # build the native binary ./hello
 grav test hello.grav                # run the file's `test` blocks (chapter 17)
+grav new app                        # a project: grav.toml + src/main.grav
+grav add github.com/owner/repo      # a dependency (also: install, update, remove, packages)
 grav hello.grav                     # writes hello.c (the default: emit C)
 grav hello.grav --emit bin          # builds the native binary ./hello
 grav hello.grav --emit both         # binary + hello.c
@@ -91,9 +97,34 @@ gravc: app.grav:4:13: type error: operator '+' requires numeric operands, but go
                 ^
 ```
 
+## Tooling
+
+```bash
+grav fmt                     # format every .grav file in the project (or: grav fmt src/ app.grav)
+grav fmt --check             # list unformatted files and exit 1 (for CI); changes nothing
+grav check app.grav          # type-check without building ("gravc: ok" or the errors)
+grav check --json app.grav   # the same diagnostics as JSON, for editors and scripts
+grav env                     # where the compiler, standard library and packages are
+```
+
+`grav fmt` re-indents (4 spaces per level; brackets opened on one line indent the
+next lines once), indents continuation lines after a trailing operator, strips
+trailing whitespace and extra blank lines, and never changes code within a line.
+Strings, comments and inline C are left as they are. `grav fmt -` formats
+standard input to standard output.
+
 ## Editor support
 
-Syntax highlighting, go-to-definition, and a language server live in
-[`../editors/`](../editors/) for VS Code, JetBrains IDEs, and Neovim.
+[`../editors/`](../editors/) has support for VS Code, Neovim, and JetBrains IDEs,
+all built on one dependency-free index and language server. It follows imports
+into the standard library, project paths and installed packages. You get:
+
+- full syntax highlighting: generics, declarations, every import form, `use`,
+  `test` blocks, number literals, interpolation, inline C;
+- go to definition (also on an import string, which opens the module);
+- hover with signatures and doc comments;
+- completion of members, namespaces, import paths and keywords, plus signature help;
+- an outline, workspace symbols, references and rename;
+- formatting with `grav fmt`, and diagnostics from `grav check` on save.
 
 Next: [Basics →](02-basics.md)
