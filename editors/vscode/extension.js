@@ -1,144 +1,217 @@
-// Grav VS Code extension — build/run commands plus language features
-// (go-to-definition, references, rename, document symbols, hover) implemented
-// directly against the shared, dependency-free indexer. Plain CommonJS: no build
-// step and no npm dependencies.
+// Grav VS Code extension. Language features run in-process on the shared,
+// dependency-free index (grav-index.js, a copy of editors/lsp/grav-index.js):
+// it follows imports into the standard library, project paths and installed
+// packages. Diagnostics come from `grav check --json`, formatting from `grav fmt`.
+// Plain CommonJS: no build step and no npm dependencies.
+"use strict";
+
 const vscode = require("vscode");
-const fs = require("fs");
 const path = require("path");
 const idx = require("./grav-index");
+
+const SEL = { language: "grav" };
+let ws = null;
+let diagnostics = null;
 
 function compilerPath() {
   return vscode.workspace.getConfiguration("grav").get("compilerPath", "grav");
 }
+function workspace() {
+  if (!ws) {
+    const folder = (vscode.workspace.workspaceFolders || [])[0];
+    ws = new idx.Workspace({ root: folder ? folder.uri.fsPath : null, compiler: compilerPath() });
+    for (const doc of vscode.workspace.textDocuments) if (doc.languageId === "grav") ws.setDoc(doc.fileName, doc.getText());
+  }
+  return ws;
+}
+const pos = (p) => ({ line: p.line, character: p.character });
+const toRange = (r) => new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character);
+const toLocation = (d) => new vscode.Location(vscode.Uri.file(d.file), toRange(d.range));
+const SYMBOL_KIND = (k) => Math.max(0, k - 1); // LSP SymbolKind -> vscode.SymbolKind
+const COMPLETION_KIND = (k) => Math.max(0, k - 1);
 
-// ---- build / run commands -------------------------------------------------
-function runInTerminal(makeArgs) {
+// ---- commands -------------------------------------------------------------
+function terminal() {
+  const t = vscode.window.terminals.find((x) => x.name === "Grav") || vscode.window.createTerminal("Grav");
+  t.show(true);
+  return t;
+}
+function quote(s) { return "'" + s.replace(/'/g, "'\\''") + "'"; }
+async function withFile(run) {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== "grav") {
     vscode.window.showWarningMessage("Grav: open a .grav file first.");
     return;
   }
-  if (editor.document.isDirty) editor.document.save();
-  const file = editor.document.fileName;
-  const term =
-    vscode.window.terminals.find((t) => t.name === "Grav") ||
-    vscode.window.createTerminal("Grav");
-  term.show(true);
-  term.sendText(`${compilerPath()} ${makeArgs(file)}`);
+  if (editor.document.isDirty) await editor.document.save();
+  run(editor.document.fileName);
+}
+function inProject(cmd) {
+  const folder = (vscode.workspace.workspaceFolders || [])[0];
+  const t = terminal();
+  if (folder) t.sendText(`cd ${quote(folder.uri.fsPath)}`);
+  t.sendText(`${compilerPath()} ${cmd}`);
 }
 
-// ---- shared document gathering --------------------------------------------
-// Every .grav document in the workspace, in-memory versions preferred.
-function allGravDocs() {
-  const byPath = new Map();
-  for (const doc of vscode.workspace.textDocuments) {
-    if (doc.languageId === "grav" || doc.fileName.endsWith(".grav")) {
-      byPath.set(doc.fileName, { uri: doc.uri, text: doc.getText() });
+const COMMANDS = {
+  "grav.run": () => withFile((f) => terminal().sendText(`${compilerPath()} run ${quote(f)}`)),
+  "grav.build": () => withFile((f) => terminal().sendText(`${compilerPath()} build ${quote(f)}`)),
+  "grav.emitC": () => withFile((f) => terminal().sendText(`${compilerPath()} ${quote(f)} --emit c`)),
+  "grav.test": () => withFile((f) => terminal().sendText(`${compilerPath()} test ${quote(f)}`)),
+  "grav.check": () => withFile((f) => checkFile(f, true)),
+  "grav.fmt": () => vscode.commands.executeCommand("editor.action.formatDocument"),
+  "grav.runProject": () => inProject("run"),
+  "grav.testProject": () => inProject("test"),
+  "grav.newProject": async () => {
+    const name = await vscode.window.showInputBox({ prompt: "Project name (a new folder)", placeHolder: "my-app" });
+    if (name) inProject(`new ${quote(name)}`);
+  },
+  "grav.addPackage": async () => {
+    const src = await vscode.window.showInputBox({
+      prompt: "Package source: a git repository, optionally @version",
+      placeHolder: "github.com/owner/repo@v1.0.0",
+    });
+    if (src) inProject(`add ${quote(src)}`);
+  },
+  "grav.installPackages": () => inProject("install"),
+};
+
+// ---- diagnostics ----------------------------------------------------------
+function checkFile(file, announce) {
+  workspace().check(file, (diags) => {
+    const byFile = new Map([[path.resolve(file), []]]);
+    for (const d of diags) {
+      const f = path.resolve(d.file);
+      if (!byFile.has(f)) byFile.set(f, []);
+      const r = new vscode.Range(d.line, d.character, d.line, d.character + 1);
+      const item = new vscode.Diagnostic(r, d.message,
+        d.severity === "error" ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning);
+      item.source = "grav";
+      byFile.get(f).push(item);
     }
-  }
-  for (const folder of vscode.workspace.workspaceFolders || []) {
-    walk(folder.uri.fsPath, byPath);
-  }
-  return [...byPath.values()];
-}
-function walk(dir, byPath) {
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    if (e.name.startsWith(".")) continue;
-    if (["build", "node_modules", "cmake-build-debug", "cmake-build-release"].includes(e.name)) continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) walk(full, byPath);
-    else if (e.isFile() && e.name.endsWith(".grav") && !byPath.has(full)) {
-      try { byPath.set(full, { uri: vscode.Uri.file(full), text: fs.readFileSync(full, "utf8") }); } catch {}
+    for (const [f, list] of byFile) diagnostics.set(vscode.Uri.file(f), list);
+    if (announce) {
+      const errors = diags.filter((d) => d.severity === "error").length;
+      vscode.window.setStatusBarMessage(errors ? `Grav: ${errors} error(s)` : "Grav: no errors", 4000);
     }
-  }
+  });
 }
 
-function toRange(r) {
-  return new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character);
-}
-function wordAt(document, position) {
-  const w = idx.wordAtPosition(document.getText(), { line: position.line, character: position.character });
-  return w ? w.word : null;
-}
-
-// ---- language feature providers -------------------------------------------
-const definitionProvider = {
-  provideDefinition(document, position) {
-    const word = wordAt(document, position);
-    if (!word) return null;
-    const here = document.fileName;
-    const docs = allGravDocs().sort((a, b) =>
-      (a.uri.fsPath === here ? -1 : 0) - (b.uri.fsPath === here ? -1 : 0));
-    const locs = [];
-    for (const d of docs)
-      for (const r of idx.declarationsOf(d.text, word)) locs.push(new vscode.Location(d.uri, toRange(r)));
-    return locs;
+// ---- providers ------------------------------------------------------------
+const providers = {
+  definition: {
+    provideDefinition(doc, p) { return workspace().definition(doc.fileName, pos(p)).map(toLocation); },
   },
-};
-
-const referenceProvider = {
-  provideReferences(document, position) {
-    const word = wordAt(document, position);
-    if (!word) return null;
-    const locs = [];
-    for (const d of allGravDocs())
-      for (const r of idx.referencesOf(d.text, word)) locs.push(new vscode.Location(d.uri, toRange(r)));
-    return locs;
+  references: {
+    provideReferences(doc, p) { return workspace().references(doc.fileName, pos(p), false).map(toLocation); },
   },
-};
-
-const renameProvider = {
-  prepareRename(document, position) {
-    const w = idx.wordAtPosition(document.getText(), { line: position.line, character: position.character });
-    if (!w) throw new Error("You cannot rename this element.");
-    return toRange(w.range);
+  rename: {
+    prepareRename(doc, p) {
+      const w = idx.wordAtPosition(doc.getText(), pos(p));
+      if (!w || idx.KEYWORDS.includes(w.word)) throw new Error("You cannot rename this element.");
+      return toRange(w.range);
+    },
+    provideRenameEdits(doc, p, newName) {
+      const edit = new vscode.WorkspaceEdit();
+      for (const r of workspace().references(doc.fileName, pos(p), false))
+        edit.replace(vscode.Uri.file(r.file), toRange(r.range), newName);
+      return edit;
+    },
   },
-  provideRenameEdits(document, position, newName) {
-    const word = wordAt(document, position);
-    if (!word) return null;
-    const edit = new vscode.WorkspaceEdit();
-    for (const d of allGravDocs())
-      for (const r of idx.referencesOf(d.text, word)) edit.replace(d.uri, toRange(r), newName);
-    return edit;
+  symbols: {
+    provideDocumentSymbols(doc) {
+      const conv = (n) => {
+        const s = new vscode.DocumentSymbol(n.name, n.detail || "", SYMBOL_KIND(n.kind), toRange(n.range), toRange(n.selectionRange));
+        s.children = (n.children || []).map(conv);
+        return s;
+      };
+      return workspace().outline(doc.fileName).map(conv);
+    },
   },
-};
-
-const documentSymbolProvider = {
-  provideDocumentSymbols(document) {
-    return idx.documentDeclarations(document.getText()).map((s) =>
-      new vscode.SymbolInformation(
-        s.name, (s.kind - 1), "", new vscode.Location(document.uri, toRange(s.range))));
+  workspaceSymbols: {
+    provideWorkspaceSymbols(query) {
+      return workspace().workspaceSymbols(query, true).map(({ file, sym }) =>
+        new vscode.SymbolInformation(sym.name, SYMBOL_KIND(sym.kind), sym.container || sym.namespace || "",
+          new vscode.Location(vscode.Uri.file(file), toRange(sym.range))));
+    },
   },
-};
-
-const hoverProvider = {
-  provideHover(document, position) {
-    const word = wordAt(document, position);
-    if (!word) return null;
-    for (const d of allGravDocs()) {
-      const decls = idx.documentDeclarations(d.text).filter((s) => s.name === word);
-      if (decls.length) {
-        const line = idx.splitLines(d.text)[decls[0].range.start.line].trim();
-        return new vscode.Hover({ language: "grav", value: line });
+  hover: {
+    provideHover(doc, p) {
+      const h = workspace().hover(doc.fileName, pos(p));
+      return h ? new vscode.Hover(new vscode.MarkdownString(h.markdown), toRange(h.range)) : null;
+    },
+  },
+  completion: {
+    provideCompletionItems(doc, p) {
+      return workspace().completion(doc.fileName, pos(p)).map((c) => {
+        const item = new vscode.CompletionItem(c.label, COMPLETION_KIND(c.kind));
+        item.detail = c.detail;
+        if (c.documentation) item.documentation = new vscode.MarkdownString(c.documentation);
+        if (c.insertText) item.insertText = c.insertText;
+        if (c.filterText) item.filterText = c.filterText;
+        return item;
+      });
+    },
+  },
+  signature: {
+    provideSignatureHelp(doc, p) {
+      const sh = workspace().signature(doc.fileName, pos(p));
+      if (!sh) return null;
+      const help = new vscode.SignatureHelp();
+      help.signatures = sh.signatures.map((s) => {
+        const info = new vscode.SignatureInformation(s.label, s.documentation || undefined);
+        info.parameters = s.parameters.map((x) => new vscode.ParameterInformation(x.label));
+        return info;
+      });
+      help.activeSignature = 0;
+      help.activeParameter = sh.activeParameter;
+      return help;
+    },
+  },
+  formatting: {
+    provideDocumentFormattingEdits(doc) {
+      const text = doc.getText();
+      const out = workspace().format(text);
+      if (out == null) {
+        vscode.window.showWarningMessage(`Grav: formatting needs the compiler (${compilerPath()} fmt).`);
+        return [];
       }
-    }
-    return null;
+      if (out === text) return [];
+      return [vscode.TextEdit.replace(new vscode.Range(0, 0, doc.lineCount, 0), out)];
+    },
   },
 };
 
 function activate(context) {
-  const sel = { language: "grav" };
-  context.subscriptions.push(
-    vscode.commands.registerCommand("grav.run", () => runInTerminal((f) => `'${f}' --run`)),
-    vscode.commands.registerCommand("grav.build", () => runInTerminal((f) => `'${f}' --emit c`)),
-    vscode.languages.registerDefinitionProvider(sel, definitionProvider),
-    vscode.languages.registerReferenceProvider(sel, referenceProvider),
-    vscode.languages.registerRenameProvider(sel, renameProvider),
-    vscode.languages.registerDocumentSymbolProvider(sel, documentSymbolProvider),
-    vscode.languages.registerHoverProvider(sel, hoverProvider)
+  diagnostics = vscode.languages.createDiagnosticCollection("grav");
+  const subs = context.subscriptions;
+  subs.push(diagnostics);
+  for (const [name, fn] of Object.entries(COMMANDS)) subs.push(vscode.commands.registerCommand(name, fn));
+  subs.push(
+    vscode.languages.registerDefinitionProvider(SEL, providers.definition),
+    vscode.languages.registerReferenceProvider(SEL, providers.references),
+    vscode.languages.registerRenameProvider(SEL, providers.rename),
+    vscode.languages.registerDocumentSymbolProvider(SEL, providers.symbols),
+    vscode.languages.registerWorkspaceSymbolProvider(providers.workspaceSymbols),
+    vscode.languages.registerHoverProvider(SEL, providers.hover),
+    vscode.languages.registerCompletionItemProvider(SEL, providers.completion, ".", "\"", "/"),
+    vscode.languages.registerSignatureHelpProvider(SEL, providers.signature, "(", ","),
+    vscode.languages.registerDocumentFormattingEditProvider(SEL, providers.formatting),
+    vscode.workspace.onDidOpenTextDocument((d) => {
+      if (d.languageId !== "grav") return;
+      workspace().setDoc(d.fileName, d.getText());
+      if (vscode.workspace.getConfiguration("grav").get("checkOnSave", true)) checkFile(d.fileName, false);
+    }),
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.document.languageId === "grav") workspace().setDoc(e.document.fileName, e.document.getText());
+    }),
+    vscode.workspace.onDidSaveTextDocument((d) => {
+      if (d.languageId === "grav" && vscode.workspace.getConfiguration("grav").get("checkOnSave", true)) checkFile(d.fileName, false);
+    }),
+    vscode.workspace.onDidCloseTextDocument((d) => { if (d.languageId === "grav") workspace().closeDoc(d.fileName); }),
+    vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration("grav")) ws = null; }),
   );
+  for (const d of vscode.workspace.textDocuments) if (d.languageId === "grav") checkFile(d.fileName, false);
 }
 
 function deactivate() {}
