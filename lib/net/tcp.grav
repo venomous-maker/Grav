@@ -1,0 +1,477 @@
+// lib/net/tcp.grav — TCP clients and servers (IPv4 and IPv6, blocking sockets).
+//
+//   // server
+//   let listener = TcpListener.bind("127.0.0.1", 0)      // port 0: pick a free port
+//   print("listening on ${listener.port()}")
+//   let conn = listener.accept()
+//   let line = conn.readLine()
+//   conn.writeLine("echo: " + line)
+//   conn.close()
+//
+//   // client
+//   let s = TcpStream.connect("127.0.0.1", port)
+//   s.writeLine("hello")
+//   print(s.readLine())
+//
+// Reads are buffered. readLine() returns "" at end of input and sets eof(), so a
+// blank line and the end of the stream can be told apart. Failures throw NetError;
+// a read or write that passes setTimeoutMs() throws TimeoutError. Serve many
+// clients at once by handling each accepted stream on a Thread (lib/thread.grav),
+// as lib/net/http.grav does.
+import "../collections/array.grav"
+import "../data/bytes.grav"
+import "../core/exception.grav"
+
+namespace std.net {
+
+    %{
+    #include <arpa/inet.h>
+    #include <errno.h>
+    #include <fcntl.h>
+    #include <netdb.h>
+    #include <netinet/in.h>
+    #include <netinet/tcp.h>
+    #include <poll.h>
+    #include <signal.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <sys/socket.h>
+    #include <sys/time.h>
+    #include <sys/types.h>
+    #include <unistd.h>
+
+    typedef struct { int fd; char* buf; int len, pos, cap; int eof; int timedOut; } GravSock;
+
+    static GravSock* grav_sock_new(int fd) {
+        GravSock* s = (GravSock*)calloc(1, sizeof(GravSock));
+        if (!s) abort();
+        s->fd = fd;
+        return s;
+    }
+    static const char* grav_net_errstr(int e) {
+        const char* m = strerror(e);
+        char* c = (char*)malloc(strlen(m) + 1);
+        if (!c) abort();
+        strcpy(c, m);
+        return c;
+    }
+    static const char* grav_net_err(const char* what, const char* detail) {
+        size_t n = strlen(what) + strlen(detail) + 3;
+        char* c = (char*)malloc(n);
+        if (!c) abort();
+        snprintf(c, n, "%s: %s", what, detail);
+        return c;
+    }
+    static void grav_net_init(void) {
+        static int done = 0;
+        if (!done) { signal(SIGPIPE, SIG_IGN); done = 1; } /* a closed peer is an error, not a crash */
+    }
+    /* "host:port" text for an address. */
+    static const char* grav_addr_text(const struct sockaddr* sa) {
+        char host[INET6_ADDRSTRLEN] = "?";
+        int port = 0;
+        if (sa->sa_family == AF_INET) {
+            const struct sockaddr_in* a = (const struct sockaddr_in*)sa;
+            inet_ntop(AF_INET, &a->sin_addr, host, sizeof host);
+            port = ntohs(a->sin_port);
+        } else if (sa->sa_family == AF_INET6) {
+            const struct sockaddr_in6* a = (const struct sockaddr_in6*)sa;
+            inet_ntop(AF_INET6, &a->sin6_addr, host, sizeof host);
+            port = ntohs(a->sin6_port);
+        }
+        char* out = (char*)malloc(strlen(host) + 16);
+        if (!out) abort();
+        if (sa->sa_family == AF_INET6) sprintf(out, "[%s]:%d", host, port);
+        else sprintf(out, "%s:%d", host, port);
+        return out;
+    }
+    /* Connect with a timeout (ms < 0: the system default). Returns fd, or -1 with *err. */
+    static int grav_tcp_connect(const char* host, int port, int ms, const char** err) {
+        grav_net_init();
+        struct addrinfo hints, *res = 0, *ai;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        char ps[16];
+        snprintf(ps, sizeof ps, "%d", port);
+        int rc = getaddrinfo(host, ps, &hints, &res);
+        if (rc != 0) { *err = grav_net_err("cannot resolve host", gai_strerror(rc)); return -1; }
+        int fd = -1, lastErr = 0;
+        for (ai = res; ai; ai = ai->ai_next) {
+            fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
+            if (fd < 0) { lastErr = errno; continue; }
+            int flags = fcntl(fd, F_GETFL, 0);
+            if (ms >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+            if (rc != 0 && errno == EINPROGRESS) {
+                struct pollfd p = { fd, POLLOUT, 0 };
+                rc = poll(&p, 1, ms);
+                if (rc == 0) { lastErr = ETIMEDOUT; close(fd); fd = -1; continue; }
+                int so = 0; socklen_t sl = sizeof so;
+                getsockopt(fd, SOL_SOCKET, SO_ERROR, &so, &sl);
+                rc = so == 0 ? 0 : -1;
+                if (so) errno = so;
+            }
+            if (rc == 0) { fcntl(fd, F_SETFL, flags); break; }
+            lastErr = errno;
+            close(fd);
+            fd = -1;
+        }
+        freeaddrinfo(res);
+        if (fd < 0) *err = grav_net_err("cannot connect", strerror(lastErr ? lastErr : ECONNREFUSED));
+        return fd;
+    }
+    /* Listen on host:port ("" or "*" = all interfaces). Returns fd, or -1 with *err. */
+    static int grav_tcp_listen(const char* host, int port, int backlog, const char** err) {
+        grav_net_init();
+        struct addrinfo hints, *res = 0, *ai;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_PASSIVE;
+        char ps[16];
+        snprintf(ps, sizeof ps, "%d", port);
+        const char* h = (host && host[0] && strcmp(host, "*") != 0) ? host : 0;
+        int rc = getaddrinfo(h, ps, &hints, &res);
+        if (rc != 0) { *err = grav_net_err("cannot resolve address", gai_strerror(rc)); return -1; }
+        int fd = -1, lastErr = 0;
+        for (ai = res; ai; ai = ai->ai_next) {
+            fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
+            if (fd < 0) { lastErr = errno; continue; }
+            int one = 1;
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+            if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 && listen(fd, backlog) == 0) break;
+            lastErr = errno;
+            close(fd);
+            fd = -1;
+        }
+        freeaddrinfo(res);
+        if (fd < 0) *err = grav_net_err("cannot listen", strerror(lastErr));
+        return fd;
+    }
+    static int grav_sock_port(int fd) {
+        struct sockaddr_storage ss; socklen_t sl = sizeof ss;
+        if (getsockname(fd, (struct sockaddr*)&ss, &sl) != 0) return -1;
+        if (ss.ss_family == AF_INET) return ntohs(((struct sockaddr_in*)&ss)->sin_port);
+        if (ss.ss_family == AF_INET6) return ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
+        return -1;
+    }
+    /* Accept one connection; -1 once the listener is closed. */
+    static int grav_tcp_accept(int fd, const char** peer) {
+        struct sockaddr_storage ss; socklen_t sl = sizeof ss;
+        int c;
+        do { c = accept(fd, (struct sockaddr*)&ss, &sl); } while (c < 0 && (errno == EINTR || errno == ECONNABORTED));
+        if (c >= 0) {
+            fcntl(c, F_SETFD, FD_CLOEXEC);
+            *peer = grav_addr_text((struct sockaddr*)&ss);
+        }
+        return c;
+    }
+    static void grav_sock_timeout(int fd, int ms) {
+        struct timeval tv;
+        tv.tv_sec = ms > 0 ? ms / 1000 : 0;
+        tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    }
+    /* Refill the read buffer. 1 = got data, 0 = EOF, -1 = error (errno set). */
+    static int grav_sock_fill(GravSock* s) {
+        if (s->pos > 0 && s->pos == s->len) { s->pos = s->len = 0; }
+        if (s->len == s->cap) {
+            if (s->pos > 0) {
+                memmove(s->buf, s->buf + s->pos, (size_t)(s->len - s->pos));
+                s->len -= s->pos; s->pos = 0;
+            }
+            if (s->len == s->cap) {
+                s->cap = s->cap ? s->cap * 2 : 16384;
+                s->buf = (char*)realloc(s->buf, (size_t)s->cap);
+                if (!s->buf) abort();
+            }
+        }
+        ssize_t n;
+        do { n = recv(s->fd, s->buf + s->len, (size_t)(s->cap - s->len), 0); } while (n < 0 && errno == EINTR);
+        if (n > 0) { s->len += (int)n; return 1; }
+        if (n == 0) { s->eof = 1; return 0; }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) s->timedOut = 1;
+        return -1;
+    }
+    /* Write everything; 0 on success, else errno. */
+    static int grav_sock_write(GravSock* s, const char* p, long long n) {
+        while (n > 0) {
+            ssize_t w = send(s->fd, p, (size_t)n, MSG_NOSIGNAL);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) s->timedOut = 1;
+                return errno;
+            }
+            p += w; n -= w;
+        }
+        return 0;
+    }
+    /* The next line without its "\n" / "\r\n". *status: 1 line, 0 EOF, -1 error. */
+    static const char* grav_sock_readline(GravSock* s, int maxLen, int* status) {
+        for (;;) {
+            char* nl = s->len > s->pos ? (char*)memchr(s->buf + s->pos, '\n', (size_t)(s->len - s->pos)) : 0;
+            if (nl || (s->eof && s->len > s->pos)) {
+                int end = nl ? (int)(nl - s->buf) : s->len;
+                int stop = end;
+                if (stop > s->pos && s->buf[stop - 1] == '\r') stop--;
+                int n = stop - s->pos;
+                char* out = (char*)malloc((size_t)n + 1);
+                if (!out) abort();
+                memcpy(out, s->buf + s->pos, (size_t)n); out[n] = 0;
+                s->pos = nl ? end + 1 : end;
+                *status = 1;
+                return out;
+            }
+            if (s->eof) { *status = 0; return ""; }
+            if (maxLen > 0 && s->len - s->pos > maxLen) { errno = EMSGSIZE; *status = -1; return ""; }
+            int r = grav_sock_fill(s);
+            if (r < 0) { *status = -1; return ""; }
+        }
+    }
+    %}
+
+    // A network failure: refused or reset connections, unknown hosts, and so on.
+    class NetError extends IOError {
+        constructor(m: string) { super(m); }
+        public fn kind() -> string { return "NetError"; }
+    }
+
+    // One TCP connection.
+    class TcpStream {
+        private s: byte*     // GravSock*
+        private peer: string
+        private closed: bool
+
+        constructor(fd: int, peer: string) {
+            self.s = %{ (unsigned char*)grav_sock_new(fd) %} as byte*;
+            self.peer = peer;
+            self.closed = false;
+        }
+        destructor() {
+            self.close();
+            %{ free(((GravSock*)self->s)->buf); free(self->s); %};
+        }
+
+        // Connect to host:port (a name or an IPv4/IPv6 address).
+        static fn connect(host: string, port: int) -> TcpStream { return TcpStream.connect(host, port, -1); }
+        // Connect, giving up after `timeoutMs` milliseconds.
+        static fn connect(host: string, port: int, timeoutMs: int) -> TcpStream {
+            let err = "";
+            let fd = %{ grav_tcp_connect(host, port, timeoutMs, &err) %} as int;
+            if (fd < 0) {
+                if (%{ strstr(err, "timed out") != 0 %} as bool) {
+                    throw new TimeoutError("connecting to ${host}:${port} timed out");
+                }
+                throw new NetError(err + " (${host}:${port})");
+            }
+            return new TcpStream(fd, "${host}:${port}");
+        }
+
+        private fn fd() -> int { return %{ ((GravSock*)self->s)->fd %} as int; }
+        private fn failed(what: string) {
+            if (%{ ((GravSock*)self->s)->timedOut %} as bool) {
+                %{ ((GravSock*)self->s)->timedOut = 0; %};
+                throw new TimeoutError(what + " timed out (" + self.peer + ")");
+            }
+            let why = %{ grav_net_errstr(errno) %} as string;
+            throw new NetError(what + " failed: " + why + " (" + self.peer + ")");
+        }
+        private fn ensureOpen() {
+            if (self.closed) { throw new NetError("the connection to " + self.peer + " is closed"); }
+        }
+
+        // ── writing ────────────────────────────────────────────────────────────
+        public fn write(text: string) {
+            self.ensureOpen();
+            let rc = %{ grav_sock_write((GravSock*)self->s, text, (long long)strlen(text)) %} as int;
+            if (rc != 0) { self.failed("write"); }
+        }
+        public fn writeLine(text: string) {
+            self.write(text);
+            self.write("\n");
+        }
+        public fn writeBytes(data: Bytes) {
+            self.ensureOpen();
+            let p = data.rawData();
+            let n = data.size();
+            let rc = %{ grav_sock_write((GravSock*)self->s, (const char*)p, n) %} as int;
+            if (rc != 0) { self.failed("write"); }
+        }
+
+        // ── reading ────────────────────────────────────────────────────────────
+        // The next line (without "\n" or "\r\n"); "" at end of input, with eof() true.
+        public fn readLine() -> string {
+            self.ensureOpen();
+            let status = 0;
+            let line = %{ grav_sock_readline((GravSock*)self->s, 1 << 20, &status) %} as string;
+            if (status < 0) { self.failed("read"); }
+            return line;
+        }
+        // True once the peer has closed its side and every buffered byte was read.
+        public fn eof() -> bool {
+            return %{ ((GravSock*)self->s)->eof && ((GravSock*)self->s)->pos >= ((GravSock*)self->s)->len %} as bool;
+        }
+        // Up to `max` bytes as text, waiting for at least one; "" at end of input.
+        public fn read(max: int) -> string { return self.readBytes(max).toString(); }
+        // Up to `max` bytes, waiting for at least one; empty at end of input.
+        public fn readBytes(max: int) -> Bytes {
+            self.ensureOpen();
+            let out = new Bytes();
+            if (%{ ((GravSock*)self->s)->pos >= ((GravSock*)self->s)->len %} as bool) {
+                let r = %{ ((GravSock*)self->s)->eof ? 0 : grav_sock_fill((GravSock*)self->s) %} as int;
+                if (r < 0) { self.failed("read"); }
+            }
+            let avail = %{ ((GravSock*)self->s)->len - ((GravSock*)self->s)->pos %} as int;
+            let n = avail < max ? avail : max;
+            if (n > 0) {
+                out.appendRaw(%{ (unsigned char*)((GravSock*)self->s)->buf + ((GravSock*)self->s)->pos %} as byte*, n);
+                %{ ((GravSock*)self->s)->pos += n; %};
+            }
+            return out;
+        }
+        // Exactly `n` bytes; throws NetError if the stream ends first.
+        public fn readExactly(n: int) -> Bytes {
+            let out = new Bytes(n);
+            while (out.size() < n) {
+                let chunk = self.readBytes(n - out.size());
+                if (chunk.isEmpty()) {
+                    throw new NetError("connection closed after ${out.size()} of ${n} bytes (" + self.peer + ")");
+                }
+                out.append(chunk);
+                free(chunk);
+            }
+            return out;
+        }
+        // Everything until the peer closes the connection.
+        public fn readAll() -> string {
+            let out = new Bytes();
+            while (true) {
+                let chunk = self.readBytes(65536);
+                if (chunk.isEmpty()) { break; }
+                out.append(chunk);
+                free(chunk);
+            }
+            let text = out.toString();
+            free(out);
+            return text;
+        }
+        // Calls `f` with each line until end of input.
+        public fn lines(f: fn(string)) {
+            while (true) {
+                let line = self.readLine();
+                if (self.eof() && line == "") { break; }
+                f(line);
+            }
+        }
+
+        // ── options ────────────────────────────────────────────────────────────
+        // Reads and writes that wait longer than `ms` throw TimeoutError (0 = never).
+        public fn setTimeoutMs(ms: int) { %{ grav_sock_timeout(((GravSock*)self->s)->fd, ms); %}; }
+        // Send small writes immediately (disable Nagle's algorithm).
+        public fn setNoDelay(on: bool) {
+            %{ int v = on ? 1 : 0; setsockopt(((GravSock*)self->s)->fd, IPPROTO_TCP, TCP_NODELAY, &v, sizeof v); %};
+        }
+        public fn peerAddress() -> string { return self.peer; }
+        public fn localPort() -> int { return %{ grav_sock_port(((GravSock*)self->s)->fd) %} as int; }
+        // Stop sending (the peer sees end of input) but keep reading.
+        public fn shutdownWrite() { %{ shutdown(((GravSock*)self->s)->fd, SHUT_WR); %}; }
+        public fn close() {
+            if (self.closed) { return; }
+            self.closed = true;
+            %{ close(((GravSock*)self->s)->fd); %};
+        }
+        public fn isClosed() -> bool { return self.closed; }
+    }
+
+    // A listening socket that accepts TCP connections.
+    class TcpListener {
+        private fd: int
+        private closedFlag: int     // atomic: close() may run on another thread than accept()
+        private host: string
+
+        constructor(fd: int, host: string) { self.fd = fd; self.closedFlag = 0; self.host = host; }
+        destructor() { self.close(); }
+
+        // Listen on host:port. Port 0 picks a free port (see port()); host "" or
+        // "*" listens on every interface.
+        static fn bind(host: string, port: int) -> TcpListener {
+            let err = "";
+            let fd = %{ grav_tcp_listen(host, port, 128, &err) %} as int;
+            if (fd < 0) { throw new NetError(err + " (${host}:${port})"); }
+            return new TcpListener(fd, host);
+        }
+        static fn bind(port: int) -> TcpListener { return TcpListener.bind("*", port); }
+
+        // The port actually listened on (useful after binding port 0).
+        public fn port() -> int { return %{ grav_sock_port(self->fd) %} as int; }
+        public fn address() -> string { return self.host + ":" + "${self.port()}"; }
+
+        // Wait for the next connection. Throws NetError once the listener is closed.
+        public fn accept() -> TcpStream {
+            if (self.isClosed()) { throw new NetError("accept on a closed listener"); }
+            let peer = "";
+            let c = %{ grav_tcp_accept(self->fd, &peer) %} as int;
+            if (c < 0) {
+                if (self.isClosed()) { throw new NetError("the listener was closed"); }
+                let why = %{ grav_net_errstr(errno) %} as string;
+                throw new NetError("accept failed: " + why);
+            }
+            return new TcpStream(c, peer);
+        }
+        // Stop listening; a thread blocked in accept() gets a NetError.
+        public fn close() {
+            if (%{ __atomic_exchange_n(&self->closedFlag, 1, __ATOMIC_SEQ_CST) %} as int == 1) { return; }
+            %{ shutdown(self->fd, SHUT_RDWR); close(self->fd); %};
+        }
+        public fn isClosed() -> bool { return %{ __atomic_load_n(&self->closedFlag, __ATOMIC_SEQ_CST) %} as int == 1; }
+    }
+
+    // Name resolution helpers.
+    class Net {
+        // Every address `host` resolves to (IPv4 and IPv6), as text.
+        static fn resolve(host: string) -> Array<string> {
+            let out = new Array<string>();
+            let res = %{ (unsigned char*)0 %} as byte*;
+            let rc = 0;
+            %{
+                struct addrinfo hints, *r = 0;
+                memset(&hints, 0, sizeof hints);
+                hints.ai_family = AF_UNSPEC;
+                hints.ai_socktype = SOCK_STREAM;
+                rc = getaddrinfo(host, 0, &hints, &r);
+                res = (unsigned char*)r;
+            %};
+            if (rc != 0) {
+                let why = %{ gai_strerror(rc) %} as string;
+                throw new NetError("cannot resolve '" + host + "': " + why);
+            }
+            let cur = res;
+            while (cur != null) {
+                let text = %{ grav_addr_text(((struct addrinfo*)cur)->ai_addr) %} as string;
+                // drop the ":0" port suffix
+                let cut = %{ (int)(strrchr(text, ':') - text) %} as int;
+                let addr = %{ grav_net_slice(text, cut) %} as string;
+                if (!out.contains(addr)) { out.push(addr); }
+                cur = %{ (unsigned char*)((struct addrinfo*)cur)->ai_next %} as byte*;
+            }
+            %{ freeaddrinfo((struct addrinfo*)res); %};
+            return out;
+        }
+    }
+
+    %{
+    static const char* grav_net_slice(const char* s, int n) {
+        int start = (s[0] == '[') ? 1 : 0;
+        int end = (n > 0 && s[n - 1] == ']') ? n - 1 : n;
+        char* out = (char*)malloc((size_t)(end - start) + 1);
+        if (!out) abort();
+        memcpy(out, s + start, (size_t)(end - start));
+        out[end - start] = 0;
+        return out;
+    }
+    %}
+
+}
