@@ -1,6 +1,6 @@
 // 09_lambdas.grav — first-class functions and closures.
 //
-//   grav examples/09_lambdas.grav --run
+//   grav run examples/09_lambdas.grav
 //
 // Covers: function types `fn(A) -> R`, lambdas in arrow form (`=> expr`) and
 // block form, parameter types inferred from context, named functions as
@@ -8,7 +8,7 @@
 // functions returned from functions, callbacks stored in fields and
 // collections, null function values, and the collection higher-order methods.
 
-import "../lib/std.grav"
+import "std"
 
 fn square(x: int) -> int { return x * x }
 fn negate(x: int) -> int { return -x }
