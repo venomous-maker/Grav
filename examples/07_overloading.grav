@@ -1,6 +1,6 @@
 // 07_overloading.grav — method, constructor, and operator overloading.
 //
-//   grav examples/07_overloading.grav --run
+//   grav run examples/07_overloading.grav
 //
 // Covers: overloaded instance and static methods (exact match first, then a
 // unique compatible one), overriding one overload in a subclass while adding
@@ -8,7 +8,7 @@
 // (`+ - * / % == != < <= > >=`, `[]`, `[]=`, with overloads of their own), and
 // `toString()` for printing.
 
-import "../lib/std.grav"
+import "std"
 
 // A 2-D vector with arithmetic operators.
 class Vec {
