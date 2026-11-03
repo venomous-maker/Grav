@@ -1,0 +1,86 @@
+// lib/collections/deque.grav — Deque<T>: a double-ended queue on a growable ring buffer.
+// pushFront/pushBack/popFront/popBack/peek are O(1); get(i) is O(1) from the front.
+//
+//   let d = new Deque<int>()
+//   d.pushBack(1); d.pushFront(0)        // 0 1
+//   for (x in d) { print(x) }
+
+namespace std.collections {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    %}
+
+    class Deque<T> {
+        private buf: T*
+        private cap: int          // power of two (or 0)
+        private head: int         // index of the first element
+        private len: int
+
+        constructor() { self.buf = null; self.cap = 0; self.head = 0; self.len = 0; }
+        destructor() { free(self.buf); }
+
+        private fn grow() {
+            let nc = self.cap == 0 ? 8 : self.cap * 2;
+            let bytes = nc * sizeof(T);
+            let nb = %{ (void*)malloc((size_t)bytes) %} as T*;
+            if (nb == null) { panic("Deque: out of memory"); }
+            for (i in 0..self.len) { nb[i] = self.buf[(self.head + i) & (self.cap - 1)]; }
+            free(self.buf);
+            self.buf = nb;
+            self.cap = nc;
+            self.head = 0;
+        }
+        private fn check(i: int) {
+            if (i < 0 || i >= self.len) { panic("Deque index ${i} out of range (size ${self.len})"); }
+        }
+
+        public fn size() -> int { return self.len; }
+        public fn length() -> int { return self.len; }
+        public fn isEmpty() -> bool { return self.len == 0; }
+        public fn clear() { self.len = 0; self.head = 0; }
+
+        public fn pushBack(item: T) {
+            if (self.len == self.cap) { self.grow(); }
+            self.buf[(self.head + self.len) & (self.cap - 1)] = item;
+            self.len = self.len + 1;
+        }
+        public fn pushFront(item: T) {
+            if (self.len == self.cap) { self.grow(); }
+            self.head = (self.head - 1) & (self.cap - 1);
+            self.buf[self.head] = item;
+            self.len = self.len + 1;
+        }
+        public fn popFront() -> T {
+            if (self.len == 0) { panic("Deque.popFront on an empty deque"); }
+            let item = self.buf[self.head];
+            self.head = (self.head + 1) & (self.cap - 1);
+            self.len = self.len - 1;
+            return item;
+        }
+        public fn popBack() -> T {
+            if (self.len == 0) { panic("Deque.popBack on an empty deque"); }
+            self.len = self.len - 1;
+            return self.buf[(self.head + self.len) & (self.cap - 1)];
+        }
+        public fn peekFront() -> T { self.check(0); return self.buf[self.head]; }
+        public fn peekBack() -> T { self.check(self.len - 1); return self.buf[(self.head + self.len - 1) & (self.cap - 1)]; }
+        public fn get(i: int) -> T { self.check(i); return self.buf[(self.head + i) & (self.cap - 1)]; }
+        public fn set(i: int, item: T) { self.check(i); self.buf[(self.head + i) & (self.cap - 1)] = item; }
+        fn operator[](i: int) -> T { return self.get(i); }
+        fn operator[]=(i: int, item: T) { self.set(i, item); }
+
+        public fn contains(item: T) -> bool {
+            for (i in 0..self.len) { if (self.buf[(self.head + i) & (self.cap - 1)] == item) { return true; } }
+            return false;
+        }
+        public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.buf[(self.head + i) & (self.cap - 1)]); } }
+        public fn toArray() -> Array<T> {
+            let out = new Array<T>(self.len);
+            for (i in 0..self.len) { out.push(self.buf[(self.head + i) & (self.cap - 1)]); }
+            return out;
+        }
+    }
+
+}
