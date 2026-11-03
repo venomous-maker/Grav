@@ -236,7 +236,10 @@ void TypeChecker::checkClass(ClassDecl &cls) {
 
 void TypeChecker::checkBlock(Block &block) {
     pushScope();
-    for (auto &s : block.statements) checkStmt(*s);
+    for (auto &s : block.statements) {
+        checkStmt(*s);
+        if (matchReplacement_) s = std::move(matchReplacement_);
+    }
     popScope();
 }
 
@@ -337,6 +340,7 @@ void TypeChecker::checkTry(TryStmt &s) {
 
 void TypeChecker::checkSwitch(SwitchStmt &s) {
     TypeRef subj = checkExpr(*s.subject);
+    if (const ClassDecl *base = dataEnumOf(subj)) return lowerDataEnumMatch(s, subj, *base);
     bool ok = subj.kind == TypeRef::Kind::Int ||
               subj.kind == TypeRef::Kind::String ||
               (subj.isNamed() && reg_->isEnum(subj.name));
