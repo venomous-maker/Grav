@@ -1,6 +1,6 @@
 // 13_stdlib.grav — a tour of the standard library (lib/std.grav).
 //
-//   grav examples/13_stdlib.grav --run
+//   grav run examples/13_stdlib.grav
 //
 // Covers: Str (search, transform, split/join, pad, compare), Format (parsing and
 // conversions), Math, Random, DateTime, Time/Stopwatch, Path, File (text,
@@ -8,7 +8,7 @@
 // values are only range-checked, the date is a fixed instant, and files live
 // in /tmp and are removed afterwards.
 
-import "../lib/std.grav"
+import "std"
 
 fn main() {
     print("--- Str ---")
