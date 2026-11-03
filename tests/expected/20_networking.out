@@ -1,0 +1,11 @@
+server on a free port: true
+POST /todos -> 201 {"id":1,"title":"write docs","done":false}
+GET /todos -> [{"id":1,"title":"write docs","done":false},{"id":2,"title":"ship v1.6","done":false}]
+GET /todos/2 -> ship v1.6
+GET /todos/99 -> 404
+POST without a title -> 400 a todo needs a title
+alice: welcome, bob: welcome
+alice sees: hi from alice
+bob sees:   hi from alice
+tcp: RAW SOCKETS WORK TOO
+done
