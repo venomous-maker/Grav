@@ -1,13 +1,13 @@
 // 11_memory.grav — how memory works in Grav (there is no garbage collector).
 //
-//   grav examples/11_memory.grav --run
+//   grav run examples/11_memory.grav
 //
 // Covers: `new` / `free`, destructors (run most-derived first), collections
 // that free what they own, `defer` for guaranteed cleanup, closures' captured
 // environments, and the compiler's automatic freeing of strings it can prove
 // are owned — plus StringBuilder for building large text.
 
-import "../lib/std.grav"
+import "std"
 
 class Resource {
     protected name: string
