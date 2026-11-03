@@ -41,8 +41,25 @@ return {
           end
           -- <leader>mr : build and run
           map("<leader>mr", function()
-            run(string.format("%s %q --run", gravc, file))
+            run(string.format("%s run %q", gravc, file))
           end, "Grav: run")
+          -- <leader>mt : run the file's test blocks
+          map("<leader>mt", function()
+            run(string.format("%s test %q", gravc, file))
+          end, "Grav: test")
+          -- <leader>mk : type-check (diagnostics also arrive through the LSP)
+          map("<leader>mk", function()
+            run(string.format("%s check %q", gravc, file))
+          end, "Grav: check")
+          -- <leader>mf : format the buffer with `grav fmt`
+          map("<leader>mf", function()
+            vim.cmd("write")
+            vim.fn.system({ gravc, "fmt", file })
+            vim.cmd("edit!")
+          end, "Grav: format")
+          -- <leader>mp : run / test the project (grav.toml)
+          map("<leader>mp", function() run(gravc .. " run") end, "Grav: run project")
+          map("<leader>mP", function() run(gravc .. " test") end, "Grav: test project")
           -- <leader>mc : transpile to C and show it
           map("<leader>mc", function()
             run(string.format("%s %q --emit c -o /dev/stdout", gravc, file))
