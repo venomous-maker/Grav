@@ -2,9 +2,9 @@
 
 ## Imports
 
-`import "path"` includes another file's declarations. Paths are relative to the
-importing file. Each file is included at most once, so repeated and circular imports
-are harmless. A file without `main` is a library module.
+`import "path"` includes another file's declarations. Each file is included at most
+once, so repeated and circular imports are harmless. A file without `main` is a
+library module. The `.grav` extension may be left off.
 
 ```grav
 // file: util/math.grav
@@ -16,8 +16,8 @@ namespace mathx {
 
 ```grav
 // file: app.grav
-import "util/math.grav"
-import "../lib/std.grav"          // the standard library, relative to this file
+import "util/math"
+import "std"                      // the whole standard library
 
 fn main() {
     print(mathx.square(7))
@@ -25,8 +25,28 @@ fn main() {
 }
 ```
 
-The standard library is imported the same way; `lib/std.grav` pulls in every module,
-or you can import individual files such as `lib/hashmap.grav`.
+`import "std"` pulls in the whole standard library; `import "std/hashmap"` imports one
+module of it. An import is looked up in this order:
+
+1. relative to the importing file (or as written, if it is an absolute path);
+2. `std` and `std/<module>` in the standard library directory;
+3. each directory in the project's `grav.toml` `paths`;
+4. each directory in the `GRAV_PATH` environment variable (`:`-separated);
+5. the standard library directory, so `import "hashmap"` also works.
+
+If nothing matches, the error lists every location that was tried.
+
+### Projects: grav.toml
+
+A `grav.toml` in the project directory (found by searching upward from the file
+being compiled, or from the current directory) sets the default entry point and
+extra import roots:
+
+```toml
+name = "inventory"
+main = "src/main.grav"       # used by `grav run`, `grav build`, `grav test` with no file
+paths = ["src", "vendor"]    # extra import roots, relative to grav.toml
+```
 
 ## Namespaces
 
