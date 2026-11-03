@@ -127,7 +127,8 @@ try { } catch (e: T) { } [catch (e: U) { }] [finally { }]
 | `env(name)`, `cwd()` | environment variable, working directory |
 | `typename(o)`, `isInstance(o, T)` | runtime type information (`typename` also works on `any`) |
 | `sizeof(T)` / `sizeof(expr)` | size in bytes |
-| `assert(c[, msg])`, `panic(msg)`, `exit(code)` | checks and termination |
+| `assert(c[, msg])`, `panic(msg)`, `exit(code)` | checks and termination (a failed `assert` reports file:line) |
+| `assertEq(actual, expected[, msg])` | fails with both values printed when they differ |
 | `free(x)` | release an object (running destructors), pointer, closure, or finished future |
 
 [← Back to the index](README.md)
