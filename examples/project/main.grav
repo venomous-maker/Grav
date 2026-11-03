@@ -1,15 +1,15 @@
 // project/main.grav — a multi-file program: modules in sub-folders, nested
 // namespaces, a module-level global shared across files, and exports.
 //
-//   grav examples/project/main.grav --run
+//   grav run examples/project/main.grav    (or, inside examples/project: grav run)
 //
 // Every module is included once (imports are de-duplicated, so they are also
 // cycle-safe), and names are referenced by their namespace path.
 
-import "../../lib/std.grav"
-import "util/text.grav"
-import "model/shapes.grav"
-import "model/shapes.grav"        // a repeated import is a no-op
+import "std"
+import "util/text"
+import "model/shapes"
+import "model/shapes"        // a repeated import is a no-op
 
 fn main() {
     print(text.banner("Shape report"))
