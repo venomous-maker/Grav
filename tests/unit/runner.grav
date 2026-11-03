@@ -1,0 +1,35 @@
+// Checks the `grav test` runner itself: passing tests, each kind of failure,
+// and that a failure does not stop the tests after it.
+import "std"
+
+fn add(a: int, b: int) -> int { return a + b }
+
+fn main() { print("main is not run by grav test") }
+
+test "assert passes" { assert(add(1, 1) == 2) }
+test "assertEq on ints, strings, floats, bools" {
+    assertEq(add(2, 3), 5)
+    assertEq("a" + "b", "ab")
+    assertEq(1.5 * 2.0, 3.0)
+    assertEq(add(1, 1) == 2, true)
+}
+test "assertEq on structs and objects" {
+    let xs = new Array<int>()
+    xs.push(4)
+    assertEq(xs.size(), 1)
+    assertEq(xs, xs)
+}
+test "caught exceptions are fine" {
+    let caught = false
+    try { throw new StateError("x") } catch (e: StateError) { caught = true }
+    assert(caught, "the catch block ran")
+}
+test "assert fails" { assert(add(2, 2) == 5, "two plus two") }
+test "assertEq fails" { assertEq(add(2, 2), 5, "sum") }
+test "string mismatch" { assertEq(Str.upper("grav"), "Grav") }
+test "panic fails" {
+    let xs = new Array<int>()
+    xs.get(3)
+}
+test "uncaught exception fails" { throw new StateError("cart is empty") }
+test "still runs after failures" { assertEq(add(0, 0), 0) }
