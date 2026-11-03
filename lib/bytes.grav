@@ -1,0 +1,2 @@
+// lib/bytes.grav — moved to lib/data/bytes.grav (namespace std.data); kept so old imports work.
+import "data/bytes.grav"
