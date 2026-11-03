@@ -108,6 +108,11 @@ void Parser::parseTopLevel(Program &program) {
             return;
         case TokenType::Class: program.decls.push_back(parseClass(false)); break;
         case TokenType::Identifier:
+            // `use std.collections.*` / `use a.b.C as D` — contextual.
+            if (peek().lexeme == "use" && peekAt(1).type == TokenType::Identifier) {
+                parseUse(program);
+                return;
+            }
             // `test "name" { ... }` — contextual: a unit test.
             if (peek().lexeme == "test" && peekAt(1).type == TokenType::StringLiteral) {
                 const Token &kw = advance();
@@ -165,6 +170,32 @@ void Parser::parseTopLevel(Program &program) {
         d->decorators = std::move(decorators);
         d->exported = exported;
     }
+}
+
+void Parser::parseUse(Program &program) {
+    const Token &kw = advance(); // 'use'
+    std::string path = expect(TokenType::Identifier, "after 'use'").lexeme;
+    bool glob = false;
+    while (check(TokenType::Dot) || check(TokenType::ColonColon)) {
+        advance();
+        if (check(TokenType::Star)) { advance(); glob = true; break; }
+        path += "." + expect(TokenType::Identifier, "in the 'use' path").lexeme;
+    }
+    UseEntry u;
+    u.target = path;
+    u.glob = glob;
+    if (!glob) {
+        u.alias = path.substr(path.rfind('.') == std::string::npos ? 0 : path.rfind('.') + 1);
+        if (check(TokenType::As) || (check(TokenType::Identifier) && peek().lexeme == "as")) {
+            advance();
+            u.alias = expect(TokenType::Identifier, "after 'as'").lexeme;
+        }
+        if (u.alias == path) fail(kw, "'use " + path + "' names nothing new; write `use " + path + ".*` or `use " + path + ".Name`");
+    }
+    matchToken(TokenType::Semicolon);
+    std::string ns;
+    for (size_t i = 0; i < nsStack_.size(); ++i) ns += (i ? "." : "") + nsStack_[i];
+    program.uses.byNamespace[ns].push_back(std::move(u));
 }
 
 void Parser::parseNamespace(Program &program) {
