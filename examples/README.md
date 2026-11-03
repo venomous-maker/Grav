@@ -29,6 +29,7 @@ grav examples/01_basics.grav --run        # or: ./build/gravc <file> --run
 | [16_async.grav](16_async.grav) | async tasks on the worker pool, `GRAV_MAXPROCS`, exceptions across threads, `Mutex`, `AtomicInt`, `Channel`, `awaitAll` |
 | [17_auto_any.grav](17_auto_any.grav) | inferred generic type arguments (`auto`), dynamic values (`any`) with `is`/`as` |
 | [18_data_structures.grav](18_data_structures.grav) | choosing a collection: `Array`, `Deque`, `Stack`/`Queue`, `HashMap`/`HashSet`, `SortedMap`, `PriorityQueue`, `LinkedList`, `BitSet`, `Pair`, `Optional` |
+| [19_enums_match.grav](19_enums_match.grav) | data enums as a syntax tree, recursive `match`, `Result`/`Option` for errors, constant folding |
 
 ## A multi-file project
 
