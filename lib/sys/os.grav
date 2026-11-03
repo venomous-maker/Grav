@@ -1,0 +1,58 @@
+// lib/sys/os.grav — operating-system queries: platform, host, user, environment,
+// CPU count, and working directory.
+
+namespace std.sys {
+
+    %{
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <unistd.h>
+    #include <sys/utsname.h>
+    static const char* grav_os_platform(void) {
+    #if defined(__linux__)
+        return "linux";
+    #elif defined(__APPLE__)
+        return "macos";
+    #elif defined(__FreeBSD__)
+        return "freebsd";
+    #elif defined(_WIN32)
+        return "windows";
+    #else
+        return "unix";
+    #endif
+    }
+    static const char* grav_os_uname(int field) {
+        static _Thread_local struct utsname u; static _Thread_local int done = 0;
+        if (!done) { if (uname(&u) != 0) memset(&u, 0, sizeof u); done = 1; }
+        return field == 0 ? u.machine : field == 1 ? u.nodename : u.release;
+    }
+    %}
+
+    class OS {
+        static fn platform() -> string { return %{ grav_os_platform() %} as string; }
+        static fn arch() -> string { return %{ grav_os_uname(0) %} as string; }
+        static fn hostname() -> string { return %{ grav_os_uname(1) %} as string; }
+        static fn kernel() -> string { return %{ grav_os_uname(2) %} as string; }
+        static fn user() -> string { return env("USER"); }
+        static fn home() -> string { return env("HOME"); }
+        static fn cwd() -> string { return cwd(); }
+        static fn chdir(path: string) -> bool { return %{ chdir(path) == 0 %} as bool; }
+        static fn pid() -> int { return %{ (int)getpid() %} as int; }
+        static fn ppid() -> int { return %{ (int)getppid() %} as int; }
+        static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
+        static fn pageSize() -> int { return %{ (int)sysconf(_SC_PAGESIZE) %} as int; }
+
+        static fn getEnv(name: string) -> string { return env(name); }
+        static fn getEnvOr(name: string, fallback: string) -> string {
+            return OS.hasEnv(name) ? env(name) : fallback;
+        }
+        static fn hasEnv(name: string) -> bool { return %{ getenv(name) != 0 %} as bool; }
+        static fn setEnv(name: string, value: string) -> bool { return %{ setenv(name, value, 1) == 0 %} as bool; }
+        static fn unsetEnv(name: string) -> bool { return %{ unsetenv(name) == 0 %} as bool; }
+
+        // Is stdout attached to a terminal (vs. a pipe or file)?
+        static fn isTerminal() -> bool { return %{ isatty(1) != 0 %} as bool; }
+    }
+
+}
