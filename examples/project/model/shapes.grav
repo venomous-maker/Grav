@@ -1,5 +1,5 @@
 // model/shapes.grav — the domain model in nested namespaces.
-import "../util/text.grav"
+import "../util/text"
 
 // Module-level state shared by every importer (it is one program in the end).
 let shapesCreated: int = 0
