@@ -1,0 +1,13 @@
+running 11 tests
+  ok    number literals
+  ok    json parse and query
+  ok    json build, print, round trip
+  ok    json errors
+  ok    bytes
+  ok    threads and wait groups
+  ok    command
+  ok    tcp echo
+  ok    http server and client
+  ok    websocket echo
+  ok    url helpers
+result: 11 passed, 0 failed
