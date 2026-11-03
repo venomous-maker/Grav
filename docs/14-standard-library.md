@@ -1,8 +1,13 @@
 # 14. Standard library
 
 The library lives in [`lib/`](../lib/) and is written in Grav (with inline C where
-it talks to the system). Import everything with `import "<path>/lib/std.grav"`, or
-individual modules such as `lib/hashmap.grav`.
+it talks to the system). It is grouped in categories (`std.core`, `std.collections`,
+`std.text`, `std.data`, `std.io`, `std.sys`, `std.concurrency`, `std.net`); see
+[chapter 13](13-modules.md#the-standard-library). Import everything with
+`import "std"`, a category with `import "std/collections"`, one module with
+`import "std/collections/hashmap"`, or chosen names with
+`import { HashMap } from "std/collections"`. The examples below use
+`import "../lib/std.grav"`, which is the same thing by path.
 
 ## Built-in functions
 
