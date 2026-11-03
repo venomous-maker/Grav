@@ -1,0 +1,2 @@
+// lib/json.grav — moved to lib/data/json.grav (namespace std.data); kept so old imports work.
+import "data/json.grav"
