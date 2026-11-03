@@ -30,6 +30,14 @@ public:
     // Call-stack tracing (exception stack traces). Off in release builds, which
     // removes every per-call/per-line bookkeeping store from the output.
     void setTrace(bool on) { trace_ = on; }
+    // `#line` directives mapping the generated C back to .grav source lines (for
+    // debuggers, crash backtraces, and sanitizer reports).
+    void setLineDirectives(bool on) { lines_ = on; }
+    // `grav test`: emit the test blocks and a runner main instead of the program's main.
+    void setTestMode(bool on) { testMode_ = on; }
+    // After each function the mapping returns to the C file; the driver replaces
+    // this marker with `#line <n> "<file.c>"` once the output path is known.
+    static constexpr const char *kLineReset = "#line __GRAV_RESET__";
 
     // Original file/line for a combined-source line (1-based), for stack traces.
     SourceMapEntry origin(int combinedLine) const;
@@ -41,6 +49,12 @@ private:
     // codegen_runtime.cpp
     void emitPrelude();
     bool trace_ = true;
+    bool lines_ = true;
+    bool testMode_ = false;
+    std::vector<std::pair<std::string, std::string>> tests_; // display name, C function
+    int curSrcLine_ = 0; // source line of the statement being emitted (for #line)
+    std::string lineDirective(int combinedLine) const; // "#line N \"file\"\n" or ""
+    void endFunction();                                // close a body + reset marker
 
     // codegen_types.cpp
     void emitEnums();
