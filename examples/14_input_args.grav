@@ -5,7 +5,7 @@
 // Covers: argc()/argv(i), input() (one line, "" at end of input), IO.prompt,
 // IO.readInt / readFloat / readBool, and reading until end of input.
 
-import "../lib/std.grav"
+import "std"
 
 fn main() {
     print("program received ${argc() - 1} argument(s)")
