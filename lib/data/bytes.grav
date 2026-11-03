@@ -1,0 +1,191 @@
+// lib/data/bytes.grav — Bytes: a growable buffer of raw bytes (may contain zeros),
+// for binary protocols, files, and network data.
+//
+//   let b = new Bytes()
+//   b.appendByte(0x81).appendString("hi")
+//   print(b.size())          // 3
+//   print(b.toHex())         // 816869
+//   print(b.slice(1, 3).toString())   // hi
+import "../collections/array.grav"
+
+namespace std.data {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdio.h>
+    %}
+
+    class Bytes {
+        private data: byte*
+        private len: int
+        private cap: int
+
+        constructor() { self.data = null; self.len = 0; self.cap = 0; }
+        constructor(capacity: int) {
+            self.data = null; self.len = 0; self.cap = 0;
+            self.reserve(capacity);
+        }
+        destructor() { free(self.data); }
+
+        static fn fromString(s: string) -> Bytes {
+            let b = new Bytes();
+            b.appendString(s);
+            return b;
+        }
+        static fn fromBinary(x: binary) -> Bytes {
+            let b = new Bytes();
+            b.appendRaw(%{ x.data %} as byte*, %{ (int)x.len %} as int);
+            return b;
+        }
+        // Parse hex digits ("48656c6c6f"); throws nothing, skips non-hex characters.
+        static fn fromHex(hex: string) -> Bytes {
+            let b = new Bytes();
+            let n = %{ (int)strlen(hex) %} as int;
+            let hi = -1;
+            for (i in 0..n) {
+                let c = %{ (int)(unsigned char)hex[i] %} as int;
+                let v = c >= 48 && c <= 57 ? c - 48 : (c >= 97 && c <= 102 ? c - 87 : (c >= 65 && c <= 70 ? c - 55 : -1));
+                if (v < 0) { continue; }
+                if (hi < 0) { hi = v; } else { b.appendByte(hi * 16 + v); hi = -1; }
+            }
+            return b;
+        }
+
+        public fn reserve(n: int) {
+            if (n <= self.cap) { return; }
+            let nc = self.cap < 16 ? 16 : self.cap;
+            while (nc < n) { nc = nc * 2; }
+            %{
+                self->data = (unsigned char*)realloc(self->data, (size_t)nc);
+                if (!self->data) abort();
+            %};
+            self.cap = nc;
+        }
+        public fn size() -> int { return self.len; }
+        public fn length() -> int { return self.len; }
+        public fn isEmpty() -> bool { return self.len == 0; }
+        public fn clear() { self.len = 0; }
+
+        public fn get(i: int) -> int {
+            if (i < 0 || i >= self.len) { panic("Bytes index ${i} out of range (size ${self.len})"); }
+            return self.data[i] as int;
+        }
+        public fn set(i: int, v: int) {
+            if (i < 0 || i >= self.len) { panic("Bytes index ${i} out of range (size ${self.len})"); }
+            self.data[i] = v as byte;
+        }
+        fn operator[](i: int) -> int { return self.get(i); }
+        fn operator[]=(i: int, v: int) { self.set(i, v); }
+
+        public fn appendByte(v: int) -> Bytes {
+            self.reserve(self.len + 1);
+            self.data[self.len] = v as byte;
+            self.len += 1;
+            return self;
+        }
+        public fn appendString(s: string) -> Bytes {
+            let n = %{ (int)strlen(s) %} as int;
+            self.reserve(self.len + n);
+            %{ memcpy(self->data + self->len, s, (size_t)n); %};
+            self.len += n;
+            return self;
+        }
+        public fn append(other: Bytes) -> Bytes {
+            let n = other.len;
+            self.reserve(self.len + n);
+            %{ if (n > 0) memcpy(self->data + self->len, other->data, (size_t)n); %};
+            self.len += n;
+            return self;
+        }
+        // Big-endian integers of `width` bytes (1, 2, 4 or 8), as network protocols use.
+        public fn appendUint(v: long, width: int) -> Bytes {
+            for (k in width - 1..=0 step -1) { self.appendByte(((v >> (k * 8)) & 255) as int); }
+            return self;
+        }
+        public fn readUint(at: int, width: int) -> long {
+            let v: long = 0;
+            for (k in 0..width) { v = (v << 8) | (self.get(at + k) as long); }
+            return v;
+        }
+
+        // Bytes [start, end) as a new buffer (bounds are clamped).
+        public fn slice(start: int, end: int) -> Bytes {
+            let s = start < 0 ? 0 : start;
+            let e = end > self.len ? self.len : end;
+            let out = new Bytes(e > s ? e - s : 0);
+            if (e > s) {
+                %{ memcpy(out->data, self->data + s, (size_t)(e - s)); %};
+                out.len = e - s;
+            }
+            return out;
+        }
+        // Remove the first `n` bytes (used for consuming parsed input).
+        public fn dropFront(n: int) {
+            let k = n > self.len ? self.len : n;
+            %{ memmove(self->data, self->data + k, (size_t)(self->len - k)); %};
+            self.len -= k;
+        }
+        public fn indexOf(sub: string) -> int {
+            let n = %{ (int)strlen(sub) %} as int;
+            if (n == 0) { return 0; }
+            for (i in 0..self.len - n + 1) {
+                if (%{ memcmp(self->data + i, sub, (size_t)n) == 0 %} as bool) { return i; }
+            }
+            return -1;
+        }
+
+        // The bytes as text (stops at a zero byte, like any string).
+        public fn toString() -> string {
+            return %{ grav_bytes_to_cstr(self->data, self->len) %} as string;
+        }
+        public fn toBinary() -> binary {
+            let out: binary = %{ grav_bytes_to_binary(self->data, self->len) %} as binary;
+            return out;
+        }
+        public fn toHex() -> string {
+            return %{ grav_bytes_hex(self->data, self->len) %} as string;
+        }
+        public fn copy() -> Bytes { return self.slice(0, self.len); }
+        fn operator==(other: Bytes) -> bool {
+            if (%{ other == 0 %} as bool) { return false; }
+            return self.len == other.len && %{ (self->len == 0 || memcmp(self->data, other->data, (size_t)self->len) == 0) %} as bool;
+        }
+
+        // For C helpers in other modules: the raw buffer.
+        public fn rawData() -> byte* { return self.data; }
+        public fn appendRaw(p: byte*, n: int) {
+            self.reserve(self.len + n);
+            %{ if (n > 0) memcpy(self->data + self->len, p, (size_t)n); %};
+            self.len += n;
+        }
+    }
+
+    %{
+    static const char* grav_bytes_to_cstr(const unsigned char* d, int n) {
+        char* s = (char*)malloc((size_t)n + 1);
+        if (!s) abort();
+        if (n > 0) memcpy(s, d, (size_t)n);
+        s[n] = 0;
+        return s;
+    }
+    static GravBytes grav_bytes_to_binary(const unsigned char* d, int n) {
+        GravBytes b;
+        b.data = (unsigned char*)malloc((size_t)n + 1);
+        if (!b.data) abort();
+        if (n > 0) memcpy(b.data, d, (size_t)n);
+        b.data[n] = 0;
+        b.len = n;
+        return b;
+    }
+    static const char* grav_bytes_hex(const unsigned char* d, int n) {
+        static const char* digits = "0123456789abcdef";
+        char* s = (char*)malloc((size_t)n * 2 + 1);
+        if (!s) abort();
+        for (int i = 0; i < n; i++) { s[2 * i] = digits[d[i] >> 4]; s[2 * i + 1] = digits[d[i] & 15]; }
+        s[2 * n] = 0;
+        return s;
+    }
+    %}
+
+}
