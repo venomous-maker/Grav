@@ -114,6 +114,8 @@ void sanitizeIdentifiers(Program &program) {
             for (auto &sf : c->staticFields) walkExpr(sf.init.get());
         } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) {
             walkExpr(g->init.get());
+        } else if (auto *t = dynamic_cast<TestDecl *>(d.get())) {
+            walkBlock(t->body);
         }
     }
 }
