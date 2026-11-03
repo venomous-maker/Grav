@@ -1,6 +1,6 @@
 // 10_exceptions.grav — throwing, catching, and cleaning up.
 //
-//   grav examples/10_exceptions.grav --run
+//   grav run examples/10_exceptions.grav
 //
 // Covers: throwing class instances, catching by exact type or base class,
 // custom exception hierarchies with `describe()`, `finally` (normal, handled,
@@ -9,7 +9,7 @@
 // into `catch`. (An uncaught exception prints its message and a stack trace,
 // then exits with status 1.)
 
-import "../lib/std.grav"
+import "std"
 
 // A custom hierarchy on top of lib/exception.grav's Exception.
 class BankError extends Exception {
