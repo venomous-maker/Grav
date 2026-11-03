@@ -63,6 +63,12 @@ done
 echo "------------------------------------"
 echo "passed: $pass   failed: $fail"
 
+# The package manager, against local git repositories.
+if [ $UPDATE = 0 ] && [ -x tests/packages.sh ]; then
+  if bash tests/packages.sh >"$TMP/pkg.out" 2>&1; then tail -1 "$TMP/pkg.out"
+  else cat "$TMP/pkg.out"; fail=$((fail+1)); fi
+fi
+
 # The documentation's snippets must compile and print what the docs claim.
 if [ $UPDATE = 0 ] && [ -x tests/docs.sh ]; then
   if bash tests/docs.sh >"$TMP/docs.out" 2>&1; then tail -1 "$TMP/docs.out"
