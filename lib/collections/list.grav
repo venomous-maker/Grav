@@ -1,0 +1,43 @@
+// lib/collections/list.grav — List<T>: a friendly, collection-style wrapper over Array<T>.
+import "array.grav"
+
+namespace std.collections {
+
+    class List<T> {
+        private items: Array<T>
+        constructor() { self.items = new Array<T>(); }
+        destructor() { free(self.items); }
+
+        public fn add(item: T) { self.items.push(item); }
+        public fn addAll(other: List<T>) { for (x in other) { self.items.push(x); } }
+        public fn insert(index: int, item: T) { self.items.insert(index, item); }
+        public fn get(index: int) -> T { return self.items.get(index); }
+        public fn set(index: int, item: T) { self.items.set(index, item); }
+        fn operator[](index: int) -> T { return self.items.get(index); }
+        fn operator[]=(index: int, item: T) { self.items.set(index, item); }
+        public fn first() -> T { return self.items.first(); }
+        public fn last() -> T { return self.items.last(); }
+        public fn removeAt(index: int) -> T { return self.items.removeAt(index); }
+        public fn remove(item: T) -> bool { return self.items.remove(item); }
+        public fn removeWhere(pred: fn(T) -> bool) -> int { return self.items.removeWhere(pred); }
+        public fn indexOf(item: T) -> int { return self.items.indexOf(item); }
+        public fn contains(item: T) -> bool { return self.items.contains(item); }
+        public fn size() -> int { return self.items.size(); }
+        public fn length() -> int { return self.items.size(); }
+        public fn isEmpty() -> bool { return self.items.isEmpty(); }
+        public fn clear() { self.items.clear(); }
+        public fn reverse() { self.items.reverse(); }
+        public fn forEach(f: fn(T)) { self.items.forEach(f); }
+        public fn filter(keep: fn(T) -> bool) -> List<T> {
+            let out = new List<T>();
+            for (x in self.items) { if (keep(x)) { out.add(x); } }
+            return out;
+        }
+        public fn any(pred: fn(T) -> bool) -> bool { return self.items.any(pred); }
+        public fn all(pred: fn(T) -> bool) -> bool { return self.items.all(pred); }
+        public fn countWhere(pred: fn(T) -> bool) -> int { return self.items.countWhere(pred); }
+        public fn sortBy(cmp: fn(T, T) -> int) { self.items.sortBy(cmp); }
+        public fn toArray() -> Array<T> { return self.items.copy(); }
+    }
+
+}
