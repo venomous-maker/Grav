@@ -260,6 +260,8 @@ void CodeGen::collectArrayTypes() {
                 sig(m.params, m.returnType);
                 if (m.hasBody) collectInBlock(m.body);
             }
+        } else if (auto *t = dynamic_cast<const TestDecl *>(d)) {
+            collectInBlock(t->body);
         } else if (auto *fn = dynamic_cast<const FunctionDecl *>(d)) {
             sig(fn->params, fn->returnType);
             collectInBlock(fn->body);
