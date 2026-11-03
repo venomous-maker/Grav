@@ -41,7 +41,12 @@ private:
     DeclPtr parseClass(bool isAbstract);
     DeclPtr parseInterface();
     DeclPtr parseStruct();
-    DeclPtr parseEnum();
+    // `enum` — a plain C enum, or a data enum (variants with payloads, type
+    // parameters or methods) lowered to an abstract class plus one final class
+    // per variant (parser_enum.cpp).
+    void parseEnum(Program &program);
+    // Parse generated Grav source `code` as top-level declarations placed at `at`.
+    void parseGenerated(const std::string &code, const Token &at, Program &out);
     DeclPtr parseTypeAlias();
     DeclPtr parseGlobalVar(); // top-level `const`/`let`
     DeclPtr parseFunction(bool isAsync);
@@ -71,6 +76,7 @@ private:
     StmtPtr parseDoWhile();
     StmtPtr parseFor();
     StmtPtr parseSwitch(); // also handles 'match'
+    Block parseCaseBody();
     StmtPtr parseTry();
     StmtPtr parseThrow();
     StmtPtr parseSimpleStmt(); // for-loop init/update: let / assign / expr
