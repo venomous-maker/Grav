@@ -177,6 +177,31 @@ struct Rewriter {
 };
 } // namespace
 
+std::vector<std::string> nameCandidates(const std::string &name, const std::string &ns,
+                                        const UseTable &uses) {
+    std::vector<std::string> out;
+    std::string level = ns;
+    for (;;) {
+        out.push_back(level.empty() ? name : level + "." + name);
+        auto it = uses.byNamespace.find(level);
+        if (it != uses.byNamespace.end()) {
+            for (const auto &u : it->second) {           // explicit names and aliases first
+                if (u.glob) continue;
+                if (name == u.alias) out.push_back(u.target);
+                else if (name.size() > u.alias.size() && name.compare(0, u.alias.size(), u.alias) == 0 &&
+                         name[u.alias.size()] == '.')
+                    out.push_back(u.target + name.substr(u.alias.size())); // namespace alias: col.X
+            }
+            for (const auto &u : it->second)
+                if (u.glob) out.push_back(u.target + "." + name);
+        }
+        if (level.empty()) break;
+        auto dot = level.rfind('.');
+        level = dot == std::string::npos ? "" : level.substr(0, dot);
+    }
+    return out;
+}
+
 void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f) {
     Rewriter v{f};
     for (auto &d : program.decls) {
