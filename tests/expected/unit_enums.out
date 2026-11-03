@@ -1,0 +1,12 @@
+running 9 tests
+  ok    construct, print, compare
+  ok    match binds fields, skips with _, and multi-pattern cases
+  ok    generic enums with unnamed fields
+  ok    recursive enums
+  ok    payload-free enums with methods
+  ok    variants in collections
+  ok    Result
+  ok    Option
+  FAIL  unwrap on Err panics with the error
+        panic: called unwrap() on Err(disk full)
+result: 8 passed, 1 failed
