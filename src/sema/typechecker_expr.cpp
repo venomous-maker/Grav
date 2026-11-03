@@ -748,8 +748,12 @@ TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
         if (cands.size() == 1) {
             fi = &cands[0]; // single overload: fall through to a precise mismatch error
         } else {
-            error(e.line, e.col, "no overload of '" + fnFq +
-                                     "' matches the given argument types");
+            std::string got, options;
+            for (size_t i = 0; i < argTypes.size(); ++i) got += (i ? ", " : "") + typeRefName(argTypes[i]);
+            for (const auto &c : cands)
+                options += "\n    " + fnFq + signatureText(c.paramNames, c.paramTypes, c.returnType, c.isVariadic);
+            error(e.line, e.col, "no overload of '" + fnFq + "' matches (" + got +
+                                     "); candidates are:" + options);
             return TypeRef::prim(TypeRef::Kind::Error);
         }
     }
@@ -757,7 +761,8 @@ TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
     e.targetName = fnFq;
     e.resolvedOverload = fi->overloadIndex;
     validateArgTypes(e.args, argTypes, fi->paramTypes, fi->isVariadic, e.line, e.col,
-                     "function '" + fnFq + "'");
+                     "function '" + fnFq +
+                         signatureText(fi->paramNames, fi->paramTypes, fi->returnType, fi->isVariadic) + "'");
     return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
 }
 
@@ -844,6 +849,27 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                        !argTypes[0].isBinary()) {
                 error(e.args[0]->line, e.args[0]->col,
                       name->name + " cannot display a value of type " + typeRefName(argTypes[0]));
+            }
+            return TypeRef::prim(TypeRef::Kind::Void);
+        }
+        if (name->name == "assertEq") {
+            // assertEq(actual, expected[, message]) — reports both values on failure.
+            e.kind = CallKind::Builtin;
+            e.targetName = "assertEq";
+            if (e.args.size() < 2 || e.args.size() > 3) {
+                error(e.line, e.col, "assertEq expects (actual, expected[, message])");
+                for (auto &a : e.args) checkExpr(*a);
+                return TypeRef::prim(TypeRef::Kind::Void);
+            }
+            TypeRef a = checkExpr(*e.args[0]);
+            TypeRef b = checkExprExpect(*e.args[1], a);
+            if (!a.isError() && !b.isError() && !(isBoxable(a) && isBoxable(b)) &&
+                !(a == b))
+                error(e.line, e.col, "assertEq cannot compare " + typeRefName(a) + " with " + typeRefName(b));
+            if (e.args.size() == 3) {
+                TypeRef m = checkExpr(*e.args[2]);
+                if (!m.isError() && m.kind != TypeRef::Kind::String)
+                    error(e.args[2]->line, e.args[2]->col, "assertEq message must be a string");
             }
             return TypeRef::prim(TypeRef::Kind::Void);
         }
