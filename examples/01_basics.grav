@@ -1,13 +1,13 @@
 // 01_basics.grav — values, variables, operators, casts, and strings.
 //
-//   grav examples/01_basics.grav --run
+//   grav run examples/01_basics.grav
 //
 // Covers: primitives and the widened numeric types, let/const, type inference,
 // arithmetic / bitwise / shift / compound operators, `**`, the ternary, casts
 // (`int(x)`, `x as T`, `(T)x`), string concatenation, interpolation, escapes,
 // and comparisons. Comments are `//` and `/* ... */`.
 
-import "../lib/std.grav"                // printRaw, Str, … (the standard library)
+import "std"                         // printRaw, Str, … (the standard library)
 
 const APP: string = "Grav basics"      // a module-level constant
 
