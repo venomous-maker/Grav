@@ -477,6 +477,12 @@ struct ClassDecl : Decl {
     DestructorDecl destructor;
     std::vector<MethodDecl> methods;
     bool isFinal = false; // `final class`: cannot be extended
+    // Data enums (`enum Shape { Circle(r: float), Empty }`) become an abstract
+    // base class plus one final class per variant, named `Shape$Circle`.
+    std::vector<std::string> enumVariants; // on the base: variant names, in order
+    std::string enumTemplate;              // base and variants: the enum's base class name
+    int variantTag = -1;                   // on a variant: its index in enumVariants
+    std::vector<std::string> variantFields; // on a variant: payload field names, in order
 };
 
 struct InterfaceDecl : Decl {
@@ -595,6 +601,11 @@ struct Program {
 // Calls `f` on every expression in the program (pre-order, including lambda
 // bodies, initializers of globals and static fields).
 void visitExprs(Program &program, const std::function<void(Expr &)> &f);
+
+// Calls `f` on every expression slot so it can replace the expression. Pre-order:
+// after `f` returns, the (possibly new) expression's children are visited.
+// `switch`/`match` case values are skipped (they may be patterns).
+void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f);
 
 } // namespace grav
 
