@@ -1,0 +1,85 @@
+// lib/collections/bitset.grav — BitSet: a growable set of non-negative integers stored as
+// bits (64 per word). Fast membership, set algebra, and counting.
+//
+//   let flags = new BitSet()
+//   flags.set(3); flags.set(64)
+//   print(flags.get(3))          // true
+
+namespace std.collections {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    %}
+
+    class BitSet {
+        private words: ulong*
+        private nwords: int
+
+        constructor() { self.words = null; self.nwords = 0; }
+        destructor() { free(self.words); }
+
+        private fn ensure(bit: int) {
+            let need = bit / 64 + 1;
+            if (need <= self.nwords) { return; }
+            let nw = self.nwords * 2;
+            if (nw < need) { nw = need; }
+            let old = self.words;
+            let oldN = self.nwords;
+            self.words = %{ (unsigned long long*)realloc(old, (size_t)nw * 8) %} as ulong*;
+            %{ memset(self->words + oldN, 0, (size_t)(nw - oldN) * 8); %};
+            self.nwords = nw;
+        }
+        private fn checkBit(bit: int) { if (bit < 0) { panic("BitSet: negative bit ${bit}"); } }
+
+        public fn set(bit: int) {
+            self.checkBit(bit);
+            self.ensure(bit);
+            %{ self->words[bit / 64] |= 1ULL << (bit % 64); %};
+        }
+        public fn unset(bit: int) {
+            self.checkBit(bit);
+            if (bit / 64 >= self.nwords) { return; }
+            %{ self->words[bit / 64] &= ~(1ULL << (bit % 64)); %};
+        }
+        public fn flip(bit: int) { if (self.get(bit)) { self.unset(bit); } else { self.set(bit); } }
+        public fn get(bit: int) -> bool {
+            if (bit < 0 || bit / 64 >= self.nwords) { return false; }
+            return %{ ((self->words[bit / 64] >> (bit % 64)) & 1ULL) != 0 %} as bool;
+        }
+        public fn contains(bit: int) -> bool { return self.get(bit); }
+        // Number of set bits.
+        public fn count() -> int {
+            let n = 0;
+            for (i in 0..self.nwords) { n += %{ __builtin_popcountll(self->words[i]) %} as int; }
+            return n;
+        }
+        public fn size() -> int { return self.count(); }
+        public fn isEmpty() -> bool { return self.count() == 0; }
+        public fn clear() { let n = self.nwords; %{ if (n) memset(self->words, 0, (size_t)n * 8); %}; }
+
+        // In-place set algebra.
+        public fn unionWith(other: BitSet) {
+            let bits = other.toArray();
+            for (b in bits) { self.set(b); }
+            free(bits);
+        }
+        public fn intersectWith(other: BitSet) {
+            let bits = self.toArray();
+            for (b in bits) { if (!other.get(b)) { self.unset(b); } }
+            free(bits);
+        }
+        // Set bits in increasing order.
+        public fn toArray() -> Array<int> {
+            let out = new Array<int>();
+            for (w in 0..self.nwords) {
+                for (b in 0..64) {
+                    let on = %{ ((self->words[w] >> b) & 1ULL) != 0 %} as bool;
+                    if (on) { out.push(w * 64 + b); }
+                }
+            }
+            return out;
+        }
+    }
+
+}
