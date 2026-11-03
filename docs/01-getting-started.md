@@ -8,8 +8,12 @@ are compiled by your system C compiler (`cc`, or `$CC`).
 ```bash
 cmake -S . -B build
 cmake --build build -j
-cp build/gravc ~/.local/bin/grav      # optional: put it on your PATH as `grav`
+cmake --install build --prefix ~/.local   # optional: installs bin/grav and the standard library
 ```
+
+The installed `grav` finds the standard library in `<prefix>/share/grav/lib`. A
+`gravc` run from the build tree uses the `lib/` directory it was built from; set
+`GRAV_STD=/path/to/lib` to point either one somewhere else.
 
 ## Hello, world
 
@@ -28,7 +32,7 @@ Hello, world!
 Save it as `hello.grav` and run it in one step:
 
 ```bash
-grav hello.grav --run
+grav run hello.grav
 ```
 
 `main` is the entry point. It takes no parameters (use `argc()`/`argv(i)` for
@@ -37,6 +41,9 @@ command-line arguments) and returns nothing; call `exit(code)` to set an exit st
 ## What the compiler can produce
 
 ```bash
+grav run hello.grav -- a b c        # build and run, passing arguments after `--`
+grav build hello.grav               # build the native binary ./hello
+grav test hello.grav                # run the file's `test` blocks (chapter 17)
 grav hello.grav                     # writes hello.c (the default: emit C)
 grav hello.grav --emit bin          # builds the native binary ./hello
 grav hello.grav --emit both         # binary + hello.c
@@ -64,6 +71,11 @@ cat hello.grav | grav -             # read stdin, print the C to stdout
 | `--cc <compiler>` | C compiler to use (default `$CC`, else `cc`) |
 | `-Werror` | treat warnings (such as unused variables) as errors |
 | `-v` | print the C compiler command |
+| `--no-lines` | omit `#line` directives (by default C compiler errors, debuggers and sanitizers point at the `.grav` source) |
+| `--filter <text>` | with `grav test`: run only tests whose name contains `text` |
+
+Inside a project with a `grav.toml` (chapter 13), `grav run`, `grav build` and
+`grav test` without a file use the project's `main`.
 
 ## Source file basics
 
