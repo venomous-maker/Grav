@@ -1,0 +1,122 @@
+// 20_networking.grav — a JSON REST API, an HTTP client, and a WebSocket chat
+// room, all in one program (the server runs on a background thread on a free
+// localhost port).
+//
+//   grav run examples/20_networking.grav
+//
+// Shows HttpServer routing with path parameters and JSON bodies, a Mutex-guarded
+// shared store, HttpClient calls, WebSocket broadcast between two clients, and a
+// raw TCP exchange.
+import "std"
+import "std/net"
+
+// A tiny in-memory store shared by every request thread.
+class TodoStore {
+    private items: JsonValue
+    private nextId: long
+    private lock: Mutex
+    constructor() { self.items = Json.array(); self.nextId = 1; self.lock = new Mutex() }
+
+    fn add(title: string) -> JsonValue {
+        let todo = Json.object()
+        self.lock.withLock(fn() {
+            todo.set("id", self.nextId).set("title", title).set("done", false)
+            self.nextId += 1
+            self.items.push(todo)
+        })
+        return todo
+    }
+    // Closures capture copies, so code that returns a value locks explicitly.
+    fn find(id: long) -> JsonValue {
+        self.lock.lock()
+        try {
+            for (t in self.items.asArray()) { if (t["id"].asLong() == id) { return t } }
+            return null
+        } finally {
+            self.lock.unlock()
+        }
+    }
+    fn all() -> string {
+        self.lock.lock()
+        try { return self.items.toJson() } finally { self.lock.unlock() }
+    }
+}
+
+// Everyone connected to the chat room.
+class ChatRoom {
+    private members: Array<WebSocket>
+    private lock: Mutex
+    constructor() { self.members = new Array<WebSocket>(); self.lock = new Mutex() }
+    fn join(ws: WebSocket) { self.lock.withLock(fn() { self.members.push(ws) }) }
+    fn leave(ws: WebSocket) { self.lock.withLock(fn() { self.members.remove(ws) }) }
+    fn broadcast(text: string) {
+        self.lock.withLock(fn() {
+            for (m in self.members) { if (m.isOpen()) { m.send(text) } }
+        })
+    }
+}
+
+fn main() {
+    let store = new TodoStore()
+    let room = new ChatRoom()
+    let app = new HttpServer();
+
+    app.get("/todos", fn(req: HttpRequest) => HttpResponse.of(200, "application/json", store.all()))
+    app.post("/todos", fn(req: HttpRequest) -> HttpResponse {
+        let body = req.json()
+        let title = body.getString("title", "")
+        if (title == "") { return HttpResponse.badRequest("a todo needs a title") }
+        return HttpResponse.json(store.add(title)).withStatus(201)
+    })
+    app.get("/todos/:id", fn(req: HttpRequest) -> HttpResponse {
+        let todo = store.find(Format.toIntOr(req.param("id"), -1) as long)
+        return todo == null ? HttpResponse.notFound() : HttpResponse.json(todo)
+    })
+    WebSocket.route(app, "/chat", fn(ws: WebSocket) {
+        room.join(ws)
+        ws.send("welcome")          // sent after joining, so the client knows it is in the room
+        ws.messages(fn(m: WsMessage) { room.broadcast(m.text()) })
+        room.leave(ws)
+    })
+    app.start(0)
+    let base = "http://127.0.0.1:${app.port()}"
+    print("server on a free port: ${app.port() > 0}")
+
+    // ── REST calls ───────────────────────────────────────────────────────────
+    let http = new HttpClient()
+    let made = http.postJson(base + "/todos", Json.object().set("title", "write docs"))
+    print("POST /todos -> ${made.status} ${made.body()}")
+    http.postJson(base + "/todos", Json.object().set("title", "ship v1.6"))
+    print("GET /todos -> " + http.get(base + "/todos").body())
+    print("GET /todos/2 -> " + http.get(base + "/todos/2").json()["title"].asString())
+    print("GET /todos/99 -> ${http.get(base + "/todos/99").status}")
+    let bad = http.postJson(base + "/todos", Json.object())
+    print("POST without a title -> ${bad.status} ${bad.body()}")
+
+    // ── WebSocket chat: what one client says, both receive ──────────────────
+    let alice = WebSocket.connect("ws://127.0.0.1:${app.port()}/chat")
+    let bob = WebSocket.connect("ws://127.0.0.1:${app.port()}/chat")
+    print("alice: " + alice.receive().text() + ", bob: " + bob.receive().text())
+    alice.send("hi from alice")
+    print("alice sees: " + alice.receive().text())
+    print("bob sees:   " + bob.receive().text())
+    alice.close()
+    bob.close()
+
+    // ── Raw TCP: a line-based echo service ───────────────────────────────────
+    let listener = TcpListener.bind("127.0.0.1", 0)
+    let echo = Thread.spawn(fn() {
+        let conn = listener.accept()
+        conn.lines(fn(line: string) { conn.writeLine(Str.upper(line)) })
+        conn.close()
+    })
+    let tcp = TcpStream.connect("127.0.0.1", listener.port())
+    tcp.writeLine("raw sockets work too")
+    print("tcp: " + tcp.readLine())
+    tcp.close()
+    echo.join()
+    listener.close()
+
+    app.stop()
+    print("done")
+}
