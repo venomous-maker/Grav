@@ -1,6 +1,6 @@
 // 16_async.grav — concurrency with async/await on a worker thread pool.
 //
-//   grav examples/16_async.grav --run
+//   grav run examples/16_async.grav
 //   GRAV_MAXPROCS=2 grav examples/16_async.grav --run     # cap the worker pool
 //
 // Covers: `async fn` calls running in parallel on GRAV_MAXPROCS workers (default:
@@ -9,7 +9,7 @@
 // and AtomicInt for shared state, a producer/consumer Channel, and releasing
 // finished tasks with free(future).
 
-import "../lib/std.grav"
+import "std"
 
 // CPU-bound work: count the primes in [lo, hi).
 async fn countPrimes(lo: int, hi: int) -> int {
