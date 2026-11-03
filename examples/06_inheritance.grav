@@ -1,6 +1,6 @@
 // 06_inheritance.grav — inheritance, interfaces, traits, composition, RTTI.
 //
-//   grav examples/06_inheritance.grav --run
+//   grav run examples/06_inheritance.grav
 //
 // Covers: single inheritance with virtual dispatch, abstract classes and
 // methods, `super(...)` and `super.method()`, protected members, interfaces
@@ -8,7 +8,7 @@
 // with `uses` (automatic forwarding), multiple inheritance (`extends A, B`),
 // `final` methods, and runtime type info: `typename`, `isInstance`, `is`, `as`.
 
-import "../lib/std.grav"
+import "std"
 
 interface Drawable { fn draw() -> string }
 interface Measurable { fn area() -> float }
@@ -66,9 +66,9 @@ class Service uses log: Logger {
 
 // Multiple inheritance: fields and methods of both bases are flattened in.
 class Flyer { public altitude: int  constructor() { self.altitude = 0 }
-              public fn fly() -> string { self.altitude = self.altitude + 100; return "flying" } }
+    public fn fly() -> string { self.altitude = self.altitude + 100; return "flying" } }
 class Swimmer { public depth: int  constructor() { self.depth = 0 }
-                public fn dive() -> string { self.depth = self.depth + 5; return "diving" } }
+    public fn dive() -> string { self.depth = self.depth + 5; return "diving" } }
 class Duck extends Flyer, Swimmer {
     constructor() { self.altitude = 0; self.depth = 0 }
 }
