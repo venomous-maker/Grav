@@ -127,6 +127,7 @@ private:
     // Statements that cannot call into other code need no stack-trace line mark.
     bool stmtMayCall(const Stmt &s) const;
     bool exprMayCall(const Expr *e) const;
+    bool readsMutable(const Expr *e) const;
 
     // codegen_stmt.cpp
     void emitBlock(const Block &block);
