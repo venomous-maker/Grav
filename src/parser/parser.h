@@ -38,6 +38,7 @@ private:
     // --- declarations (parser_core.cpp) ---
     void parseTopLevel(Program &program);
     void parseNamespace(Program &program);
+    void parseUse(Program &program); // `use a.b.*`, `use a.b.C [as D]`, `use a.b as x`
     DeclPtr parseClass(bool isAbstract);
     DeclPtr parseInterface();
     DeclPtr parseStruct();
