@@ -1,0 +1,2 @@
+// lib/thread.grav — moved to lib/concurrency/thread.grav (namespace std.concurrency); kept so old imports work.
+import "concurrency/thread.grav"
