@@ -1,0 +1,53 @@
+// lib/io/term.grav — ANSI terminal styling, cursor control, and terminal size.
+
+namespace std.io {
+
+    %{
+    #include <stdio.h>
+    #include <sys/ioctl.h>
+    #include <unistd.h>
+    static int grav_term_dim(int cols) {
+        struct winsize w;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && (cols ? w.ws_col : w.ws_row) > 0)
+            return cols ? w.ws_col : w.ws_row;
+        return cols ? 80 : 24;   /* not a terminal: a conventional default */
+    }
+    %}
+    //
+    //   print(Term.green("ok") + " " + Term.bold("done"))
+    //   Term.clear()
+    // Styles are plain escape codes; check OS.isTerminal() (lib/os.grav) before
+    // colouring output that may be piped to a file.
+    class Term {
+        static fn style(s: string, code: string) -> string { return "\e[" + code + "m" + s + "\e[0m"; }
+        static fn bold(s: string) -> string { return Term.style(s, "1"); }
+        static fn dim(s: string) -> string { return Term.style(s, "2"); }
+        static fn italic(s: string) -> string { return Term.style(s, "3"); }
+        static fn underline(s: string) -> string { return Term.style(s, "4"); }
+        static fn red(s: string) -> string { return Term.style(s, "31"); }
+        static fn green(s: string) -> string { return Term.style(s, "32"); }
+        static fn yellow(s: string) -> string { return Term.style(s, "33"); }
+        static fn blue(s: string) -> string { return Term.style(s, "34"); }
+        static fn magenta(s: string) -> string { return Term.style(s, "35"); }
+        static fn cyan(s: string) -> string { return Term.style(s, "36"); }
+        static fn gray(s: string) -> string { return Term.style(s, "90"); }
+        static fn white(s: string) -> string { return Term.style(s, "37"); }
+        static fn inverse(s: string) -> string { return Term.style(s, "7"); }
+        static fn strike(s: string) -> string { return Term.style(s, "9"); }
+        // 256-colour foreground/background (0-255) and 24-bit true colour.
+        static fn color(s: string, n: int) -> string { return Term.style(s, "38;5;${n}"); }
+        static fn background(s: string, n: int) -> string { return Term.style(s, "48;5;${n}"); }
+        static fn rgb(s: string, r: int, g: int, b: int) -> string { return Term.style(s, "38;2;${r};${g};${b}"); }
+        static fn bgRgb(s: string, r: int, g: int, b: int) -> string { return Term.style(s, "48;2;${r};${g};${b}"); }
+        // Terminal size in columns/rows (80 x 24 when not attached to a terminal).
+        static fn width() -> int { return %{ grav_term_dim(1) %} as int; }
+        static fn height() -> int { return %{ grav_term_dim(0) %} as int; }
+
+        static fn clear() { %{ fputs("\x1b[2J\x1b[H", stdout); %}; }
+        static fn clearLine() { %{ fputs("\x1b[2K\r", stdout); %}; }
+        static fn moveTo(row: int, col: int) { %{ printf("\x1b[%d;%dH", row, col); %}; }
+        static fn hideCursor() { %{ fputs("\x1b[?25l", stdout); %}; }
+        static fn showCursor() { %{ fputs("\x1b[?25h", stdout); %}; }
+    }
+
+}
