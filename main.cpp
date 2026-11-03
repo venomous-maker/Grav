@@ -107,7 +107,7 @@ void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
     std::string where = mapped ? (loc.file + ":" + std::to_string(loc.line))
                                : ("line " + std::to_string(combined));
     std::cerr << "gravc: " << where << ":" << d.col() << ": " << label << ": "
-              << d.message() << "\n";
+              << grav::prettyNames(d.message()) << "\n";
     if (mapped) {
         std::ifstream f(loc.file);
         std::string ln;
@@ -119,9 +119,32 @@ void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
     }
 }
 
+// Readable names for generic instances, used to un-mangle diagnostics:
+// "HashMap$i64$int" -> "HashMap<long, int>", "fold$string" -> "fold<string>".
+void registerDisplayNames(const grav::GenericTables &g) {
+    grav::clearDisplayNames();
+    auto readable = [](const std::string &name, const std::vector<grav::TypeRef> &args) {
+        std::string s = name + "<";
+        for (size_t i = 0; i < args.size(); ++i) s += (i ? ", " : "") + grav::typeRefName(args[i]);
+        return s + ">";
+    };
+    // Arguments may themselves be instances, so register in order of length:
+    // shorter (inner) names first, which typeRefName then resolves.
+    std::vector<std::pair<std::string, const std::pair<std::string, std::vector<grav::TypeRef>> *>> all;
+    for (const auto &[inst, origin] : g.instances) all.push_back({inst, &origin});
+    for (const auto &[inst, origin] : g.methodInstances) all.push_back({inst, &origin});
+    std::sort(all.begin(), all.end(),
+              [](const auto &a, const auto &b) { return a.first.size() < b.first.size(); });
+    for (const auto &[inst, origin] : all)
+        grav::setDisplayName(inst, readable(origin->first, origin->second));
+}
+
 int usage(const char *prog) {
     std::cerr <<
         "usage: " << prog << " <input.grav> [options] [-- args...]\n"
+        "       " << prog << " run <file.grav> [-- args]   build and run\n"
+        "       " << prog << " build <file.grav>           build a binary\n"
+        "       " << prog << " test <file.grav> [--filter text]   run the file's test blocks\n"
         "       " << prog << " -                 read stdin, write C to stdout\n"
         "\n"
         "output:\n"
@@ -138,6 +161,7 @@ int usage(const char *prog) {
         "  --release            -O3, no stack-trace bookkeeping, NDEBUG\n"
         "  --no-trace           drop call-stack tracing (exceptions report no trace)\n"
         "  --native             tune for this machine (-march=native)\n"
+        "  --no-lines           omit #line directives (map generated C to itself)\n"
         "  --race               detect data races between threads (ThreadSanitizer)\n"
         "  --sanitize           detect memory errors and undefined behaviour (ASan+UBSan)\n"
         "  -g | -g3             include debug info\n"
@@ -148,6 +172,32 @@ int usage(const char *prog) {
         "  -v, --verbose        print the C compiler command\n"
         "  -h, --help           show this help\n";
     return 2;
+}
+
+// After each function the generated code maps back to the C file itself: turn
+// the codegen's reset markers into `#line <next line> "<file.c>"`.
+std::string resolveLineResets(const std::string &c, const std::string &cFile) {
+    std::string out;
+    out.reserve(c.size() + 1024);
+    const std::string marker = grav::CodeGen::kLineReset;
+    int lineNo = 1;
+    size_t pos = 0;
+    while (pos < c.size()) {
+        size_t eol = c.find('\n', pos);
+        if (eol == std::string::npos) eol = c.size();
+        std::string ln = c.substr(pos, eol - pos);
+        if (ln == marker) {
+            std::string esc;
+            for (char ch : cFile) { if (ch == '\\' || ch == '"') esc += '\\'; esc += ch; }
+            out += "#line " + std::to_string(lineNo + 1) + " \"" + esc + "\"";
+        } else {
+            out += ln;
+        }
+        if (eol < c.size()) out += '\n';
+        ++lineNo;
+        pos = eol + 1;
+    }
+    return out;
 }
 
 std::string stem(const std::string &input) {
@@ -162,10 +212,22 @@ int main(int argc, char **argv) {
     bool useStdin = false, toStdout = false, werror = false;
     bool runAfter = false, keepC = false, verbose = false;
     bool trace = true, native = false, release = false, race = false, sanitize = false;
+    bool lineDirectives = true;
+    bool testMode = false;
+    std::string testFilter;
     std::vector<std::string> runArgs;
     EmitMode emit = EmitMode::C;
 
-    for (int i = 1; i < argc; ++i) {
+    // Subcommands: `grav run f.grav`, `grav build f.grav`, `grav test f.grav`.
+    int first = 1;
+    if (argc > 1) {
+        std::string sub = argv[1];
+        if (sub == "run") { runAfter = true; emit = EmitMode::Bin; first = 2; }
+        else if (sub == "build") { emit = EmitMode::Bin; first = 2; }
+        else if (sub == "test") { testMode = true; runAfter = true; emit = EmitMode::Bin; first = 2; }
+    }
+
+    for (int i = first; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--") {                       // remaining args go to the program
             for (int j = i + 1; j < argc; ++j) runArgs.emplace_back(argv[j]);
@@ -210,6 +272,11 @@ int main(int argc, char **argv) {
             trace = false;
         } else if (arg == "--native") {
             native = true;
+        } else if (arg == "--filter") {
+            if (i + 1 >= argc) return usage(argv[0]);
+            testFilter = argv[++i];
+        } else if (arg == "--no-lines") {
+            lineDirectives = false;
         } else if (arg == "--race") {
             race = true;
         } else if (arg == "--sanitize") {
@@ -266,6 +333,7 @@ int main(int argc, char **argv) {
 
             // Expand generic structs/functions into concrete instances before symbols.
             errors = grav::monomorphize(*programPtr);
+            registerDisplayNames(programPtr->generics);
             // A failed expansion leaves half-made instances; checking them would only
             // bury the real error under follow-on errors from library code.
             if (!errors.empty()) {
@@ -304,6 +372,8 @@ int main(int argc, char **argv) {
 
         grav::CodeGen codegen;
         codegen.setTrace(trace);
+        codegen.setLineDirectives(lineDirectives);
+        codegen.setTestMode(testMode);
         // Hand the line map to codegen so runtime stack traces show real file:line.
         std::vector<grav::SourceMapEntry> cgMap;
         cgMap.reserve(srcMap.size());
@@ -311,7 +381,7 @@ int main(int argc, char **argv) {
         std::string c = codegen.generate(program, registry, cgMap);
 
         if (toStdout) {
-            std::cout << c;
+            std::cout << resolveLineResets(c, "<stdout>");
             return 0;
         }
 
@@ -319,12 +389,21 @@ int main(int argc, char **argv) {
         std::string base = stem(inputPath);
         std::string cPath, exePath = outputPath;
         bool tempC = false; // the .c is an intermediate to delete afterward
+        bool tempExe = false; // a `grav test` binary, deleted after it runs
         if (emit == EmitMode::C) {
             cPath = outputPath.empty() ? base + ".c" : outputPath;
         } else if (emit == EmitMode::Both) {
             if (exePath.empty()) exePath = base;
             cPath = base + ".c";
         } else { // Asm or Bin: the .c is intermediate unless --keep-c
+            if (exePath.empty() && testMode) {
+                std::error_code tec;
+                fs::path tmp = fs::temp_directory_path(tec);
+                if (tec) tmp = ".";
+                exePath = (tmp / ("gravtest-" + std::to_string(getpid()) + "-" +
+                                  fs::path(base).filename().string())).string();
+                tempExe = true;
+            }
             if (exePath.empty()) exePath = (emit == EmitMode::Asm) ? base + ".s" : base;
             if (keepC) {
                 cPath = base + ".gen.c";
@@ -340,6 +419,7 @@ int main(int argc, char **argv) {
             }
         }
 
+        c = resolveLineResets(c, cPath);
         std::ofstream out(cPath);
         if (!out) { std::cerr << "gravc: cannot write '" << cPath << "'\n"; return 1; }
         out << c;
@@ -385,9 +465,10 @@ int main(int argc, char **argv) {
             std::cerr << "gravc: wrote " << exePath << "\n";
             return 0;
         }
-        std::cerr << "gravc: built " << exePath
-                  << (emit == EmitMode::Both ? (" (and wrote " + cPath + ")") : "")
-                  << "\n";
+        if (!tempExe)
+            std::cerr << "gravc: built " << exePath
+                      << (emit == EmitMode::Both ? (" (and wrote " + cPath + ")") : "")
+                      << "\n";
 
         // --run: execute the freshly built binary, forwarding any `-- args`.
         if (runAfter) {
@@ -396,7 +477,9 @@ int main(int argc, char **argv) {
             if (runPath.find('/') == std::string::npos) runPath = "./" + runPath;
             std::string runCmd = "\"" + runPath + "\"";
             for (const auto &a : runArgs) runCmd += " \"" + a + "\"";
+            if (testMode) setenv("GRAV_TEST_FILTER", testFilter.c_str(), 1);
             int prc = std::system(runCmd.c_str());
+            if (tempExe) { std::error_code ec; fs::remove(exePath, ec); }
             // Pass the program's own exit status through.
             if (prc == -1) return 1;
             if (WIFEXITED(prc)) return WEXITSTATUS(prc);
