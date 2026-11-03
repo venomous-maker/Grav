@@ -1,0 +1,3 @@
+// lib/data.grav — `import "std/data"`: Json/JsonValue, Bytes.
+import "data/json.grav"
+import "data/bytes.grav"
