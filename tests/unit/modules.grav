@@ -1,0 +1,61 @@
+// Namespaced library, use, aliases, and selective imports.
+import { HashMap as Dict, Array } from "std/collections"
+import "std/text" as text
+import "std/core"
+
+namespace shapes {
+    class Box<T> { public v: T; constructor(v: T) { self.v = v } fn get() -> T { return self.v } }
+    class Circle { public r: int; constructor(r: int) { self.r = r } }
+    fn area(c: Circle) -> int { return 3 * c.r * c.r }
+    const SIDES: int = 4
+}
+namespace legacy { class Circle { public d: int; constructor(d: int) { self.d = d } } }
+
+use shapes::*
+use legacy.Circle as OldCircle
+use shapes as sh
+
+// Our own names: they shadow the library's in this file only.
+class Str { static fn length(s: string) -> int { return -1 } }
+class Box { public label: string; constructor(l: string) { self.label = l } }
+
+test "selective import and renaming" {
+    let d = new Dict<string, int>()
+    d.put("a", 1)
+    assertEq(d.get("a"), 1)
+    let xs = new Array<int>()
+    xs.push(2)
+    assertEq(xs.size(), 1)
+}
+
+test "module alias" {
+    assertEq(text.Str.upper("ok"), "OK")
+    let sb = new text.StringBuilder()
+    sb.append("x")
+    assertEq(sb.toString(), "x")
+}
+
+test "local names shadow the library, which keeps its own" {
+    assertEq(Str.length("abc"), -1)
+    assertEq(std.text.Str.length("abc"), 3)
+    let d = new Dict<string, int>()       // HashMap's own code uses std's names
+    d.put("k", 7)
+    assertEq(d.keys().size(), 1)
+}
+
+test "use globs, renames, and namespace aliases" {
+    assertEq(area(new Circle(2)), 12)
+    assertEq(new OldCircle(9).d, 9)
+    assertEq(sh.area(new sh.Circle(1)), 3)
+    assertEq(SIDES, 4)
+    assertEq(new sh.Box<int>(5).get(), 5)
+    assertEq(new Box("ours").label, "ours")
+}
+
+test "fully qualified library names" {
+    let q = new std.collections.Deque<int>()
+    q.pushBack(1)
+    assertEq(q.size(), 1)
+    let r: Result<int, string> = Result.Ok(3)
+    assertEq(r.unwrap(), 3)
+}
