@@ -99,6 +99,7 @@ typedef struct GravTypeInfo {
     int nextra;
     void (*drop)(void*);                        /* destructor chain, or 0 */
     const char* (*str)(void*);                  /* toString(), or 0 */
+    bool (*eq)(void*, void*);                   /* operator==(other), or 0 */
 } GravTypeInfo;
 
 /* Common object header: vtable pointer + runtime type descriptor. */
@@ -370,7 +371,11 @@ static bool grav_any_eq(GravAny a, GravAny b) {
         case GRAV_ANY_NULL: return true;
         case GRAV_ANY_BOOL: return a.v.b == b.v.b;
         case GRAV_ANY_STR: return grav_streq(a.v.s, b.v.s);
-        case GRAV_ANY_OBJ: return a.v.p == b.v.p;
+        case GRAV_ANY_OBJ: { /* the class's operator== when it has one */
+            if (a.v.p == b.v.p) return true;
+            const GravTypeInfo* t = ((const struct GravObject*)a.v.p)->__type;
+            return t->eq ? t->eq(a.v.p, b.v.p) : false;
+        }
         case GRAV_ANY_ENUM: return strcmp(a.tname, b.tname) == 0 && a.v.i == b.v.i;
         case GRAV_ANY_FN: return grav_fn_eq(a.v.fn, b.v.fn);
         default: return false;
@@ -672,9 +677,12 @@ static void grav_join_all(void) {
 /* ---- assertEq and the test runner ---------------------------------------- */
 static void grav_assert_eq(GravAny actual, GravAny expected, const char* msg, const char* loc) {
     if (grav_any_eq(actual, expected)) return;
+    /* Strings are quoted so leading/trailing whitespace differences show. */
+    const char* eq = expected.tag == GRAV_ANY_STR ? "\"" : "";
+    const char* aq = actual.tag == GRAV_ANY_STR ? "\"" : "";
     char b[1024];
-    snprintf(b, sizeof b, "%s%sexpected %s but got %s", msg, (msg && msg[0]) ? ": " : "",
-             grav_any_to_string(expected), grav_any_to_string(actual));
+    snprintf(b, sizeof b, "%s%sexpected %s%s%s but got %s%s%s", msg, (msg && msg[0]) ? ": " : "",
+             eq, grav_any_to_string(expected), eq, aq, grav_any_to_string(actual), aq);
     grav_assert_fail_at(b, loc);
 }
 static int grav_run_tests(const char* const* names, void (*const* fns)(void), int n) {
