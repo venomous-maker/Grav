@@ -1,23 +1,26 @@
 #!/usr/bin/env node
 // server.js — a dependency-free Language Server for Grav.
 //
-// Speaks LSP over stdio (no npm packages). Provides:
-//   • go-to-declaration   (textDocument/definition)
-//   • find references      (textDocument/references)
-//   • rename / refactor    (textDocument/rename, prepareRename)
-//   • document outline     (textDocument/documentSymbol)
-//   • hover                (textDocument/hover)
-//   • diagnostics          (by running the `grav` compiler on open/save)
+// Speaks LSP over stdio (no npm packages). Built on grav-index.js, it follows
+// imports into the standard library, project paths and installed packages, and
+// provides:
+//   • go to definition / declaration (also on import strings: opens the module)
+//   • hover with signatures, doc comments and the declaring module
+//   • completion: members after `.` (by inferred type), namespace members,
+//     visible declarations, keywords, builtins, and import paths
+//   • signature help for calls and constructors
+//   • document outline (nested), workspace symbols (including the library)
+//   • find references, rename
+//   • formatting (`grav fmt -`)
+//   • diagnostics from `grav check --json` on open and save
 //
-// Used by Neovim (built-in LSP) and CLion (LSP plugin API). VS Code uses the same
-// index module directly via providers. Configure the compiler with the env var
-// GRAV_COMPILER or the `compilerPath` initialization option (default: "grav").
+// Used by Neovim (built-in LSP), JetBrains (LSP API), and any LSP client. Set the
+// compiler with GRAV_COMPILER or the `compilerPath` initialization option.
 
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
 const idx = require("./grav-index");
 
 // ---- transport ------------------------------------------------------------
@@ -35,13 +38,17 @@ process.stdin.on("data", (chunk) => {
     if (buffer.length < start + len) return;
     const body = buffer.slice(start, start + len).toString("utf8");
     buffer = buffer.slice(start + len);
-    try { handle(JSON.parse(body)); } catch (e) { log("parse error: " + e); }
+    let msg;
+    try { msg = JSON.parse(body); } catch (e) { log("parse error: " + e); continue; }
+    try { handle(msg); } catch (e) {
+      log("error handling " + msg.method + ": " + (e && e.stack || e));
+      if (msg.id !== undefined) send({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: String(e) } });
+    }
   }
 });
 
 function send(msg) {
-  const json = JSON.stringify(msg);
-  const payload = Buffer.from(json, "utf8");
+  const payload = Buffer.from(JSON.stringify(msg), "utf8");
   process.stdout.write(`Content-Length: ${payload.length}\r\n\r\n`);
   process.stdout.write(payload);
 }
@@ -50,40 +57,12 @@ function notify(method, params) { send({ jsonrpc: "2.0", method, params }); }
 function log(s) { process.stderr.write(`[grav-lsp] ${s}\n`); }
 
 // ---- state ----------------------------------------------------------------
-const docs = new Map();          // uri -> { text, version }
-let rootPath = null;
-let compiler = process.env.GRAV_COMPILER || "grav";
+let ws = new idx.Workspace({ compiler: process.env.GRAV_COMPILER || "grav", log });
+const published = new Map(); // uri -> true (files we sent diagnostics for)
 
-function uriToPath(uri) {
-  return decodeURIComponent(uri.replace(/^file:\/\//, ""));
-}
-function pathToUri(p) {
-  return "file://" + p.split(path.sep).map(encodeURIComponent).join("/").replace(/%2F/g, "/");
-}
-
-// Text for a uri: prefer the in-memory (possibly unsaved) version.
-function textOf(uri) {
-  if (docs.has(uri)) return docs.get(uri).text;
-  try { return fs.readFileSync(uriToPath(uri), "utf8"); } catch { return null; }
-}
-
-// Every .grav file in the workspace, plus any open docs outside it.
-function workspaceUris() {
-  const uris = new Set(docs.keys());
-  if (rootPath) walk(rootPath, uris);
-  return [...uris];
-}
-function walk(dir, uris) {
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    if (e.name.startsWith(".")) continue;
-    if (["build", "node_modules", "cmake-build-debug", "cmake-build-release"].includes(e.name)) continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) walk(full, uris);
-    else if (e.isFile() && e.name.endsWith(".grav")) uris.add(pathToUri(full));
-  }
-}
+function uriToPath(uri) { return decodeURIComponent(uri.replace(/^file:\/\//, "")); }
+function pathToUri(p) { return "file://" + path.resolve(p).split(path.sep).map(encodeURIComponent).join("/").replace(/%2F/g, "/"); }
+const loc = (d) => ({ uri: pathToUri(d.file), range: d.range });
 
 // ---- dispatch -------------------------------------------------------------
 function handle(msg) {
@@ -93,156 +72,115 @@ function handle(msg) {
     case "initialized": return;
     case "shutdown": return reply(id, null);
     case "exit": return process.exit(0);
-    case "textDocument/didOpen": return onDidOpen(params);
-    case "textDocument/didChange": return onDidChange(params);
-    case "textDocument/didSave": return onDidSave(params);
-    case "textDocument/didClose": return docs.delete(params.textDocument.uri);
-    case "textDocument/definition": return onDefinition(id, params);
-    case "textDocument/references": return onReferences(id, params);
-    case "textDocument/documentSymbol": return onDocumentSymbol(id, params);
-    case "textDocument/hover": return onHover(id, params);
-    case "textDocument/prepareRename": return onPrepareRename(id, params);
-    case "textDocument/rename": return onRename(id, params);
+    case "textDocument/didOpen": ws.setDoc(uriToPath(params.textDocument.uri), params.textDocument.text); return diagnose(params.textDocument.uri);
+    case "textDocument/didChange": {
+      const change = params.contentChanges[params.contentChanges.length - 1];
+      if (change) ws.setDoc(uriToPath(params.textDocument.uri), change.text);
+      return;
+    }
+    case "textDocument/didSave": return diagnose(params.textDocument.uri);
+    case "textDocument/didClose": return ws.closeDoc(uriToPath(params.textDocument.uri));
+    case "textDocument/definition":
+    case "textDocument/declaration":
+      return reply(id, ws.definition(uriToPath(params.textDocument.uri), params.position).map(loc));
+    case "textDocument/references":
+      return reply(id, ws.references(uriToPath(params.textDocument.uri), params.position, false).map(loc));
+    case "textDocument/documentSymbol": return reply(id, ws.outline(uriToPath(params.textDocument.uri)));
+    case "workspace/symbol":
+      return reply(id, ws.workspaceSymbols(params.query || "", true).map(({ file, sym }) => ({
+        name: sym.name, kind: sym.kind, containerName: sym.container || sym.namespace || "",
+        location: { uri: pathToUri(file), range: sym.range },
+      })));
+    case "textDocument/hover": {
+      const h = ws.hover(uriToPath(params.textDocument.uri), params.position);
+      return reply(id, h ? { contents: { kind: "markdown", value: h.markdown }, range: h.range } : null);
+    }
+    case "textDocument/completion": {
+      const items = ws.completion(uriToPath(params.textDocument.uri), params.position).map((c) => ({
+        label: c.label, kind: c.kind, detail: c.detail,
+        documentation: c.documentation ? { kind: "markdown", value: c.documentation } : undefined,
+        insertText: c.insertText, filterText: c.filterText,
+      }));
+      return reply(id, { isIncomplete: false, items });
+    }
+    case "textDocument/signatureHelp": {
+      const sh = ws.signature(uriToPath(params.textDocument.uri), params.position);
+      return reply(id, sh ? { signatures: sh.signatures, activeSignature: 0, activeParameter: sh.activeParameter } : null);
+    }
+    case "textDocument/prepareRename": {
+      const text = ws.text(uriToPath(params.textDocument.uri)) || "";
+      const w = idx.wordAtPosition(text, params.position);
+      return reply(id, w && !idx.KEYWORDS.includes(w.word) ? w.range : null);
+    }
+    case "textDocument/rename": {
+      const changes = {};
+      for (const r of ws.references(uriToPath(params.textDocument.uri), params.position, false)) {
+        const u = pathToUri(r.file);
+        (changes[u] = changes[u] || []).push({ range: r.range, newText: params.newName });
+      }
+      return reply(id, { changes });
+    }
+    case "textDocument/formatting": {
+      const file = uriToPath(params.textDocument.uri);
+      const text = ws.text(file) || "";
+      const out = ws.format(text);
+      if (out == null || out === text) return reply(id, []);
+      const lines = idx.splitLines(text);
+      return reply(id, [{ range: { start: { line: 0, character: 0 }, end: { line: lines.length, character: 0 } }, newText: out }]);
+    }
     default: if (id !== undefined) reply(id, null);
   }
 }
 
 function onInitialize(id, params) {
-  rootPath = params.rootPath ||
+  const root = params.rootPath ||
     (params.rootUri ? uriToPath(params.rootUri) :
-      (params.workspaceFolders && params.workspaceFolders[0]
-        ? uriToPath(params.workspaceFolders[0].uri) : null));
+      (params.workspaceFolders && params.workspaceFolders[0] ? uriToPath(params.workspaceFolders[0].uri) : null));
   const opts = params.initializationOptions || {};
-  if (opts.compilerPath) compiler = opts.compilerPath;
+  ws = new idx.Workspace({ root, compiler: opts.compilerPath || process.env.GRAV_COMPILER || "grav", log });
   reply(id, {
     capabilities: {
-      textDocumentSync: 1, // full
+      textDocumentSync: { openClose: true, change: 1, save: { includeText: false } },
       definitionProvider: true,
+      declarationProvider: true,
       referencesProvider: true,
       documentSymbolProvider: true,
+      workspaceSymbolProvider: true,
       hoverProvider: true,
+      completionProvider: { triggerCharacters: [".", "\"", "/"] },
+      signatureHelpProvider: { triggerCharacters: ["(", ","] },
       renameProvider: { prepareProvider: true },
+      documentFormattingProvider: true,
     },
-    serverInfo: { name: "grav-lsp", version: "0.9.0" },
+    serverInfo: { name: "grav-lsp", version: "1.6.0" },
   });
 }
 
-// ---- document lifecycle ---------------------------------------------------
-function onDidOpen(params) {
-  const d = params.textDocument;
-  docs.set(d.uri, { text: d.text, version: d.version });
-  diagnose(d.uri);
-}
-function onDidChange(params) {
-  const d = params.textDocument;
-  const change = params.contentChanges[params.contentChanges.length - 1];
-  if (change) docs.set(d.uri, { text: change.text, version: d.version });
-}
-function onDidSave(params) { diagnose(params.textDocument.uri); }
-
-// ---- features -------------------------------------------------------------
-function onDefinition(id, params) {
-  const word = wordAt(params);
-  if (!word) return reply(id, null);
-  const locs = [];
-  // Prefer declarations in the current document first.
-  const here = params.textDocument.uri;
-  for (const uri of [here, ...workspaceUris().filter((u) => u !== here)]) {
-    const text = textOf(uri);
-    if (text == null) continue;
-    for (const range of idx.declarationsOf(text, word)) locs.push({ uri, range });
-  }
-  reply(id, locs.length === 1 ? locs[0] : locs);
-}
-
-function onReferences(id, params) {
-  const word = wordAt(params);
-  if (!word) return reply(id, null);
-  const locs = [];
-  for (const uri of workspaceUris()) {
-    const text = textOf(uri);
-    if (text == null) continue;
-    for (const range of idx.referencesOf(text, word)) locs.push({ uri, range });
-  }
-  reply(id, locs);
-}
-
-function onDocumentSymbol(id, params) {
-  const text = textOf(params.textDocument.uri) || "";
-  const syms = idx.documentDeclarations(text).map((s) => ({
-    name: s.name, kind: s.kind, range: s.range, selectionRange: s.selectionRange,
-  }));
-  reply(id, syms);
-}
-
-function onHover(id, params) {
-  const word = wordAt(params);
-  if (!word) return reply(id, null);
-  for (const uri of workspaceUris()) {
-    const text = textOf(uri);
-    if (text == null) continue;
-    const decls = idx.documentDeclarations(text).filter((s) => s.name === word);
-    if (decls.length) {
-      const line = idx.splitLines(text)[decls[0].range.start.line].trim();
-      return reply(id, { contents: { kind: "markdown", value: "```grav\n" + line + "\n```" } });
-    }
-  }
-  reply(id, null);
-}
-
-function onPrepareRename(id, params) {
-  const w = idx.wordAtPosition(textOf(params.textDocument.uri) || "", params.position);
-  reply(id, w ? w.range : null);
-}
-
-function onRename(id, params) {
-  const word = wordAt(params);
-  if (!word) return reply(id, null);
-  const changes = {};
-  for (const uri of workspaceUris()) {
-    const text = textOf(uri);
-    if (text == null) continue;
-    const edits = idx.referencesOf(text, word).map((range) => ({ range, newText: params.newName }));
-    if (edits.length) changes[uri] = edits;
-  }
-  reply(id, { changes });
-}
-
-function wordAt(params) {
-  const text = textOf(params.textDocument.uri);
-  if (text == null) return null;
-  const w = idx.wordAtPosition(text, params.position);
-  return w ? w.word : null;
-}
-
-// ---- diagnostics (delegate to the gravc compiler) -------------------------
+// ---- diagnostics (grav check --json) ---------------------------------------
 function diagnose(uri) {
   const file = uriToPath(uri);
   if (!file.endsWith(".grav") || !fs.existsSync(file)) return;
-  const out = path.join(require("os").tmpdir(), "grav_lsp_check.c");
-  execFile(compiler, [file, "--emit", "c", "-o", out], { timeout: 15000 }, (err, stdout, stderr) => {
-    const diags = parseDiagnostics(stderr || "", file);
-    notify("textDocument/publishDiagnostics", { uri, diagnostics: diags });
+  ws.check(file, (diags) => {
+    const byFile = new Map([[path.resolve(file), []]]);
+    for (const d of diags) {
+      const f = path.resolve(d.file);
+      if (!byFile.has(f)) byFile.set(f, []);
+      byFile.get(f).push({
+        range: { start: { line: d.line, character: d.character }, end: { line: d.line, character: d.character + 1 } },
+        severity: d.severity === "error" ? 1 : 2, source: "grav", message: d.message,
+      });
+    }
+    // Clear files that had diagnostics from this file's last check but none now.
+    for (const [u] of published) if (!byFile.has(uriToPath(u)) && u.startsWith("file://")) {
+      notify("textDocument/publishDiagnostics", { uri: u, diagnostics: [] });
+      published.delete(u);
+    }
+    for (const [f, list] of byFile) {
+      const u = pathToUri(f);
+      notify("textDocument/publishDiagnostics", { uri: u, diagnostics: list });
+      if (list.length) published.set(u, true); else published.delete(u);
+    }
   });
-}
-
-function parseDiagnostics(stderr, file) {
-  const diags = [];
-  const re = /^gravc:\s+(.+?):(\d+):(\d+):\s+(?:\w+\s+)?(error|warning):\s+(.*)$/;
-  for (const line of stderr.split(/\r?\n/)) {
-    const m = re.exec(line);
-    if (!m) continue;
-    if (path.resolve(m[1]) !== path.resolve(file)) continue; // only this file
-    const ln = Math.max(0, parseInt(m[2], 10) - 1);
-    const col = Math.max(0, parseInt(m[3], 10) - 1);
-    diags.push({
-      range: { start: { line: ln, character: col }, end: { line: ln, character: col + 1 } },
-      severity: m[4] === "error" ? 1 : 2,
-      source: "gravc",
-      message: m[5],
-    });
-  }
-  return diags;
 }
 
 log("started");
