@@ -1,0 +1,309 @@
+// lib/sys/command.grav — run programs directly (no shell), with arguments, working
+// directory, environment, standard input, separate stdout/stderr, and timeouts.
+//
+//   let r = new Command("git").arg("status").arg("--short").cwd("/src/app").run()
+//   if (r.ok()) { print(r.stdout) } else { print("git failed: " + r.stderr) }
+//
+//   let r2 = new Command("sort").stdin("b\na\n").run()          // feed input
+//   let r3 = new Command("sleep").arg("5").timeoutMs(100).run() // r3.timedOut
+//
+//   let child = new Command("server").arg("--port").arg("8080").spawn()
+//   ...
+//   child.kill()
+//   let done = child.wait()
+//
+// Arguments are passed to the program exactly as given: no quoting, globbing,
+// or variable expansion happens (use Process.exec for shell commands).
+import "../collections/array.grav"
+import "../core/exception.grav"
+
+namespace std.sys {
+
+    %{
+    #include <errno.h>
+    #include <fcntl.h>
+    #include <poll.h>
+    #include <signal.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <sys/time.h>
+    #include <sys/types.h>
+    #include <sys/wait.h>
+    #include <unistd.h>
+    extern char** environ;
+
+    typedef struct { int pid; int in_fd, out_fd, err_fd; int status; int exited; } GravChild;
+
+    static long long grav_now_ms(void) {
+        struct timeval tv; gettimeofday(&tv, 0);
+        return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    }
+    static int grav_status_code(int status) {
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+        return status;
+    }
+
+    /* fork + exec. `env` holds "KEY=VALUE" strings; capture: 1 = pipes, 0 = inherit.
+       Returns 0, or an errno (exec failures are reported through a CLOEXEC pipe). */
+    static int grav_proc_spawn(const char* const* argv, const char* cwd, const char* const* env, int nenv,
+                          int clearEnv, int pipeIn, int capture, GravChild* ch) {
+        int in[2] = {-1, -1}, out[2] = {-1, -1}, err[2] = {-1, -1}, report[2];
+        if (pipeIn && pipe(in) != 0) return errno;
+        if (capture && (pipe(out) != 0 || pipe(err) != 0)) return errno;
+        if (pipe(report) != 0) return errno;
+        fcntl(report[1], F_SETFD, FD_CLOEXEC);
+        pid_t pid = fork();
+        if (pid < 0) return errno;
+        if (pid == 0) {
+            close(report[0]);
+            if (pipeIn) { dup2(in[0], 0); close(in[0]); close(in[1]); }
+            if (capture) {
+                dup2(out[1], 1); dup2(err[1], 2);
+                close(out[0]); close(out[1]); close(err[0]); close(err[1]);
+            }
+            if (clearEnv) environ = 0;
+            for (int i = 0; i < nenv; i++) putenv((char*)env[i]);
+            int e = 0;
+            if (cwd && cwd[0] && chdir(cwd) != 0) e = errno;
+            if (!e) { execvp(argv[0], (char* const*)argv); e = errno; }
+            ssize_t w = write(report[1], &e, sizeof e);
+            (void)w;
+            _exit(127);
+        }
+        close(report[1]);
+        int e = 0;
+        ssize_t r;
+        do { r = read(report[0], &e, sizeof e); } while (r < 0 && errno == EINTR);
+        close(report[0]);
+        if (pipeIn) close(in[0]);
+        if (capture) { close(out[1]); close(err[1]); }
+        if (r == (ssize_t)sizeof e && e != 0) { /* exec failed: reap the child */
+            int st; waitpid(pid, &st, 0);
+            if (pipeIn) close(in[1]);
+            if (capture) { close(out[0]); close(err[0]); }
+            return e;
+        }
+        ch->pid = pid; ch->in_fd = pipeIn ? in[1] : -1;
+        ch->out_fd = capture ? out[0] : -1; ch->err_fd = capture ? err[0] : -1;
+        ch->status = 0; ch->exited = 0;
+        return 0;
+    }
+
+    typedef struct { char* p; size_t n, cap; } GravBuf;
+    static void grav_buf_add(GravBuf* b, const char* s, size_t n) {
+        if (b->n + n + 1 > b->cap) {
+            b->cap = (b->n + n + 1) * 2;
+            b->p = (char*)realloc(b->p, b->cap);
+            if (!b->p) abort();
+        }
+        memcpy(b->p + b->n, s, n); b->n += n; b->p[b->n] = 0;
+    }
+
+    static int grav_child_running(GravChild* c) {
+        int st;
+        if (!c->exited && waitpid(c->pid, &st, WNOHANG) == c->pid) { c->status = st; c->exited = 1; }
+        return !c->exited;
+    }
+
+    /* Feed `input`, collect stdout/stderr, and wait (killing the child after
+       timeoutMs when >= 0). Returns 1 if the timeout fired. */
+    static int grav_child_finish(GravChild* ch, const char* input, long long timeoutMs,
+                                 const char** outS, const char** errS) {
+        GravBuf ob = {0, 0, 0}, eb = {0, 0, 0};
+        grav_buf_add(&ob, "", 0); grav_buf_add(&eb, "", 0);
+        size_t inLen = input ? strlen(input) : 0, inPos = 0;
+        if (ch->in_fd >= 0 && inLen == 0) { close(ch->in_fd); ch->in_fd = -1; }
+        if (ch->in_fd >= 0) fcntl(ch->in_fd, F_SETFL, O_NONBLOCK);
+        signal(SIGPIPE, SIG_IGN);
+        long long deadline = timeoutMs >= 0 ? grav_now_ms() + timeoutMs : -1;
+        int timedOut = 0;
+        char buf[65536];
+        while (ch->out_fd >= 0 || ch->err_fd >= 0 || ch->in_fd >= 0) {
+            struct pollfd fds[3]; int n = 0, io = -1, oo = -1, eo = -1;
+            if (ch->in_fd >= 0) { io = n; fds[n].fd = ch->in_fd; fds[n].events = POLLOUT; n++; }
+            if (ch->out_fd >= 0) { oo = n; fds[n].fd = ch->out_fd; fds[n].events = POLLIN; n++; }
+            if (ch->err_fd >= 0) { eo = n; fds[n].fd = ch->err_fd; fds[n].events = POLLIN; n++; }
+            int wait = -1;
+            if (deadline >= 0) {
+                long long left = deadline - grav_now_ms();
+                if (left <= 0) { timedOut = 1; break; }
+                wait = (int)left;
+            }
+            int pr = poll(fds, n, wait);
+            if (pr < 0) { if (errno == EINTR) continue; break; }
+            if (pr == 0) continue;
+            if (io >= 0 && (fds[io].revents & (POLLOUT | POLLERR | POLLHUP))) {
+                ssize_t w = write(ch->in_fd, input + inPos, inLen - inPos);
+                if (w > 0) inPos += (size_t)w;
+                if (w < 0 && errno != EAGAIN) inPos = inLen;
+                if (inPos >= inLen) { close(ch->in_fd); ch->in_fd = -1; }
+            }
+            if (oo >= 0 && (fds[oo].revents & (POLLIN | POLLHUP | POLLERR))) {
+                ssize_t r = read(ch->out_fd, buf, sizeof buf);
+                if (r > 0) grav_buf_add(&ob, buf, (size_t)r);
+                else if (r == 0 || errno != EINTR) { close(ch->out_fd); ch->out_fd = -1; }
+            }
+            if (eo >= 0 && (fds[eo].revents & (POLLIN | POLLHUP | POLLERR))) {
+                ssize_t r = read(ch->err_fd, buf, sizeof buf);
+                if (r > 0) grav_buf_add(&eb, buf, (size_t)r);
+                else if (r == 0 || errno != EINTR) { close(ch->err_fd); ch->err_fd = -1; }
+            }
+        }
+        if (!timedOut && !ch->exited && deadline >= 0) { /* outputs closed: wait out the rest */
+            while (!ch->exited) {
+                int st; pid_t w = waitpid(ch->pid, &st, WNOHANG);
+                if (w == ch->pid) { ch->status = st; ch->exited = 1; break; }
+                if (grav_now_ms() >= deadline) { timedOut = 1; break; }
+                usleep(1000);
+            }
+        }
+        if (timedOut) kill(ch->pid, SIGKILL);
+        if (ch->in_fd >= 0) { close(ch->in_fd); ch->in_fd = -1; }
+        if (ch->out_fd >= 0) { close(ch->out_fd); ch->out_fd = -1; }
+        if (ch->err_fd >= 0) { close(ch->err_fd); ch->err_fd = -1; }
+        if (!ch->exited) {
+            int st;
+            while (waitpid(ch->pid, &st, 0) < 0 && errno == EINTR) {}
+            ch->status = st; ch->exited = 1;
+        }
+        *outS = ob.p; *errS = eb.p;
+        return timedOut;
+    }
+    %}
+
+    // What a finished command produced.
+    class CommandResult {
+        // The exit status (128 + signal number when killed by a signal).
+        readonly code: int
+        readonly stdout: string
+        readonly stderr: string
+        // True when the command was killed for running past its timeout.
+        readonly timedOut: bool
+        constructor(code: int, stdout: string, stderr: string, timedOut: bool) {
+            self.code = code; self.stdout = stdout; self.stderr = stderr; self.timedOut = timedOut;
+        }
+        public fn ok() -> bool { return self.code == 0 && !self.timedOut; }
+        fn toString() -> string {
+            return "CommandResult(code ${self.code}${self.timedOut ? ", timed out" : ""})";
+        }
+    }
+
+    // A running program started by Command.spawn().
+    class Child {
+        private h: byte*        // GravChild*
+        private input: string
+        private timeout: int
+        constructor(h: byte*, input: string, timeout: int) {
+            self.h = h; self.input = input; self.timeout = timeout;
+        }
+        destructor() { %{ free(self->h); %}; }
+        public fn pid() -> int { return %{ ((GravChild*)self->h)->pid %} as int; }
+        // Whether the program is still running.
+        public fn isRunning() -> bool {
+            return %{ grav_child_running((GravChild*)self->h) %} as bool;
+        }
+        // Send a signal (default SIGTERM = 15; 9 is SIGKILL).
+        public fn kill() { self.signal(15); }
+        public fn signal(sig: int) { %{ kill(((GravChild*)self->h)->pid, sig); %}; }
+        // Wait for the program to exit, collecting what it printed (when captured).
+        public fn wait() -> CommandResult {
+            let out = "";
+            let err = "";
+            let timedOut = %{ grav_child_finish((GravChild*)self->h, self->input, self->timeout, &out, &err) %} as bool;
+            let code = %{ grav_status_code(((GravChild*)self->h)->status) %} as int;
+            return new CommandResult(code, out, err, timedOut);
+        }
+    }
+
+    // Builds a program invocation: new Command(program).arg(...).cwd(...).run().
+    class Command {
+        private program: string
+        private argv: Array<string>
+        private envs: Array<string>
+        private dir: string
+        private input: string
+        private hasInput: bool
+        private timeout: int
+        private clear: bool
+        private capture: bool
+
+        constructor(program: string) {
+            self.program = program;
+            self.argv = new Array<string>();
+            self.envs = new Array<string>();
+            self.dir = "";
+            self.input = "";
+            self.hasInput = false;
+            self.timeout = -1;
+            self.clear = false;
+            self.capture = true;
+        }
+        destructor() { free(self.argv); free(self.envs); }
+
+        public fn arg(a: string) -> Command { self.argv.push(a); return self; }
+        public fn args(list: Array<string>) -> Command {
+            for (a in list) { self.argv.push(a); }
+            return self;
+        }
+        // Run in this working directory.
+        public fn cwd(dir: string) -> Command { self.dir = dir; return self; }
+        // Set an environment variable for the program (on top of the inherited ones).
+        public fn env(key: string, value: string) -> Command { self.envs.push(key + "=" + value); return self; }
+        // Start from an empty environment (variables set with env() still apply).
+        public fn clearEnv() -> Command { self.clear = true; return self; }
+        // Text written to the program's standard input (then closed).
+        public fn stdin(text: string) -> Command { self.input = text; self.hasInput = true; return self; }
+        // Kill the program if it runs longer than `ms` milliseconds.
+        public fn timeoutMs(ms: int) -> Command { self.timeout = ms; return self; }
+        // Let the program print straight to this terminal instead of capturing output.
+        public fn inheritOutput() -> Command { self.capture = false; return self; }
+
+        // "program arg1 arg2", for logs and error messages.
+        public fn describe() -> string {
+            let s = self.program;
+            for (a in self.argv) { s = s + " " + a; }
+            return s;
+        }
+
+        // Start the program without waiting. Throws IOError if it cannot be started
+        // (for example, the program does not exist).
+        public fn spawn() -> Child {
+            let a = self.argv;
+            let e = self.envs;
+            let spawnErr = 0;
+            let h = %{ (unsigned char*)calloc(1, sizeof(GravChild)) %} as byte*;
+            %{
+                const char** av = (const char**)malloc(sizeof(char*) * (size_t)(a->len + 2));
+                if (!av) abort();
+                av[0] = self->program;
+                for (int i = 0; i < a->len; i++) av[i + 1] = a->data[i];
+                av[a->len + 1] = 0;
+                spawnErr = grav_proc_spawn(av, self->dir, (const char* const*)e->data, e->len, self->clear,
+                                    1, self->capture, (GravChild*)h);
+                free(av);
+            %};
+            if (spawnErr != 0) {
+                %{ free(h); %};
+                let why = %{ strerror(spawnErr) %} as string;
+                throw new IOError("cannot run '" + self.describe() + "': " + why);
+            }
+            return new Child(h, self.input, self.timeout);
+        }
+
+        // Run to completion and collect the exit code and output.
+        public fn run() -> CommandResult { return self.spawn().wait(); }
+        // Run and return stdout; throws IOError when the program fails.
+        public fn output() -> string {
+            let r = self.run();
+            if (!r.ok()) {
+                let why = r.timedOut ? "timed out" : "exited with ${r.code}";
+                throw new IOError("'" + self.describe() + "' " + why + (r.stderr != "" ? ": " + r.stderr : ""));
+            }
+            return r.stdout;
+        }
+        // Run and return only the exit code.
+        public fn status() -> int { return self.run().code; }
+    }
+
+}
