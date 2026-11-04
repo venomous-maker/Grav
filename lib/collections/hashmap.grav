@@ -64,6 +64,12 @@ namespace std.collections {
 
         constructor() { self.count = 0; self.alloc(16); }
         // One reference per key and value (reference types).
+        // For the cycle collector: the keys and values this map holds.
+        private fn __visitRefs() {
+            for (i in 0..self.cap) {
+                if (self.used[i] != 0) { __visit(self.ks[i]); __visit(self.vs[i]); }
+            }
+        }
         destructor() {
             for (i in 0..self.cap) {
                 if (self.used[i] != 0) { __release(self.ks[i]); __release(self.vs[i]); }
