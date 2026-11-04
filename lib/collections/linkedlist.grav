@@ -2,6 +2,7 @@
 // either end is O(1); get(i) walks from the nearer end. Prefer Array for
 // index-heavy work; use LinkedList when you mostly add/remove at the ends or
 // splice through an iteration.
+import "../core/exception.grav"
 import "array.grav"
 
 namespace std.collections {
@@ -57,24 +58,24 @@ namespace std.collections {
             return v;
         }
         public fn removeFirst() -> T {
-            if (self.head == null) { panic("LinkedList.removeFirst on an empty list"); }
+            if (self.head == null) { throw new StateError("LinkedList.removeFirst on an empty list"); }
             return self.unlink(self.head);
         }
         public fn removeLast() -> T {
-            if (self.tail == null) { panic("LinkedList.removeLast on an empty list"); }
+            if (self.tail == null) { throw new StateError("LinkedList.removeLast on an empty list"); }
             return self.unlink(self.tail);
         }
         public fn first() -> T {
-            if (self.head == null) { panic("LinkedList.first on an empty list"); }
+            if (self.head == null) { throw new StateError("LinkedList.first on an empty list"); }
             return self.head.value;
         }
         public fn last() -> T {
-            if (self.tail == null) { panic("LinkedList.last on an empty list"); }
+            if (self.tail == null) { throw new StateError("LinkedList.last on an empty list"); }
             return self.tail.value;
         }
 
         private fn nodeAt(i: int) -> LinkedNode<T> {
-            if (i < 0 || i >= self.len) { panic("LinkedList index ${i} out of range (size ${self.len})"); }
+            if (i < 0 || i >= self.len) { throw new IndexError("LinkedList index ${i} out of range (size ${self.len})"); }
             if (i < self.len / 2) {
                 let n = self.head;
                 for (k in 0..i) { n = n.next; }
