@@ -94,6 +94,7 @@ struct BinaryExpr : Expr {
     std::string overloadMethod;
     std::string overloadClass;
     bool overloadNegate = false;
+    bool overloadSwap = false; // `a > b` as `b < a` (from operator<)
 };
 
 // Prefix unary: '!' (logical not) and '~' (bitwise not).
@@ -180,6 +181,7 @@ struct IndexExpr : Expr {
     std::string overloadMethod; // internal name of the chosen op_index / op_index_set
     ExprPtr base;
     ExprPtr index;
+    std::vector<ExprPtr> more;  // `m[r, c]`: the indices after the first (operator[] only)
 };
 
 // `object.member`. Used both as a value (field read) and as the callee of a
@@ -272,6 +274,12 @@ struct AssignStmt : Stmt {
     // `target <op>= value`. `op` is one of Add/Sub/Mul/Div/Mod.
     bool isCompound = false;
     BinaryOp compoundOp = BinaryOp::Add;
+    // A compound assignment through operator methods (`obj[k] += v` with
+    // operator[]/operator[]=, or `x += y` on a class with operator+): the checker
+    // rewrites it to `t = t + v`, reading through `readBack` (a copy of the
+    // target); the generated code evaluates the target's object/container and
+    // indices once for both.
+    const Expr *readBack = nullptr;
 };
 
 struct ReturnStmt : Stmt {
