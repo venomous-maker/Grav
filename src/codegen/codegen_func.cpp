@@ -83,10 +83,23 @@ std::string CodeGen::accessorSig(const std::string &classFq,
 
 void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) {
     defs_ += "static " + accessorSig(classFq, m) + " {\n";
+    const FieldInfo *af = m.accessor == AccessorKind::Delegate ? nullptr : reg_->findField(classFq, m.accessorField);
+    bool weak = af && af->isWeak;
     if (m.accessor == AccessorKind::Getter) {
-        defs_ += "    return self->" + memberCName(m.accessorField) + ";\n";
+        std::string f = "self->" + memberCName(m.accessorField);
+        if (weak) f = "((" + cTy(m.returnType) + ")grav_weak_load((void*)" + f + "))";
+        defs_ += "    return " + retainOf(m.returnType, f) + ";\n"; // results are the caller's
     } else if (m.accessor == AccessorKind::Setter) {
-        defs_ += "    self->" + memberCName(m.accessorField) + " = value;\n";
+        std::string f = "self->" + memberCName(m.accessorField);
+        const TypeRef &vt = m.paramTypes.empty() ? m.returnType : m.paramTypes[0];
+        if (weak)
+            defs_ += "    { void* __old = (void*)" + f + "; grav_weak_retain((void*)value); " + f +
+                     " = value; grav_weak_release(__old); }\n";
+        else if (refKind(vt) != RefKind::None)
+            defs_ += "    { " + cTy(vt) + " __old = " + f + "; " + f + " = " + retainOf(vt, "value") + "; " +
+                     releaseOf(vt, "__old") + " }\n";
+        else
+            defs_ += "    " + f + " = value;\n";
     } else { // Delegate: forward to self->field's method via its vtable
         std::string slotOwner = m.delegateClass;
         if (const ClassInfo *ac = reg_->cls(m.delegateClass))
@@ -143,7 +156,9 @@ void CodeGen::emitFunction(const FunctionDecl &fn) {
     for (const auto &p : fn.params) pnames.push_back(p.name);
     beginBody(fn.body, pnames);
     emitEnter(fn.fqName, fn.line);
+    ownAssignedParams(fn.body, fn.params);
     emitBlock(fn.body);
+    emitBodyEndCleanups();
     if (trace_) line("grav_leave();");
     indent_ = 0;
     endFunction();
@@ -189,7 +204,9 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
         for (const auto &p : params) pnames.push_back(p.name);
         beginBody(ctor->body, pnames);
         emitEnter(cls.fqName + ".constructor", ctor->line);
+        ownAssignedParams(ctor->body, params);
         emitBlock(ctor->body);
+        emitBodyEndCleanups();
         if (trace_) line("grav_leave();");
         indent_ = 0;
         endFunction();
@@ -206,6 +223,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
         defs_ += "    self->__vt = 0;\n";
     }
     defs_ += "    self->__type = &" + mangle(cls.fqName) + "_typeinfo;\n";
+    defs_ += "    self->__rc = 1;\n"; // the creator's reference
 
     if (ctor) {
         defs_ += "    " + ctorInitCName(cls.fqName, idx) + "(self";
@@ -228,7 +246,9 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     for (const auto &p : m.params) pnames.push_back(p.name);
     beginBody(m.body, pnames);
     emitEnter(cls.fqName + "." + m.name, m.line);
+    ownAssignedParams(m.body, m.params);
     emitBlock(m.body);
+    emitBodyEndCleanups();
     if (trace_) line("grav_leave();");
     indent_ = 0;
     endFunction();
@@ -274,7 +294,8 @@ void CodeGen::emitAsyncSpawner(const FunctionDecl &fn) {
                    "*)t;\n    (void)r;\n    " + (isVoid ? "" : "r->result = ") + base + "(" + args +
                    ");\n}\n";
     std::string sets;
-    for (const auto &p : fn.params) sets += " r->" + p.name + " = " + p.name + ";";
+    // The task keeps its reference arguments alive (it may outlive the caller's).
+    for (const auto &p : fn.params) sets += " r->" + p.name + " = " + retainOf(p.type, p.name) + ";";
     asyncDecls_ += "static GravTask* " + base + "__spawn" + paramList(fn.params, "") + " {\n    " + rec +
                    "* r = (" + rec + "*)grav_zalloc(sizeof *r);" + sets + "\n    return grav_spawn(&r->task, " +
                    base + "__run, " + (isVoid ? "0" : "&r->result") + ");\n}\n";
