@@ -70,11 +70,11 @@ void CodeGen::emitBlock(const Block &block) {
     cleanups_.resize(base);
 }
 
-void CodeGen::emitUnwind(bool toLoop) {
+void CodeGen::emitUnwind(bool toLoop, const std::string &labelId) {
     for (size_t i = cleanups_.size(); i-- > 0;) {
         const Cleanup c = cleanups_[i];
         if (c.kind == Cleanup::Loop) {
-            if (toLoop) return;
+            if (toLoop && (labelId.empty() || c.label == labelId)) return;
             continue;
         }
         if (c.kind == Cleanup::Scope) continue;
@@ -89,8 +89,19 @@ void CodeGen::emitUnwind(bool toLoop) {
     }
 }
 
-void CodeGen::emitLoopBody(const Block &body) {
-    cleanups_.push_back({Cleanup::Loop, "", nullptr});
+// The C name of an enclosing loop's label (set up by emitLoopBody's caller).
+std::string CodeGen::loopLabelId(const std::string &label) const {
+    for (size_t i = loopLabels_.size(); i-- > 0;)
+        if (loopLabels_[i].first == label) return loopLabels_[i].second;
+    return "";
+}
+
+// A labeled loop's body ends with `<id>_next:`, where `continue <label>` jumps
+// (after the iteration's cleanups); `break <label>` jumps to `<id>_done:` right
+// after the loop.
+void CodeGen::emitLoopBody(const Block &body, const std::string &label) {
+    std::string id = label.empty() ? "" : loopLabelId(label);
+    cleanups_.push_back({Cleanup::Loop, "", nullptr, "", id});
     std::string varRelease = loopVarRelease_;
     loopVarRelease_.clear();
     if (!varRelease.empty()) cleanups_.push_back({Cleanup::Code, "", nullptr, varRelease});
@@ -102,6 +113,7 @@ void CodeGen::emitLoopBody(const Block &body) {
         line(varRelease); // end of an iteration
         cleanups_.pop_back();
     }
+    if (!id.empty()) line(id + "_next: ;");
     indent_--;
     cleanups_.pop_back();
 }
@@ -202,7 +214,22 @@ void CodeGen::emitTry(const TryStmt &s) {
     line("}");
 }
 
+// A labeled loop's C name for its `_next` / `_done` jump targets ("" if unlabeled).
+std::string CodeGen::pushLoopLabel(const std::string &label) {
+    if (label.empty()) return "";
+    std::string id = "grav_loop" + std::to_string(switchCounter_++) + "_" + label;
+    loopLabels_.push_back({label, id});
+    return id;
+}
+
+void CodeGen::popLoopLabel(const std::string &id) {
+    if (id.empty()) return;
+    line(id + "_done: ;");
+    loopLabels_.pop_back();
+}
+
 void CodeGen::emitForIn(const ForInStmt &s) {
+    std::string labelId = pushLoopLabel(s.label);
     std::string n = std::to_string(switchCounter_++);
     std::string vty = cTy(s.varType);
     if (s.iterKind == ForInKind::Range) {
@@ -225,8 +252,9 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             line(head + ", " + st + " = " + emitExpr(*s.step) + "; (" + st + " > 0 ? " + s.var +
                  lt + hi + " : " + s.var + gt + hi + "); " + s.var + " += " + st + ") {");
         }
-        emitLoopBody(s.body);
+        emitLoopBody(s.body, s.label);
         line("}");
+        popLoopLabel(labelId);
         return;
     }
 
@@ -303,8 +331,9 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     line(vty + " " + s.var + " = " + elem + ";");
     indent_--;
     if (ownedVar) loopVarRelease_ = releaseOf(s.varType, s.var);
-    emitLoopBody(s.body);
+    emitLoopBody(s.body, s.label);
     line("}");
+    popLoopLabel(labelId); // `break <label>` still releases the iterated collection
     if (ownedSrc) {
         line(cleanups_.back().code);
         cleanups_.pop_back();

@@ -104,12 +104,12 @@ import "relative/path.grav"
 let x: T = e / const x = e
 x = e / x += e (and -= *= /= %= &= |= ^= <<= >>=)
 if (c) { } else if (c) { } else { }
-while (c) { } / do { } while (c)
+while (c) { } / do { } while (c)                     (a loop may be labeled: `outer: for (...)`)
 for (init; cond; update) { }
 for (i in a..b [step s]) { } / for (i in a..=b) { }
 for (x in xs) { } / for (i, x in xs) { }
 switch (v) { case a, b: { } default: { } }            (match is a synonym)
-break / continue / return [e]
+break [label] / continue [label] / return [e]
 defer stmt / defer { }
 throw e
 try { } catch (e: T) { } [catch (e: U) { }] [finally { }]

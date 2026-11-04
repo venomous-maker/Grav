@@ -187,17 +187,21 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     };
     if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()));
+        std::string id = pushLoopLabel(s->label);
         line("while (" + emitExpr(*s->cond) + ") {");
-        emitLoopBody(s->body);
+        emitLoopBody(s->body, s->label);
         line("}");
+        popLoopLabel(id);
         loopMarks_.pop_back();
         return;
     }
     if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()));
+        std::string id = pushLoopLabel(s->label);
         line("do {");
-        emitLoopBody(s->body);
+        emitLoopBody(s->body, s->label);
         line("} while (" + emitExpr(*s->cond) + ");");
+        popLoopLabel(id);
         loopMarks_.pop_back();
         return;
     }
@@ -206,9 +210,11 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         std::string init = inlineSimple(s->init.get());
         std::string cond = s->cond ? emitExpr(*s->cond) : "";
         std::string upd = inlineSimple(s->update.get());
+        std::string id = pushLoopLabel(s->label);
         line("for (" + init + "; " + cond + "; " + upd + ") {");
-        emitLoopBody(s->body);
+        emitLoopBody(s->body, s->label);
         line("}");
+        popLoopLabel(id);
         loopMarks_.pop_back();
         return;
     }
@@ -270,8 +276,28 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     // Leaving a loop early first unwinds any try/finally/defer inside it.
-    if (dynamic_cast<const BreakStmt *>(&stmt)) { emitUnwind(true); line("break;"); return; }
-    if (dynamic_cast<const ContinueStmt *>(&stmt)) { emitUnwind(true); line("continue;"); return; }
+    if (auto *b = dynamic_cast<const BreakStmt *>(&stmt)) {
+        if (!b->label.empty()) {
+            std::string id = loopLabelId(b->label);
+            emitUnwind(true, id);
+            line("goto " + id + "_done;");
+            return;
+        }
+        emitUnwind(true);
+        line("break;");
+        return;
+    }
+    if (auto *c = dynamic_cast<const ContinueStmt *>(&stmt)) {
+        if (!c->label.empty()) {
+            std::string id = loopLabelId(c->label);
+            emitUnwind(true, id);
+            line("goto " + id + "_next;");
+            return;
+        }
+        emitUnwind(true);
+        line("continue;");
+        return;
+    }
 }
 
 void CodeGen::emitIf(const IfStmt &s) {

@@ -212,10 +212,10 @@ StmtPtr cloneStmt(const Stmt *s) {
         n->thenBlock = cloneBlock(x->thenBlock); n->elseStmt = cloneStmt(x->elseStmt.get()); return n;
     }
     if (auto *x = dynamic_cast<const WhileStmt *>(s)) {
-        auto n = mkS<WhileStmt>(s); n->cond = cloneExpr(x->cond.get()); n->body = cloneBlock(x->body); return n;
+        auto n = mkS<WhileStmt>(s); n->label = x->label; n->cond = cloneExpr(x->cond.get()); n->body = cloneBlock(x->body); return n;
     }
     if (auto *x = dynamic_cast<const DoWhileStmt *>(s)) {
-        auto n = mkS<DoWhileStmt>(s); n->body = cloneBlock(x->body); n->cond = cloneExpr(x->cond.get()); return n;
+        auto n = mkS<DoWhileStmt>(s); n->label = x->label; n->body = cloneBlock(x->body); n->cond = cloneExpr(x->cond.get()); return n;
     }
     if (auto *x = dynamic_cast<const SwitchStmt *>(s)) {
         auto n = mkS<SwitchStmt>(s); n->subject = cloneExpr(x->subject.get());
@@ -228,11 +228,11 @@ StmtPtr cloneStmt(const Stmt *s) {
         return n;
     }
     if (auto *x = dynamic_cast<const ForStmt *>(s)) {
-        auto n = mkS<ForStmt>(s); n->init = cloneStmt(x->init.get()); n->cond = cloneExpr(x->cond.get());
+        auto n = mkS<ForStmt>(s); n->label = x->label; n->init = cloneStmt(x->init.get()); n->cond = cloneExpr(x->cond.get());
         n->update = cloneStmt(x->update.get()); n->body = cloneBlock(x->body); return n;
     }
     if (auto *x = dynamic_cast<const ForInStmt *>(s)) {
-        auto n = mkS<ForInStmt>(s); n->var = x->var; n->indexVar = x->indexVar;
+        auto n = mkS<ForInStmt>(s); n->label = x->label; n->var = x->var; n->indexVar = x->indexVar;
         n->inclusive = x->inclusive;
         n->lo = cloneExpr(x->lo.get()); n->hi = cloneExpr(x->hi.get());
         n->step = cloneExpr(x->step.get()); n->body = cloneBlock(x->body); return n;
@@ -255,8 +255,8 @@ StmtPtr cloneStmt(const Stmt *s) {
         n->hasFinally = x->hasFinally; n->finallyBlock = cloneBlock(x->finallyBlock);
         return n;
     }
-    if (dynamic_cast<const BreakStmt *>(s)) return mkS<BreakStmt>(s);
-    if (dynamic_cast<const ContinueStmt *>(s)) return mkS<ContinueStmt>(s);
+    if (auto *x = dynamic_cast<const BreakStmt *>(s)) { auto n = mkS<BreakStmt>(s); n->label = x->label; return n; }
+    if (auto *x = dynamic_cast<const ContinueStmt *>(s)) { auto n = mkS<ContinueStmt>(s); n->label = x->label; return n; }
     return nullptr;
 }
 

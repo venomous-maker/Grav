@@ -531,9 +531,9 @@ void TypeChecker::checkForIn(ForInStmt &s) {
     if (!s.indexVar.empty())
         declareLocal(s.indexVar, TypeRef::prim(TypeRef::Kind::Int), true, false, s.line, s.col);
     declareLocal(s.var, s.varType, true, false, s.line, s.col);
-    loopDepth_++;
+    enterLoop(s.label, s.line, s.col);
     checkBlock(s.body);
-    loopDepth_--;
+    leaveLoop();
     popScope();
 }
 

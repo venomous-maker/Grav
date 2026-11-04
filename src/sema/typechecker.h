@@ -226,6 +226,9 @@ private:
     bool inStatic_ = false;
     bool inAsync_ = false; // true while checking an `async fn` body
     int loopDepth_ = 0; // for validating break/continue
+    std::vector<std::string> loopLabels_; // enclosing loops' labels ("" for none), innermost last
+    void enterLoop(const std::string &label, int line, int col);
+    void leaveLoop();
     // `match` on a data enum is replaced by an if/else chain (typechecker_match.cpp):
     // checkSwitch leaves the replacement here and checkBlock swaps it in.
     StmtPtr matchReplacement_;

@@ -146,6 +146,30 @@ Output:
 1 3 5 7 9 
 ```
 
+A label before a loop lets `break` and `continue` reach past inner loops:
+`break outer` leaves the loop labeled `outer`, and `continue outer` goes on with
+its next iteration. Cleanups on the way (`defer`, `finally`) run as usual.
+
+```grav
+fn main() {
+    search: for (i in 0..5) {
+        for (j in 0..5) {
+            if (i * j == 6) {
+                print("found ${i} x ${j}")
+                break search
+            }
+            if (j > i) { continue search }
+        }
+    }
+}
+```
+
+Output:
+
+```text
+found 3 x 2
+```
+
 ## switch / match
 
 `switch` and `match` are synonyms. Each case has a block (or a single statement),

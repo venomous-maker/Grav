@@ -176,11 +176,17 @@ private:
         std::string tryVar;          // Try: the jmp-top slot to restore
         const Block *body = nullptr; // Try/Finally: finally block; Defer: deferred body
         std::string code;            // Code: a C statement (e.g. freeing an owned string)
+        std::string label;           // Loop: the C name behind a labeled loop's label
     };
     std::vector<Cleanup> cleanups_;
-    void emitUnwind(bool toLoop);
+    // `break outer` / `continue outer`: the Grav label -> its C name, innermost last.
+    std::vector<std::pair<std::string, std::string>> loopLabels_;
+    std::string loopLabelId(const std::string &label) const;
+    std::string pushLoopLabel(const std::string &label);
+    void popLoopLabel(const std::string &id);
+    void emitUnwind(bool toLoop, const std::string &labelId = "");
     void emitForIn(const ForInStmt &s);
-    void emitLoopBody(const Block &body);
+    void emitLoopBody(const Block &body, const std::string &label = "");
     // Names assigned inside a `try` block of the current body; such locals are
     // declared `volatile` so their values survive the longjmp into `catch`.
     std::set<std::string> volatileNames_;

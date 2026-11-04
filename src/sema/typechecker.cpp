@@ -297,8 +297,14 @@ void TypeChecker::checkStmt(Stmt &stmt) {
     if (auto *s = dynamic_cast<DeferStmt *>(&stmt)) return checkDefer(*s);
     if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) return checkBlock(s->block);
     if (dynamic_cast<BreakStmt *>(&stmt) || dynamic_cast<ContinueStmt *>(&stmt)) {
-        if (loopDepth_ == 0)
+        if (loopDepth_ == 0) {
             error(stmt.line, stmt.col, "'break'/'continue' is only valid inside a loop");
+            return;
+        }
+        auto *br = dynamic_cast<BreakStmt *>(&stmt);
+        const std::string &label = br ? br->label : static_cast<ContinueStmt &>(stmt).label;
+        if (!label.empty() && std::find(loopLabels_.end() - loopDepth_, loopLabels_.end(), label) == loopLabels_.end())
+            error(stmt.line, stmt.col, "there is no enclosing loop labeled '" + label + "'");
         return;
     }
     if (auto *s = dynamic_cast<ExprStmt *>(&stmt)) {
@@ -320,17 +326,30 @@ void TypeChecker::checkIf(IfStmt &s) {
     if (s.elseStmt) checkStmt(*s.elseStmt);
 }
 
-void TypeChecker::checkWhile(WhileStmt &s) {
-    requireBool(*s.cond, "a 'while' condition");
+// Loops nest with their labels; a label may not repeat an enclosing one.
+void TypeChecker::enterLoop(const std::string &label, int line, int col) {
+    if (!label.empty() && std::find(loopLabels_.end() - loopDepth_, loopLabels_.end(), label) != loopLabels_.end())
+        error(line, col, "an enclosing loop is already labeled '" + label + "'");
+    loopLabels_.push_back(label);
     loopDepth_++;
-    checkBlock(s.body);
+}
+
+void TypeChecker::leaveLoop() {
+    loopLabels_.pop_back();
     loopDepth_--;
 }
 
-void TypeChecker::checkDoWhile(DoWhileStmt &s) {
-    loopDepth_++;
+void TypeChecker::checkWhile(WhileStmt &s) {
+    requireBool(*s.cond, "a 'while' condition");
+    enterLoop(s.label, s.line, s.col);
     checkBlock(s.body);
-    loopDepth_--;
+    leaveLoop();
+}
+
+void TypeChecker::checkDoWhile(DoWhileStmt &s) {
+    enterLoop(s.label, s.line, s.col);
+    checkBlock(s.body);
+    leaveLoop();
     requireBool(*s.cond, "a 'do/while' condition");
 }
 
@@ -339,9 +358,9 @@ void TypeChecker::checkFor(ForStmt &s) {
     if (s.init) checkStmt(*s.init);
     if (s.cond) requireBool(*s.cond, "a 'for' condition");
     if (s.update) checkStmt(*s.update);
-    loopDepth_++;
+    enterLoop(s.label, s.line, s.col);
     checkBlock(s.body);
-    loopDepth_--;
+    leaveLoop();
     popScope();
 }
 

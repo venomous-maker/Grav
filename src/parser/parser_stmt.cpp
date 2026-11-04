@@ -35,15 +35,30 @@ StmtPtr Parser::parseStatement() {
             const Token &t = advance();
             auto s = std::make_unique<BreakStmt>();
             s->line = t.line; s->col = t.col;
+            if (check(TokenType::Identifier) && !onNewLine()) s->label = advance().lexeme; // `break outer`
             return s;
         }
         case TokenType::Continue: {
             const Token &t = advance();
             auto s = std::make_unique<ContinueStmt>();
             s->line = t.line; s->col = t.col;
+            if (check(TokenType::Identifier) && !onNewLine()) s->label = advance().lexeme;
             return s;
         }
         case TokenType::Identifier:
+            // `outer: for (...)` — a labeled loop.
+            if (peekAt(1).type == TokenType::Colon &&
+                (peekAt(2).type == TokenType::For || peekAt(2).type == TokenType::While ||
+                 peekAt(2).type == TokenType::Do)) {
+                std::string label = advance().lexeme;
+                advance(); // ':'
+                StmtPtr loop = parseStatement();
+                if (auto *w = dynamic_cast<WhileStmt *>(loop.get())) w->label = label;
+                else if (auto *d = dynamic_cast<DoWhileStmt *>(loop.get())) d->label = label;
+                else if (auto *f = dynamic_cast<ForStmt *>(loop.get())) f->label = label;
+                else if (auto *fi = dynamic_cast<ForInStmt *>(loop.get())) fi->label = label;
+                return loop;
+            }
             // `defer` is contextual (still usable as a name): it starts a defer
             // statement only when followed by a block or another statement.
             if (peek().lexeme == "defer" &&

@@ -311,11 +311,13 @@ struct IfStmt : Stmt {
 struct WhileStmt : Stmt {
     ExprPtr cond;
     Block body;
+    std::string label; // `outer: while (...)`, for `break outer` / `continue outer`
 };
 
 struct DoWhileStmt : Stmt {
     Block body;
     ExprPtr cond;
+    std::string label;
 };
 
 // switch / match: each case matches one or more constant values; no fall-through.
@@ -336,6 +338,7 @@ struct ForStmt : Stmt {
     ExprPtr cond;   // or null (treated as true)
     StmtPtr update; // AssignStmt / ExprStmt or null
     Block body;
+    std::string label;
 };
 
 // `for (i in lo..hi [step s]) { ... }` — i takes lo, lo+s, … up to hi (exclusive
@@ -345,6 +348,7 @@ struct ForStmt : Stmt {
 // `length()`/`size()` plus `get(i)`/`at(i)` (e.g. Array<T>, List<T>).
 enum class ForInKind { Range, Array, Slice, Bytes, Chars, Object };
 struct ForInStmt : Stmt {
+    std::string label;
     std::string var;
     std::string indexVar;   // optional `i` in `for (i, x in xs)`
     ExprPtr lo;             // range start, or the iterable for element loops
@@ -365,8 +369,9 @@ struct DeferStmt : Stmt {
     Block body;
 };
 
-struct BreakStmt : Stmt {};
-struct ContinueStmt : Stmt {};
+// `break` / `continue`, optionally naming an enclosing labeled loop.
+struct BreakStmt : Stmt { std::string label; };
+struct ContinueStmt : Stmt { std::string label; };
 
 // `throw expr;` — raises a class instance as an exception.
 struct ThrowStmt : Stmt {
