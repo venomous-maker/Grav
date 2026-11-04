@@ -1,4 +1,5 @@
 #include "sema/typechecker.h"
+#include "sema/monomorph.h"
 
 namespace grav {
 
@@ -209,10 +210,22 @@ std::optional<TypeRef> TypeChecker::tryOperatorOverload(BinaryExpr &e, const Typ
     std::string name = opMethodName(e.op);
     if (name.empty()) return std::nullopt;
     const MethodInfo *mi = pickByOperand(reg_->findMethodsBySource(lt.name, name), rt);
-    bool negate = false;
+    bool negate = false, swap = false;
     if (!mi && e.op == BinaryOp::NotEq) { // `!=` falls back to `!(a == b)`
         mi = pickByOperand(reg_->findMethodsBySource(lt.name, "op_eq"), rt);
         negate = mi != nullptr;
+    }
+    // `>`, `<=`, `>=` follow from operator< when the class does not define them:
+    // a > b is b < a, a <= b is !(b < a), a >= b is !(a < b).
+    if (!mi && (e.op == BinaryOp::Greater || e.op == BinaryOp::LessEq || e.op == BinaryOp::GreaterEq)) {
+        if (e.op == BinaryOp::GreaterEq) {
+            mi = pickByOperand(reg_->findMethodsBySource(lt.name, "op_lt"), rt);
+            negate = mi != nullptr;
+        } else if (rt.isNamed() && reg_->isClass(rt.name)) {
+            mi = pickByOperand(reg_->findMethodsBySource(rt.name, "op_lt"), lt);
+            swap = mi != nullptr;
+            negate = mi != nullptr && e.op == BinaryOp::LessEq;
+        }
     }
     if (!mi) return std::nullopt;
     if (mi->isStatic || mi->paramTypes.size() != 1) {
@@ -222,14 +235,15 @@ std::optional<TypeRef> TypeChecker::tryOperatorOverload(BinaryExpr &e, const Typ
     }
     if (!checkAccess(mi->access, mi->definingClass))
         error(e.line, e.col, "operator method of '" + lt.name + "' is not accessible here");
-    if (!isAssignable(rt, mi->paramTypes[0]))
+    if (!isAssignable(swap ? lt : rt, mi->paramTypes[0]))
         error(e.right->line, e.right->col,
               std::string("operator '") + binaryOpSymbol(e.op) + "' on " + typeRefName(lt) +
                   " expects a right operand of type " + typeRefName(mi->paramTypes[0]) +
                   ", got " + typeRefName(rt));
     e.overloadMethod = mi->name;
-    e.overloadClass = lt.name;
+    e.overloadClass = swap ? rt.name : lt.name;
     e.overloadNegate = negate;
+    e.overloadSwap = swap;
     if ((isComparison(e.op)) && mi->returnType.kind != TypeRef::Kind::Bool) {
         error(e.line, e.col, "comparison operator method '" + mi->name + "' must return bool");
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -237,26 +251,115 @@ std::optional<TypeRef> TypeChecker::tryOperatorOverload(BinaryExpr &e, const Typ
     return mi->returnType;
 }
 
+std::vector<TypeRef> TypeChecker::checkIndexKeys(IndexExpr &e) {
+    std::vector<TypeRef> keys{checkExpr(*e.index)};
+    for (auto &m : e.more) keys.push_back(checkExpr(*m));
+    return keys;
+}
+
+const MethodInfo *TypeChecker::pickIndexMethod(const std::vector<const MethodInfo *> &cands,
+                                               const std::vector<TypeRef> &keys, size_t extra) const {
+    const MethodInfo *best = nullptr;
+    int bestExact = -1;
+    for (const MethodInfo *m : cands) {
+        if (m->isStatic || m->paramTypes.size() != keys.size() + extra) continue;
+        int exact = 0;
+        bool ok = true;
+        for (size_t i = 0; i < keys.size(); ++i) {
+            if (keys[i] == m->paramTypes[i]) exact++;
+            else if (!isAssignable(keys[i], m->paramTypes[i])) { ok = false; break; }
+        }
+        if (ok && exact > bestExact) { best = m; bestExact = exact; }
+    }
+    return best;
+}
+
+namespace {
+std::string indexList(const std::vector<TypeRef> &keys) {
+    std::string s;
+    for (size_t i = 0; i < keys.size(); ++i) s += (i ? ", " : "") + typeRefName(keys[i]);
+    return s;
+}
+} // namespace
+
 std::optional<TypeRef> TypeChecker::tryIndexOverload(IndexExpr &e, const TypeRef &base) {
     if (!base.isNamed() || !reg_->isClass(base.name)) return std::nullopt;
     auto cands = reg_->findMethodsBySource(base.name, "op_index");
+    std::vector<TypeRef> keys = checkIndexKeys(e);
     if (cands.empty()) {
-        error(e.line, e.col, "class '" + base.name + "' has no 'operator[]'");
+        if (!reg_->findMethodsBySource(base.name, "op_index_set").empty())
+            error(e.line, e.col, "class '" + base.name + "' has 'operator[]=' but no 'operator[]': its "
+                                 "elements can be assigned but not read");
+        else
+            error(e.line, e.col, "class '" + base.name + "' has no 'operator[]'");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
-    TypeRef it = checkExpr(*e.index);
-    const MethodInfo *mi = pickByOperand(cands, it);
-    if (mi->isStatic || mi->paramTypes.size() != 1) {
-        error(e.line, e.col, "'operator[]' must be an instance method taking one parameter");
+    for (const auto &k : keys) if (k.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    const MethodInfo *mi = pickIndexMethod(cands, keys, 0);
+    if (!mi) {
+        std::string have;
+        for (const MethodInfo *c : cands) {
+            if (c->isStatic) continue;
+            have += std::string(have.empty() ? "" : ", ") + "[" + indexList(c->paramTypes) + "]";
+        }
+        error(e.line, e.col, "no 'operator[]' of '" + base.name + "' takes [" + indexList(keys) +
+                                 "] (it has " + (have.empty() ? "none usable" : have) + ")");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
-    if (!isAssignable(it, mi->paramTypes[0]))
-        error(e.index->line, e.index->col,
-              "index of type " + typeRefName(it) + " does not match 'operator[]' parameter " +
-                  typeRefName(mi->paramTypes[0]));
     e.overloadClass = base.name;
     e.overloadMethod = mi->name;
     return mi->returnType;
+}
+
+// `obj[k...] = v` and `obj[k...] op= v` on a class: operator[]= (and, for the
+// compound form, operator[] to read the old value).
+void TypeChecker::checkIndexAssign(AssignStmt &s, IndexExpr &ix, const TypeRef &bt) {
+    std::vector<TypeRef> keys = checkIndexKeys(ix);
+    for (const auto &k : keys) if (k.isError()) return;
+    auto sets = reg_->findMethodsBySource(bt.name, "op_index_set");
+    if (sets.empty()) {
+        if (!reg_->findMethodsBySource(bt.name, "op_index").empty())
+            error(s.line, s.col, "class '" + bt.name + "' has 'operator[]' but no 'operator[]=': its "
+                                 "elements are read-only");
+        else
+            error(s.line, s.col, "class '" + bt.name + "' has no 'operator[]=' for element assignment");
+        return;
+    }
+    const MethodInfo *mi = pickIndexMethod(sets, keys, 1);
+    if (!mi) {
+        error(s.line, s.col, "no 'operator[]=' of '" + bt.name + "' takes [" + indexList(keys) + "] and a value");
+        return;
+    }
+    const TypeRef &elemT = mi->paramTypes.back();
+    TypeRef valueType;
+    if (s.isCompound) {
+        // obj[k] op= v  ==>  obj[k] = obj[k] op v, with obj and k evaluated once.
+        if (reg_->findMethodsBySource(bt.name, "op_index").empty()) {
+            error(s.line, s.col, "'" + std::string(binaryOpSymbol(s.compoundOp)) + "=' on an element of '" + bt.name +
+                                     "' needs 'operator[]' to read it, and the class has only 'operator[]='");
+            return;
+        }
+        ExprPtr copy = cloneExpression(&ix);
+        Expr *read = copy.get();
+        auto bin = std::make_unique<BinaryExpr>();
+        bin->line = s.value->line;
+        bin->col = s.value->col;
+        bin->op = s.compoundOp;
+        bin->left = std::move(copy);
+        bin->right = std::move(s.value);
+        s.value = std::move(bin);
+        s.isCompound = false;
+        s.readBack = read;
+        valueType = checkExpr(*s.value);
+    } else {
+        valueType = checkExprExpect(*s.value, elemT);
+    }
+    if (!valueType.isError() && !isAssignable(valueType, elemT))
+        error(s.value->line, s.value->col, "cannot assign " + typeRefName(valueType) +
+                                               " through 'operator[]=' expecting " + typeRefName(elemT));
+    ix.overloadClass = bt.name;
+    ix.overloadMethod = mi->name;
+    ix.type = TypeRef::prim(TypeRef::Kind::Void);
 }
 
 bool TypeChecker::isDisplayable(const TypeRef &t) const {
