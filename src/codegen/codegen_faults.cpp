@@ -12,7 +12,8 @@ namespace grav {
 void CodeGen::emitFaultSupport() {
     typedefs_ += R"C(#include <signal.h>
 #include <sys/resource.h>
-static GRAV_COLD GRAV_NORETURN void grav_fault_index(long long i, long long n);
+static GRAV_COLD GRAV_NORETURN void grav_fault_index_of(const char* what, long long i, long long n);
+#define grav_fault_index(i, n) grav_fault_index_of("array", (i), (n))
 static GRAV_COLD GRAV_NORETURN void grav_fault_div(void);
 static GRAV_COLD GRAV_NORETURN void grav_fault_enum(long long v, long long n, const char* name);
 static GRAV_COLD GRAV_NORETURN void grav_fault_cast(const GravTypeInfo* from, const GravTypeInfo* to);
@@ -46,6 +47,24 @@ static inline void* grav_cast_check(void* o, const GravTypeInfo* to) {
 static inline long long grav_idx(long long i, long long n) {
     if (GRAV_UNLIKELY((unsigned long long)i >= (unsigned long long)n)) grav_fault_index(i, n);
     return i;
+}
+/* `s[i]`: the byte at index i (checked against the string's length). */
+static inline unsigned char grav_str_byte(const char* s, long long i) {
+    if (GRAV_UNLIKELY(i < 0 || strnlen(s, (size_t)i + 1) <= (size_t)i)) grav_fault_index_of("string", i, (long long)strlen(s));
+    return (unsigned char)s[i];
+}
+/* `for (ch in s)`: the byte length of the UTF-8 character at p, and a copy of it. */
+static inline int grav_utf8_len(const char* p) {
+    unsigned char c = (unsigned char)p[0];
+    int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
+    for (int k = 1; k < n; k++) if (((unsigned char)p[k] & 0xC0) != 0x80) return 1; /* malformed: one byte */
+    return n;
+}
+static inline const char* grav_str_slice(const char* p, int n) {
+    char* r = grav_str_new((size_t)n);
+    memcpy(r, p, (size_t)n);
+    r[n] = 0;
+    return r;
 }
 /* Integer `/` and `%`: a zero divisor is a fault, and dividing by -1 negates
    (in two's complement, so the most negative value cannot trap). */
@@ -122,9 +141,9 @@ void CodeGen::emitFaultRaisers() {
     std::string div = raise("std.core.ArithmeticError");
     std::string value = raise("std.core.ValueError");
     std::string type = raise("std.core.TypeError");
-    defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_index(long long i, long long n) {\n"
+    defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_index_of(const char* what, long long i, long long n) {\n"
              "    char msg[160];\n"
-             "    snprintf(msg, sizeof msg, \"array index %lld out of range (length %lld)\", i, n);\n" +
+             "    snprintf(msg, sizeof msg, \"%s index %lld out of range (length %lld)\", what, i, n);\n" +
              (index.empty() ? "    grav_panic(msg);\n" : index) + "}\n";
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_div(void) {\n"
              "    const char* msg = \"integer division by zero\";\n" +

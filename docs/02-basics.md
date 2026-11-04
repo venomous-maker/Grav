@@ -138,9 +138,12 @@ false
 
 ## Strings
 
-Strings are immutable. `+` concatenates, `==` compares contents, and `${expr}`
-interpolates any printable value (numbers, booleans, enums, and objects with a
-`toString()` method).
+Strings are immutable UTF-8 text. `+` concatenates, `==` and `<` compare contents,
+and `${expr}` interpolates any value (see [Printing values](#printing-values)).
+`s.length` is the length in bytes, `s[i]` is the byte at index `i` (a `byte`;
+an index past the end throws `IndexError`), and `for (ch in s)` visits each
+character as a one-character string. The `Str` class in the
+[standard library](14-standard-library.md#strings) has the rest.
 
 ```grav
 fn main() {
@@ -160,6 +163,25 @@ Output:
 Hello, Ada! Born 1815, that is 210 years ago.
 same? true
 42true
+```
+
+```grav
+fn main() {
+    let word = "héllo"
+    print(word.length)          // bytes: é takes two
+    print(word[0])              // 104, the byte for 'h'
+    let n = 0
+    for (ch in word) { n++ }
+    print(n)                    // characters
+}
+```
+
+Output:
+
+```text
+6
+104
+5
 ```
 
 Escape sequences:

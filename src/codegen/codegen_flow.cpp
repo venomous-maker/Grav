@@ -265,6 +265,12 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             elem = src + ".data[" + idx + "]";
             count = "(int)" + src + ".len";
             break;
+        case ForInKind::Chars:
+            // The string is held for the loop; each character is a fresh string.
+            line("const char* " + src + " = " + emitOwned(*s.lo, s.lo->type) + ";");
+            cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(s.lo->type, src)});
+            ownedSrc = true;
+            break;
         case ForInKind::Object:
         default:
             // The collection is owned for the whole loop (an iteration's releases
@@ -279,11 +285,21 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             elem = methodCall(src, s.lo->type, s.getMethod, idx);
             break;
     }
-    line("for (int " + idx + " = 0; " + idx + " < " + count + "; " + idx + "++) {");
-    indent_++;
+    if (s.iterKind == ForInKind::Chars) {
+        std::string pos = src + "_p", len = src + "_l";
+        line("for (int " + idx + " = 0, " + pos + " = 0, " + len + " = 0; " + src + "[" + pos + "]; " + idx +
+             "++, " + pos + " += " + len + ") {");
+        indent_++;
+        line(len + " = grav_utf8_len(" + src + " + " + pos + ");");
+        elem = "grav_str_slice(" + src + " + " + pos + ", " + len + ")";
+    } else {
+        line("for (int " + idx + " = 0; " + idx + " < " + count + "; " + idx + "++) {");
+        indent_++;
+    }
     // An element from get(i) is the loop variable's own reference: released at
     // the end of the iteration (and by break/continue/return on the way out).
-    bool ownedVar = s.iterKind == ForInKind::Object && refKind(s.varType) != RefKind::None;
+    bool ownedVar = (s.iterKind == ForInKind::Object || s.iterKind == ForInKind::Chars) &&
+                    refKind(s.varType) != RefKind::None;
     line(vty + " " + s.var + " = " + elem + ";");
     indent_--;
     if (ownedVar) loopVarRelease_ = releaseOf(s.varType, s.var);

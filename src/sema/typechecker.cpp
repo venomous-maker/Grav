@@ -495,6 +495,10 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     if (dynamic_cast<IndexExpr *>(s.target.get())) {
         TypeRef targetType = checkExpr(*s.target); // validates indexability, sets type
         if (targetType.isError()) return;
+        if (static_cast<IndexExpr *>(s.target.get())->base->type.kind == TypeRef::Kind::String) {
+            error(s.line, s.col, "strings are immutable: build a new one instead (Str.replace, + or StringBuilder)");
+            return;
+        }
         if (s.isCompound)
             checkCompound(s, targetType, valueType);
         else if (!isAssignable(valueType, targetType))

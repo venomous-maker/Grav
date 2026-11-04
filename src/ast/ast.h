@@ -343,7 +343,7 @@ struct ForStmt : Stmt {
 // `for (x in xs)` / `for (i, x in xs)` iterate the elements of a fixed array, a
 // slice (variadic param), a `binary`, or a collection object exposing
 // `length()`/`size()` plus `get(i)`/`at(i)` (e.g. Array<T>, List<T>).
-enum class ForInKind { Range, Array, Slice, Bytes, Object };
+enum class ForInKind { Range, Array, Slice, Bytes, Chars, Object };
 struct ForInStmt : Stmt {
     std::string var;
     std::string indexVar;   // optional `i` in `for (i, x in xs)`

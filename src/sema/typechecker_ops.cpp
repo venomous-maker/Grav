@@ -507,6 +507,9 @@ void TypeChecker::checkForIn(ForInStmt &s) {
         } else if (lo.isBinary()) {
             s.iterKind = ForInKind::Bytes;
             s.varType = TypeRef::integer(8, true);
+        } else if (lo.kind == TypeRef::Kind::String) {
+            s.iterKind = ForInKind::Chars; // each UTF-8 character, as a string
+            s.varType = TypeRef::prim(TypeRef::Kind::String);
         } else if (lo.isNamed() && reg_->isClass(lo.name)) {
             s.iterKind = ForInKind::Object;
             auto pick = [&](std::initializer_list<const char *> names, size_t nparams)
@@ -533,7 +536,7 @@ void TypeChecker::checkForIn(ForInStmt &s) {
         } else {
             error(s.lo->line, s.lo->col,
                   "cannot iterate a value of type " + typeRefName(lo) +
-                      " (expected an array, slice, binary, or collection object)");
+                      " (expected an array, slice, string, binary, or collection object)");
             s.varType = TypeRef::prim(TypeRef::Kind::Error);
         }
     } else {

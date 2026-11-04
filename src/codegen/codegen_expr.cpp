@@ -425,6 +425,10 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         // index directly.
         if (e->base->type.isArray() && !e->base->type.isSlice())
             return "(" + base + ").data[" + checkedIndex(idx, e->base->type.arrayLen) + "]";
+        if (e->base->type.kind == TypeRef::Kind::String) return "grav_str_byte(" + base + ", " + idx + ")";
+        // A slice (a variadic parameter) carries its length alongside.
+        if (e->base->type.isSlice() && dynamic_cast<const NameExpr *>(e->base.get()))
+            return "(" + base + ")[grav_idx(" + idx + ", " + base + "__n)]";
         return "(" + base + ")[" + idx + "]";
     }
     if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
@@ -471,6 +475,8 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         // `arr.length` is the array's fixed length, a compile-time constant.
         if (e->object->type.isArray() && e->member == "length")
             return std::to_string(e->object->type.arrayLen);
+        if (e->object->type.kind == TypeRef::Kind::String && e->member == "length")
+            return "((int)strlen(" + emitExpr(*e->object) + "))";
         // `bytes.length` is the runtime byte count stored alongside the buffer.
         if (e->object->type.isBinary() && e->member == "length")
             return "(int)((" + emitExpr(*e->object) + ").len)";

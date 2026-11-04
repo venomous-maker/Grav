@@ -658,9 +658,10 @@ TypeRef TypeChecker::checkIndex(IndexExpr &e) {
               "an array index must be int, but got " + typeRefName(idx));
     if (base.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     if (base.isArray() || base.isPointer()) return *base.elem; // an lvalue of the element type
+    if (base.kind == TypeRef::Kind::String) return TypeRef::integer(8, true); // the byte at an index
     error(e.base->line, e.base->col,
           "cannot index a value of type " + typeRefName(base) +
-              " (only arrays and pointers are indexable)");
+              " (only arrays, strings and pointers are indexable)");
     return TypeRef::prim(TypeRef::Kind::Error);
 }
 
@@ -1279,6 +1280,12 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
         if (e.member == "length") return TypeRef::prim(TypeRef::Kind::Int);
         error(e.line, e.col,
               "an array has no member '" + e.member + "' (only 'length')");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    // `s.length` is a string's length in bytes (UTF-8), as an int.
+    if (objType.kind == TypeRef::Kind::String) {
+        if (e.member == "length") return TypeRef::prim(TypeRef::Kind::Int);
+        error(e.line, e.col, "a string has no member '" + e.member + "' (only 'length'; see Str for the rest)");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     // `bytes.length` is the runtime byte count of a binary value, as an int.

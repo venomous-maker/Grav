@@ -96,7 +96,7 @@ Output:
 ## For-each
 
 `for (x in xs)` iterates the elements of a fixed array, a variadic parameter, a
-`binary` value, or any collection object that has `length()`/`size()` and
+`binary` value (its bytes), a string (its characters), or any collection object that has `length()`/`size()` and
 `get(i)`/`at(i)` (so `Array`, `List`, and your own classes work). The two-name form
 also binds the index.
 
