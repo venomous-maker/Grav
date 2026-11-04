@@ -223,6 +223,57 @@ Output:
 true
 ```
 
+## Sorting and searching
+
+`Sort` (in `std.core`, next to `Math`) sorts arrays with TimSort. It is stable
+(equal elements keep their order), O(n log n) in the worst case, and close to O(n)
+when the input is already sorted, reversed, or made of a few sorted stretches.
+`xs.sortBy(cmp)` on an `Array` is the same sort.
+
+| Call | Does |
+|------|------|
+| `Sort.sort(xs)`, `Sort.sortDescending(xs)` | natural order, for arrays of `int`, `long`, `float` and `string` |
+| `Sort.sortBy(xs, cmp)` | any element type: `cmp(a, b) < 0` puts `a` first |
+| `Sort.isSorted(xs)`, `Sort.isSortedBy(xs, cmp)` | whether the array is in order |
+| `Sort.binarySearch(xs, key)`, `Sort.binarySearchBy(xs, key, cmp)` | in a sorted array: the index of `key`, or `-(insertion point) - 1` |
+
+Strings compare byte by byte, like `Str.compare` (`"B"` sorts before `"a"`). If a
+comparison throws, the sort stops and the array keeps all of its elements, in a
+partly sorted order.
+
+```grav
+import "std"
+
+class Player {
+    public name: string
+    public score: int
+    constructor(name: string, score: int) { self.name = name; self.score = score }
+}
+
+fn main() {
+    let scores = new Array<int>()
+    for (v in [42, 7, 19, 7, 88]) { scores.push(v) }
+    Sort.sort(scores)
+    print("${scores.get(0)} .. ${scores.get(4)}, 19 at ${Sort.binarySearch(scores, 19)}")
+
+    let players = new Array<Player>()
+    players.push(new Player("ana", 30))
+    players.push(new Player("bo", 50))
+    players.push(new Player("cy", 30))
+    Sort.sortBy(players, fn(a, b) => b.score - a.score)    // best first; ties keep their order
+    for (p in players) { print("${p.name} ${p.score}") }
+}
+```
+
+Output:
+
+```text
+7 .. 88, 19 at 2
+bo 50
+ana 30
+cy 30
+```
+
 ## Files and paths
 
 `File` (`lib/fs.grav`) is an object for one path: `exists`, `size` (64-bit),
