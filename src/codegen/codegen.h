@@ -106,6 +106,38 @@ private:
     std::string paramList(const std::vector<Param> &params,
                           const std::string &selfStruct) const;
 
+    // codegen_arc.cpp — automatic reference counting. Objects, interface values,
+    // closures and `any` values are reference types: owning places (locals,
+    // fields, globals, captures, returns) hold one reference each. emitExpr()
+    // yields a *borrowed* value valid until the statement ends (call and `new`
+    // results go on the per-thread release list); emitOwned() yields +1.
+    enum class RefKind { None, Obj, Iface, Fn, Any, Str };
+    bool concatAllocates(const Expr &e) const;
+    bool isUnstableRef(const Expr &e) const;
+    bool isWeakField(const MemberExpr &m) const;
+    RefKind refKind(const TypeRef &t) const;
+    std::string retainOf(const TypeRef &t, const std::string &c) const;
+    std::string releaseOf(const TypeRef &t, const std::string &c) const;   // a statement
+    std::string autoreleaseOf(const TypeRef &t, const std::string &c) const;
+    // Does evaluating `e` yield a new reference (a call, `new`, a capturing lambda)?
+    bool isRefProducer(const Expr &e) const;
+    bool exprMayAutorelease(const Expr *e) const;
+    bool stmtNeedsDrain(const Stmt &s) const;
+    // The value of `e` converted to `target`, as an owned (+1) reference.
+    std::string emitOwned(const Expr &e, const TypeRef &target) const;
+    // The C statement storing `value` into the owning place `slot` (an lvalue).
+    std::string storeOwned(const std::string &slot, const TypeRef &slotType, const Expr &value) const;
+    void emitReleaseFields(const std::string &classFq);  // Class__arc_fields(): typeinfo `fields` hook
+    // Parameters a body assigns to: owned for the body (retained on entry).
+    void ownAssignedParams(const Block &body, const std::vector<Param> &params);
+    void emitBodyEndCleanups();
+    std::string emitStable(const Expr &e, const TypeRef &t) const; // a call argument / receiver
+    mutable const Expr *ownedRoot_ = nullptr; // emitOwned: this producer transfers, no autorelease
+    int poolCounter_ = 0;
+    std::vector<std::string> loopMarks_;      // release-list depth before each enclosing loop
+    std::string loopVarRelease_;              // for-in: release of an owned loop variable
+    std::string emitExprRaw(const Expr &expr) const;
+
     // codegen_flow.cpp — structured control flow with cleanups.
     // Every construct that must run code on an early exit pushes an entry: a
     // `return` unwinds all of them, `break`/`continue` unwind to the nearest loop.
@@ -179,7 +211,8 @@ private:
     std::set<std::string> ownedSet(const Block &body, const std::vector<std::string> &outerNames,
                                    bool returnsOwned) const;
     void analyzeOwnedStrings(const Block &body, const std::vector<std::string> &outerNames);
-    bool isFreshString(const Expr &e) const; // does it allocate a new string?
+    bool isFreshString(const Expr &e) const;
+    bool isFreshStringLegacy(const Expr &e) const; // does it allocate a new string?
     bool emitOwnedLet(const LetStmt &s);
     bool emitOwnedAssign(const AssignStmt &s);
     // Interprocedural: functions/methods whose every return yields a fresh string
