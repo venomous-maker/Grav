@@ -11,4 +11,8 @@ examples/[0-9][0-9]_*
 !examples/[0-9][0-9]_*.grav
 examples/apps/*
 !examples/apps/*.grav
+# multi-file app projects: keep the sources, ignore their binaries and data
+!examples/apps/bank_server/
+examples/apps/bank_server/src/main
+examples/apps/bank_server/*.json
 examples/project/main
