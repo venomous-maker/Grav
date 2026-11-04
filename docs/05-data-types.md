@@ -121,7 +121,8 @@ anonymous
 
 The type arguments of `Result.Ok(42)` and `Option.None` are inferred from the
 arguments or from the expected type (the declared variable, parameter or return
-type). `Result` has `isOk`, `isErr`, `unwrap`, `expect`, `unwrapOr`,
+type), including through both branches of `? :`, as in
+`return found == null ? Result.Err("missing") : Result.Ok(found)`. `Result` has `isOk`, `isErr`, `unwrap`, `expect`, `unwrapOr`,
 `unwrapOrElse`, `unwrapErr`, `map`, `mapErr`, `andThen` and `ok`. `Option` has
 `isSome`, `isNone`, `unwrap`, `expect`, `unwrapOr`, `unwrapOrElse`, `map`,
 `andThen`, `filter`, `ifSome` and `okOr`.
