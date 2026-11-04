@@ -440,6 +440,39 @@ bool Parser::looksLikeStructLiteral() const {
            tokens_[b + 1].type == TokenType::Colon; // `Type { field: ... }`
 }
 
+// At an identifier: is this `Name<Args>.member` — a static member of a generic
+// class instance (`Stack<int>.of(3)`)? The arguments must look like types, so a
+// comparison such as `a < b && c > d.e` is left alone.
+bool Parser::looksLikeGenericStatic() const {
+    size_t i = pos_;
+    if (i >= tokens_.size() || tokens_[i].type != TokenType::Identifier) return false;
+    ++i;
+    while (i + 1 < tokens_.size() && tokens_[i].type == TokenType::Dot &&
+           tokens_[i + 1].type == TokenType::Identifier)
+        i += 2;
+    if (i >= tokens_.size() || tokens_[i].type != TokenType::Less) return false;
+    int depth = 0;
+    while (i < tokens_.size()) {
+        TokenType tt = tokens_[i].type;
+        switch (tt) {
+            case TokenType::Less: depth += 1; break;
+            case TokenType::Greater: depth -= 1; break;
+            case TokenType::ShiftRight: depth -= 2; break;
+            case TokenType::Identifier: case TokenType::KwInt: case TokenType::KwFloat:
+            case TokenType::KwBool: case TokenType::KwString: case TokenType::KwVoid:
+            case TokenType::Comma: case TokenType::Dot: case TokenType::Star:
+            case TokenType::LBracket: case TokenType::RBracket: case TokenType::IntLiteral:
+            case TokenType::Fn: case TokenType::LParen: case TokenType::RParen: case TokenType::Arrow:
+                break;
+            default: return false;
+        }
+        ++i;
+        if (depth <= 0) break;
+    }
+    return depth == 0 && i + 1 < tokens_.size() && tokens_[i].type == TokenType::Dot &&
+           tokens_[i + 1].type == TokenType::Identifier;
+}
+
 ExprPtr Parser::parseStructLiteral() {
     const Token &t = peek();
     auto e = at<StructLiteralExpr>(t);
@@ -599,6 +632,12 @@ ExprPtr Parser::parsePrimary() {
             // `Type { field: value, ... }` — a struct literal. Disambiguated from
             // a plain name (and from a following block) by a short lookahead.
             if (looksLikeStructLiteral()) return parseStructLiteral();
+            if (looksLikeGenericStatic()) { // `Stack<int>.of(3)`
+                auto e = at<NameExpr>(t);
+                e->name = parseQualifiedName("for a generic class");
+                e->typeArgs = parseTypeArgs();
+                return e;
+            }
             advance();
             auto e = at<NameExpr>(t);
             e->name = t.lexeme;

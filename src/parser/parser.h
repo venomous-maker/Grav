@@ -107,6 +107,7 @@ private:
     // type rather than an expression.
     bool looksLikeTypeArg() const;
     bool looksLikeStructLiteral() const;
+    bool looksLikeGenericStatic() const;
     bool looksLikeCast() const; // C-style `(Type)value` at the current '('
     std::vector<ExprPtr> parseArguments();
 

@@ -47,8 +47,16 @@ void TypeChecker::unify(const TypeRef &p, const TypeRef &a, const std::vector<st
         auto it = program_->generics.instances.find(a.name);
         if (it != program_->generics.instances.end() &&
             lastSegment(it->second.first) == lastSegment(p.name) &&
-            it->second.second.size() == p.args.size())
+            it->second.second.size() == p.args.size()) {
             for (size_t i = 0; i < p.args.size(); ++i) unify(p.args[i], it->second.second[i], tps, s);
+            return;
+        }
+        // A class passed where its interface or base is expected: `One<int>` for
+        // `Container<T>` gives T = int through `One<T> implements Container<T>`.
+        if (const ClassInfo *ci = reg_->cls(a.name)) {
+            for (const auto &i : ci->interfaces) if (!i.empty()) unify(p, TypeRef::named(i), tps, s);
+            if (!ci->baseClass.empty()) unify(p, TypeRef::named(ci->baseClass), tps, s);
+        }
         return;
     }
     if (p.kind == a.kind && p.elem && a.elem &&

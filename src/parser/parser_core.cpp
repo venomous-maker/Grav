@@ -335,7 +335,11 @@ std::vector<std::string> Parser::parseTypeParams(std::vector<std::string> *bound
         params.push_back(expect(TokenType::Identifier, "as a type parameter").lexeme);
         // Optional constraint: `T: Bound`.
         std::string b;
-        if (matchToken(TokenType::Colon)) b = parseQualifiedName("as a type-parameter bound");
+        if (matchToken(TokenType::Colon)) {
+            b = parseQualifiedName("as a type-parameter bound");
+            // A generic bound (`T: Comparable<T>`) is checked by its interface name.
+            if (check(TokenType::Less)) (void)parseTypeArgs();
+        }
         if (bounds) bounds->push_back(b);
     } while (matchToken(TokenType::Comma));
     expectGenericClose();

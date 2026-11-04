@@ -62,6 +62,9 @@ struct NameExpr : Expr {
     // its fully-qualified name and chosen overload.
     std::string fnRef;
     int fnRefOverload = 0;
+    // `Stack<int>.of(3)`: the type arguments of a generic class named as a static
+    // target (monomorphization replaces `name` with the instance and clears them).
+    std::vector<TypeRef> typeArgs;
 };
 
 // `self` (or `this`) inside a method body.

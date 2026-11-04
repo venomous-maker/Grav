@@ -92,7 +92,7 @@ ExprPtr cloneExpr(const Expr *e) {
         auto n = mkE<CBlockExpr>(e); n->code = x->code; return n;
     }
     if (auto *x = dynamic_cast<const NameExpr *>(e)) {
-        auto n = mkE<NameExpr>(e); n->name = x->name; return n;
+        auto n = mkE<NameExpr>(e); n->name = x->name; n->typeArgs = x->typeArgs; return n;
     }
     if (dynamic_cast<const SelfExpr *>(e)) return mkE<SelfExpr>(e);
     if (dynamic_cast<const SuperExpr *>(e)) return mkE<SuperExpr>(e);
@@ -767,6 +767,14 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
             x->typeArgs.clear();
         }
         for (auto &f : x->fields) walkExpr(f.value.get(), subst);
+    } else if (auto *x = dynamic_cast<NameExpr *>(e); x && !x->typeArgs.empty()) {
+        // `Stack<int>.of(3)` names the instance's static member.
+        for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
+        if (std::string fq = findTpl(x->name, classTpl_); !fq.empty())
+            x->name = instantiateClass(fq, x->typeArgs, e->line, e->col);
+        else
+            error(e->line, e->col, "unknown generic class '" + x->name + "'");
+        x->typeArgs.clear();
     } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {

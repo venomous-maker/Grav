@@ -124,6 +124,39 @@ Output:
 Nairobi!
 ```
 
+A bound may itself be generic, as in `fn maxOf<T: Comparable<T>>(a: T, b: T) -> T`.
+
+Type arguments are also inferred through the interfaces and base classes of an
+argument: passing a `Box<int>` where a `Container<T>` is expected gives `T = int`
+when `Box<T> implements Container<T>`.
+
+## Static members of generic classes
+
+Name the instance to reach its static methods and fields: `Stack<int>.of(3)`.
+
+```grav
+class Stack<T> {
+    private items: T[8]
+    private n: int
+    constructor() { self.n = 0 }
+    fn push(x: T) { self.items[self.n] = x; self.n += 1 }
+    fn size() -> int { return self.n }
+    static fn of(x: T) -> Stack<T> { let s = new Stack<T>()  s.push(x)  return s }
+}
+
+fn main() {
+    let s = Stack<string>.of("a")
+    s.push("b")
+    print(s.size())
+}
+```
+
+Output:
+
+```text
+2
+```
+
 ## Generic methods
 
 A method can have type parameters of its own — on generic or plain classes, instance
