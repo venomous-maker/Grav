@@ -1,0 +1,156 @@
+// main.grav — a small bank: customers, checking and savings accounts, deposits,
+// withdrawals with overdraft limits, atomic transfers, interest, statements, and a
+// JSON REST API, organized as entities / repository / services / controllers / routes.
+//
+//   cd examples/apps/bank_server
+//   grav run -- --serve 8080 [--data bank.json]    a real server (BANK_TOKEN sets the token)
+//   grav run                                       a self-test: drives the API and stops
+//   grav test tests/bank_test.grav                 unit tests of the business rules
+//
+// Try it with curl (token: dev-token):
+//   curl -H 'Authorization: Bearer dev-token' -d '{"name":"Ada","email":"ada@x.io"}' localhost:8080/api/customers
+import "std"
+import "std/net"
+import "app"
+
+use bank.BankApp
+
+fn argAfter(args: Array<string>, flag: string, fallback: string) -> string {
+    let i = args.indexOf(flag)
+    return i >= 0 && i + 1 < args.size() ? args.get(i + 1) : fallback
+}
+
+fn serve(args: Array<string>) {
+    let port = Format.toIntOr(argAfter(args, "--serve", "8080"), 8080)
+    let token = OS.getEnvOr("BANK_TOKEN", "dev-token")
+    let app = new BankApp(argAfter(args, "--data", ""), token)
+    match (app.store.load()) {
+        case Ok(n): print("loaded ${n} record(s)")
+        case Err(why): {
+            print("cannot start: " + why)
+            exit(1)
+        }
+    }
+    app.server.logRequests(true)
+    print("bank API on http://127.0.0.1:${port}/api  (token: ${token})")
+    app.server.listen("127.0.0.1", port)
+}
+
+// ── the self-test: a scripted session against the real server ───────────────
+
+class Session {
+    public base: string
+    public http: HttpClient
+    constructor(base: string) {
+        self.base = base
+        self.http = new HttpClient()
+        self.http.headers.set("Authorization", "Bearer dev-token")
+    }
+    fn post(path: string, body: string) -> JsonValue { return self.show("POST " + path, self.http.post(self.base + path, body, "application/json")) }
+    fn get(path: string) -> JsonValue { return self.show("GET  " + path, self.http.get(self.base + path)) }
+
+    // One line per call: status, then the error or a short summary of the result.
+    fn show(label: string, r: HttpResponse) -> JsonValue {
+        let doc = Json.tryParse(r.body())
+        let info = r.body()
+        if (doc != null && doc.has("error")) {
+            info = doc["error"]["code"].asString() + ": " + doc["error"]["message"].asString()
+        } else if (doc != null && doc.has("number")) {
+            info = doc["number"].asString() + " " + doc["kind"].asString() + " " + doc["status"].asString() +
+                " balance " + doc["balance"].asString() + " (available " + doc["available"].asString() + ")"
+        } else if (doc != null && doc.has("email")) {
+            info = "customer #${doc["id"].asLong()} " + doc["name"].asString() + " <" + doc["email"].asString() + ">" +
+                (doc.has("accounts") ? ", ${doc["accounts"].size()} account(s)" : "")
+        } else if (doc != null && doc.has("from")) {
+            info = doc["amount"].asString() + " " + doc["from"].asString() + " -> " + doc["to"].asString() +
+                " (now " + doc["fromBalance"].asString() + " / " + doc["toBalance"].asString() + ")"
+        } else if (doc != null && doc.has("items")) {
+            info = "${doc["count"].asLong()} item(s)"
+        }
+        print(Str.padRight(label, 44, " ") + " ${r.status}  " + info)
+        return doc == null ? Json.nil() : doc
+    }
+}
+
+fn selfTest() {
+    let app = new BankApp("", "dev-token")
+    app.server.start(0)
+    let s = new Session("http://127.0.0.1:${app.server.port()}")
+    let anon = new HttpClient()
+    s.show("GET  /api/health (no token)", anon.get(s.base + "/api/health"))
+    s.show("GET  /api/customers (no token)", anon.get(s.base + "/api/customers"))
+
+    print("--- customers ---")
+    s.post("/api/customers", "{\"name\": \"Ada Lovelace\", \"email\": \"ada@example.com\"}")
+    s.post("/api/customers", "{\"name\": \"Alan Turing\", \"email\": \"alan@example.com\"}")
+    s.post("/api/customers", "{\"name\": \"Ada Again\", \"email\": \"ADA@example.com\"}")
+    s.post("/api/customers", "{\"name\": \"X\", \"email\": \"nope\"}")
+    s.post("/api/customers", "not json")
+
+    print("--- accounts ---")
+    s.post("/api/accounts", "{\"customerId\": 1, \"kind\": \"checking\"}")
+    s.post("/api/accounts", "{\"customerId\": 1, \"kind\": \"savings\"}")
+    s.post("/api/accounts", "{\"customerId\": 2, \"kind\": \"checking\"}")
+    s.post("/api/accounts", "{\"customerId\": 9, \"kind\": \"checking\"}")
+    s.post("/api/accounts", "{\"customerId\": 2, \"kind\": \"crypto\"}")
+
+    print("--- money ---")
+    s.post("/api/accounts/ACC-000001/deposit", "{\"amount\": \"1,250.00\", \"memo\": \"salary\"}")
+    s.post("/api/accounts/ACC-000003/deposit", "{\"amount\": 300}")
+    s.post("/api/accounts/ACC-000001/withdraw", "{\"amount\": \"80.25\", \"memo\": \"groceries\"}")
+    s.post("/api/accounts/ACC-000003/withdraw", "{\"amount\": \"900\"}")
+    s.post("/api/accounts/ACC-000003/withdraw", "{\"amount\": \"0.001\"}")
+    s.post("/api/accounts/ACC-000003/withdraw", "{}")
+    s.post("/api/transfers", "{\"from\": \"ACC-000001\", \"to\": \"ACC-000002\", \"amount\": \"500\", \"memo\": \"savings\"}")
+    s.post("/api/transfers", "{\"from\": \"ACC-000003\", \"to\": \"ACC-000001\", \"amount\": \"5000\"}")
+    s.post("/api/transfers", "{\"from\": \"ACC-000003\", \"to\": \"ACC-000042\", \"amount\": \"1\"}")
+    s.post("/api/admin/interest", "{\"basisPoints\": 150}")
+
+    print("--- freezing ---")
+    s.post("/api/accounts/ACC-000003/freeze", "{}")
+    s.post("/api/accounts/ACC-000003/deposit", "{\"amount\": \"10\"}")
+    s.post("/api/transfers", "{\"from\": \"ACC-000001\", \"to\": \"ACC-000003\", \"amount\": \"1\"}")
+    s.post("/api/accounts/ACC-000003/unfreeze", "{}")
+    s.post("/api/accounts/ACC-000003/close", "{}")
+
+    print("--- reading ---")
+    s.get("/api/accounts/ACC-000001")
+    s.get("/api/accounts/ACC-000002")
+    s.get("/api/customers/1")
+    let stmt = s.get("/api/accounts/ACC-000001/transactions")
+    for (t in stmt["items"].asArray()) {
+        print("    " + Str.padRight(t["kind"].asString(), 13, " ") + Str.padLeft(t["amount"].asString(), 10, " ") +
+            "  -> " + Str.padLeft(t["balanceAfter"].asString(), 9, " ") + "  " + t["memo"].asString() +
+            (t.has("counterparty") ? " (" + t["counterparty"].asString() + ")" : ""))
+    }
+    s.get("/api/accounts/ACC-000002/transactions?kind=interest")
+    s.get("/api/accounts/ACC-000099")
+    let summary = s.get("/api/reports/summary")
+
+    print("--- concurrency: 4 clients x 25 transfers each way ---")
+    let wg = new WaitGroup()
+    for (i in 0..4) {
+        wg.add(1)
+        Thread.spawn(fn() {
+            let c = new HttpClient()
+            c.headers.set("Authorization", "Bearer dev-token")
+            for (k in 0..25) {
+                let from = (i + k) % 2 == 0 ? "ACC-000001" : "ACC-000003"
+                let to = from == "ACC-000001" ? "ACC-000003" : "ACC-000001"
+                c.post(s.base + "/api/transfers", "{\"from\": \"" + from + "\", \"to\": \"" + to + "\", \"amount\": \"1.00\"}", "application/json")
+            }
+            wg.done()
+        }).detach()
+    }
+    wg.wait()
+    let after = Json.parse(s.http.get(s.base + "/api/reports/summary").body())
+    print("total deposits before " + summary["totalDeposits"].asString() + ", after " + after["totalDeposits"].asString() +
+        " (unchanged), ${after["transactions"].asLong() - summary["transactions"].asLong()} new transactions")
+    app.server.stop()
+    print("served ${app.gate.requests.get()} requests; stopped")
+}
+
+fn main() {
+    let args = Process.args()
+    if (args.contains("--serve")) { serve(args) } else { selfTest() }
+}
