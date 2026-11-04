@@ -59,11 +59,54 @@ close x2
 - Long chains (a million-node linked list) are freed iteratively, without deep
   recursion.
 
-## Cycles and weak fields
+## Cycles
 
-Two objects that refer to each other, such as a parent whose `children` point back
-at it, would keep each other alive forever. Mark the back-reference `weak`: a weak
-field does not keep its object alive, and reads as `null` once that object is gone.
+Objects that refer to each other in a cycle (a parent whose children point back
+at it, an object holding a closure that captures it) keep each other's counts
+above zero. A cycle collector finds such groups once nothing outside refers to
+them, runs their destructors and frees them. It runs on its own as candidates
+pile up; `GC.collect()` runs it now and returns how many objects it freed.
+
+```grav
+import "std"
+
+class Peer {
+    public name: string
+    public other: Peer
+    constructor(name: string) { self.name = name; self.other = null }
+    destructor() { print("free " + self.name) }
+}
+
+fn main() {
+    if (true) {
+        let a = new Peer("a")
+        let b = new Peer("b")
+        a.other = b
+        b.other = a                    // a cycle: neither count reaches zero
+    }
+    print("collected ${GC.collect()}")
+}
+```
+
+Output:
+
+```text
+free b
+free a
+collected 2
+```
+
+The destructors of a collected cycle run in no particular order, and may see
+fields that point at objects of the same cycle whose destructors already ran.
+
+The collector works while this is the only thread using objects: it pauses while
+other `Thread`s or async tasks run (a server's threads, for example). There, and
+whenever you want a cycle to go at once, mark the back-reference `weak`.
+
+### Weak fields
+
+A `weak` field does not keep its object alive, and reads as `null` once that
+object is gone.
 
 ```grav
 import "std"
@@ -100,8 +143,15 @@ free leaf
 - `weak` applies to fields of class type. Reading one gives the object for the
   rest of the statement, or `null`; store it in a local to keep it longer.
 - An object disposed with `free` also reads as `null` through weak fields.
-- Without `weak`, break a cycle by hand: set one side to `null`, or call `free` on
-  one of the objects, when you are done.
+- Without `weak`, a cycle can also be broken by hand: set one side to `null`, or
+  call `free` on one of the objects.
+
+## Structs and exceptions
+
+Value structs and fixed-size arrays that hold references own them: copying one
+retains its references, and they are released with the copy. A thrown exception
+is owned while it is in flight; the `catch` that handles it releases it when the
+handler ends.
 
 ## free
 
