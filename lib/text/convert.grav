@@ -15,6 +15,7 @@ namespace std.text {
     #include <stdio.h>
     #include <ctype.h>
     #include <strings.h>
+    #include <errno.h>
     /* Does `s` hold exactly one number (surrounding spaces allowed)? */
     static int grav_is_number(const char* s, int integer) {
         char* end = 0;
@@ -44,6 +45,11 @@ namespace std.text {
         size_t pl = strlen(prefix), n = 70 - (size_t)i;
         char* r = grav_str_alloc(pl + n + 1); memcpy(r, prefix, pl); memcpy(r + pl, tmp + i + 1, n + 1); return r;
     }
+    /* strtoll, noting (in *range) a value outside the 64-bit range. */
+    static long long grav_parse_ll(const char* s, int* range) {
+        errno = 0; long long v = strtoll(s, 0, 10);
+        *range = errno == ERANGE; return v;
+    }
     static long long grav_parse_base(const char* s, int base, int* ok) {
         char* end = 0; long long v = strtoll(s, &end, base);
         *ok = end != s && *end == 0; return v;
@@ -56,10 +62,29 @@ namespace std.text {
     // Parses strings into primitive values.
     class Format {
         // ---- string -> value ----
-        static fn toInt(s: string) -> int { return %{ atoi(s) %} as int; }
-        static fn toLong(s: string) -> long { return %{ (long long)atoll(s) %} as long; }
-        static fn toUInt(s: string) -> uint { return %{ (unsigned)strtoul(s, 0, 10) %} as uint; }
-        static fn toByte(s: string) -> byte { return %{ (unsigned char)atoi(s) %} as byte; }
+        // The integer parsers read leading digits ("12a" is 12, "x" is 0) and throw
+        // ValueError when the number does not fit the result type.
+        static fn toInt(s: string) -> int {
+            let v = Format.toLong(s)
+            if (v < -2147483648 || v > 2147483647) { throw new ValueError("'${s}' is out of range for int") }
+            return v
+        }
+        static fn toLong(s: string) -> long {
+            let range = 0
+            let v = %{ grav_parse_ll(s, &range) %} as long
+            if (range != 0) { throw new ValueError("'${s}' is out of range for long") }
+            return v
+        }
+        static fn toUInt(s: string) -> uint {
+            let v = Format.toLong(s)
+            if (v < 0 || v > 4294967295) { throw new ValueError("'${s}' is out of range for uint") }
+            return v
+        }
+        static fn toByte(s: string) -> byte {
+            let v = Format.toLong(s)
+            if (v < 0 || v > 255) { throw new ValueError("'${s}' is out of range for byte") }
+            return v
+        }
         static fn toFloat(s: string) -> float { return %{ atof(s) %} as float; }
         static fn toDouble(s: string) -> double { return %{ atof(s) %} as double; }
         // true for "true", "1", "yes", "y", "on" (any case); false otherwise.
@@ -71,10 +96,13 @@ namespace std.text {
         static fn isNumber(s: string) -> bool { return %{ grav_is_number(s, 0) %} as bool; }
         // Parse, or return `fallback` unless the whole text is a valid number.
         static fn toIntOr(s: string, fallback: int) -> int {
-            return Format.isInt(s) ? Format.toInt(s) : fallback;
+            let v = Format.toLongOr(s, -2147483649)
+            return v < -2147483648 || v > 2147483647 ? fallback : v;
         }
         static fn toLongOr(s: string, fallback: long) -> long {
-            return Format.isInt(s) ? Format.toLong(s) : fallback;
+            let range = 0
+            let v = %{ grav_parse_ll(s, &range) %} as long
+            return Format.isInt(s) && range == 0 ? v : fallback;
         }
         static fn toFloatOr(s: string, fallback: float) -> float {
             return Format.isNumber(s) ? Format.toFloat(s) : fallback;

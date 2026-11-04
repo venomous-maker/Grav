@@ -154,7 +154,7 @@ a | b | c
 
 | Group | Functions |
 |-------|-----------|
-| parse | `toInt`, `toLong`, `toUInt`, `toByte`, `toFloat`, `toDouble`, `toBool` (`true`/`1`/`yes`/`y`/`on`) |
+| parse | `toInt`, `toLong`, `toUInt`, `toByte` (`ValueError` when the number does not fit), `toFloat`, `toDouble`, `toBool` (`true`/`1`/`yes`/`y`/`on`) |
 | parse safely | `isInt`, `isNumber`, `toIntOr`, `toLongOr`, `toFloatOr`, `parseInt(s, base, fallback)` |
 | format numbers | `fixed(x, digits)`, `grouped(n)` (`1,234,567`), `percent(ratio, digits)`, `bytes(n)` (`1.5 KB`), `hex`, `binary`, `octal` |
 
