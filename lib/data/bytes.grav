@@ -163,7 +163,7 @@ namespace std.data {
 
     %{
     static const char* grav_bytes_to_cstr(const unsigned char* d, int n) {
-        char* s = (char*)malloc((size_t)n + 1);
+        char* s = grav_str_alloc((size_t)n + 1);
         if (!s) abort();
         if (n > 0) memcpy(s, d, (size_t)n);
         s[n] = 0;
@@ -180,7 +180,7 @@ namespace std.data {
     }
     static const char* grav_bytes_hex(const unsigned char* d, int n) {
         static const char* digits = "0123456789abcdef";
-        char* s = (char*)malloc((size_t)n * 2 + 1);
+        char* s = grav_str_alloc((size_t)n * 2 + 1);
         if (!s) abort();
         for (int i = 0; i < n; i++) { s[2 * i] = digits[d[i] >> 4]; s[2 * i + 1] = digits[d[i] & 15]; }
         s[2 * n] = 0;
