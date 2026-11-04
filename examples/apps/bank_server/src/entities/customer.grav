@@ -1,0 +1,34 @@
+// entities/customer.grav — a bank customer.
+import "std"
+
+namespace bank.entities {
+
+    class Customer {
+        public id: long
+        public name: string
+        public email: string
+        public createdAt: long
+
+        constructor(id: long, name: string, email: string) {
+            self.id = id
+            self.name = name
+            self.email = email
+            self.createdAt = Time.now()
+        }
+
+        fn toJson() -> JsonValue {
+            return Json.object()
+                .set("id", self.id)
+                .set("name", self.name)
+                .set("email", self.email)
+                .set("createdAt", self.createdAt)
+        }
+
+        static fn fromJson(v: JsonValue) -> Customer {
+            let c = new Customer(v.getLong("id", 0), v.getString("name", ""), v.getString("email", ""))
+            c.createdAt = v.getLong("createdAt", 0)
+            return c
+        }
+    }
+
+}
