@@ -32,6 +32,7 @@ add_executable(gravc
         src/codegen/mangle.cpp
         src/codegen/codegen_runtime.cpp
         src/codegen/codegen_faults.cpp
+        src/codegen/codegen_display.cpp
         src/codegen/codegen_types.cpp
         src/codegen/codegen_flow.cpp
         src/codegen/codegen_dispatch.cpp

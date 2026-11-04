@@ -923,6 +923,13 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             TypeRef t = checkExpr(*e.args[0]);
             return name->name == "__retain" ? t : TypeRef::prim(TypeRef::Kind::Void);
         }
+        if (name->name == "__repr" && e.args.size() == 1) {
+            // Internal (collection toString): a value as text, strings quoted.
+            e.kind = CallKind::Builtin;
+            e.targetName = "__repr";
+            checkExpr(*e.args[0]);
+            return TypeRef::prim(TypeRef::Kind::String);
+        }
         if (name->name == "__show" && e.args.size() == 1) {
             // Internal (generated data-enum toString): any value as text; values
             // that cannot be boxed show their type name.

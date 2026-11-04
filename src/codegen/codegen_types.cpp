@@ -16,6 +16,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
 
     emitPrelude();
     emitFaultSupport();
+    emitDisplaySupport();
     emitEnums();
     emitStructs();
     emitVTableTypes();
@@ -48,8 +49,10 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
         for (const auto &[name, def] : thunks_) thunks += def;
         thunks += "\n";
     }
+    std::string display;
+    if (!displayProtos_.empty()) display = "/* display of struct and array values */\n" + displayProtos_ + displayDefs_ + "\n";
     return head + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ + thunks +
-           globals_ + defs_;
+           globals_ + display + defs_;
 }
 
 SourceMapEntry CodeGen::origin(int combinedLine) const {

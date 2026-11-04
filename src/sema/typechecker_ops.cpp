@@ -441,23 +441,9 @@ void TypeChecker::checkIndexAssign(AssignStmt &s, IndexExpr &ix, const TypeRef &
     ix.type = TypeRef::prim(TypeRef::Kind::Void);
 }
 
+// Every value has a text form (see codegen_display.cpp); only `void` has none.
 bool TypeChecker::isDisplayable(const TypeRef &t) const {
-    switch (t.kind) {
-        case TypeRef::Kind::Int:
-        case TypeRef::Kind::Float:
-        case TypeRef::Kind::Bool:
-        case TypeRef::Kind::String:
-        case TypeRef::Kind::Any:
-            return true;
-        default: break;
-    }
-    if (!t.isNamed()) return false;
-    if (reg_->isEnum(t.name)) return true;
-    const MethodInfo *mi = nullptr;
-    if (reg_->isClass(t.name)) mi = reg_->findMethod(t.name, "toString");
-    else if (reg_->isInterface(t.name)) mi = reg_->findInterfaceMethod(t.name, "toString");
-    return mi && !mi->isStatic && mi->paramTypes.empty() &&
-           mi->returnType.kind == TypeRef::Kind::String;
+    return !t.isVoid() && !t.isError();
 }
 
 void TypeChecker::checkDefer(DeferStmt &s) {

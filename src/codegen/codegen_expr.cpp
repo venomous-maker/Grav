@@ -565,8 +565,9 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 bool boxable = !(t.isNamed() && reg_->isStruct(t.name)) && !t.isArray() &&
                                !t.isBinary() && !t.isPointer();
                 if (boxable) return "grav_any_to_string(" + boxAny(*call.args[0]) + ")";
-                return "\"" + escapeC(prettyNames(typeRefName(t))) + "\"";
+                return displayC(emitExpr(*call.args[0]), t, false);
             }
+            if (call.targetName == "__repr") return displayC(emitExpr(*call.args[0]), call.args[0]->type, true);
             if (call.targetName == "assertEq") {
                 SourceMapEntry o = origin(call.line);
                 std::string loc = "\"" + escapeC(o.file) + ":" + std::to_string(o.line) + "\"";

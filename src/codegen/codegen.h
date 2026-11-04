@@ -50,6 +50,13 @@ private:
     void emitPrelude();
     // Run-time fault checks (codegen_faults.cpp).
     void emitFaultSupport();
+    // Display of any value (codegen_display.cpp).
+    void emitDisplaySupport();
+    std::string displayC(const std::string &c, const TypeRef &t, bool nested) const;
+    std::string displayFn(const TypeRef &t) const;
+    std::string displayTypeName(const std::string &fq) const;
+    mutable std::set<std::string> displayDone_;
+    mutable std::string displayProtos_, displayDefs_;
     std::vector<std::string> classInterfaces(const std::string &classFq) const;
     std::string ifaceCast(const std::string &obj, const std::string &iface) const;
     void emitFaultRaisers();

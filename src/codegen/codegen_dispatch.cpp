@@ -210,9 +210,8 @@ std::string CodeGen::emitToString(const Expr &e) const {
         default: break;
     }
     if (t.isNamed() && reg_->isEnum(t.name)) return enumNameFn(t.name) + "(" + emitExpr(e) + ")";
-    if (t.isNamed() && (reg_->isClass(t.name) || reg_->isInterface(t.name)))
-        return ar(methodCall(emitExpr(e), t, "toString", ""));
-    return "\"\"";
+    // Objects (null prints as null), structs, arrays, functions, pointers.
+    return ar(displayC(emitExpr(e), t, false));
 }
 
 std::string CodeGen::emitPrint(const Expr &arg) const {

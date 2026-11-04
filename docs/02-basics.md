@@ -199,4 +199,33 @@ Escape sequences:
 The `Str` class in the standard library adds searching, slicing, splitting, and
 more — see [Standard library](14-standard-library.md#strings).
 
+
+## Printing values
+
+`print`, `str()` and `${}` accept any value. Objects use their `toString()`
+method (or show their class name), `null` prints as `null`, structs print like
+their literal, fixed arrays and the standard collections print their elements,
+and strings inside those are quoted:
+
+```grav
+struct Point { x: int  y: int }
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    print(p)
+    print([p, Point { x: 3, y: 4 }])
+    print(["a", "b"])
+    print("${[1.5, 2.0]}")
+}
+```
+
+Output:
+
+```text
+Point { x: 1, y: 2 }
+[Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+["a", "b"]
+[1.5, 2]
+```
+
 Next: [Control flow →](03-control-flow.md)
