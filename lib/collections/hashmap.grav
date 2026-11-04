@@ -63,7 +63,13 @@ namespace std.collections {
         private count: int
 
         constructor() { self.count = 0; self.alloc(16); }
-        destructor() { free(self.ks); free(self.vs); free(self.used); }
+        // One reference per key and value (reference types).
+        destructor() {
+            for (i in 0..self.cap) {
+                if (self.used[i] != 0) { __release(self.ks[i]); __release(self.vs[i]); }
+            }
+            free(self.ks); free(self.vs); free(self.used);
+        }
 
         private fn alloc(n: int) {
             self.cap = n;
@@ -90,15 +96,31 @@ namespace std.collections {
             let oldCap = self.cap;
             self.alloc(oldCap * 2);
             self.count = 0;
-            for (i in 0..oldCap) { if (oldU[i] != 0) { self.put(oldK[i], oldV[i]); } }
+            for (i in 0..oldCap) { if (oldU[i] != 0) { self.putMoved(oldK[i], oldV[i]); } }
             free(oldK); free(oldV); free(oldU);
         }
 
         public fn put(key: K, value: V) {
             if ((self.count + 1) * 4 > self.cap * 3) { self.grow(); }   // load factor 0.75
             let i = self.slot(key);
-            if (self.used[i] == 0) { self.used[i] = 1; self.ks[i] = key; self.count += 1; }
+            if (self.used[i] == 0) {
+                self.used[i] = 1;
+                self.ks[i] = __retain(key);
+                self.vs[i] = __retain(value);
+                self.count += 1;
+                return;
+            }
+            let old = self.vs[i];
+            self.vs[i] = __retain(value);
+            __release(old);
+        }
+        // Re-insert an entry the map already owns (rehashing): moves, no new references.
+        private fn putMoved(key: K, value: V) {
+            let i = self.slot(key);
+            self.used[i] = 1;
+            self.ks[i] = key;
             self.vs[i] = value;
+            self.count += 1;
         }
         // The value for `key`, or the zero value of V when absent.
         public fn get(key: K) -> V { return self.vs[self.slot(key)]; }
@@ -114,6 +136,8 @@ namespace std.collections {
         public fn remove(key: K) -> bool {
             let i = self.slot(key);
             if (self.used[i] == 0) { return false; }
+            __release(self.ks[i]);
+            __release(self.vs[i]);
             self.used[i] = 0;
             self.count -= 1;
             let mask = self.cap - 1;
@@ -123,7 +147,7 @@ namespace std.collections {
                 let v = self.vs[j];
                 self.used[j] = 0;
                 self.count -= 1;
-                self.put(k, v);
+                self.putMoved(k, v);
                 j = (j + 1) & mask;
             }
             return true;
@@ -133,6 +157,9 @@ namespace std.collections {
         public fn length() -> int { return self.count; }
         public fn isEmpty() -> bool { return self.count == 0; }
         public fn clear() {
+            for (i in 0..self.cap) {
+                if (self.used[i] != 0) { __release(self.ks[i]); __release(self.vs[i]); }
+            }
             let n = self.cap;
             %{ memset(self->used, 0, (size_t)n); %};
             self.count = 0;
