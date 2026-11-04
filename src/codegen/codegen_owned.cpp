@@ -35,6 +35,10 @@ const std::set<std::string> &strFreshFns() {
 // Higher-order library calls that only *call* their function arguments (never
 // store them), so a closure passed to them can be freed afterwards.
 bool isFnNonRetainingCall(const CallExpr &c) {
+    (void)c;
+    return false; // closures are reference counted (codegen_arc.cpp)
+}
+[[maybe_unused]] bool isFnNonRetainingCallLegacy(const CallExpr &c) {
     static const std::set<std::string> hof = {"forEach", "forEachIndexed", "map", "filter",
                                               "reduce", "any", "all", "countWhere",
                                               "findIndex", "sortBy"};
@@ -228,8 +232,7 @@ struct OwnScan {
         if (giveUp) return;
         if (auto *x = dynamic_cast<const LetStmt *>(&s)) {
             declare(x->name);
-            if ((x->resolvedType.kind == TypeRef::Kind::String || x->resolvedType.isFunction()) &&
-                !inForHeader)
+            if (x->resolvedType.kind == TypeRef::Kind::String && !inForHeader)
                 candidates.insert(x->name);
             expr(x->init.get(), false);
         } else if (auto *x = dynamic_cast<const AssignStmt *>(&s)) {
@@ -317,6 +320,9 @@ std::set<std::string> CodeGen::ownedSet(const Block &body, const std::vector<std
 }
 
 void CodeGen::analyzeOwnedStrings(const Block &body, const std::vector<std::string> &outerNames) {
+    ownedStrings_.clear();
+    (void)outerNames;
+    if ((true)) return;
     auto it = ownedCache_.find(&body);
     ownedStrings_ = it != ownedCache_.end() ? it->second : ownedSet(body, outerNames, false);
 }
@@ -348,6 +354,7 @@ void collectReturns(const Block &b, std::vector<const Expr *> &out) {
 } // namespace
 
 void CodeGen::computeFreshFunctions() {
+    if ((true)) return; // see isFreshString
     struct Fn {
         std::string key;
         const Block *body;
@@ -396,7 +403,13 @@ void CodeGen::computeFreshFunctions() {
     for (auto &f : fns) ownedCache_[f.body] = freshFns_.count(f.key) ? f.loose : f.strict;
 }
 
+// Strings are reference counted now (codegen_arc.cpp): the old ownership pass is
+// kept inert, so nothing here frees a string.
 bool CodeGen::isFreshString(const Expr &e) const {
+    (void)e;
+    return false;
+}
+bool CodeGen::isFreshStringLegacy(const Expr &e) const {
     if (e.type.kind != TypeRef::Kind::String) return false;
     if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
         switch (c->kind) {
@@ -436,7 +449,7 @@ bool CodeGen::isFreshString(const Expr &e) const {
         c && c->kind == CallKind::Builtin && c->targetName == "str" && c->args.size() == 1) {
         const TypeRef &t = c->args[0]->type;
         if (t.kind == TypeRef::Kind::Int || t.kind == TypeRef::Kind::Float || t.isBinary()) return true;
-        if (t.kind == TypeRef::Kind::String) return isFreshString(*c->args[0]);
+        if (t.kind == TypeRef::Kind::String) return isFreshStringLegacy(*c->args[0]);
     }
     return false;
 }
@@ -671,29 +684,19 @@ void CodeGen::collectHoists(const Expr *e, std::vector<const Expr *> &out) const
 }
 
 std::vector<std::string> CodeGen::hoistTemps(const Expr *root) {
+    // Hoisted subexpressions fix evaluation order. Under ARC their values are
+    // borrowed (fresh results sit on the release list), so temps are never freed.
     std::vector<const Expr *> hs;
     collectHoists(root, hs);
     std::vector<std::string> temps;
     for (const Expr *h : hs) {
         if (exprOverride_.count(h)) continue;
+        orderOnly_.erase(h);
         std::string t = "grav_tmp" + std::to_string(throwCounter_++);
-        if (orderOnly_.count(h)) {
-            orderOnly_.erase(h);
-            std::string val = h->type.kind == TypeRef::Kind::String ? emitStringExpr(*h) : emitExpr(*h);
-            line(cTy(h->type) + " " + t + " = " + val + ";");
-            exprOverride_[h] = t;
-            temps.push_back("!" + t); // ordering only: not freed
-            continue;
-        }
-        if (h->type.isFunction()) {
-            line("GravFn " + t + " = " + emitExpr(*h) + ";");
-            exprOverride_[h] = t;
-            temps.push_back(t + ".env"); // freed as an environment pointer
-        } else {
-            line("const char* " + t + " = " + emitStringExpr(*h) + ";");
-            exprOverride_[h] = t;
-            temps.push_back(t);
-        }
+        std::string val = h->type.kind == TypeRef::Kind::String ? emitToString(*h) : emitExpr(*h);
+        line(cTy(h->type) + " " + t + " = " + val + ";");
+        exprOverride_[h] = t;
+        temps.push_back("!" + t);
     }
     return temps;
 }
