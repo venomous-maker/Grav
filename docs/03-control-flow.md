@@ -167,7 +167,7 @@ fn main() {
 Output:
 
 ```text
-found 3 x 2
+found 2 x 3
 ```
 
 ## switch / match
