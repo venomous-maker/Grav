@@ -3,7 +3,7 @@
 // concrete struct holding a `T*` buffer that doubles on demand.
 //
 // Iterate with `for (x in arr)` / `for (i, x in arr)`, index with `arr[i]`.
-// Element access is bounds-checked (an out-of-range index panics). `free(arr)`
+// Element access is bounds-checked (an out-of-range index throws IndexError). `free(arr)`
 // releases the buffer (via the destructor) — not the objects stored in it.
 //
 // Collection conventions shared by the library: size() (length() is an alias
@@ -13,6 +13,7 @@
 // `xs.mapTo(f)` maps into another element type and `xs.fold(init, f)` reduces into
 // any type (both infer their type parameter; `::<U>` can still be written).
 
+import "../core/exception.grav"
 import "../core/timsort.grav"
 
 namespace std.collections {
@@ -43,7 +44,7 @@ namespace std.collections {
         }
 
         private fn check(i: int) {
-            if (i < 0 || i >= self.len) { panic("Array index ${i} out of range (length ${self.len})"); }
+            if (i < 0 || i >= self.len) { throw new IndexError("Array index ${i} out of range (length ${self.len})"); }
         }
 
         private fn ensure(need: int) {
@@ -98,14 +99,14 @@ namespace std.collections {
             self.len = self.len + n;
         }
         public fn pop() -> T {
-            if (self.len == 0) { panic("Array.pop on an empty array"); }
+            if (self.len == 0) { throw new StateError("Array.pop on an empty array"); }
             self.len = self.len - 1;
             let item = self.data[self.len];
             __release(item);          // the array's reference (the caller gets its own)
             return item;
         }
         public fn insert(index: int, item: T) {
-            if (index < 0 || index > self.len) { panic("Array.insert index ${index} out of range"); }
+            if (index < 0 || index > self.len) { throw new IndexError("Array.insert index ${index} out of range"); }
             self.ensure(self.len + 1);
             let n = self.len - index;
             %{ memmove(self->data + index + 1, self->data + index, (size_t)n * sizeof(*self->data)); %};
@@ -244,7 +245,7 @@ namespace std.collections {
             for (i in 0..self.len) { acc = f(acc, self.data[i]); }
             return acc;
         }
-        // The largest element by `cmp` (panics when empty).
+        // The largest element by `cmp` (throws StateError when empty).
         public fn maxBy(cmp: fn(T, T) -> int) -> T {
             self.check(0);
             let best = self.data[0];
