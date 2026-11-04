@@ -1,0 +1,6 @@
+running 4 tests
+  ok    a class without a constructor inherits its parent's
+  ok    a constructor without super(...) runs the parent's parameterless one first
+  ok    super(...) inside a branch counts as the parent call
+  ok    string fields start empty
+result: 4 passed, 0 failed

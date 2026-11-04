@@ -1,0 +1,61 @@
+// Constructors through a class hierarchy, and the initial values of fields.
+import "std"
+
+class Log { static text: string = "" }
+
+class Base {
+    public name: string
+    constructor(name: string) { self.name = name; Log.text += "Base(${name}) " }
+    constructor() { self.name = "anon"; Log.text += "Base() " }
+}
+class Inherits extends Base { }
+class Grandchild extends Inherits { }
+class Implicit extends Base {
+    public tag: string
+    constructor(tag: string) { self.tag = tag; Log.text += "Implicit(${tag}) " }
+}
+class Explicit extends Base {
+    constructor(flag: bool) {
+        if (flag) { super("yes") } else { super("no") }
+    }
+}
+
+struct Inner { label: string  n: int }
+class Defaults {
+    public s: string
+    public n: int
+    public names: string[2]
+    public inner: Inner
+}
+class MoreDefaults extends Defaults { public t: string }
+
+test "a class without a constructor inherits its parent's" {
+    Log.text = ""
+    assertEq(new Inherits("a").name, "a")
+    assertEq(new Inherits().name, "anon")
+    assertEq(new Grandchild("g").name, "g")
+    assertEq(Log.text, "Base(a) Base() Base(g) ")
+}
+
+test "a constructor without super(...) runs the parent's parameterless one first" {
+    Log.text = ""
+    let x = new Implicit("t")
+    assertEq(x.name, "anon")
+    assertEq(Log.text, "Base() Implicit(t) ")
+}
+
+test "super(...) inside a branch counts as the parent call" {
+    Log.text = ""
+    assertEq(new Explicit(false).name, "no")
+    assertEq(Log.text, "Base(no) ")
+}
+
+test "string fields start empty" {
+    let d = new MoreDefaults()
+    assertEq(d.s, "")
+    assertEq(d.t, "")
+    assertEq(d.n, 0)
+    assertEq(d.names[1], "")
+    assertEq(d.inner.label, "")
+    assertEq(d.s + "!", "!")
+}
