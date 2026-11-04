@@ -8,5 +8,5 @@ running 9 tests
   ok    Result
   ok    Option
   FAIL  unwrap on Err panics with the error
-        panic: called unwrap() on Err(disk full)
+        uncaught exception: StateError: called unwrap() on Err(disk full)
 result: 8 passed, 1 failed
