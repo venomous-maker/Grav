@@ -10,7 +10,7 @@ running 10 tests
   FAIL  string mismatch
         expected "Grav" but got "GRAV" (tests/unit/runner.grav:29)
   FAIL  panic fails
-        panic: Array index 3 out of range (length 0)
+        uncaught exception: IndexError: Array index 3 out of range (length 0)
   FAIL  uncaught exception fails
         uncaught exception: StateError: cart is empty
   ok    still runs after failures
