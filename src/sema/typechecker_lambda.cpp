@@ -35,7 +35,8 @@ bool TypeChecker::isCapturedHere(const std::string &name) {
 TypeRef TypeChecker::checkExprExpect(Expr &e, const TypeRef &expected) {
     const TypeRef *saved = expected_;
     expected_ = dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<NameExpr *>(&e) ||
-                        dynamic_cast<NewExpr *>(&e) || dynamic_cast<CallExpr *>(&e)
+                        dynamic_cast<NewExpr *>(&e) || dynamic_cast<CallExpr *>(&e) ||
+                        dynamic_cast<TernaryExpr *>(&e)
                     ? &expected
                     : nullptr;
     TypeRef t = checkExpr(e);
