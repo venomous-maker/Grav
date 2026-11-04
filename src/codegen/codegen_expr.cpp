@@ -350,7 +350,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         const TypeRef elem = e->type.elem ? *e->type.elem : TypeRef::prim(TypeRef::Kind::Int);
         for (size_t i = 0; i < e->elements.size(); ++i) {
             if (i) out += ", ";
-            out += emitOwned(*e->elements[i], elem); // fixed arrays are values: kept for good
+            out += emitOwned(*e->elements[i], elem); // the literal owns its elements
         }
         return out + " } }";
     }
@@ -394,7 +394,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         for (size_t i = 0; i < e->fields.size(); ++i) {
             if (i) out += ", ";
             const FieldInfo *f = reg_->findStructField(e->typeName, e->fields[i].name);
-            // Struct copies are not tracked: a reference stored in one is kept for good.
+            // The literal owns its reference fields (K__release gives them back).
             std::string v = f ? emitOwned(*e->fields[i].value, f->type)
                               : emitExpr(*e->fields[i].value);
             out += "." + memberCName(e->fields[i].name) + " = " + v;
@@ -489,6 +489,10 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return "grav_assert_at(" + cond + ", " + msg + ", " + loc + ")";
             }
             if (call.targetName == "__retain") return retainOf(call.args[0]->type, emitExpr(*call.args[0]));
+            if (call.targetName == "__visit") { // report a buffer element to the cycle collector
+                std::string v = visitOf(call.args[0]->type, emitExpr(*call.args[0]));
+                return v.empty() ? "((void)0)" : "(" + v.substr(0, v.size() - 1) + ")";
+            }
             if (call.targetName == "__release") {
                 std::string r = releaseOf(call.args[0]->type, emitExpr(*call.args[0]));
                 if (r.empty()) return "((void)0)";
