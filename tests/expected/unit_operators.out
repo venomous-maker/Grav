@@ -1,0 +1,10 @@
+gravc: tests/unit/operators.grav:79:51: warning: unused variable 't'
+            for (i in 0..50) { m[1, 1] += new Num(1); let t = m[1, 1] + m[0, 0] * 2 }
+                                                      ^
+running 5 tests
+  ok    indexing with several keys
+  ok    compound assignment through operator[] evaluates once
+  ok    compound assignment on variables and fields uses the operator
+  ok    comparisons follow from operator<
+  ok    operator results are freed
+result: 5 passed, 0 failed
