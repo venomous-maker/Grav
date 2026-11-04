@@ -1,0 +1,83 @@
+// controllers/account_controller.grav — /api/accounts
+import "std"
+import "std/net"
+import "services/bank_service"
+import "http/api"
+
+namespace bank.controllers {
+    use bank.entities.*
+    use bank.services.*
+    use bank.http.Api
+
+    class AccountController {
+        private bank: BankService
+        constructor(bank: BankService) { self.bank = bank }
+
+        // POST /api/accounts {"customerId", "kind": "checking" | "savings"}
+        fn open(req: HttpRequest) -> HttpResponse {
+            match (Api.body(req)) {
+                case Err(bad): return bad
+                case Ok(body): {
+                    let customer = body.getLong("customerId", -1)
+                    match (self.bank.openAccount(customer, body.getString("kind", "checking"))) {
+                        case Ok(a): return Api.created(a.toJson())
+                        case Err(e): return Api.error(e)
+                    }
+                }
+            }
+        }
+
+        // GET /api/accounts/:number
+        fn show(req: HttpRequest) -> HttpResponse { return self.reply(self.bank.account(req.param("number"))) }
+
+        // POST /api/accounts/:number/deposit {"amount", "memo"?}
+        fn deposit(req: HttpRequest) -> HttpResponse { return self.move(req, true) }
+        // POST /api/accounts/:number/withdraw {"amount", "memo"?}
+        fn withdraw(req: HttpRequest) -> HttpResponse { return self.move(req, false) }
+
+        private fn move(req: HttpRequest, isDeposit: bool) -> HttpResponse {
+            match (Api.body(req)) {
+                case Err(bad): return bad
+                case Ok(body): {
+                    match (Api.amount(body)) {
+                        case Err(bad): return bad
+                        case Ok(cents): {
+                            let memo = body.getString("memo", isDeposit ? "deposit" : "withdrawal")
+                            let number = req.param("number")
+                            return self.reply(isDeposit ? self.bank.deposit(number, cents, memo)
+                                : self.bank.withdraw(number, cents, memo))
+                        }
+                    }
+                }
+            }
+        }
+
+        // POST /api/accounts/:number/freeze, /unfreeze, /close
+        fn freeze(req: HttpRequest) -> HttpResponse { return self.reply(self.bank.setStatus(req.param("number"), AccountStatus.Frozen)) }
+        fn unfreeze(req: HttpRequest) -> HttpResponse { return self.reply(self.bank.setStatus(req.param("number"), AccountStatus.Active)) }
+        fn close(req: HttpRequest) -> HttpResponse { return self.reply(self.bank.setStatus(req.param("number"), AccountStatus.Closed)) }
+
+        // GET /api/accounts/:number/transactions?kind=deposit
+        fn transactions(req: HttpRequest) -> HttpResponse {
+            match (self.bank.statement(req.param("number"))) {
+                case Err(e): return Api.error(e)
+                case Ok(list): {
+                    let kind = req.query("kind")
+                    let items = Json.array()
+                    for (t in list) {
+                        if (kind == "" || txKindName(t.kind) == kind) { items.push(t.toJson()) }
+                    }
+                    return Api.list(items)
+                }
+            }
+        }
+
+        private fn reply(r: Result<Account, BankError>) -> HttpResponse {
+            match (r) {
+                case Ok(a): return Api.ok(a.toJson())
+                case Err(e): return Api.error(e)
+            }
+        }
+    }
+
+}
