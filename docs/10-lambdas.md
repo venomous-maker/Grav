@@ -170,7 +170,7 @@ Calling a `null` function value stops the program with an error message.
 | `filter(pred)` | the elements where `pred(x)` is true |
 | `reduce(init, f)`, `fold(init, f)` | combine all elements into one value (`fold` may change the type) |
 | `any(pred)`, `all(pred)`, `countWhere(pred)`, `findIndex(pred)` | queries |
-| `sortBy(cmp)` | stable sort; `cmp(a, b) < 0` puts `a` first |
+| `sortBy(cmp)` | stable sort (TimSort); `cmp(a, b) < 0` puts `a` first |
 
 ```grav
 import "../lib/std.grav"
