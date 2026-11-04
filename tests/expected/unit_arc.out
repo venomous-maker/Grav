@@ -1,4 +1,4 @@
-running 9 tests
+running 13 tests
   ok    locals and temporaries are freed at once
   ok    reassignment frees the old object
   ok    a long chain is freed without deep recursion
@@ -8,4 +8,8 @@ running 9 tests
   ok    weak back-references let a parent and its children go
   ok    a weak reference reads null once its object is gone
   ok    string += keeps building correctly
-result: 9 passed, 0 failed
+  ok    thrown exceptions are freed once handled
+  ok    finally keeps the pending exception
+  ok    value structs and fixed arrays own their references
+  ok    the cycle collector frees unreachable cycles
+result: 13 passed, 0 failed
