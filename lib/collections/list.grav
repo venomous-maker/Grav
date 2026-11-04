@@ -37,6 +37,8 @@ namespace std.collections {
         public fn all(pred: fn(T) -> bool) -> bool { return self.items.all(pred); }
         public fn countWhere(pred: fn(T) -> bool) -> int { return self.items.countWhere(pred); }
         public fn sortBy(cmp: fn(T, T) -> int) { self.items.sortBy(cmp); }
+        // As text: [1, 2, 3] (strings in quotes).
+        public fn toString() -> string { return self.items.toString() }
         public fn toArray() -> Array<T> { return self.items.copy(); }
     }
 

@@ -57,6 +57,8 @@ namespace std.collections {
         public fn clear() { self.items.clear(); }
         public fn contains(item: T) -> bool { return self.items.contains(item); }
         // Every element, in priority order (the queue is left unchanged).
+        // As text: [1, 2, 3] (strings in quotes).
+        public fn toString() -> string { return self.items.toString() }
         public fn toArray() -> Array<T> {
             let out = self.items.copy();
             out.sortBy(self.cmp);

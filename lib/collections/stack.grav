@@ -28,6 +28,8 @@ namespace std.collections {
         // Index 0 is the bottom of the stack.
         public fn get(i: int) -> T { return self.items.get(i); }
         public fn forEach(f: fn(T)) { self.items.forEach(f); }
+        // As text: [1, 2, 3] (strings in quotes).
+        public fn toString() -> string { return self.items.toString() }
         public fn toArray() -> Array<T> { return self.items.copy(); }
     }
 
@@ -53,6 +55,8 @@ namespace std.collections {
         // Index 0 is the front (next to dequeue).
         public fn get(i: int) -> T { return self.items.get(i); }
         public fn forEach(f: fn(T)) { self.items.forEach(f); }
+        // As text: [1, 2, 3] (strings in quotes).
+        public fn toString() -> string { return self.items.toString() }
         public fn toArray() -> Array<T> { return self.items.toArray(); }
     }
 

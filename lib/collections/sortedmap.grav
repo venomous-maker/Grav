@@ -63,6 +63,16 @@ namespace std.collections {
         public fn firstKey() -> K { return self.ks.first(); }
         public fn lastKey() -> K { return self.ks.last(); }
         // Keys and values in key order (copies).
+        // As text: {"a": 1, "b": 2} (strings in quotes).
+        public fn toString() -> string {
+            let ks = self.keys()
+            let out = "{"
+            for (i in 0..ks.size()) {
+                if (i > 0) { out += ", " }
+                out += __repr(ks.get(i)) + ": " + __repr(self.get(ks.get(i)))
+            }
+            return out + "}"
+        }
         public fn keys() -> Array<K> { return self.ks.copy(); }
         public fn values() -> Array<V> { return self.vs.copy(); }
         // Keys k with lo <= k < hi, in order.

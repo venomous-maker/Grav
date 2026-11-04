@@ -118,6 +118,8 @@ namespace std.collections {
             self.head = self.tail;
             self.tail = h;
         }
+        // As text: [1, 2, 3] (strings in quotes).
+        public fn toString() -> string { return self.toArray().toString() }
         public fn toArray() -> Array<T> {
             let out = new Array<T>(self.len);
             let n = self.head;

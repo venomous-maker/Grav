@@ -1,0 +1,6 @@
+running 4 tests
+  ok    string length, bytes and characters
+  ok    structs and fixed arrays print like their literals
+  ok    objects, null and functions
+  ok    collections print their elements
+result: 4 passed, 0 failed

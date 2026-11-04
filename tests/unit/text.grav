@@ -1,0 +1,63 @@
+// Strings as values (length, bytes, characters) and the text of every kind of
+// value: print, str and interpolation.
+import "std"
+
+struct Point { x: int  y: int }
+struct Labeled { name: string  at: Point  tags: string[2] }
+struct Pair2<A, B> { first: A  second: B }
+enum Color { Red, Green }
+class Plain { }
+class Shown { fn toString() -> string { return "shown" } }
+
+test "string length, bytes and characters" {
+    let s = "héllo"
+    assertEq(s.length, 6)
+    assertEq(s[0], 104)
+    let chars = new Array<string>()
+    for (ch in s) { chars.push(ch) }
+    assertEq(chars.size(), 5)
+    assertEq(chars[1], "é")
+    let positions = ""
+    for (i, ch in "ab") { positions += "${i}${ch}" }
+    assertEq(positions, "0a1b")
+    let msg = ""
+    try { print(s[6]) } catch (e: IndexError) { msg = e.message() }
+    assertEq(msg, "string index 6 out of range (length 6)")
+}
+
+test "structs and fixed arrays print like their literals" {
+    let p = Point { x: 1, y: 2 }
+    assertEq(str(p), "Point { x: 1, y: 2 }")
+    assertEq(str(Labeled { name: "q\"x", at: p, tags: ["t", "u"] }),
+             "Labeled { name: \"q\\\"x\", at: Point { x: 1, y: 2 }, tags: [\"t\", \"u\"] }")
+    assertEq(str([[1, 2], [3, 4]]), "[[1, 2], [3, 4]]")
+    assertEq(str([Color.Red, Color.Green]), "[Red, Green]")
+    assertEq(str(Pair2<int, string> { first: 1, second: "one" }), "Pair2<int, string> { first: 1, second: \"one\" }")
+}
+
+test "objects, null and functions" {
+    assertEq(str(new Plain()), "Plain")
+    assertEq(str(new Shown()), "shown")
+    let none: Shown = null
+    assertEq("${none}", "null")
+    let f = fn(x: int) => x + 1
+    assertEq(str(f), "fn(int) -> int")
+}
+
+test "collections print their elements" {
+    let xs = new Array<int>()
+    for (n in [3, 1, 2]) { xs.push(n) }
+    assertEq(str(xs), "[3, 1, 2]")
+    let names = new List<string>()
+    names.add("ada")
+    assertEq(str(names), "[\"ada\"]")
+    let m = new SortedMap<string, int>(fn(a, b) => Str.compare(a, b))
+    m.put("b", 2)
+    m.put("a", 1)
+    assertEq(str(m), "{\"a\": 1, \"b\": 2}")
+    let set = new Set<int>()
+    set.add(4)
+    assertEq(str(set), "{4}")
+    assertEq(str(new Pair("age", 36)), "(\"age\", 36)")
+    assertEq(str(new Array<int>()), "[]")
+}

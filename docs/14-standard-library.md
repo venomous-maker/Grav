@@ -38,6 +38,7 @@ Every collection follows the same shape, so switching between them is easy:
 | `getOr(k, fallback)`, `peekOr(fallback)` | lookups that never fail |
 | `remove(x)` → `bool` | whether something was removed |
 | `for (x in c)` | works on every collection with indexed access |
+| `toString()` | the contents as text, used by `print` and `${}`: `[1, 2]` for sequences, `{1, 2}` for sets, `{"a": 1}` for maps, `("a", 1)` for `Pair` (strings in quotes) |
 
 Misuse (popping an empty stack, a bad index, `Map.get` on a missing key) stops the
 program with a clear message. Methods that return a new collection (`keys()`,

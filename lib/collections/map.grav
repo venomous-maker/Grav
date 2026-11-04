@@ -39,6 +39,16 @@ namespace std.collections {
         public fn isEmpty() -> bool { return self.ks.isEmpty(); }
         public fn clear() { self.ks.clear(); self.vs.clear(); }
         // Copies, in insertion order (changing them does not affect the map).
+        // As text: {"a": 1, "b": 2} (strings in quotes).
+        public fn toString() -> string {
+            let ks = self.keys()
+            let out = "{"
+            for (i in 0..ks.size()) {
+                if (i > 0) { out += ", " }
+                out += __repr(ks.get(i)) + ": " + __repr(self.get(ks.get(i)))
+            }
+            return out + "}"
+        }
         public fn keys() -> Array<K> { return self.ks.copy(); }
         public fn values() -> Array<V> { return self.vs.copy(); }
         public fn forEach(f: fn(K, V)) { for (i in 0..self.ks.size()) { f(self.ks.get(i), self.vs.get(i)); } }

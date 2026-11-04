@@ -71,6 +71,16 @@ namespace std.collections {
             free(bits);
         }
         // Set bits in increasing order.
+        // As text: {1, 2, 3} (strings in quotes).
+        public fn toString() -> string {
+            let xs = self.toArray()
+            let out = "{"
+            for (i in 0..xs.size()) {
+                if (i > 0) { out += ", " }
+                out += __repr(xs.get(i))
+            }
+            return out + "}"
+        }
         public fn toArray() -> Array<int> {
             let out = new Array<int>();
             for (w in 0..self.nwords) {

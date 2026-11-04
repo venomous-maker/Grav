@@ -96,6 +96,15 @@ namespace std.collections {
             return false;
         }
         public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.buf[(self.head + i) & (self.cap - 1)]); } }
+        // As text: [1, 2, 3] (strings in quotes).
+        public fn toString() -> string {
+            let out = "["
+            for (i in 0..self.len) {
+                if (i > 0) { out += ", " }
+                out += __repr(self.get(i))
+            }
+            return out + "]"
+        }
         public fn toArray() -> Array<T> {
             let out = new Array<T>(self.len);
             for (i in 0..self.len) { out.push(self.buf[(self.head + i) & (self.cap - 1)]); }

@@ -26,6 +26,16 @@ namespace std.collections {
         public fn get(index: int) -> T { return self.items.get(index); }
         public fn at(index: int) -> T { return self.items.get(index); }
         public fn forEach(f: fn(T)) { self.items.forEach(f); }
+        // As text: {1, 2, 3} (strings in quotes).
+        public fn toString() -> string {
+            let xs = self.items
+            let out = "{"
+            for (i in 0..xs.size()) {
+                if (i > 0) { out += ", " }
+                out += __repr(xs.get(i))
+            }
+            return out + "}"
+        }
         public fn toArray() -> Array<T> { return self.items.copy(); }
 
         public fn union(other: Set<T>) -> Set<T> {
