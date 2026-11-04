@@ -1,0 +1,11 @@
+running 9 tests
+  ok    money parses and formats exactly
+  ok    customers need a name and a unique email
+  ok    account numbers and kinds
+  ok    withdrawals respect the overdraft limit
+  ok    transfers are atomic and recorded on both sides
+  ok    frozen and closed accounts refuse money movement
+  ok    interest is paid on savings only, rounded down to the cent
+  ok    concurrent transfers keep the total balance
+  ok    the store saves and loads everything
+result: 9 passed, 0 failed
