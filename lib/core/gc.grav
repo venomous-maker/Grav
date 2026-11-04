@@ -1,0 +1,20 @@
+// lib/core/gc.grav — the cycle collector.
+//
+// Memory is reference counted: an object is freed when its last reference goes.
+// Objects that refer to each other in a cycle (a parent and its children, an
+// object and a closure that captures it) keep each other alive, so a cycle
+// collector finds such groups once nothing outside refers to them, runs their
+// destructors and frees them. It runs on its own after enough candidates pile up,
+// while this is the only thread touching objects (no other Thread or async task
+// is running); with threads, use `weak` back-references.
+//
+//   let freed = GC.collect()        // collect now; returns how many objects were freed
+namespace std.core {
+    class GC {
+        // Collects unreachable cycles now. Returns the number of objects freed
+        // (0 while other threads or async tasks are running).
+        static fn collect() -> int { return %{ (int)grav_gc_collect() %} as int; }
+        // Objects currently recorded as possible members of a cycle.
+        static fn pending() -> int { return %{ (int)grav_gc_nroots %} as int; }
+    }
+}
