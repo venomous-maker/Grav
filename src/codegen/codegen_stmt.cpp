@@ -65,6 +65,13 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         bool vol = volatileNames_.count(s->name) && !t.isArray() &&
                    !(t.isNamed() && (reg_->isStruct(t.name) || reg_->isInterface(t.name))) &&
                    !t.isBinary();
+        if (refKind(t) != RefKind::None) {
+            // An owning local: +1 now, released when its scope ends.
+            line(cTy(t) + (vol ? " volatile " : " ") + s->name + " = " + emitOwned(*s->init, t) + ";");
+            cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(t, s->name)});
+            freeTemps(temps);
+            return;
+        }
         line(cTy(t) + (vol ? " volatile " : " ") + s->name + " = " + emitAs(*s->init, t) + ";");
         freeTemps(temps);
         return;
@@ -104,14 +111,14 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             if (cleanups || (trace_ && exprMayCall(s->value.get()))) {
                 std::string rt = "__ret" + std::to_string(throwCounter_++);
                 line(cTy(currentReturnType_) + " " + rt + " = " +
-                     emitAs(*s->value, currentReturnType_) + ";");
+                     emitOwned(*s->value, currentReturnType_) + ";");
                 freeTemps(temps);
                 emitUnwind(false);
                 if (trace_) line("grav_leave();");
                 line("return " + rt + ";");
             } else {
                 if (trace_) line("grav_leave();");
-                line("return " + emitAs(*s->value, currentReturnType_) + ";");
+                line("return " + emitOwned(*s->value, currentReturnType_) + ";");
             }
         } else {
             emitUnwind(false);
@@ -138,25 +145,39 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         emitIf(*s);
         return;
     }
+    // A loop whose condition can create temporaries releases them at the start
+    // of every iteration (loopMarks_), not only when the whole loop ends.
+    auto loopMark = [&](bool needed) {
+        if (!needed) { loopMarks_.push_back(""); return; }
+        std::string m = "__lp" + std::to_string(poolCounter_++);
+        line("size_t " + m + " = grav_pool_top;");
+        loopMarks_.push_back(m);
+    };
     if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
+        loopMark(exprMayAutorelease(s->cond.get()));
         line("while (" + emitExpr(*s->cond) + ") {");
         emitLoopBody(s->body);
         line("}");
+        loopMarks_.pop_back();
         return;
     }
     if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
+        loopMark(exprMayAutorelease(s->cond.get()));
         line("do {");
         emitLoopBody(s->body);
         line("} while (" + emitExpr(*s->cond) + ");");
+        loopMarks_.pop_back();
         return;
     }
     if (auto *s = dynamic_cast<const ForStmt *>(&stmt)) {
+        loopMark(exprMayAutorelease(s->cond.get()) || (s->update && stmtNeedsDrain(*s->update)));
         std::string init = inlineSimple(s->init.get());
         std::string cond = s->cond ? emitExpr(*s->cond) : "";
         std::string upd = inlineSimple(s->update.get());
         line("for (" + init + "; " + cond + "; " + upd + ") {");
         emitLoopBody(s->body);
         line("}");
+        loopMarks_.pop_back();
         return;
     }
     if (auto *s = dynamic_cast<const SwitchStmt *>(&stmt)) {
@@ -198,7 +219,8 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         const std::string &ty = vt.name;
         // Hoist the value into a temp so describe() isn't evaluated twice.
         std::string tmp = "__exc" + std::to_string(throwCounter_++);
-        line(cTy(vt) + " " + tmp + " = " + emitExpr(*s->value) + ";");
+        // The in-flight exception owns the object (and keeps it: handlers borrow it).
+        line(cTy(vt) + " " + tmp + " = " + emitOwned(*s->value, vt) + ";");
         std::string msg = emitDescribe(tmp, vt);
         line("grav_throw((void*)(" + tmp + "), &" + mangle(ty) + "_typeinfo, " +
              (msg.empty() ? "0" : msg) + ");");
@@ -259,6 +281,41 @@ std::string CodeGen::inlineSimple(const Stmt *s) const {
 // Renders an assignment (plain or compound) without a trailing ';'. `string +=`
 // has no C equivalent, so it lowers to an explicit concat re-assignment.
 std::string CodeGen::emitAssign(const AssignStmt &s) const {
+    // Reference-typed stores keep the counts right (see codegen_arc.cpp).
+    if (!s.isCompound && refKind(s.target->type) != RefKind::None) {
+        const TypeRef &tt = s.target->type;
+        const Expr *tgt = s.target.get();
+        if (auto *n = dynamic_cast<const NameExpr *>(tgt)) {
+            std::string v = n->resolvedGlobal.empty() ? n->name : n->resolvedGlobal;
+            return "{ " + cTy(tt) + " __new = " + emitOwned(*s.value, tt) + "; " + cTy(tt) + " __old = " + v +
+                   "; " + v + " = __new; " + releaseOf(tt, "__old") + " }";
+        }
+        if (auto *m = dynamic_cast<const MemberExpr *>(tgt); m && isWeakField(*m)) {
+            // A weak slot counts the target weakly: it never keeps it alive.
+            std::string slot = "(" + emitExpr(*m->object) + ")->" + memberCName(m->member);
+            return "{ " + cTy(tt) + "* __slot = &(" + slot + "); " + cTy(tt) + " __new = " + emitAs(*s.value, tt) +
+                   "; grav_weak_retain((void*)__new); void* __old = (void*)*__slot; *__slot = __new; grav_weak_release(__old); }";
+        }
+        if (auto *m = dynamic_cast<const MemberExpr *>(tgt)) {
+            bool inValue = m->object && m->object->type.isNamed() && reg_->isStruct(m->object->type.name);
+            if (!inValue) return storeOwned(emitExpr(*tgt), tt, *s.value);
+            // A field of a value struct: struct copies are not tracked, so the
+            // reference it takes is never given back (a leak, never a dangling one).
+            return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
+        }
+        if (auto *ix = dynamic_cast<const IndexExpr *>(tgt); ix && ix->overloadClass.empty()) {
+            if (ix->base->type.isArray()) return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
+            // A raw buffer slot (T*): containers manage these themselves with
+            // __retain/__release, so the store is a move: a fresh result is
+            // handed over, a borrowed value is stored as is.
+            const Expr *saved = ownedRoot_;
+            if (isRefProducer(*s.value)) ownedRoot_ = s.value.get();
+            std::string out = emitExpr(*tgt) + " = " + emitAs(*s.value, tt);
+            ownedRoot_ = saved;
+            return out;
+        }
+        if (dynamic_cast<const DerefExpr *>(tgt)) return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
+    }
     // `obj[k] = v` on a class with `operator[]=` calls its op_index_set(k, v).
     if (auto *ix = dynamic_cast<const IndexExpr *>(s.target.get()); ix && !ix->overloadClass.empty()) {
         std::vector<TypeRef> params;
@@ -273,8 +330,16 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
     if (!s.isCompound)
         return target + " = " + emitAs(*s.value, s.target->type);
     if (s.compoundOp == BinaryOp::Add &&
-        s.target->type.kind == TypeRef::Kind::String)
-        return target + " = grav_str_concat(" + target + ", " + emitStringExpr(*s.value) + ")";
+        s.target->type.kind == TypeRef::Kind::String) {
+        // `s += x`: the new string replaces the old one, which is released (a
+        // value struct's field keeps its reference: struct copies are untracked).
+        auto *m = dynamic_cast<const MemberExpr *>(s.target.get());
+        bool inValue = m && m->object && m->object->type.isNamed() && reg_->isStruct(m->object->type.name);
+        std::string add = "grav_str_concat(" + target + ", " + emitToString(*s.value) + ")";
+        if (inValue) return target + " = " + add;
+        return "{ const char** __slot = &(" + target + "); const char* __new = grav_str_concat(*__slot, " +
+               emitToString(*s.value) + "); const char* __old = *__slot; *__slot = __new; grav_str_release(__old); }";
+    }
     return target + " " + binaryOpSymbol(s.compoundOp) + "= " + emitExpr(*s.value);
 }
 
