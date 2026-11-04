@@ -19,6 +19,7 @@
 
 // The outcome of an operation that can fail: a value, or an error.
 
+import "exception.grav"
 namespace std.core {
 
     enum Result<T, E> {
@@ -32,18 +33,18 @@ namespace std.core {
             }
         }
         fn isErr() -> bool { return !self.isOk() }
-        // The value; panics with the error when this is an Err.
+        // The value; throws StateError (showing the error) when this is an Err.
         fn unwrap() -> T {
             match (self) {
                 case Ok(v): return v
-                case Err(e): panic("called unwrap() on Err(" + __show(e) + ")")
+                case Err(e): throw new StateError("called unwrap() on Err(" + __show(e) + ")")
             }
         }
-        // The value, or panics with `message` when this is an Err.
+        // The value, or throws StateError with `message` when this is an Err.
         fn expect(message: string) -> T {
             match (self) {
                 case Ok(v): return v
-                case Err(e): panic(message + ": " + __show(e))
+                case Err(e): throw new StateError(message + ": " + __show(e))
             }
         }
         fn unwrapOr(fallback: T) -> T {
@@ -58,11 +59,11 @@ namespace std.core {
                 case Err(e): return f(e)
             }
         }
-        // The error; panics when this is an Ok.
+        // The error; throws StateError when this is an Ok.
         fn unwrapErr() -> E {
             match (self) {
                 case Err(e): return e
-                case Ok(v): panic("called unwrapErr() on Ok(" + __show(v) + ")")
+                case Ok(v): throw new StateError("called unwrapErr() on Ok(" + __show(v) + ")")
             }
         }
         // Ok(f(value)); errors pass through unchanged.
@@ -106,17 +107,17 @@ namespace std.core {
             }
         }
         fn isNone() -> bool { return !self.isSome() }
-        // The value; panics when this is None.
+        // The value; throws StateError when this is None.
         fn unwrap() -> T {
             match (self) {
                 case Some(v): return v
-                case None: panic("called unwrap() on None")
+                case None: throw new StateError("called unwrap() on None")
             }
         }
         fn expect(message: string) -> T {
             match (self) {
                 case Some(v): return v
-                case None: panic(message)
+                case None: throw new StateError(message)
             }
         }
         fn unwrapOr(fallback: T) -> T {
