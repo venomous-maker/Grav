@@ -1,0 +1,45 @@
+GET  /api/health (no token)                  200  {"status":"up","requests":1}
+GET  /api/customers (no token)               401  unauthorized: send Authorization: Bearer <token>
+--- customers ---
+POST /api/customers                          201  customer #1 Ada Lovelace <ada@example.com>
+POST /api/customers                          201  customer #2 Alan Turing <alan@example.com>
+POST /api/customers                          409  conflict: a customer with email ada@example.com already exists
+POST /api/customers                          400  invalid: 'name' needs at least 2 characters
+POST /api/customers                          400  bad_json: the body must be a JSON object
+--- accounts ---
+POST /api/accounts                           201  ACC-000001 checking active balance 0.00 (available 500.00)
+POST /api/accounts                           201  ACC-000002 savings active balance 0.00 (available 0.00)
+POST /api/accounts                           201  ACC-000003 checking active balance 0.00 (available 500.00)
+POST /api/accounts                           404  not_found: no customer 9
+POST /api/accounts                           400  invalid: account kind must be checking or savings, not 'crypto'
+--- money ---
+POST /api/accounts/ACC-000001/deposit        200  ACC-000001 checking active balance 1,250.00 (available 1,750.00)
+POST /api/accounts/ACC-000003/deposit        200  ACC-000003 checking active balance 300.00 (available 800.00)
+POST /api/accounts/ACC-000001/withdraw       200  ACC-000001 checking active balance 1,169.75 (available 1,669.75)
+POST /api/accounts/ACC-000003/withdraw       409  insufficient_funds: ACC-000003 has 800.00 available, 900.00 requested
+POST /api/accounts/ACC-000003/withdraw       400  invalid: '0.001' is not an amount (use up to two decimals, e.g. 25.50)
+POST /api/accounts/ACC-000003/withdraw       400  invalid: 'amount' is required
+POST /api/transfers                          201  500.00 ACC-000001 -> ACC-000002 (now 669.75 / 500.00)
+POST /api/transfers                          409  insufficient_funds: ACC-000003 has 800.00 available, 5,000.00 requested
+POST /api/transfers                          404  not_found: no account ACC-000042
+POST /api/admin/interest                     200  {"accountsPaid":1}
+--- freezing ---
+POST /api/accounts/ACC-000003/freeze         200  ACC-000003 checking frozen balance 300.00 (available 800.00)
+POST /api/accounts/ACC-000003/deposit        409  account_not_active: ACC-000003 is frozen
+POST /api/transfers                          409  account_not_active: ACC-000003 is frozen
+POST /api/accounts/ACC-000003/unfreeze       200  ACC-000003 checking active balance 300.00 (available 800.00)
+POST /api/accounts/ACC-000003/close          409  conflict: ACC-000003 still holds 300.00; empty it first
+--- reading ---
+GET  /api/accounts/ACC-000001                200  ACC-000001 checking active balance 669.75 (available 1,169.75)
+GET  /api/accounts/ACC-000002                200  ACC-000002 savings active balance 507.50 (available 507.50)
+GET  /api/customers/1                        200  customer #1 Ada Lovelace <ada@example.com>, 2 account(s)
+GET  /api/accounts/ACC-000001/transactions   200  3 item(s)
+    deposit        1,250.00  ->  1,250.00  salary
+    withdrawal       -80.25  ->  1,169.75  groceries
+    transfer-out    -500.00  ->    669.75  savings (ACC-000002)
+GET  /api/accounts/ACC-000002/transactions?kind=interest 200  1 item(s)
+GET  /api/accounts/ACC-000099                404  not_found: no account ACC-000099
+GET  /api/reports/summary                    200  {"customers":2,"accounts":3,"accountsByKind":{"checking":2,"savings":1},"transactions":6,"totalDeposits":"1,477.25"}
+--- concurrency: 4 clients x 25 transfers each way ---
+total deposits before 1,477.25, after 1,477.25 (unchanged), 200 new transactions
+served 135 requests; stopped
