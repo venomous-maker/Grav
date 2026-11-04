@@ -1,12 +1,13 @@
-running 8 tests
+running 9 tests
   ok    recover returns the panic message
+  ok    library misuse throws exceptions, stopped at a recovery point
   ok    escaping exceptions stop at a recovery point
   ok    catch does not catch a panic, finally still runs
   ok    locks are released while unwinding
   ok    nested recovery points
   ok    a panicking thread reports through join
-grav http: GET /boom: panic: Array index 0 out of range (length 0) (recovered)
-grav http: GET /boom: panic: Array index 0 out of range (length 0) (recovered)
+grav http: GET /boom: panic: boom (recovered)
+grav http: GET /boom: panic: boom (recovered)
   ok    servers answer 500 and keep serving
   ok    global and per-thread switches
-result: 8 passed, 0 failed
+result: 9 passed, 0 failed
