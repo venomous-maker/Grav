@@ -96,6 +96,7 @@ namespace std.concurrency {
         private joined: bool
         private failure: string
         private name: string
+        private recovery: int        // -1: follow the global setting
 
         constructor(body: fn()) {
             self.body = body;
@@ -104,6 +105,7 @@ namespace std.concurrency {
             self.joined = false;
             self.failure = "";
             self.name = "thread";
+            self.recovery = -1;
         }
         constructor(name: string, body: fn()) {
             self.body = body;
@@ -112,6 +114,7 @@ namespace std.concurrency {
             self.joined = false;
             self.failure = "";
             self.name = name;
+            self.recovery = -1;
         }
         destructor() { %{ free(self->h); %}; }
 
@@ -129,11 +132,25 @@ namespace std.concurrency {
 
         // The thread's entry point (called from C on the new thread).
         private fn runBody() {
-            try {
-                self.body();
-            } catch (e: Exception) {
-                self.failure = e.describe();
-            }
+            if (self.recovery >= 0) { Panic.setThreadRecovery(self.recovery == 1); }
+            // A recovery point: a panic in the body is reported by join() rather
+            // than stopping the program (unless recovery is off for this thread).
+            let me = self;
+            let panicked = Panic.recover(fn() {
+                try {
+                    me.body();
+                } catch (e: Exception) {
+                    me.failure = e.describe();
+                }
+            });
+            if (panicked != "") { self.failure = panicked; }
+        }
+
+        // Before start(): this thread's own panic-recovery setting (by default it
+        // follows Panic.setRecovery).
+        public fn withPanicRecovery(on: bool) -> Thread {
+            self.recovery = on ? 1 : 0;
+            return self;
         }
 
         public fn start() {
