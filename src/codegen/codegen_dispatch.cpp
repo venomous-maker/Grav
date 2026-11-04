@@ -27,7 +27,7 @@ std::string CodeGen::methodArgs(const std::vector<ExprPtr> &args,
     std::string out;
     for (size_t i = 0; i < args.size(); ++i) {
         if (i) out += ", ";
-        out += i < params.size() ? emitAs(*args[i], params[i]) : emitExpr(*args[i]);
+        out += i < params.size() ? emitStable(*args[i], params[i]) : emitExpr(*args[i]);
     }
     return out;
 }
@@ -193,22 +193,24 @@ std::string CodeGen::concatParts(const std::vector<FmtPart> &parts) const {
     return "grav_fmt(\"" + fmt + "\"" + args + ")";
 }
 
+// The text of a value as a borrowed string: built strings go on the release list.
 std::string CodeGen::emitToString(const Expr &e) const {
     const TypeRef &t = e.type;
+    auto ar = [](const std::string &s) { return "grav_str_autorelease(" + s + ")"; };
     switch (t.kind) {
-        case TypeRef::Kind::String: return emitStringExpr(e);
+        case TypeRef::Kind::String: return isRefProducer(e) && dynamic_cast<const BinaryExpr *>(&e) ? ar(emitStringExpr(e)) : emitStringExpr(e);
         case TypeRef::Kind::Int:
-            return t.isUnsigned ? "grav_uint_to_str((unsigned long long)(" + emitExpr(e) + "))"
-                                : "grav_int_to_str((long long)(" + emitExpr(e) + "))";
-        case TypeRef::Kind::Float: return "grav_float_to_str(" + emitExpr(e) + ")";
+            return ar(t.isUnsigned ? "grav_uint_to_str((unsigned long long)(" + emitExpr(e) + "))"
+                                   : "grav_int_to_str((long long)(" + emitExpr(e) + "))");
+        case TypeRef::Kind::Float: return ar("grav_float_to_str(" + emitExpr(e) + ")");
         case TypeRef::Kind::Bool: return "((" + emitExpr(e) + ") ? \"true\" : \"false\")";
-        case TypeRef::Kind::Binary: return "grav_bytes_to_str(" + emitExpr(e) + ")";
-        case TypeRef::Kind::Any: return "grav_any_to_string(" + emitExpr(e) + ")";
+        case TypeRef::Kind::Binary: return ar("grav_bytes_to_str(" + emitExpr(e) + ")");
+        case TypeRef::Kind::Any: return ar("grav_any_to_string(" + emitExpr(e) + ")");
         default: break;
     }
     if (t.isNamed() && reg_->isEnum(t.name)) return enumNameFn(t.name) + "(" + emitExpr(e) + ")";
     if (t.isNamed() && (reg_->isClass(t.name) || reg_->isInterface(t.name)))
-        return methodCall(emitExpr(e), t, "toString", "");
+        return ar(methodCall(emitExpr(e), t, "toString", ""));
     return "\"\"";
 }
 
