@@ -1,0 +1,10 @@
+fn takesByte(b: byte) -> int { return b }
+fn main() {
+    let small: int = 9000000000
+    let b: byte = 300
+    b = 256
+    print(takesByte(1000) + small)
+    print(1 << 40)
+    let s = "text"
+    print(s == null)
+}

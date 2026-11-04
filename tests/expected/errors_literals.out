@@ -1,0 +1,19 @@
+gravc: tests/errors/literals.grav:3:22: type error: integer literal 9000000000 does not fit in int
+        let small: int = 9000000000
+                         ^
+gravc: tests/errors/literals.grav:4:19: type error: integer literal 300 does not fit in byte
+        let b: byte = 300
+                      ^
+gravc: tests/errors/literals.grav:5:9: type error: integer literal 256 does not fit in byte
+        b = 256
+            ^
+gravc: tests/errors/literals.grav:6:21: type error: integer literal 1000 does not fit in byte
+        print(takesByte(1000) + small)
+                        ^
+gravc: tests/errors/literals.grav:7:16: type error: cannot shift an int by 40 bits (it has 32); shift a long instead, e.g. (1 as long) << 40
+        print(1 << 40)
+                   ^
+gravc: tests/errors/literals.grav:9:13: type error: a string is never null: only objects, interfaces, functions, pointers and any values can be compared with null
+        print(s == null)
+                ^
+gravc: 6 error(s); aborting

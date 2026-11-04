@@ -226,6 +226,16 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
                                      typeRefName(lt) + " and " + typeRefName(rt));
             return TypeRef::prim(TypeRef::Kind::Error);
         }
+        // A shift has the (promoted) type of its left operand, like C; shifting
+        // by its width or more is undefined, so a constant count must be smaller.
+        if (e.op == BinaryOp::Shl || e.op == BinaryOp::Shr) {
+            TypeRef res = lt.numBits() < 32 ? TypeRef::prim(TypeRef::Kind::Int) : lt;
+            if (auto *n = dynamic_cast<IntLiteralExpr *>(e.right.get()); n && n->value >= res.numBits())
+                error(e.right->line, e.right->col, "cannot shift " + aTypeName(res) + " by " + n->raw +
+                                                       " bits (it has " + std::to_string(res.numBits()) +
+                                                       "); shift a long instead, e.g. (1 as long) << " + n->raw);
+            return res;
+        }
         // Mixed numeric operands promote to the wider/float type, like C.
         return numericPromote(lt, rt);
     }
