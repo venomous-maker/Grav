@@ -24,7 +24,7 @@ namespace std.sys {
     }
     static const char* grav_strftime(long long ts, const char* fmt) {
         time_t tt = (time_t)ts; struct tm tmv; struct tm* m = localtime_r(&tt, &tmv); /* thread-safe */
-        char* b = (char*)malloc(256); if (!strftime(b, 256, fmt, m)) b[0] = 0; return b;
+        char* b = grav_str_alloc(256); if (!strftime(b, 256, fmt, m)) b[0] = 0; return b;
     }
     static long long grav_mktime(int y, int mo, int d, int h, int mi, int s) {
         struct tm t = {0};
