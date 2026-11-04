@@ -1,4 +1,5 @@
 #include "sema/typechecker.h"
+#include "sema/monomorph.h"
 
 #include <algorithm>
 
@@ -406,6 +407,28 @@ void TypeChecker::checkLet(LetStmt &s) {
 }
 
 void TypeChecker::checkAssign(AssignStmt &s) {
+    // `obj[k] = value` on a class with `operator[]=` calls `op_index_set(k, value)`.
+    if (auto *ix = dynamic_cast<IndexExpr *>(s.target.get())) {
+        TypeRef bt = checkExpr(*ix->base);
+        if (bt.isNamed() && reg_->isClass(bt.name)) { checkIndexAssign(s, *ix, bt); return; }
+    }
+    // `x op= v` on a class value (operator+ and friends): rewrite to `x = x op v`.
+    if (s.isCompound) {
+        TypeRef tt = checkExpr(*s.target);
+        if (tt.isNamed() && reg_->isClass(tt.name)) {
+            ExprPtr copy = cloneExpression(s.target.get());
+            Expr *read = copy.get();
+            auto bin = std::make_unique<BinaryExpr>();
+            bin->line = s.value->line;
+            bin->col = s.value->col;
+            bin->op = s.compoundOp;
+            bin->left = std::move(copy);
+            bin->right = std::move(s.value);
+            s.value = std::move(bin);
+            s.isCompound = false;
+            s.readBack = read;
+        }
+    }
     // A lambda assigned to a typed variable/field takes its parameter types from it.
     TypeRef valueType;
     if (dynamic_cast<LambdaExpr *>(s.value.get()) || dynamic_cast<NewExpr *>(s.value.get())) {
@@ -428,40 +451,6 @@ void TypeChecker::checkAssign(AssignStmt &s) {
         return;
     }
 
-    // `obj[k] = value` on a class with `operator[]=` calls `op_index_set(k, value)`.
-    if (auto *ix = dynamic_cast<IndexExpr *>(s.target.get())) {
-        TypeRef bt = checkExpr(*ix->base);
-        if (bt.isNamed() && reg_->isClass(bt.name)) {
-            const MethodInfo *mi = nullptr;
-            TypeRef keyT = checkExpr(*ix->index);
-            for (const MethodInfo *c : reg_->findMethodsBySource(bt.name, "op_index_set"))
-                if (!c->isStatic && c->paramTypes.size() == 2 &&
-                    (!mi || c->paramTypes[0] == keyT))
-                    mi = c;
-            if (!mi) {
-                error(s.line, s.col, "class '" + bt.name +
-                                         "' has no 'operator[]=(key, value)' for element assignment");
-                return;
-            }
-            if (s.isCompound) {
-                error(s.line, s.col, "compound assignment through 'operator[]' is not supported");
-                return;
-            }
-            TypeRef kt = keyT;
-            if (!isAssignable(kt, mi->paramTypes[0]))
-                error(ix->index->line, ix->index->col, "index of type " + typeRefName(kt) +
-                                                           " does not match 'operator[]=' key " +
-                                                           typeRefName(mi->paramTypes[0]));
-            if (!isAssignable(valueType, mi->paramTypes[1]))
-                error(s.value->line, s.value->col, "cannot assign " + typeRefName(valueType) +
-                                                       " through 'operator[]=' expecting " +
-                                                       typeRefName(mi->paramTypes[1]));
-            ix->overloadClass = bt.name;
-            ix->overloadMethod = mi->name;
-            ix->type = TypeRef::prim(TypeRef::Kind::Void);
-            return;
-        }
-    }
     // `a[i] = value` — write through an array/pointer element.
     if (dynamic_cast<IndexExpr *>(s.target.get())) {
         TypeRef targetType = checkExpr(*s.target); // validates indexability, sets type
