@@ -62,8 +62,8 @@ test "transfers are atomic and recorded on both sides" {
     let a = funded(bank, "a@example.com", "checking", 50000)
     let b = funded(bank, "b@example.com", "savings", 0)
     let r = bank.transfer(a.number, b.number, 12550, "rent share").unwrap()
-    assertEq(Money.format(r.from.balance), "374.50")
-    assertEq(Money.format(r.to.balance), "125.50")
+    assertEq(Money.format(r.fromBalance), "374.50")
+    assertEq(Money.format(r.toBalance), "125.50")
     let failed = bank.transfer(b.number, a.number, 99999999, "nope")
     assert(failed.isErr())
     assertEq(Money.format(b.balance), "125.50")                       // unchanged
