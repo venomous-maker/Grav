@@ -44,8 +44,17 @@ void CodeGen::emitBlock(const Block &block) {
             cleanups_.push_back({Cleanup::Defer, "", &d->body});
             continue;
         }
+        bool drain = stmtNeedsDrain(*s);
+        std::string mark;
+        if (drain) {
+            mark = "__ap" + std::to_string(poolCounter_++);
+            line("size_t " + mark + " = grav_pool_top;");
+        }
         emitStmt(*s);
         fellOff = !isTerminator(*s);
+        // The statement's call results are released here (a `return`/`break`
+        // leaves them to the caller's or the loop's next release).
+        if (drain && fellOff) line("grav_pool_drain(" + mark + ");");
     }
     // Normal exit: run this block's defers, most recent first.
     if (fellOff) {
@@ -82,8 +91,17 @@ void CodeGen::emitUnwind(bool toLoop) {
 
 void CodeGen::emitLoopBody(const Block &body) {
     cleanups_.push_back({Cleanup::Loop, "", nullptr});
+    std::string varRelease = loopVarRelease_;
+    loopVarRelease_.clear();
+    if (!varRelease.empty()) cleanups_.push_back({Cleanup::Code, "", nullptr, varRelease});
     indent_++;
+    if (!loopMarks_.empty() && !loopMarks_.back().empty())
+        line("grav_pool_drain(" + loopMarks_.back() + ");"); // the condition's temporaries
     emitBlock(body);
+    if (!varRelease.empty()) {
+        line(varRelease); // end of an iteration
+        cleanups_.pop_back();
+    }
     indent_--;
     cleanups_.pop_back();
 }
@@ -190,6 +208,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         return;
     }
 
+    bool ownedSrc = false;
     // Element loops: bind the iterable once, then index it.
     std::string idx = s.indexVar.empty() ? "__i" + n : s.indexVar;
     std::string src = "__it" + n;
@@ -226,7 +245,13 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             break;
         case ForInKind::Object:
         default:
-            line(cTy(s.lo->type) + " " + src + " = " + emitExpr(*s.lo) + ";");
+            // The collection is owned for the whole loop (an iteration's releases
+            // must not free a collection the loop expression just made).
+            line(cTy(s.lo->type) + " " + src + " = " + emitOwned(*s.lo, s.lo->type) + ";");
+            if (refKind(s.lo->type) != RefKind::None) {
+                cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(s.lo->type, src)});
+                ownedSrc = true;
+            }
             // length() is re-read each step so the loop tolerates appends.
             count = methodCall(src, s.lo->type, s.lenMethod, "");
             elem = methodCall(src, s.lo->type, s.getMethod, idx);
@@ -234,10 +259,18 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     }
     line("for (int " + idx + " = 0; " + idx + " < " + count + "; " + idx + "++) {");
     indent_++;
+    // An element from get(i) is the loop variable's own reference: released at
+    // the end of the iteration (and by break/continue/return on the way out).
+    bool ownedVar = s.iterKind == ForInKind::Object && refKind(s.varType) != RefKind::None;
     line(vty + " " + s.var + " = " + elem + ";");
     indent_--;
+    if (ownedVar) loopVarRelease_ = releaseOf(s.varType, s.var);
     emitLoopBody(s.body);
     line("}");
+    if (ownedSrc) {
+        line(cleanups_.back().code);
+        cleanups_.pop_back();
+    }
     indent_--;
     line("}");
 }
