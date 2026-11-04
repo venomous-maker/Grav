@@ -1,0 +1,302 @@
+// Automatic reference counting.
+//
+// Reference types: class instances (and data enums), interface values, closures
+// (their environments are counted objects), strings built at run time (counted
+// blocks from the runtime's string allocator; literals and C strings are permanent
+// and ignored by retain/release) and `any` values holding one of those.
+//
+// The rules the generated code follows:
+//   - Owning places hold one reference each: local variables, object fields,
+//     globals and static fields, closure environments, container slots (the
+//     library retains/releases those explicitly with __retain/__release).
+//   - A call or `new` hands its result to the caller (+1). Used inside an
+//     expression it is put on the per-thread release list and released when the
+//     statement ends, so a result is valid for exactly the statement that made it.
+//   - Parameters and `self` are borrowed: the caller keeps the argument alive.
+//   - Storing into an owning place retains the new value (or takes over a fresh
+//     result) before releasing the old one.
+//   - Places the compiler cannot follow (struct copies, fixed arrays, exceptions,
+//     async task arguments) take a reference they never give back: a leak, never
+//     a dangling pointer.
+#include "codegen/codegen.h"
+
+#include "codegen/mangle.h"
+
+namespace grav {
+
+CodeGen::RefKind CodeGen::refKind(const TypeRef &t) const {
+    if (t.isNamed()) {
+        if (reg_->isInterface(t.name)) return RefKind::Iface;
+        if (reg_->isClass(t.name)) return RefKind::Obj;
+        return RefKind::None;
+    }
+    if (t.kind == TypeRef::Kind::String) return RefKind::Str;
+    if (t.isFunction()) return RefKind::Fn;
+    if (t.isAny()) return RefKind::Any;
+    return RefKind::None;
+}
+
+std::string CodeGen::retainOf(const TypeRef &t, const std::string &c) const {
+    switch (refKind(t)) {
+        case RefKind::Obj: return "((" + cTy(t) + ")grav_retain((void*)(" + c + ")))";
+        case RefKind::Iface: return "grav_iface_retain(" + c + ")";
+        case RefKind::Fn: return "grav_fn_retain(" + c + ")";
+        case RefKind::Any: return "grav_any_retain(" + c + ")";
+        case RefKind::Str: return "grav_str_retain(" + c + ")";
+        default: return c;
+    }
+}
+
+std::string CodeGen::releaseOf(const TypeRef &t, const std::string &c) const {
+    switch (refKind(t)) {
+        case RefKind::Obj: return "grav_release((void*)(" + c + "));";
+        case RefKind::Iface: return "grav_iface_release(" + c + ");";
+        case RefKind::Fn: return "grav_fn_release(" + c + ");";
+        case RefKind::Any: return "grav_any_release(" + c + ");";
+        case RefKind::Str: return "grav_str_release(" + c + ");";
+        default: return "";
+    }
+}
+
+std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const {
+    switch (refKind(t)) {
+        case RefKind::Obj: return "((" + cTy(t) + ")grav_autorelease((void*)(" + c + ")))";
+        case RefKind::Iface: return "grav_iface_autorelease(" + c + ")";
+        case RefKind::Fn: return "grav_fn_autorelease(" + c + ")";
+        case RefKind::Any: return "grav_any_autorelease(" + c + ")";
+        case RefKind::Str: return "grav_str_autorelease(" + c + ")";
+        default: return c;
+    }
+}
+
+bool CodeGen::isRefProducer(const Expr &e) const {
+    if (refKind(e.type) == RefKind::None) return false;
+    if (dynamic_cast<const NewExpr *>(&e)) return true;
+    if (auto *l = dynamic_cast<const LambdaExpr *>(&e)) return !l->captures.empty();
+    if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
+        if (c->kind == CallKind::Builtin) {
+            if (c->targetName == "__retain") return true;
+            // Builtins returning strings hand back fresh or permanent strings,
+            // except str(), which emitToString already makes borrowed.
+            return refKind(e.type) == RefKind::Str && c->targetName != "str";
+        }
+        return true; // functions, methods, closures: the result is the caller's
+    }
+    if (refKind(e.type) == RefKind::Str) {
+        // Inline C yields a fresh string or a permanent one (literal, static, C library).
+        if (dynamic_cast<const CBlockExpr *>(&e)) return true;
+        if (auto *b = dynamic_cast<const BinaryExpr *>(&e); b && b->stringConcat && b->overloadMethod.empty())
+            return concatAllocates(e);
+    }
+    return false;
+}
+
+// Whether a `+` chain builds a new string (two or more pieces, or a formatted
+// one); a single piece is just that piece.
+bool CodeGen::concatAllocates(const Expr &e) const {
+    std::vector<FmtPart> raw;
+    flattenString(e, raw);
+    int parts = 0;
+    bool lastLit = false, formatted = false;
+    for (const auto &p : raw) {
+        if (p.literal) { if (!lastLit) parts++; lastLit = true; continue; }
+        lastLit = false;
+        parts++;
+        if (p.conv != "%s") formatted = true;
+    }
+    return parts >= 2 || formatted;
+}
+
+bool CodeGen::exprMayAutorelease(const Expr *e) const {
+    if (!e) return false;
+    if (isRefProducer(*e)) return true;
+    bool found = false;
+    struct Walk {
+        const CodeGen *g;
+        bool &found;
+        void expr(const Expr *x) {
+            if (!x || found) return;
+            if (g->isRefProducer(*x)) { found = true; return; }
+            if (auto *b = dynamic_cast<const BinaryExpr *>(x)) { expr(b->left.get()); expr(b->right.get()); }
+            else if (auto *u = dynamic_cast<const UnaryExpr *>(x)) expr(u->operand.get());
+            else if (auto *t = dynamic_cast<const TernaryExpr *>(x)) { expr(t->cond.get()); expr(t->thenExpr.get()); expr(t->elseExpr.get()); }
+            else if (auto *a = dynamic_cast<const AsExpr *>(x)) expr(a->operand.get());
+            else if (auto *i = dynamic_cast<const IsExpr *>(x)) expr(i->operand.get());
+            else if (auto *c = dynamic_cast<const CastExpr *>(x)) expr(c->operand.get());
+            else if (auto *co = dynamic_cast<const CoalesceExpr *>(x)) { expr(co->left.get()); expr(co->right.get()); }
+            else if (auto *ix = dynamic_cast<const IndexExpr *>(x)) { expr(ix->base.get()); expr(ix->index.get()); }
+            else if (auto *m = dynamic_cast<const MemberExpr *>(x)) {
+                if (g->isWeakField(*m)) { found = true; return; } // a weak read is held on the list
+                expr(m->object.get());
+            }
+            else if (auto *ar = dynamic_cast<const ArrayLiteralExpr *>(x)) { for (const auto &el : ar->elements) expr(el.get()); }
+            else if (auto *sl = dynamic_cast<const StructLiteralExpr *>(x)) { for (const auto &f : sl->fields) expr(f.value.get()); }
+            else if (auto *n = dynamic_cast<const NewExpr *>(x)) {
+                for (const auto &a : n->args) { if (g->isUnstableRef(*a)) { found = true; return; } expr(a.get()); }
+            } else if (auto *cl = dynamic_cast<const CallExpr *>(x)) {
+                // emitStable holds field/element/global arguments and receivers on the list
+                if (auto *m = dynamic_cast<const MemberExpr *>(cl->callee.get()); m && g->isUnstableRef(*m->object)) { found = true; return; }
+                for (const auto &a : cl->args) if (g->isUnstableRef(*a)) { found = true; return; }
+                expr(cl->callee.get());
+                for (const auto &a : cl->args) expr(a.get());
+            } else if (auto *aw = dynamic_cast<const AwaitExpr *>(x)) expr(aw->operand.get());
+            else if (auto *ad = dynamic_cast<const AddrOfExpr *>(x)) expr(ad->operand.get());
+            else if (auto *d = dynamic_cast<const DerefExpr *>(x)) expr(d->operand.get());
+            else if (auto *id = dynamic_cast<const IncDecExpr *>(x)) expr(id->target.get());
+            // lambda bodies are separate functions; literals and names produce nothing
+        }
+    } w{this, found};
+    w.expr(e);
+    return found;
+}
+
+// Whether a statement's own expressions (not nested blocks, which drain their
+// own statements) can put anything on the release list.
+bool CodeGen::stmtNeedsDrain(const Stmt &s) const {
+    if (auto *x = dynamic_cast<const LetStmt *>(&s)) return exprMayAutorelease(x->init.get());
+    if (auto *x = dynamic_cast<const AssignStmt *>(&s))
+        return exprMayAutorelease(x->target.get()) || exprMayAutorelease(x->value.get());
+    if (auto *x = dynamic_cast<const ExprStmt *>(&s)) return exprMayAutorelease(x->expr.get());
+    if (auto *x = dynamic_cast<const IfStmt *>(&s)) {
+        if (exprMayAutorelease(x->cond.get())) return true;
+        // `else if` conditions belong to this statement too
+        for (const Stmt *e = x->elseStmt.get(); e;) {
+            auto *ei = dynamic_cast<const IfStmt *>(e);
+            if (!ei) break;
+            if (exprMayAutorelease(ei->cond.get())) return true;
+            e = ei->elseStmt.get();
+        }
+        return false;
+    }
+    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exprMayAutorelease(x->cond.get());
+    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exprMayAutorelease(x->cond.get());
+    if (auto *x = dynamic_cast<const ForStmt *>(&s))
+        return (x->init && stmtNeedsDrain(*x->init)) || exprMayAutorelease(x->cond.get()) ||
+               (x->update && stmtNeedsDrain(*x->update));
+    if (auto *x = dynamic_cast<const ForInStmt *>(&s))
+        return exprMayAutorelease(x->lo.get()) || exprMayAutorelease(x->hi.get()) ||
+               exprMayAutorelease(x->step.get());
+    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) return exprMayAutorelease(x->subject.get());
+    if (auto *x = dynamic_cast<const ThrowStmt *>(&s)) return exprMayAutorelease(x->value.get());
+    return false;
+}
+
+std::string CodeGen::emitOwned(const Expr &e, const TypeRef &target) const {
+    if (refKind(target) == RefKind::None || dynamic_cast<const NullLiteralExpr *>(&e) ||
+        dynamic_cast<const StringLiteralExpr *>(&e)) // literals are permanent
+        return emitAs(e, target);
+    if (auto *as = dynamic_cast<const AsExpr *>(&e);
+        as && refKind(target) == RefKind::Str && dynamic_cast<const CBlockExpr *>(as->operand.get()) &&
+        as->operand->type.kind == TypeRef::Kind::String)
+        return emitOwned(*as->operand, target); // `%{ … %} as string`: take the C result over
+    bool hoisted = !exprOverride_.empty() && exprOverride_.count(&e);
+    if (!hoisted && isRefProducer(e)) {
+        // The result is already +1: hand it over without the release list.
+        const Expr *saved = ownedRoot_;
+        ownedRoot_ = &e;
+        std::string out = emitAs(e, target);
+        ownedRoot_ = saved;
+        return out;
+    }
+    return retainOf(target, emitAs(e, target));
+}
+
+std::string CodeGen::storeOwned(const std::string &slot, const TypeRef &slotType, const Expr &value) const {
+    // Retain (or take over) the new value first, then release the old one: storing
+    // a place's own value back must not free it in between.
+    std::string ct = cTy(slotType);
+    return "{ " + ct + "* __slot = &(" + slot + "); " + ct + " __new = " + emitOwned(value, slotType) +
+           "; " + ct + " __old = *__slot; *__slot = __new; " + releaseOf(slotType, "__old") + " }";
+}
+
+void CodeGen::emitReleaseFields(const std::string &classFq) {
+    std::string S = structName(classFq);
+    std::string body;
+    for (const auto &f : collectFields(classFq)) {
+        if (refKind(f.type) == RefKind::None) continue;
+        std::string m = "self->" + memberCName(f.name);
+        if (f.isWeak) {
+            body += "    { void* __v = (void*)" + m + "; " + m + " = 0; grav_weak_release(__v); }\n";
+            continue;
+        }
+        // Clear the field before releasing: a cycle back to this object sees null.
+        std::string zero = refKind(f.type) == RefKind::Str ? "\"\"" : refKind(f.type) == RefKind::Obj ? "0" : "(" + cTy(f.type) + "){0}";
+        body += "    { " + cTy(f.type) + " __v = " + m + "; " + m + " = " + zero + "; " + releaseOf(f.type, "__v") + " }\n";
+    }
+    vtables_ += "static void " + mangle(classFq) + "__arc_fields(void* o) {\n";
+    if (body.empty()) vtables_ += "    (void)o;\n";
+    else vtables_ += "    " + S + "* self = (" + S + "*)o;\n" + body;
+    vtables_ += "}\n";
+}
+
+void CodeGen::ownAssignedParams(const Block &body, const std::vector<Param> &params) {
+    // A parameter the body assigns to becomes an owning local for the body.
+    std::set<std::string> assigned;
+    std::function<void(const Block &)> scanBlock;
+    std::function<void(const Stmt *)> scan = [&](const Stmt *s) {
+        if (!s) return;
+        if (auto *a = dynamic_cast<const AssignStmt *>(s)) {
+            if (auto *n = dynamic_cast<const NameExpr *>(a->target.get()); n && n->resolvedGlobal.empty())
+                assigned.insert(n->name);
+        } else if (auto *b = dynamic_cast<const BlockStmt *>(s)) scanBlock(b->block);
+        else if (auto *i = dynamic_cast<const IfStmt *>(s)) { scanBlock(i->thenBlock); scan(i->elseStmt.get()); }
+        else if (auto *w = dynamic_cast<const WhileStmt *>(s)) scanBlock(w->body);
+        else if (auto *d = dynamic_cast<const DoWhileStmt *>(s)) scanBlock(d->body);
+        else if (auto *f = dynamic_cast<const ForStmt *>(s)) { scan(f->init.get()); scan(f->update.get()); scanBlock(f->body); }
+        else if (auto *fi = dynamic_cast<const ForInStmt *>(s)) scanBlock(fi->body);
+        else if (auto *sw = dynamic_cast<const SwitchStmt *>(s)) {
+            for (const auto &c : sw->cases) scanBlock(c.body);
+            scanBlock(sw->defaultBody);
+        } else if (auto *t = dynamic_cast<const TryStmt *>(s)) {
+            scanBlock(t->tryBlock);
+            for (const auto &c : t->catches) scanBlock(c.block);
+            scanBlock(t->finallyBlock);
+        } else if (auto *df = dynamic_cast<const DeferStmt *>(s)) scanBlock(df->body);
+    };
+    scanBlock = [&](const Block &b) { for (const auto &st : b.statements) scan(st.get()); };
+    scanBlock(body);
+    for (const auto &p : params) {
+        if (!assigned.count(p.name) || refKind(p.type) == RefKind::None || p.variadic) continue;
+        const std::string &n = p.name;
+        line(n + " = " + retainOf(p.type, n) + ";");
+        cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(p.type, n)});
+    }
+}
+
+// A borrowed reference handed to a call must stay alive for the call. Locals,
+// parameters and `self` have an owner the call cannot change, and fresh results
+// are on the release list; but a value read from a field, an element or a global
+// could be released by the callee (`self.unlink(self.tail)` clearing `self.tail`),
+// so it is held by an extra reference until the statement ends.
+// A `weak` field of a class instance.
+bool CodeGen::isWeakField(const MemberExpr &m) const {
+    if (m.kind != MemberKind::InstanceField) return false;
+    if (!m.object || !m.object->type.isNamed() || !reg_->isClass(m.object->type.name)) return false;
+    const FieldInfo *f = reg_->findField(m.object->type.name, m.member);
+    return f && f->isWeak;
+}
+
+bool CodeGen::isUnstableRef(const Expr &e) const {
+    if (refKind(e.type) == RefKind::None) return false;
+    if (dynamic_cast<const MemberExpr *>(&e) || dynamic_cast<const IndexExpr *>(&e) ||
+        dynamic_cast<const DerefExpr *>(&e))
+        return true;
+    if (auto *n = dynamic_cast<const NameExpr *>(&e)) return !n->resolvedGlobal.empty();
+    return false;
+}
+
+std::string CodeGen::emitStable(const Expr &e, const TypeRef &t) const {
+    std::string v = emitAs(e, t);
+    if (refKind(t) == RefKind::None || !isUnstableRef(e)) return v;
+    if (!exprOverride_.empty() && exprOverride_.count(&e)) return v;
+    return autoreleaseOf(t, retainOf(t, v));
+}
+
+// At the natural end of a body: the function-level cleanups (owned parameters)
+// that a `return` would have run.
+void CodeGen::emitBodyEndCleanups() {
+    for (size_t i = cleanups_.size(); i-- > 0;)
+        if (cleanups_[i].kind == Cleanup::Code) line(cleanups_[i].code);
+}
+
+} // namespace grav
