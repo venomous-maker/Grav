@@ -1,0 +1,78 @@
+// entities/transaction.grav — one line of an account's statement. A transfer
+// is recorded twice: TransferOut on the source and TransferIn on the target.
+import "std"
+import "entities/money"
+
+namespace bank.entities {
+
+    enum TxKind { Deposit, Withdrawal, TransferIn, TransferOut, Interest }
+
+    fn txKindName(k: TxKind) -> string {
+        switch (k) {
+            case TxKind.Deposit: return "deposit"
+            case TxKind.Withdrawal: return "withdrawal"
+            case TxKind.TransferIn: return "transfer-in"
+            case TxKind.TransferOut: return "transfer-out"
+            default: return "interest"
+        }
+    }
+
+    class Transaction {
+        public id: long
+        public accountId: long
+        public kind: TxKind
+        public amount: long             // cents, always positive
+        public balanceAfter: long       // cents
+        public counterparty: string     // the other account of a transfer, or ""
+        public memo: string
+        public at: long
+
+        constructor(id: long, accountId: long, kind: TxKind, amount: long, balanceAfter: long, counterparty: string, memo: string) {
+            self.id = id
+            self.accountId = accountId
+            self.kind = kind
+            self.amount = amount
+            self.balanceAfter = balanceAfter
+            self.counterparty = counterparty
+            self.memo = memo
+            self.at = Time.now()
+        }
+
+        // Money in is positive, money out negative.
+        fn signedAmount() -> long {
+            return self.kind == TxKind.Withdrawal || self.kind == TxKind.TransferOut ? -self.amount : self.amount
+        }
+
+        fn toJson() -> JsonValue {
+            let j = Json.object()
+                .set("id", self.id)
+                .set("kind", txKindName(self.kind))
+                .set("amount", Money.format(self.signedAmount()))
+                .set("balanceAfter", Money.format(self.balanceAfter))
+                .set("memo", self.memo)
+                .set("at", self.at)
+            if (self.counterparty != "") { j.set("counterparty", self.counterparty) }
+            return j
+        }
+
+        fn toRecord() -> JsonValue {
+            return Json.object()
+                .set("id", self.id).set("accountId", self.accountId).set("kind", txKindName(self.kind))
+                .set("amount", self.amount).set("balanceAfter", self.balanceAfter)
+                .set("counterparty", self.counterparty).set("memo", self.memo).set("at", self.at)
+        }
+
+        static fn fromRecord(v: JsonValue) -> Transaction {
+            let names = ["deposit", "withdrawal", "transfer-in", "transfer-out", "interest"]
+            let kinds = [TxKind.Deposit, TxKind.Withdrawal, TxKind.TransferIn, TxKind.TransferOut, TxKind.Interest]
+            let kind = TxKind.Deposit
+            let k = v.getString("kind", "deposit")
+            for (i in 0..5) { if (names[i] == k) { kind = kinds[i] } }
+            let t = new Transaction(v.getLong("id", 0), v.getLong("accountId", 0), kind, v.getLong("amount", 0),
+                v.getLong("balanceAfter", 0), v.getString("counterparty", ""), v.getString("memo", ""))
+            t.at = v.getLong("at", 0)
+            return t
+        }
+    }
+
+}
