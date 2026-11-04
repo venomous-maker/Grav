@@ -17,6 +17,7 @@ struct FieldInfo {
     std::string name;
     TypeRef type;            // canonical
     std::string definingClass; // FQ
+    bool isWeak = false;       // a weak reference (class types only)
 };
 
 enum class AccessorKind { None, Getter, Setter, Delegate };
