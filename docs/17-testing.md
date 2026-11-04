@@ -63,8 +63,8 @@ result: 3 passed, 0 failed
 ## Failures are isolated
 
 A test fails when an assertion fails, when it calls `panic`, or when an exception
-escapes it (a bounds-checked `Array` access out of range panics, for example). The
-runner reports the failure and moves on to the next test. `grav test` exits with
+escapes it (a bounds-checked `Array` access out of range throws `IndexError`,
+for example). The runner reports the failure and moves on to the next test. `grav test` exits with
 status 1 if any test failed, so it works in CI as is.
 
 ```text
