@@ -6,6 +6,7 @@
 //   }
 //   let name = find(2).getOr("nobody")
 
+import "exception.grav"
 namespace std.core {
 
     class Optional<T> {
@@ -18,7 +19,7 @@ namespace std.core {
         public fn isPresent() -> bool { return self.present; }
         public fn isEmpty() -> bool { return !self.present; }
         public fn get() -> T {
-            if (!self.present) { panic("Optional.get on an empty Optional"); }
+            if (!self.present) { throw new StateError("Optional.get on an empty Optional"); }
             return self.value;
         }
         public fn getOr(fallback: T) -> T { return self.present ? self.value : fallback; }
