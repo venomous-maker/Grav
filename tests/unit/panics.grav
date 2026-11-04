@@ -1,0 +1,83 @@
+// Panic recovery: Panic.recover, finally during unwinding, threads, servers, switches.
+import "std"
+import "std/net"
+
+class Box { public n: int; constructor() { self.n = 0 } }
+
+test "recover returns the panic message" {
+    let xs = new Array<int>()
+    assertEq(Panic.recover(fn() {}), "")
+    assertEq(Panic.recover(fn() { xs.get(2) }), "panic: Array index 2 out of range (length 0)")
+    let r: Result<int, string> = Result.Err("gone")
+    assertEq(Panic.recover(fn() { r.unwrap() }), "panic: called unwrap() on Err(gone)")
+    assertEq(Panic.recover(fn() { panic("custom") }), "panic: custom")
+}
+
+test "escaping exceptions stop at a recovery point" {
+    assertEq(Panic.recover(fn() { throw new StateError("x") }), "uncaught exception: StateError: x")
+}
+
+test "catch does not catch a panic, finally still runs" {
+    let caught = new Box()
+    let cleaned = new Box()
+    let msg = Panic.recover(fn() {
+        try { panic("p") } catch (e: Exception) { caught.n += 1 } finally { cleaned.n += 1 }
+    })
+    assertEq(msg, "panic: p")
+    assertEq(caught.n, 0)
+    assertEq(cleaned.n, 1)
+}
+
+test "locks are released while unwinding" {
+    let m = new Mutex()
+    Panic.recover(fn() { m.withLock(fn() { panic("held") }) })
+    assert(m.tryLock())
+    m.unlock()
+}
+
+test "nested recovery points" {
+    let inner = new Box()
+    let outer = Panic.recover(fn() {
+        if (Panic.recover(fn() { panic("in") }) == "panic: in") { inner.n = 1 }
+        panic("out")
+    })
+    assertEq(inner.n, 1)
+    assertEq(outer, "panic: out")
+}
+
+test "a panicking thread reports through join" {
+    let xs = new Array<int>()
+    assertEq(Thread.spawn(fn() { xs.get(1) }).joinResult(), "panic: Array index 1 out of range (length 0)")
+}
+
+test "servers answer 500 and keep serving" {
+    let xs = new Array<int>()
+    let app = new HttpServer()
+    app.get("/ok", fn(q: HttpRequest) => HttpResponse.text("fine"))
+    app.get("/boom", fn(q: HttpRequest) -> HttpResponse { return HttpResponse.text("${xs.get(0)}") })
+    app.start(0)
+    let base = "http://127.0.0.1:${app.port()}"
+    let c = new HttpClient()
+    assertEq(c.get(base + "/boom").status, 500)
+    assertEq(c.get(base + "/ok").body(), "fine")
+    assertEq(c.get(base + "/boom").body(), "internal error: panic: Array index 0 out of range (length 0)")
+    app.stop()
+}
+
+test "global and per-thread switches" {
+    assert(Panic.recoveryEnabled())
+    Panic.setThreadRecovery(false)
+    assert(!Panic.recoveryEnabled())
+    let other = new Box()
+    Thread.spawn(fn() { other.n = Panic.recoveryEnabled() ? 1 : 0 }).join()
+    assertEq(other.n, 1)                       // other threads keep the global setting
+    Panic.followGlobalRecovery()
+    Panic.setRecovery(false)
+    let own = new Box()
+    let t = new Thread(fn() { own.n = Panic.recoveryEnabled() ? 1 : 0 }).withPanicRecovery(true)
+    t.start()
+    t.join()
+    assertEq(own.n, 1)                         // a thread's own setting wins
+    assert(!Panic.recoveryEnabled())
+    Panic.setRecovery(true)
+}
