@@ -53,6 +53,12 @@ std::string prettyNames(const std::string &text) {
     return out;
 }
 
+std::string aTypeName(const TypeRef &t) {
+    std::string n = typeRefName(t);
+    bool vowel = !n.empty() && std::string("aeiouAEIOU").find(n[0]) != std::string::npos;
+    return (vowel ? "an " : "a ") + n;
+}
+
 std::string typeRefName(const TypeRef &t) {
     switch (t.kind) {
         case TypeRef::Kind::Int: {

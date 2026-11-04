@@ -199,9 +199,10 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
         };
         if (refOrNull(lt) && refOrNull(rt))
             return TypeRef::prim(TypeRef::Kind::Bool);
+        const TypeRef &value = refOrNull(lt) ? rt : lt;
         error(e.line, e.col,
-              "cannot compare " + typeRefName(lt) + " and " + typeRefName(rt) +
-                  " against null");
+              aTypeName(value) + " is never null: only objects, interfaces, functions, "
+              "pointers and any values can be compared with null");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     if (!isComparison(e.op)) {
@@ -291,13 +292,13 @@ TypeRef TypeChecker::checkCoalesce(CoalesceExpr &e) {
     bool leftNullable = l.isPointer() ||
                         (l.isNamed() && (reg_->isClass(l.name) || reg_->isInterface(l.name)));
     if (!leftNullable) {
-        error(e.line, e.col, "the left of '??' must be a nullable reference "
+        error(e.line, e.col, "the left of '?" "?' must be a nullable reference "
                              "(class, interface, or pointer), but got " + typeRefName(l));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     if (isAssignable(r, l)) return l;
     if (isAssignable(l, r)) return r;
-    error(e.line, e.col, "'??' branches have incompatible types " +
+    error(e.line, e.col, "'?" "?' branches have incompatible types " +
                              typeRefName(l) + " and " + typeRefName(r));
     return TypeRef::prim(TypeRef::Kind::Error);
 }

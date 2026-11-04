@@ -121,6 +121,8 @@ struct TypeRef {
 
 // Human-readable name for diagnostics, e.g. "int", "string", "geometry.Circle".
 std::string typeRefName(const TypeRef &t);
+// The type's name after "a" or "an", for messages: "an int", "a string".
+std::string aTypeName(const TypeRef &t);
 
 // Diagnostics show generic instances as written (`HashMap<long, int>`), not by
 // their internal mangled names (`HashMap$i64$int`). The driver registers each
