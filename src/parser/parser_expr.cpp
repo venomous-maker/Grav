@@ -392,6 +392,7 @@ ExprPtr Parser::parsePostfix() {
             auto idx = at<IndexExpr>(lb);
             idx->base = std::move(expr);
             idx->index = parseExpression();
+            while (matchToken(TokenType::Comma)) idx->more.push_back(parseExpression()); // m[r, c]
             expect(TokenType::RBracket, "to close the index");
             expr = std::move(idx);
         } else if ((check(TokenType::PlusPlus) || check(TokenType::MinusMinus)) && !onNewLine()) {
