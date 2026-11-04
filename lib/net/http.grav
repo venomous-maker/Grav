@@ -97,7 +97,7 @@ namespace std.net {
     static const char* grav_url_encode(const char* s) {
         static const char* hex = "0123456789ABCDEF";
         size_t n = strlen(s), o = 0;
-        char* out = (char*)malloc(n * 3 + 1);
+        char* out = grav_str_alloc(n * 3 + 1);
         if (!out) abort();
         for (size_t i = 0; i < n; i++) {
             unsigned char c = (unsigned char)s[i];
@@ -112,7 +112,7 @@ namespace std.net {
     }
     static const char* grav_url_decode(const char* s) {
         size_t n = strlen(s), o = 0;
-        char* out = (char*)malloc(n + 1);
+        char* out = grav_str_alloc(n + 1);
         if (!out) abort();
         for (size_t i = 0; i < n; i++) {
             if (s[i] == '%' && i + 2 < n + 0 + 1 && grav_hexval((unsigned char)s[i + 1]) >= 0 && grav_hexval((unsigned char)s[i + 2]) >= 0) {
