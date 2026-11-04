@@ -77,7 +77,10 @@ void TypeChecker::checkVariadicArgs(const std::vector<ExprPtr> &args,
 
 TypeRef TypeChecker::checkExpr(Expr &expr) {
     TypeRef t = TypeRef::prim(TypeRef::Kind::Error);
-    if (dynamic_cast<IntLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Int);
+    // An integer literal is an int, or a long when it needs 64 bits.
+    if (auto *lit = dynamic_cast<IntLiteralExpr *>(&expr))
+        t = lit->value > 2147483647LL || lit->value < -2147483648LL ? TypeRef::integer(64, false)
+                                                                   : TypeRef::prim(TypeRef::Kind::Int);
     else if (dynamic_cast<FloatLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Float);
     else if (dynamic_cast<BoolLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Bool);
     else if (dynamic_cast<StringLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::String);

@@ -470,7 +470,8 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
     // A lambda assigned to a typed variable/field takes its parameter types from it.
     TypeRef valueType;
-    if (dynamic_cast<LambdaExpr *>(s.value.get()) || dynamic_cast<NewExpr *>(s.value.get())) {
+    if (dynamic_cast<LambdaExpr *>(s.value.get()) || dynamic_cast<NewExpr *>(s.value.get()) ||
+        (!s.isCompound && dynamic_cast<IntLiteralExpr *>(s.value.get()))) {
         TypeRef tt = checkExpr(*s.target);
         valueType = checkExprExpect(*s.value, tt);
     } else {

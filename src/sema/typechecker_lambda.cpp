@@ -41,6 +41,16 @@ TypeRef TypeChecker::checkExprExpect(Expr &e, const TypeRef &expected) {
                     : nullptr;
     TypeRef t = checkExpr(e);
     expected_ = saved;
+    // An integer literal must fit the integer type it initializes.
+    if (auto *lit = dynamic_cast<IntLiteralExpr *>(&e); lit && expected.kind == TypeRef::Kind::Int) {
+        int bits = expected.numBits();
+        // (A 64-bit unsigned target takes any literal: 0xFFFFFFFFFFFFFFFF wraps to -1.)
+        bool fits = expected.isUnsigned
+                        ? bits >= 64 || (lit->value >= 0 && lit->value < (1LL << bits))
+                        : bits >= 64 || (lit->value >= -(1LL << (bits - 1)) && lit->value < (1LL << (bits - 1)));
+        if (!fits)
+            error(e.line, e.col, "integer literal " + lit->raw + " does not fit in " + typeRefName(expected));
+    }
     return t;
 }
 

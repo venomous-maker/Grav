@@ -559,8 +559,9 @@ ExprPtr Parser::parsePrimary() {
             advance();
             auto e = at<IntLiteralExpr>(t);
             e->raw = t.lexeme;
-            std::from_chars(t.lexeme.data(), t.lexeme.data() + t.lexeme.size(),
-                            e->value);
+            auto [end, ec] = std::from_chars(t.lexeme.data(), t.lexeme.data() + t.lexeme.size(), e->value);
+            (void)end;
+            if (ec != std::errc()) fail(t, "integer literal " + t.lexeme + " is too large (the limit is 9223372036854775807)");
             return e;
         }
         case TokenType::FloatLiteral: {
