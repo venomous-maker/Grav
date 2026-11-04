@@ -1,0 +1,118 @@
+// Automatic reference counting: objects are freed with their last reference.
+import "std"
+
+class Tracked {
+    public n: int
+    public next: Tracked
+    constructor(n: int) { self.n = n; self.next = null; Live.count += 1 }
+    destructor() { Live.count -= 1 }
+}
+class Live { static count: int = 0 }
+
+fn build(n: int) -> Tracked {
+    let head: Tracked = null
+    for (i in 0..n) { let t = new Tracked(i); t.next = head; head = t }
+    return head
+}
+
+test "locals and temporaries are freed at once" {
+    if (true) {
+        let a = new Tracked(1)
+        let b = new Tracked(2)
+        a.next = b
+    }
+    new Tracked(3)
+    assertEq(Live.count, 0)
+}
+
+test "reassignment frees the old object" {
+    let x = new Tracked(1)
+    x = new Tracked(2)
+    assertEq(Live.count, 1)
+}
+
+test "a long chain is freed without deep recursion" {
+    if (true) { let head = build(200000); assertEq(head.n, 199999) }
+    assertEq(Live.count, 0)
+}
+
+test "containers hold their elements" {
+    if (true) {
+        let xs = new Array<Tracked>()
+        for (i in 0..100) { xs.push(new Tracked(i)) }
+        xs.removeAt(0)
+        xs.pop()
+        assertEq(Live.count, 98)
+        let m = new HashMap<int, Tracked>()
+        m.put(1, new Tracked(1))
+        m.put(1, new Tracked(2))
+        assertEq(Live.count, 99)
+    }
+    assertEq(Live.count, 0)
+}
+
+test "closures keep what they capture" {
+    let f: fn() -> int = null
+    if (true) {
+        let t = new Tracked(7)
+        f = fn() -> int { return t.n }
+    }
+    assertEq(Live.count, 1)
+    assertEq(f(), 7)
+    f = null
+    assertEq(Live.count, 0)
+}
+
+test "free runs the destructor now, other references stay safe" {
+    let a = new Tracked(5)
+    let alias = a
+    free(a)
+    assertEq(Live.count, 0)
+    assertEq(alias.n, 5)
+}
+
+class TreeNode {
+    public name: string
+    public children: Array<TreeNode>
+    public weak parent: TreeNode           // back-reference: does not keep the parent alive
+    constructor(name: string) {
+        self.name = name; self.children = new Array<TreeNode>(); self.parent = null; Live.count += 1
+    }
+    destructor() { Live.count -= 1 }
+    fn add(c: TreeNode) -> TreeNode { c.parent = self; self.children.push(c); return c }
+}
+
+test "weak back-references let a parent and its children go" {
+    if (true) {
+        let root = new TreeNode("root")
+        let kid = root.add(new TreeNode("kid"))
+        kid.add(new TreeNode("grandkid"))
+        assertEq(kid.parent.name, "root")
+        assertEq(Live.count, 3)
+    }
+    assertEq(Live.count, 0)
+}
+
+test "a weak reference reads null once its object is gone" {
+    let kid = new TreeNode("kid")
+    if (true) {
+        let root = new TreeNode("root")
+        root.add(kid)
+        assert(kid.parent != null)
+    }
+    assert(kid.parent == null)
+    assertEq(Live.count, 1)
+    let other = new TreeNode("other")
+    kid.parent = other
+    free(other)                            // disposed: weak references see null too
+    assert(kid.parent == null)
+}
+
+test "string += keeps building correctly" {
+    let s = ""
+    for (i in 0..1000) { s += "${i % 10}" }
+    assertEq(Str.length(s), 1000)
+    let n = new TreeNode("a")
+    for (i in 0..3) { n.name += "!" }
+    assertEq(n.name, "a!!!")
+}
