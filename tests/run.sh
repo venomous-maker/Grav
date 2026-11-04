@@ -55,6 +55,16 @@ for f in tests/unit/*.grav; do
   else echo "ok   $f (grav test)"; pass=$((pass+1)); fi
 done
 
+# Programs that must not compile: `grav check`'s diagnostics are golden-checked.
+for f in tests/errors/*.grav; do
+  name="errors_$(basename "$f" .grav)"; gold="tests/expected/$name.out"
+  "$GRAV" check "$f" >"$TMP/$name.out" 2>&1 && echo "    (compiled, but should not)" >>"$TMP/$name.out"
+  if [ $UPDATE = 1 ]; then cp "$TMP/$name.out" "$gold"; echo "updated $gold"; pass=$((pass+1)); continue; fi
+  if [ ! -f "$gold" ] || ! diff -q "$gold" "$TMP/$name.out" >/dev/null; then
+    echo "FAIL (errors)  $f"; diff "$gold" "$TMP/$name.out" 2>&1 | sed 's/^/    /' | head -30; fail=$((fail+1))
+  else echo "ok   $f (errors)"; pass=$((pass+1)); fi
+done
+
 # Project test suites run with `grav test` from the project directory.
 for p in examples/apps/bank_server; do
   name="project_$(basename "$p")"; gold="tests/expected/$name.out"
