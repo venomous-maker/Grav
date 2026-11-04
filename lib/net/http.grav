@@ -364,6 +364,13 @@ namespace std.net {
         }
     }
 
+    // The outcome of dispatching one request (filled in inside a recovery point).
+    class Dispatch {
+        public res: HttpResponse
+        public upgraded: bool
+        constructor() { self.res = null; self.upgraded = false; }
+    }
+
     // One route: method + path pattern -> handler.
     class Route {
         public method: string                 // "*" for any
@@ -413,6 +420,11 @@ namespace std.net {
         public maxBodyBytes: int
         // Idle keep-alive connections are closed after this many milliseconds.
         public idleTimeoutMs: int
+        // A panic in a handler (or middleware, or WebSocket handler) is recovered:
+        // the client gets a 500, the panic is logged, and the server keeps running.
+        // false: panics on this server's connection threads stop the program.
+        // Panic.setRecovery(false) turns recovery off everywhere.
+        public recoverPanics: bool
 
         constructor() {
             self.routes = new Array<Route>();
@@ -424,6 +436,7 @@ namespace std.net {
             self.logLock = new Mutex();
             self.maxBodyBytes = 10 * 1024 * 1024;
             self.idleTimeoutMs = 15000;
+            self.recoverPanics = true;
         }
 
         // ── routes ─────────────────────────────────────────────────────────────
@@ -453,6 +466,7 @@ namespace std.net {
         public fn use(f: fn(HttpRequest) -> HttpResponse) -> HttpServer { self.middleware.push(f); return self; }
         // Print one line per request ("GET /path -> 200").
         public fn logRequests(on: bool) -> HttpServer { self.log = on; return self; }
+        public fn withPanicRecovery(on: bool) -> HttpServer { self.recoverPanics = on; return self; }
 
         // ── running ────────────────────────────────────────────────────────────
         // Serve on host:port, blocking until stop().
@@ -498,6 +512,7 @@ namespace std.net {
 
         // Requests on one connection, until it closes or asks not to be kept alive.
         private fn serveConnection(conn: TcpStream) {
+            if (!self.recoverPanics) { Panic.setThreadRecovery(false); }
             conn.setNoDelay(true);
             conn.setTimeoutMs(self.idleTimeoutMs);
             let keepOpen = true;
@@ -514,7 +529,17 @@ namespace std.net {
                 }
                 if (req == null) { break; }
                 req.remote = conn.peerAddress();
-                let res = self.dispatch(req, conn);
+                // Each request runs as a recovery point: a panic in its handler
+                // becomes a 500 instead of stopping the server.
+                let d = new Dispatch();
+                let r = req;
+                let failure = Panic.recover(fn() { d.res = self.dispatch(r, conn, d); });
+                if (failure != "") {
+                    IO.eprint("grav http: " + req.method + " " + req.target + ": " + failure + " (recovered)");
+                    if (d.upgraded) { conn.close(); return; }   // the connection is no longer HTTP
+                    d.res = HttpResponse.of(500, "text/plain; charset=utf-8", "internal error: " + failure);
+                }
+                let res = d.res;
                 if (res == null) { return; }   // an upgrade handler now owns the connection
                 keepOpen = req.keepAlive() && !Str.equalsIgnoreCase(res.headers.get("Connection"), "close");
                 try {
@@ -548,7 +573,7 @@ namespace std.net {
         }
 
         // The response for `req`, or null when an upgrade handler took the connection.
-        private fn dispatch(req: HttpRequest, conn: TcpStream) -> HttpResponse {
+        private fn dispatch(req: HttpRequest, conn: TcpStream, d: Dispatch) -> HttpResponse {
             for (m in self.middleware) {
                 try {
                     let early = m(req);
@@ -566,6 +591,7 @@ namespace std.net {
                 r.matches(segs, req);                     // capture the parameters
                 if (r.isUpgrade) {
                     if (req.headers.get("Upgrade") == "") { continue; }
+                    d.upgraded = true;
                     r.upgrader(req, conn);
                     return null;
                 }
