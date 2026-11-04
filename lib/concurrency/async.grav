@@ -98,14 +98,19 @@ namespace std.concurrency {
             self.closed = false;
             self.h = %{ (unsigned char*)grav_sync_new() %} as byte*;
         }
-        destructor() { free(self.buf); %{ grav_sync_free((GravSync*)self->h); %}; }
+        // One reference per queued value (reference types).
+        destructor() {
+            for (i in 0..self.count) { __release(self.buf[(self.head + i) % self.cap]); }
+            free(self.buf);
+            %{ grav_sync_free((GravSync*)self->h); %};
+        }
 
         // Blocks while the channel is full. Returns false if it has been closed.
         public fn send(v: T) -> bool {
             %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu);
                while (self->count == self->cap && !self->closed) pthread_cond_wait(&s->notFull, &s->mu); %};
             if (self.closed) { %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %}; return false; }
-            self.buf[(self.head + self.count) % self.cap] = v;
+            self.buf[(self.head + self.count) % self.cap] = __retain(v);
             self.count = self.count + 1;
             %{ pthread_cond_signal(&((GravSync*)self->h)->notEmpty); pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
             return true;
@@ -128,6 +133,7 @@ namespace std.concurrency {
             let v = self.buf[self.head];
             self.head = (self.head + 1) % self.cap;
             self.count = self.count - 1;
+            __release(v);             // the channel's reference
             %{ pthread_cond_signal(&((GravSync*)self->h)->notFull); pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
             return v;
         }
@@ -143,6 +149,7 @@ namespace std.concurrency {
             let v = self.buf[self.head];
             self.head = (self.head + 1) % self.cap;
             self.count = self.count - 1;
+            __release(v);             // the channel's reference
             %{ pthread_cond_signal(&((GravSync*)self->h)->notFull); pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
             return v;
         }
