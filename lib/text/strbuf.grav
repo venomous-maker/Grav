@@ -23,7 +23,7 @@ namespace std.text {
         return nb;
     }
     static const char* grav_sb_ll(long long n) { static _Thread_local char b[32]; snprintf(b, sizeof b, "%lld", n); return b; }
-    static const char* grav_sb_g(double f) { static _Thread_local char b[48]; snprintf(b, sizeof b, "%g", f); return b; }
+    static const char* grav_sb_g(double f) { static _Thread_local char b[48]; return grav_dtoa(f, b); }
     static const char* grav_sb_dup(const unsigned char* buf, int len) {
         char* r = grav_str_alloc((size_t)len + 1);
         if (!r) { fprintf(stderr, "panic: out of memory\n"); exit(1); }

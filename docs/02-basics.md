@@ -65,11 +65,13 @@ Output:
 ```text
 9000000042
 256
-5.250000
+5.25
 ```
 
-`print` shows floats with six decimals; string interpolation and `str()` use the
-shortest form (`5.25`).
+Floats print in the shortest form that reads back as the same number, whether
+through `print`, `str()` or interpolation: `5.25`, `1` for `1.0`, and
+`0.30000000000000004` for `0.1 + 0.2`. Use `Format.fixed(x, digits)` for a fixed
+number of decimals.
 
 ## Operators
 
@@ -127,7 +129,7 @@ Output:
 3
 3
 7000000000
-3.500000
+3.5
 false
 ```
 

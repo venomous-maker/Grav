@@ -2,9 +2,9 @@
 <circle area=3.14159>
 <rect area=6>
 [square] <square area=16>
-total area = 25.1416
+total area = 25.14159
 --- interfaces ---
-[square] <square area=1> / 12.5664
+[square] <square area=1> / 12.56636
 --- traits ---
 x >= y? false  y >= x? true
 --- composition ---

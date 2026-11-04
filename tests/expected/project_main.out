@@ -3,6 +3,6 @@
 ================
 circle  3.14159
 rect    6
-circle  0.785397
-total area: 9.92699
+circle  0.7853975
+total area: 9.926987500000001
 created 3 shapes (global shared across modules)

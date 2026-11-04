@@ -72,7 +72,8 @@ static void vf_main(void) {
     Square* sq = Square_new(3.0);
     double grav_tmp0 = Square_m_area((Square*)(sq));          /* direct call */
     double grav_tmp1 = vf_total((struct GravIface){ (void*)(sq), &Square__itab__Shape }, 2);
-    const char* label = grav_fmt("area=%g total=%g", (double)(grav_tmp0), (double)(grav_tmp1));
+    const char* label = grav_fmt("area=%s total=%s", grav_dtoa(grav_tmp0, (char[32]){0}),
+                                 grav_dtoa(grav_tmp1, (char[32]){0}));
     bool label__own = 1;
     puts(label);
     if (label__own) free((void*)label);                       /* freed automatically */

@@ -141,7 +141,7 @@ void CodeGen::flattenString(const Expr &e, std::vector<FmtPart> &parts) const {
                 else parts.push_back({false, "(long long)(" + v + ")", "%lld"});
                 return;
             case TypeRef::Kind::Float:
-                parts.push_back({false, "(double)(" + v + ")", "%g"});
+                parts.push_back({false, (t.numBits() == 32 ? "grav_ftoa(" : "grav_dtoa(") + v + ", (char[32]){0})", "%s"});
                 return;
             case TypeRef::Kind::Bool:
                 parts.push_back({false, "((" + v + ") ? \"true\" : \"false\")", "%s"});
@@ -202,7 +202,8 @@ std::string CodeGen::emitToString(const Expr &e) const {
         case TypeRef::Kind::Int:
             return ar(t.isUnsigned ? "grav_uint_to_str((unsigned long long)(" + emitExpr(e) + "))"
                                    : "grav_int_to_str((long long)(" + emitExpr(e) + "))");
-        case TypeRef::Kind::Float: return ar("grav_float_to_str(" + emitExpr(e) + ")");
+        case TypeRef::Kind::Float:
+            return ar((t.numBits() == 32 ? "grav_float32_to_str(" : "grav_float_to_str(") + emitExpr(e) + ")");
         case TypeRef::Kind::Bool: return "((" + emitExpr(e) + ") ? \"true\" : \"false\")";
         case TypeRef::Kind::Binary: return ar("grav_bytes_to_str(" + emitExpr(e) + ")");
         case TypeRef::Kind::Any: return ar("grav_any_to_string(" + emitExpr(e) + ")");
@@ -222,7 +223,8 @@ std::string CodeGen::emitPrint(const Expr &arg) const {
             a = emitExpr(arg);
             return t.isUnsigned ? "printf(\"%llu\\n\", (unsigned long long)(" + a + "))"
                                 : "printf(\"%lld\\n\", (long long)(" + a + "))";
-        case TypeRef::Kind::Float: return "printf(\"%f\\n\", (double)(" + emitExpr(arg) + "))";
+        case TypeRef::Kind::Float:
+            return std::string("puts(") + (t.numBits() == 32 ? "grav_ftoa(" : "grav_dtoa(") + emitExpr(arg) + ", (char[32]){0}))";
         case TypeRef::Kind::Bool:
             return "puts((" + emitExpr(arg) + ") ? \"true\" : \"false\")";
         case TypeRef::Kind::String: {

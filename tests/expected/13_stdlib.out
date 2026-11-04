@@ -10,8 +10,8 @@ compare: true true true
 toInt=43 toLong=9000000000 toFloat=5
 toBool=true toIntOr=-1 hex(255)=0xff
 --- Math ---
-sqrt(2)=1.41421 pow(2,8)=256 abs(-3.5)=3.5
-floor/ceil/round(2.5)=2/3/3 pi=3.14159
+sqrt(2)=1.4142135623730951 pow(2,8)=256 abs(-3.5)=3.5
+floor/ceil/round(2.5)=2/3/3 pi=3.141592653589793
 sin(pi/2)=1 log(e)=1 max=7
 --- Random ---
 1000 dice rolls all in 1..6: true; nextFloat in [0,1): true

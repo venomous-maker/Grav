@@ -729,9 +729,24 @@ static const char* grav_int_to_str(long long v) {
 static const char* grav_uint_to_str(unsigned long long v) {
     char* b = grav_str_new(23); snprintf(b, 24, "%llu", v); return b;
 }
-static const char* grav_float_to_str(double v) {
-    char* b = grav_str_new(31); snprintf(b, 32, "%g", v); return b;
+/* Floats print in the shortest form that reads back as the same value: 2.5 is
+   2.5, 0.1 + 0.2 is 0.30000000000000004, 1e21 is 1e+21. `b` holds 32 bytes. */
+static char* grav_dtoa(double v, char* b) {
+    for (int p = 15; p <= 17; p++) {
+        snprintf(b, 32, "%.*g", p, v);
+        if (p == 17 || strtod(b, 0) == v) break;
+    }
+    return b;
 }
+static char* grav_ftoa(float v, char* b) { /* float32: shortest that reads back as the float */
+    for (int p = 6; p <= 9; p++) {
+        snprintf(b, 32, "%.*g", p, (double)v);
+        if (p == 9 || strtof(b, 0) == v) break;
+    }
+    return b;
+}
+static const char* grav_float_to_str(double v) { char b[32]; return grav_strdup(grav_dtoa(v, b)); }
+static const char* grav_float32_to_str(float v) { char b[32]; return grav_strdup(grav_ftoa(v, b)); }
 
 /* Command-line arguments and stdin. */
 static int grav_argc = 0;
