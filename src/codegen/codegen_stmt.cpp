@@ -373,6 +373,9 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
         return "{ const char** __slot = &(" + target + "); const char* __new = grav_str_concat(*__slot, " +
                emitToString(*s.value) + "); const char* __old = *__slot; *__slot = __new; grav_str_release(__old); }";
     }
+    if ((s.compoundOp == BinaryOp::Div || s.compoundOp == BinaryOp::Mod) &&
+        s.target->type.kind == TypeRef::Kind::Int && s.value->type.kind == TypeRef::Kind::Int)
+        return checkedDivisionAssign(s.compoundOp, s.target->type, target, emitExpr(*s.value), *s.value);
     return target + " " + binaryOpSymbol(s.compoundOp) + "= " + emitExpr(*s.value);
 }
 

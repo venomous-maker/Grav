@@ -6,7 +6,7 @@ Any class instance can be thrown. A `try` may have several `catch` clauses; the 
 whose class matches (exactly or as a base class) handles the exception. The standard
 library's `lib/exception.grav` provides `Exception` (with `message()`, `kind()`, and
 `describe()`) and `ValueError`, `TypeError`, `IndexError`, `NotFound`, `IOError`,
-`StateError`, `TimeoutError`, and `RuntimeError`.
+`StateError`, `TimeoutError`, `ArithmeticError`, and `RuntimeError`.
 
 ```grav
 import "../lib/std.grav"
@@ -184,11 +184,14 @@ stopped after 2: bad input 'x'
 
 ## Errors from the standard library
 
-The standard library reports misuse with exceptions, so a `catch` can handle it:
+The standard library reports misuse with exceptions, so a `catch` can handle it.
+So do the checks the language itself makes when the standard library is loaded
+(without it, they are panics):
 
 | Exception | When |
 |-----------|------|
-| `IndexError` | an index out of range: `Array`, `List`, `Deque`, `LinkedList`, `Bytes`, `Str.charAt`, `insert` past the end, a negative `BitSet` bit |
+| `IndexError` | an index out of range: a fixed-length array (`T[N]`), `Array`, `List`, `Deque`, `LinkedList`, `Bytes`, `Str.charAt`, `insert` past the end, a negative `BitSet` bit |
+| `ArithmeticError` | integer division or `%` by zero |
 | `StateError` | taking from something empty (`pop`, `peek`, `dequeue`, `removeFirst`, `first`, `Random.choice`, `Optional.get`), receiving on a closed channel, `unwrap()` on an `Err` or `None`, `unwrapErr()` on an `Ok` |
 | `NotFound` | `Map.get` / `SortedMap.get` with a missing key |
 | `ValueError` | bad input, such as a sort comparison that does not define an order |
@@ -222,7 +225,8 @@ called unwrap() on Err(no such user)
 ## Panics and recovery
 
 A *panic* is for bugs that should stop the program: `panic("...")` itself, a
-failed internal check, running out of memory. Normally it prints its message and
+failed internal check, running out of memory, using a field or method through
+`null`, or a stack overflow from runaway recursion. Normally it prints its message and
 stops the program; no `catch` takes it.
 
 Inside a *recovery point* a panic is recovered instead. It unwinds like an

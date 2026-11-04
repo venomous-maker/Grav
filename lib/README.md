@@ -61,7 +61,7 @@ All collections share `size()` (`length()` too), `isEmpty()`, `clear()`,
 | `text/convert` | **`Format`** — parsing (`toInt`, `isInt`, `toIntOr`, `parseInt(s, base, fallback)`, …) and number formatting (`fixed`, `grouped`, `percent`, `bytes`, `hex`/`binary`/`octal`) |
 | `core/math` | **`Math`** — constants `PI`/`E`/`TAU`, powers/logs, trigonometry, rounding (`roundTo`), `min`/`max`/`abs`/`clamp`/`sign` with integer overloads, `gcd`/`lcm`/`isPrime`/`factorial` |
 | `core/random` | **`Random`** (xoshiro256**, per thread, reproducible) — inclusive `nextInt`/`nextLong`, `nextFloat`, `nextGaussian`, `chance`, `shuffle`, `choice`; **`Rng`** for independent streams |
-| `core/exception` | **`Exception`** with `ValueError`, `TypeError`, `IndexError`, `NotFound`, `IOError`, `StateError`, `TimeoutError`, `RuntimeError` |
+| `core/exception` | **`Exception`** with `ValueError`, `TypeError`, `IndexError`, `NotFound`, `IOError`, `StateError`, `TimeoutError`, `ArithmeticError`, `RuntimeError` |
 
 ## System
 

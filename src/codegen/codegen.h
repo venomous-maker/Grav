@@ -48,6 +48,14 @@ public:
 private:
     // codegen_runtime.cpp
     void emitPrelude();
+    // Run-time fault checks (codegen_faults.cpp).
+    void emitFaultSupport();
+    void emitFaultRaisers();
+    std::string checkedIndex(const std::string &idx, int length) const;
+    std::string checkedDivision(BinaryOp op, const TypeRef &type, const std::string &l,
+                                const std::string &r, const Expr &divisor) const;
+    std::string checkedDivisionAssign(BinaryOp op, const TypeRef &type, const std::string &target,
+                                      const std::string &r, const Expr &divisor) const;
     bool trace_ = true;
     bool lines_ = true;
     bool testMode_ = false;

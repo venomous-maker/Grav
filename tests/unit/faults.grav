@@ -1,0 +1,48 @@
+// Run-time checks: fixed-array bounds, integer division by zero, and null
+// references (a panic, so they are observed through Panic.recover).
+import "std"
+
+class Node { public v: int  constructor(v: int) { self.v = v } }
+
+fn kindOf(f: fn()) -> string {
+    try { f() } catch (e: Exception) { return e.describe() }
+    return "no error"
+}
+
+test "fixed-array indexes are checked" {
+    let xs = [10, 20, 30]
+    let i = 3
+    assertEq(kindOf(fn() { print(xs[i]) }), "IndexError: array index 3 out of range (length 3)")
+    assertEq(kindOf(fn() { let ys = [1, 2]  let k = -1  ys[k] = 5 }), "IndexError: array index -1 out of range (length 2)")
+    let grid: int[2][2] = [[1, 2], [3, 4]]
+    let r = 1
+    assertEq(grid[r][r], 4)
+    assertEq(kindOf(fn() { print(grid[r][r + 1]) }), "IndexError: array index 2 out of range (length 2)")
+}
+
+test "integer division by zero is an ArithmeticError" {
+    let zero = 0
+    assertEq(kindOf(fn() { print(1 / zero) }), "ArithmeticError: integer division by zero")
+    assertEq(kindOf(fn() { print(1 % zero) }), "ArithmeticError: integer division by zero")
+    assertEq(kindOf(fn() { let x = 5  x /= zero }), "ArithmeticError: integer division by zero")
+    assertEq(kindOf(fn() { let x: long = 5  x %= zero }), "ArithmeticError: integer division by zero")
+    assertEq(1.0 / float(zero) > 1000000.0, true)   // floats divide to infinity
+}
+
+test "dividing the most negative value by -1 wraps instead of trapping" {
+    let min: int = -2147483648
+    let m = -1
+    assertEq(min / m, min)
+    assertEq(min % m, 0)
+    let x = min
+    x /= m
+    assertEq(x, min)
+    assertEq(7 / -2, -3)
+    assertEq(-7 % 3, -1)
+}
+
+test "using a null reference panics" {
+    let n: Node = null
+    let failure = Panic.recover(fn() { print(n.v) })
+    assertEq(failure, "panic: null reference: a field or method was used through a null value")
+}

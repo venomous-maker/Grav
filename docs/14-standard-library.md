@@ -387,7 +387,7 @@ true
 
 `lib/exception.grav` defines `Exception` (`message()`, `kind()`, `describe()`, and
 `toString()`) and the subclasses `ValueError`, `TypeError`, `IndexError`, `NotFound`,
-`IOError`, `StateError`, `TimeoutError`, and `RuntimeError` — see
+`IOError`, `StateError`, `TimeoutError`, `ArithmeticError`, and `RuntimeError` — see
 [Exceptions](11-exceptions.md).
 
 Next: [How Grav compiles →](15-how-it-compiles.md)

@@ -336,6 +336,7 @@ void CodeGen::emitMainWrapper() {
         defs_ += " };\n";
         defs_ += "int main(int argc, char** argv) {\n";
         defs_ += "    grav_argc = argc; grav_argv = argv;\n";
+        defs_ += "    grav_install_faults();\n";
         defs_ += "    int rc = grav_run_tests(grav_test_names, grav_test_fns, " +
                  std::to_string(tests_.size()) + ");\n";
         if (!asyncDecls_.empty()) defs_ += "    grav_join_all();\n";
@@ -344,6 +345,7 @@ void CodeGen::emitMainWrapper() {
     }
     defs_ += "int main(int argc, char** argv) {\n";
     defs_ += "    grav_argc = argc; grav_argv = argv;\n";
+    defs_ += "    grav_install_faults();\n";
     if (hasMain_) defs_ += "    " + funcCName("main") + "();\n";
     if (!asyncDecls_.empty()) defs_ += "    grav_join_all(); /* finish tasks that were never awaited */\n";
     defs_ += "    return 0;\n}\n";

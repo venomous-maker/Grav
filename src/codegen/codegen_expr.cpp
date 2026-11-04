@@ -282,6 +282,8 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
                 return "((" + cTy(e->type) + ")pow((double)(" + l + "), (double)(" + r + ")))";
             return "((" + cTy(e->type) + ")grav_ipow((long long)(" + l + "), (long long)(" + r + ")))";
         }
+        if ((e->op == BinaryOp::Div || e->op == BinaryOp::Mod) && e->type.kind == TypeRef::Kind::Int)
+            return checkedDivision(e->op, e->type, l, r, *e->right);
         return "(" + l + " " + binaryOpSymbol(e->op) + " " + r + ")";
     }
     if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
@@ -374,7 +376,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         // Fixed arrays index through their `.data` member; slices and pointers
         // index directly.
         if (e->base->type.isArray() && !e->base->type.isSlice())
-            return "(" + base + ").data[" + idx + "]";
+            return "(" + base + ").data[" + checkedIndex(idx, e->base->type.arrayLen) + "]";
         return "(" + base + ")[" + idx + "]";
     }
     if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {

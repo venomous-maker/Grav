@@ -1,0 +1,6 @@
+running 4 tests
+  ok    fixed-array indexes are checked
+  ok    integer division by zero is an ArithmeticError
+  ok    dividing the most negative value by -1 wraps instead of trapping
+  ok    using a null reference panics
+result: 4 passed, 0 failed
