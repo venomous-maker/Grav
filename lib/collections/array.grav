@@ -13,6 +13,8 @@
 // `xs.mapTo(f)` maps into another element type and `xs.fold(init, f)` reduces into
 // any type (both infer their type parameter; `::<U>` can still be written).
 
+import "../core/timsort.grav"
+
 namespace std.collections {
 
     %{
@@ -33,6 +35,8 @@ namespace std.collections {
         }
         // The array owns one reference to each element (for reference types):
         // __retain when an element goes in, __release when it comes out.
+        // For the cycle collector: the elements this array holds.
+        private fn __visitRefs() { for (i in 0..self.len) { __visit(self.data[i]) } }
         destructor() {
             for (i in 0..self.len) { __release(self.data[i]); }
             free(self.data);
@@ -253,34 +257,11 @@ namespace std.collections {
             for (i in 1..self.len) { if (cmp(self.data[i], best) < 0) { best = self.data[i]; } }
             return best;
         }
-        // Stable merge sort; `cmp(a, b)` < 0 puts a first. O(n log n).
+        // Stable sort (TimSort, lib/core/timsort.grav): `cmp(a, b)` < 0 puts a
+        // first. O(n log n), and close to O(n) on input that is mostly in order.
         public fn sortBy(cmp: fn(T, T) -> int) {
             if (self.len < 2) { return; }
-            let n = self.len;
-            let bytes = n * sizeof(T);
-            let tmp = %{ (void*)malloc((size_t)bytes) %} as T*;
-            let width = 1;
-            while (width < n) {
-                let lo = 0;
-                while (lo < n) {
-                    let mid = lo + width < n ? lo + width : n;
-                    let hi = lo + 2 * width < n ? lo + 2 * width : n;
-                    let i = lo;
-                    let j = mid;
-                    let k = lo;
-                    while (i < mid && j < hi) {
-                        if (cmp(self.data[j], self.data[i]) < 0) { tmp[k] = self.data[j]; j += 1; }
-                        else { tmp[k] = self.data[i]; i += 1; }
-                        k += 1;
-                    }
-                    while (i < mid) { tmp[k] = self.data[i]; i += 1; k += 1; }
-                    while (j < hi) { tmp[k] = self.data[j]; j += 1; k += 1; }
-                    lo = hi;
-                }
-                %{ memcpy(self->data, tmp, (size_t)bytes); %};
-                width = width * 2;
-            }
-            free(tmp);
+            new TimSorter<T>(self.data, self.len, cmp).sort();
         }
     }
 
