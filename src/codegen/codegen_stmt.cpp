@@ -222,8 +222,15 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         // The in-flight exception owns the object (and keeps it: handlers borrow it).
         line(cTy(vt) + " " + tmp + " = " + emitOwned(*s->value, vt) + ";");
         std::string msg = emitDescribe(tmp, vt);
-        line("grav_throw((void*)(" + tmp + "), &" + mangle(ty) + "_typeinfo, " +
-             (msg.empty() ? "0" : msg) + ");");
+        std::string mt = "__excm" + std::to_string(throwCounter_++);
+        line("const char* " + mt + " = " + (msg.empty() ? "0" : msg) + ";");
+        // The scopes between here and the nearest `try` end with the throw:
+        // release their locals now (the thrown object is already held).
+        for (size_t i = cleanups_.size(); i-- > 0;) {
+            if (cleanups_[i].kind == Cleanup::Try) break;
+            if (cleanups_[i].kind == Cleanup::Code) line(cleanups_[i].code);
+        }
+        line("grav_throw((void*)(" + tmp + "), &" + mangle(ty) + "_typeinfo, " + mt + ");");
         return;
     }
     if (auto *s = dynamic_cast<const TryStmt *>(&stmt)) {
@@ -296,15 +303,11 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
             return "{ " + cTy(tt) + "* __slot = &(" + slot + "); " + cTy(tt) + " __new = " + emitAs(*s.value, tt) +
                    "; grav_weak_retain((void*)__new); void* __old = (void*)*__slot; *__slot = __new; grav_weak_release(__old); }";
         }
-        if (auto *m = dynamic_cast<const MemberExpr *>(tgt)) {
-            bool inValue = m->object && m->object->type.isNamed() && reg_->isStruct(m->object->type.name);
-            if (!inValue) return storeOwned(emitExpr(*tgt), tt, *s.value);
-            // A field of a value struct: struct copies are not tracked, so the
-            // reference it takes is never given back (a leak, never a dangling one).
-            return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
-        }
+        // Fields of objects and of value structs, and fixed-array elements, own
+        // their references (value copies retain theirs).
+        if (dynamic_cast<const MemberExpr *>(tgt)) return storeOwned(emitExpr(*tgt), tt, *s.value);
         if (auto *ix = dynamic_cast<const IndexExpr *>(tgt); ix && ix->overloadClass.empty()) {
-            if (ix->base->type.isArray()) return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
+            if (ix->base->type.isArray()) return storeOwned(emitExpr(*tgt), tt, *s.value);
             // A raw buffer slot (T*): containers manage these themselves with
             // __retain/__release, so the store is a move: a fresh result is
             // handed over, a borrowed value is stored as is.
@@ -331,12 +334,7 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
         return target + " = " + emitAs(*s.value, s.target->type);
     if (s.compoundOp == BinaryOp::Add &&
         s.target->type.kind == TypeRef::Kind::String) {
-        // `s += x`: the new string replaces the old one, which is released (a
-        // value struct's field keeps its reference: struct copies are untracked).
-        auto *m = dynamic_cast<const MemberExpr *>(s.target.get());
-        bool inValue = m && m->object && m->object->type.isNamed() && reg_->isStruct(m->object->type.name);
-        std::string add = "grav_str_concat(" + target + ", " + emitToString(*s.value) + ")";
-        if (inValue) return target + " = " + add;
+        // `s += x`: the new string replaces the old one, which is released.
         return "{ const char** __slot = &(" + target + "); const char* __new = grav_str_concat(*__slot, " +
                emitToString(*s.value) + "); const char* __old = *__slot; *__slot = __new; grav_str_release(__old); }";
     }
