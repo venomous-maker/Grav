@@ -13,21 +13,26 @@ namespace bank.services {
     use bank.entities.*
     use bank.repository.Store
 
-    // A transfer's two statement lines.
+    // What a transfer did. The balances are copied when it happens (under the
+    // store's lock): reading the accounts later would race with other transfers.
     class TransferReceipt {
-        public from: Account
-        public to: Account
+        public from: string
+        public to: string
         public amount: long
         public memo: string
+        public fromBalance: long
+        public toBalance: long
         constructor(from: Account, to: Account, amount: long, memo: string) {
-            self.from = from; self.to = to; self.amount = amount; self.memo = memo
+            self.from = from.number; self.to = to.number; self.amount = amount; self.memo = memo
+            self.fromBalance = from.balance
+            self.toBalance = to.balance
         }
         fn toJson() -> JsonValue {
             return Json.object()
-                .set("from", self.from.number).set("to", self.to.number)
+                .set("from", self.from).set("to", self.to)
                 .set("amount", Money.format(self.amount)).set("memo", self.memo)
-                .set("fromBalance", Money.format(self.from.balance))
-                .set("toBalance", Money.format(self.to.balance))
+                .set("fromBalance", Money.format(self.fromBalance))
+                .set("toBalance", Money.format(self.toBalance))
         }
     }
 
