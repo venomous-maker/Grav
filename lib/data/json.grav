@@ -59,22 +59,22 @@ namespace std.data {
         while (s[i] && s[i] != '"' && s[i] != '\\') i++;
         if (s[i] == '"') { /* fast path: no escapes */
             size_t n = (size_t)(i - start);
-            char* out = (char*)malloc(n + 1);
+            char* out = grav_str_alloc(n + 1);
             if (!out) abort();
             memcpy(out, s + start, n); out[n] = 0;
             *pos = i + 1;
             return out;
         }
         size_t cap = (size_t)(i - start) + 64, n = 0;
-        char* out = (char*)malloc(cap);
+        char* out = grav_str_alloc(cap);
         if (!out) abort();
         memcpy(out, s + start, (size_t)(i - start)); n = (size_t)(i - start);
         for (;;) {
             unsigned char c = (unsigned char)s[i];
-            if (n + 8 >= cap) { cap *= 2; out = (char*)realloc(out, cap); if (!out) abort(); }
-            if (c == 0) { *err = "unterminated string"; *pos = i; free(out); return 0; }
+            if (n + 8 >= cap) { cap *= 2; out = grav_str_grow(out, cap); if (!out) abort(); }
+            if (c == 0) { *err = "unterminated string"; *pos = i; grav_str_free(out); return 0; }
             if (c == '"') { i++; break; }
-            if (c < 0x20) { *err = "control character in string (escape it)"; *pos = i; free(out); return 0; }
+            if (c < 0x20) { *err = "control character in string (escape it)"; *pos = i; grav_str_free(out); return 0; }
             if (c != '\\') { out[n++] = (char)c; i++; continue; }
             char e = s[i + 1];
             switch (e) {
@@ -88,20 +88,20 @@ namespace std.data {
                 case 't': out[n++] = '\t'; i += 2; break;
                 case 'u': {
                     int cp = grav_json_u4(s, i + 2);
-                    if (cp < 0) { *err = "bad \\u escape"; *pos = i; free(out); return 0; }
+                    if (cp < 0) { *err = "bad \\u escape"; *pos = i; grav_str_free(out); return 0; }
                     i += 6;
                     if (cp >= 0xD800 && cp <= 0xDBFF) { /* surrogate pair */
                         int lo = (s[i] == '\\' && s[i + 1] == 'u') ? grav_json_u4(s, i + 2) : -1;
-                        if (lo < 0xDC00 || lo > 0xDFFF) { *err = "unpaired surrogate in \\u escape"; *pos = i; free(out); return 0; }
+                        if (lo < 0xDC00 || lo > 0xDFFF) { *err = "unpaired surrogate in \\u escape"; *pos = i; grav_str_free(out); return 0; }
                         cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                         i += 6;
                     } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-                        *err = "unpaired surrogate in \\u escape"; *pos = i; free(out); return 0;
+                        *err = "unpaired surrogate in \\u escape"; *pos = i; grav_str_free(out); return 0;
                     }
                     n += grav_utf8_put(out + n, (unsigned)cp);
                     break;
                 }
-                default: *err = "unknown escape in string"; *pos = i; free(out); return 0;
+                default: *err = "unknown escape in string"; *pos = i; grav_str_free(out); return 0;
             }
         }
         out[n] = 0;
@@ -138,7 +138,7 @@ namespace std.data {
     }
     static const char* grav_json_slice(const char* s, int a, int b) {
         size_t n = (size_t)(b - a);
-        char* t = (char*)malloc(n + 1);
+        char* t = grav_str_alloc(n + 1);
         if (!t) abort();
         memcpy(t, s + a, n); t[n] = 0;
         return t;
@@ -156,12 +156,12 @@ namespace std.data {
     /* Append `s` to a fresh JSON string literal (quotes included). */
     static const char* grav_json_quote(const char* s) {
         size_t n = strlen(s), cap = n + n / 8 + 16, o = 0;
-        char* out = (char*)malloc(cap);
+        char* out = grav_str_alloc(cap);
         if (!out) abort();
         out[o++] = '"';
         for (size_t i = 0; i < n; i++) {
             unsigned char c = (unsigned char)s[i];
-            if (o + 8 >= cap) { cap *= 2; out = (char*)realloc(out, cap); if (!out) abort(); }
+            if (o + 8 >= cap) { cap *= 2; out = grav_str_grow(out, cap); if (!out) abort(); }
             switch (c) {
                 case '"': out[o++] = '\\'; out[o++] = '"'; break;
                 case '\\': out[o++] = '\\'; out[o++] = '\\'; break;
@@ -180,7 +180,7 @@ namespace std.data {
     }
     /* Shortest text that reads back as the same double. */
     static const char* grav_json_double(double d) {
-        char* b = (char*)malloc(32);
+        char* b = grav_str_alloc(32);
         if (!b) abort();
         if (!isfinite(d)) { strcpy(b, "null"); return b; } /* JSON has no NaN/Infinity */
         if (d == floor(d) && fabs(d) < 1e15) { snprintf(b, 32, "%.0f", d); return b; }
