@@ -1,0 +1,73 @@
+// entities/account.grav — accounts: checking (may overdraw up to a limit) or
+// savings (earns interest, never below zero); active, frozen, or closed.
+import "std"
+import "entities/money"
+
+namespace bank.entities {
+
+    enum AccountKind { Checking, Savings }
+    enum AccountStatus { Active, Frozen, Closed }
+
+    fn kindName(k: AccountKind) -> string { return Str.lower("${k}") }
+    fn statusName(s: AccountStatus) -> string { return Str.lower("${s}") }
+
+    fn parseKind(text: string) -> Result<AccountKind, string> {
+        switch (Str.lower(text)) {
+            case "checking": return Result.Ok(AccountKind.Checking)
+            case "savings": return Result.Ok(AccountKind.Savings)
+            default: return Result.Err("account kind must be checking or savings, not '" + text + "'")
+        }
+    }
+
+    class Account {
+        public id: long
+        public number: string           // "ACC-000001": what customers and the API use
+        public customerId: long
+        public kind: AccountKind
+        public status: AccountStatus
+        public balance: long            // cents
+        public overdraftLimit: long     // cents a checking account may go below zero
+
+        constructor(id: long, customerId: long, kind: AccountKind) {
+            self.id = id
+            self.number = "ACC-" + Str.padLeft("${id}", 6, "0")
+            self.customerId = customerId
+            self.kind = kind
+            self.status = AccountStatus.Active
+            self.balance = 0
+            self.overdraftLimit = kind == AccountKind.Checking ? 50000 : 0
+        }
+
+        // How much can be withdrawn right now.
+        fn available() -> long { return self.balance + self.overdraftLimit }
+        fn isActive() -> bool { return self.status == AccountStatus.Active }
+
+        fn toJson() -> JsonValue {
+            return Json.object()
+                .set("number", self.number)
+                .set("customerId", self.customerId)
+                .set("kind", kindName(self.kind))
+                .set("status", statusName(self.status))
+                .set("balance", Money.format(self.balance))
+                .set("available", Money.format(self.available()))
+        }
+
+        fn toRecord() -> JsonValue {         // what the store saves (cents, ids)
+            return Json.object()
+                .set("id", self.id).set("customerId", self.customerId)
+                .set("kind", kindName(self.kind)).set("status", statusName(self.status))
+                .set("balance", self.balance).set("overdraftLimit", self.overdraftLimit)
+        }
+
+        static fn fromRecord(v: JsonValue) -> Account {
+            let kind = parseKind(v.getString("kind", "checking")).unwrapOr(AccountKind.Checking)
+            let a = new Account(v.getLong("id", 0), v.getLong("customerId", 0), kind)
+            a.balance = v.getLong("balance", 0)
+            a.overdraftLimit = v.getLong("overdraftLimit", 0)
+            let s = v.getString("status", "active")
+            a.status = s == "frozen" ? AccountStatus.Frozen : (s == "closed" ? AccountStatus.Closed : AccountStatus.Active)
+            return a
+        }
+    }
+
+}
