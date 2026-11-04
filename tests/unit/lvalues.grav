@@ -1,0 +1,52 @@
+// Stores through operator[]: an element that is a struct is a copy, so storing
+// to one of its fields writes the copy back; `++`/`--` work on elements too.
+import "std"
+
+struct Inner { n: int }
+struct Item { count: int  label: string  inner: Inner }
+class Box { public n: int  constructor(n: int) { self.n = n } }
+class Calls { public n: int  constructor() { self.n = 0 } }
+
+fn at(c: Calls, i: int) -> int { c.n += 1; return i }
+
+test "fields of struct elements can be assigned" {
+    let items = new Array<Item>()
+    items.push(Item { count: 1, label: "a", inner: Inner { n: 0 } })
+    items[0].count = 5
+    items[0].label = "b"
+    items[0].inner.n += 3
+    items[0].inner.n++
+    items[0].count--
+    assertEq(items[0].count, 4)
+    assertEq(items[0].label, "b")
+    assertEq(items[0].inner.n, 4)
+    let byName = new HashMap<string, Item>()
+    byName["x"] = Item { count: 0, label: "", inner: Inner { n: 0 } }
+    byName["x"].count = 42
+    assertEq(byName["x"].count, 42)
+}
+
+test "the container and index are evaluated once" {
+    let items = new Array<Item>()
+    items.push(Item { count: 1, label: "a", inner: Inner { n: 0 } })
+    let calls = new Calls()
+    items[at(calls, 0)].count += 10
+    assertEq(calls.n, 1)
+    assertEq(items[0].count, 11)
+}
+
+test "increment and decrement elements" {
+    let xs = new Array<int>()
+    xs.push(1)
+    xs[0]++
+    xs[0]++
+    xs[0]--
+    assertEq(xs[0], 2)
+    let fixed = [1, 2]
+    fixed[1]++
+    assertEq(fixed[1], 3)
+    let boxes = new Array<Box>()
+    boxes.push(new Box(1))
+    boxes[0].n++
+    assertEq(boxes[0].n, 2)
+}

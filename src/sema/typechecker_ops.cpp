@@ -313,6 +313,85 @@ std::optional<TypeRef> TypeChecker::tryIndexOverload(IndexExpr &e, const TypeRef
 
 // `obj[k...] = v` and `obj[k...] op= v` on a class: operator[]= (and, for the
 // compound form, operator[] to read the old value).
+// `xs[i].f = v` (also `xs[i].a.b op= v`) where `xs[i]` is an operator[] call:
+// the element is a copy, so the store goes to the copy, which is written back:
+//   { let base = xs  let key = i  let elem = base[key]  elem.f = v  base[key] = elem }
+bool TypeChecker::rewriteElementStore(AssignStmt &s) {
+    auto *top = dynamic_cast<MemberExpr *>(s.target.get());
+    if (!top) return false;
+    MemberExpr *inner = top;
+    while (auto *m = dynamic_cast<MemberExpr *>(inner->object.get())) inner = m;
+    auto *ix = dynamic_cast<IndexExpr *>(inner->object.get());
+    if (!ix) return false;
+    // Only containers with operator[]= qualify: probe the base's type on a copy,
+    // leaving no diagnostics behind (the real check happens on the rewrite).
+    size_t nErr = errors_.size(), nWarn = warnings_.size();
+    ExprPtr probe = cloneExpression(ix->base.get());
+    TypeRef bt = checkExpr(*probe);
+    errors_.erase(errors_.begin() + static_cast<long>(nErr), errors_.end());
+    warnings_.erase(warnings_.begin() + static_cast<long>(nWarn), warnings_.end());
+    if (!bt.isNamed() || !reg_->isClass(bt.name) || reg_->findMethodsBySource(bt.name, "op_index_set").empty())
+        return false;
+
+    int line = s.line, col = s.col, n = matchCounter_++;
+    auto name = [&](const std::string &v) {
+        auto e = std::make_unique<NameExpr>();
+        e->name = v;
+        e->line = line;
+        e->col = col;
+        return e;
+    };
+    auto block = std::make_unique<BlockStmt>();
+    block->line = line;
+    block->col = col;
+    auto let = [&](const std::string &v, ExprPtr init) {
+        auto l = std::make_unique<LetStmt>();
+        l->name = v;
+        l->init = std::move(init);
+        l->line = line;
+        l->col = col;
+        block->block.statements.push_back(std::move(l));
+    };
+    std::string tag = std::to_string(n);
+    std::string baseVar = "elem__base" + tag, elemVar = "elem__value" + tag;
+    let(baseVar, std::move(ix->base));
+    std::vector<std::string> keyVars;
+    std::vector<ExprPtr *> keys{&ix->index};
+    for (auto &m : ix->more) keys.push_back(&m);
+    for (size_t k = 0; k < keys.size(); ++k) {
+        keyVars.push_back("elem__key" + tag + "_" + std::to_string(k));
+        let(keyVars.back(), std::move(*keys[k]));
+    }
+    auto access = [&]() {
+        auto a = std::make_unique<IndexExpr>();
+        a->line = ix->line;
+        a->col = ix->col;
+        a->base = name(baseVar);
+        a->index = name(keyVars[0]);
+        for (size_t k = 1; k < keyVars.size(); ++k) a->more.push_back(name(keyVars[k]));
+        return a;
+    };
+    let(elemVar, access());
+    inner->object = name(elemVar);
+    auto store = std::make_unique<AssignStmt>();
+    store->line = line;
+    store->col = col;
+    store->target = std::move(s.target);
+    store->value = std::move(s.value);
+    store->isCompound = s.isCompound;
+    store->compoundOp = s.compoundOp;
+    block->block.statements.push_back(std::move(store));
+    auto back = std::make_unique<AssignStmt>();
+    back->line = line;
+    back->col = col;
+    back->target = access();
+    back->value = name(elemVar);
+    block->block.statements.push_back(std::move(back));
+    checkBlock(block->block);
+    matchReplacement_ = std::move(block);
+    return true;
+}
+
 void TypeChecker::checkIndexAssign(AssignStmt &s, IndexExpr &ix, const TypeRef &bt) {
     std::vector<TypeRef> keys = checkIndexKeys(ix);
     for (const auto &k : keys) if (k.isError()) return;

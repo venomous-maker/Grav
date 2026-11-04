@@ -78,8 +78,10 @@ A class can define what operators mean for its instances with
 | `obj[k]`, `obj[r, c]` | `fn operator[](k: K) -> V` | reading; one or more keys |
 | `obj[k] = v` | `fn operator[]=(k: K, v: V)` | writing; the keys, then the value |
 
-Compound assignments use them too: `a += b` is `a = a + b`, and `obj[k] += v` reads
-with `operator[]` and writes with `operator[]=`. [Writing operators](operators.md)
+Compound assignments use them too: `a += b` is `a = a + b`, and `obj[k] += v` (or
+`obj[k]++`) reads with `operator[]` and writes with `operator[]=`. When the element
+is a struct, `operator[]` returns a copy, so `obj[k].field = v` changes the copy and
+writes it back with `operator[]=`. [Writing operators](operators.md)
 covers every operator, its rules, and the compiler's checks.
 
 Operator methods can themselves be overloaded (here `*` scales or takes a dot

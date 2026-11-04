@@ -1,0 +1,5 @@
+running 3 tests
+  ok    fields of struct elements can be assigned
+  ok    the container and index are evaluated once
+  ok    increment and decrement elements
+result: 3 passed, 0 failed

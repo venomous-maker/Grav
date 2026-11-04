@@ -131,6 +131,10 @@ private:
                                       const std::vector<TypeRef> &keys, size_t extra) const;
     std::vector<TypeRef> checkIndexKeys(IndexExpr &e);
     void checkIndexAssign(AssignStmt &s, IndexExpr &ix, const TypeRef &base);
+    // `xs[i].f = v` through operator[]: write the element copy back (true when rewritten).
+    bool rewriteElementStore(AssignStmt &s);
+    bool assignAtBlockLevel_ = false; // the assignment being checked is a statement of a block
+    bool stmtAtBlockLevel_ = false;   // set by checkBlock for the statement it checks next
     // Values print/str/interpolation can render: primitives, enums (member name),
     // and classes/interfaces with `toString() -> string`.
     bool isDisplayable(const TypeRef &t) const;

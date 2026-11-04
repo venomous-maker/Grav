@@ -1,4 +1,6 @@
 #include "sema/typechecker.h"
+
+#include <utility>
 #include "sema/monomorph.h"
 
 #include <algorithm>
@@ -247,6 +249,29 @@ void TypeChecker::checkClass(ClassDecl &cls) {
 void TypeChecker::checkBlock(Block &block) {
     pushScope();
     for (auto &s : block.statements) {
+        // `a[i]++` as a statement is `a[i] += 1`, which also works through
+        // operator[] / operator[]= and on fields of an element.
+        if (auto *es = dynamic_cast<ExprStmt *>(s.get()))
+            if (auto *id = dynamic_cast<IncDecExpr *>(es->expr.get())) {
+                const Expr *root = id->target.get();
+                while (auto *m = dynamic_cast<const MemberExpr *>(root)) root = m->object.get();
+                if (dynamic_cast<const IndexExpr *>(root)) {
+                    auto as = std::make_unique<AssignStmt>();
+                    as->line = s->line;
+                    as->col = s->col;
+                    as->isCompound = true;
+                    as->compoundOp = id->isIncrement ? BinaryOp::Add : BinaryOp::Sub;
+                    auto one = std::make_unique<IntLiteralExpr>();
+                    one->value = 1;
+                    one->raw = "1";
+                    one->line = id->line;
+                    one->col = id->col;
+                    as->value = std::move(one);
+                    as->target = std::move(id->target);
+                    s = std::move(as);
+                }
+            }
+        stmtAtBlockLevel_ = true;
         checkStmt(*s);
         if (matchReplacement_) s = std::move(matchReplacement_);
     }
@@ -254,8 +279,12 @@ void TypeChecker::checkBlock(Block &block) {
 }
 
 void TypeChecker::checkStmt(Stmt &stmt) {
+    bool blockLevel = std::exchange(stmtAtBlockLevel_, false);
     if (auto *s = dynamic_cast<LetStmt *>(&stmt)) return checkLet(*s);
-    if (auto *s = dynamic_cast<AssignStmt *>(&stmt)) return checkAssign(*s);
+    if (auto *s = dynamic_cast<AssignStmt *>(&stmt)) {
+        assignAtBlockLevel_ = blockLevel;
+        return checkAssign(*s);
+    }
     if (auto *s = dynamic_cast<ReturnStmt *>(&stmt)) return checkReturn(*s);
     if (auto *s = dynamic_cast<IfStmt *>(&stmt)) return checkIf(*s);
     if (auto *s = dynamic_cast<WhileStmt *>(&stmt)) return checkWhile(*s);
@@ -416,6 +445,7 @@ void TypeChecker::checkLet(LetStmt &s) {
 }
 
 void TypeChecker::checkAssign(AssignStmt &s) {
+    if (std::exchange(assignAtBlockLevel_, false) && rewriteElementStore(s)) return;
     // `obj[k] = value` on a class with `operator[]=` calls `op_index_set(k, value)`.
     if (auto *ix = dynamic_cast<IndexExpr *>(s.target.get())) {
         TypeRef bt = checkExpr(*ix->base);
