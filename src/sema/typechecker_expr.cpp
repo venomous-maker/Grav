@@ -218,8 +218,8 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
                                      typeRefName(lt) + " and " + typeRefName(rt));
             return TypeRef::prim(TypeRef::Kind::Error);
         }
-        // '%', bitwise and shift operators are integer-only in C.
-        if (isIntOnly(e.op) &&
+        // Bitwise and shift operators are integer-only; `%` on floats is fmod.
+        if (isIntOnly(e.op) && !(e.op == BinaryOp::Mod && lt.isNumeric() && rt.isNumeric()) &&
             (lt.kind != TypeRef::Kind::Int || rt.kind != TypeRef::Kind::Int)) {
             error(e.line, e.col, std::string("operator '") + sym +
                                      "' requires int operands, but got " +
@@ -257,9 +257,11 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
                                  typeRefName(lt) + " and " + typeRefName(rt));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
-    if (ordered && !lt.isNumeric()) {
+    // Strings order byte by byte (like Str.compare); enums by declaration order.
+    if (ordered && !lt.isNumeric() && lt.kind != TypeRef::Kind::String &&
+        !(lt.isNamed() && reg_->isEnum(lt.name))) {
         error(e.line, e.col, std::string("operator '") + sym +
-                                 "' requires numeric operands");
+                                 "' requires numbers, strings or enum values, but got " + typeRefName(lt));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     return TypeRef::prim(TypeRef::Kind::Bool);

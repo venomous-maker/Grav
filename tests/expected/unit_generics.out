@@ -1,0 +1,7 @@
+running 5 tests
+  ok    a generic interface as a bound
+  ok    static members of a generic class instance
+  ok    type arguments are inferred through interfaces and bases
+  ok    strings and enums are ordered
+  ok    % on floats is the floating remainder
+result: 5 passed, 0 failed

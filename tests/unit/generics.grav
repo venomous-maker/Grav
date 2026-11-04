@@ -1,0 +1,66 @@
+// Generic bounds, static members of generic classes, inference through
+// interfaces, and comparison operators on strings and enums.
+import "std"
+
+interface Comparable<T> { fn compareTo(o: T) -> int }
+class Version implements Comparable<Version> {
+    public n: int
+    constructor(n: int) { self.n = n }
+    fn compareTo(o: Version) -> int { return self.n - o.n }
+}
+interface Container<T> { fn first() -> T }
+class One<T> implements Container<T> {
+    public v: T
+    constructor(v: T) { self.v = v }
+    fn first() -> T { return self.v }
+}
+class Named extends One<string> { constructor() { super("named") } }
+class Stack<T> {
+    private items: T[4]
+    private n: int
+    static made: int = 0
+    constructor() { self.n = 0; Stack<T>.made += 1 }
+    fn push(x: T) { self.items[self.n] = x; self.n += 1 }
+    fn size() -> int { return self.n }
+    static fn of(x: T) -> Stack<T> { let s = new Stack<T>()  s.push(x)  return s }
+}
+enum Level { Low, Mid, High }
+
+fn newest<T: Comparable<T>>(a: T, b: T) -> T { return a.compareTo(b) >= 0 ? a : b }
+fn firstOf<T>(c: Container<T>) -> T { return c.first() }
+fn largest<T>(a: T, b: T) -> T { return a > b ? a : b }
+
+test "a generic interface as a bound" {
+    assertEq(newest(new Version(3), new Version(5)).n, 5)
+}
+
+test "static members of a generic class instance" {
+    let s = Stack<string>.of("a")
+    s.push("b")
+    assertEq(s.size(), 2)
+    assertEq(Stack<int>.of(1).size(), 1)
+    assertEq(Stack<string>.made, 1)
+    assertEq(Stack<int>.made, 1)
+}
+
+test "type arguments are inferred through interfaces and bases" {
+    assertEq(firstOf(new One<int>(9)), 9)
+    assertEq(firstOf(new Named()), "named")
+}
+
+test "strings and enums are ordered" {
+    assertEq("abc" < "abd", true)
+    assertEq("B" < "a", true)
+    assertEq("b" >= "b", true)
+    let prefix = "ab"
+    assertEq(prefix + "c" <= "abc", true)
+    assertEq(largest("pear", "apple"), "pear")
+    assertEq(Level.Low < Level.High, true)
+}
+
+test "% on floats is the floating remainder" {
+    assertEq(7.5 % 2.0, 1.5)
+    let f = 10.25
+    f %= 3.0
+    assertEq(f, 1.25)
+}

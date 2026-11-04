@@ -665,6 +665,12 @@ static bool grav_streq_tmp(const char* a, const char* b, int freeA, int freeB) {
     if (freeB) grav_str_release(b);
     return r;
 }
+static int grav_strcmp_tmp(const char* a, const char* b, int freeA, int freeB) {
+    int r = strcmp(a, b);
+    if (freeA) grav_str_release(a);
+    if (freeB) grav_str_release(b);
+    return r;
+}
 static const char* grav_str_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);
     char* r = grav_str_new(la + lb);

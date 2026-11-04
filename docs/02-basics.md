@@ -77,8 +77,8 @@ number of decimals.
 
 | Kind | Operators |
 |------|-----------|
-| arithmetic | `+ - * / %` and `**` (power) |
-| comparison | `== != < <= > >=` |
+| arithmetic | `+ - * / %` and `**` (power); `%` on floats is the floating remainder |
+| comparison | `== != < <= > >=` (numbers, strings byte by byte, enums by declaration order) |
 | logical | `&& \|\| !` (short-circuit) |
 | bitwise | `& \| ^ ~ << >>` |
 | assignment | `= += -= *= /= %= &= \|= ^= <<= >>=` |

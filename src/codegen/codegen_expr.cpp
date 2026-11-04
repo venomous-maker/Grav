@@ -271,6 +271,13 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
                        (fr ? "1" : "0") + ")";
             return neg + "grav_streq(" + l + ", " + r + ")";
         }
+        // String ordering compares bytes, releasing freshly built operands.
+        if (isComparison(e->op) && e->left->type.kind == TypeRef::Kind::String &&
+            e->right->type.kind == TypeRef::Kind::String) {
+            bool fl = isFreshString(*e->left), fr = isFreshString(*e->right);
+            return "(grav_strcmp_tmp(" + l + ", " + r + ", " + (fl ? "1" : "0") + ", " + (fr ? "1" : "0") +
+                   ") " + binaryOpSymbol(e->op) + " 0)";
+        }
         // Value equality for kinds C cannot compare with `==`.
         if ((e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) && e->left->type == e->right->type) {
             const TypeRef &lt = e->left->type;
@@ -293,6 +300,8 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         }
         if ((e->op == BinaryOp::Div || e->op == BinaryOp::Mod) && e->type.kind == TypeRef::Kind::Int)
             return checkedDivision(e->op, e->type, l, r, *e->right);
+        if (e->op == BinaryOp::Mod && e->type.kind == TypeRef::Kind::Float)
+            return "((" + cTy(e->type) + ")fmod((double)(" + l + "), (double)(" + r + ")))";
         return "(" + l + " " + binaryOpSymbol(e->op) + " " + r + ")";
     }
     if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {

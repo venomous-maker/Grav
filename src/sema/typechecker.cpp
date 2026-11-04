@@ -655,8 +655,6 @@ void TypeChecker::checkCompound(const AssignStmt &s, const TypeRef &targetType,
                                  typeRefName(targetType) + " and " + typeRefName(valueType));
         return;
     }
-    if (s.compoundOp == BinaryOp::Mod && targetType.kind != TypeRef::Kind::Int)
-        error(s.line, s.col, "operator '%=' requires int operands");
 }
 
 void TypeChecker::checkReturn(ReturnStmt &s) {
