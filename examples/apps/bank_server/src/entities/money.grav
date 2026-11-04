@@ -1,0 +1,43 @@
+// entities/money.grav — amounts are whole cents (long), never floating point,
+// so 0.10 + 0.20 is exactly 0.30.
+import "std"
+
+namespace bank.entities {
+
+    class Money {
+        // 123456 -> "1,234.56", -5 -> "-0.05"
+        static fn format(cents: long) -> string {
+            let sign = cents < 0 ? "-" : ""
+            let abs = cents < 0 ? -cents : cents
+            let whole = Format.grouped(abs / 100)
+            let frac = abs % 100
+            return sign + whole + "." + (frac < 10 ? "0" : "") + "${frac}"
+        }
+
+        // "12.5", "12.50", "1,000", "7" -> cents. Err when it is not an amount
+        // with at most two decimals.
+        static fn parse(text: string) -> Result<long, string> {
+            let t = Str.replace(Str.trim(text), ",", "")
+            if (t == "") { return Result.Err("an amount is required") }
+            let dot = Str.indexOf(t, ".")
+            let whole = dot < 0 ? t : Str.slice(t, 0, dot)
+            let frac = dot < 0 ? "" : Str.slice(t, dot + 1, Str.length(t))
+            if (whole == "" || !Str.isDigits(whole) || (frac != "" && !Str.isDigits(frac)) || Str.length(frac) > 2) {
+                return Result.Err("'" + text + "' is not an amount (use up to two decimals, e.g. 25.50)")
+            }
+            let cents = Format.toLong(whole) * 100
+            if (Str.length(frac) == 1) { cents += Format.toLong(frac) * 10 }
+            if (Str.length(frac) == 2) { cents += Format.toLong(frac) }
+            return Result.Ok(cents)
+        }
+
+        // An amount from JSON: a string ("25.50") or a number (25.5).
+        static fn fromJson(v: JsonValue) -> Result<long, string> {
+            if (v.isString()) { return Money.parse(v.asString()) }
+            if (v.isInteger()) { return Result.Ok(v.asLong() * 100) }
+            if (v.isNumber()) { return Money.parse(Format.fixed(v.asFloat(), 2)) }
+            return Result.Err("'amount' must be a number or a string such as \"25.50\"")
+        }
+    }
+
+}
