@@ -1,0 +1,2 @@
+// lib/gc.grav — kept so a flat import works: the module is lib/core/gc.grav (namespace std.core).
+import "core/gc.grav"
