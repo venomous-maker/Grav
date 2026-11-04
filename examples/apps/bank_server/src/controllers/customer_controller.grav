@@ -1,0 +1,54 @@
+// controllers/customer_controller.grav — /api/customers
+import "std"
+import "std/net"
+import "services/bank_service"
+import "http/api"
+
+namespace bank.controllers {
+    use bank.entities.*
+    use bank.services.*
+    use bank.http.Api
+
+    class CustomerController {
+        private bank: BankService
+        constructor(bank: BankService) { self.bank = bank }
+
+        // POST /api/customers {"name", "email"}
+        fn create(req: HttpRequest) -> HttpResponse {
+            match (Api.body(req)) {
+                case Err(bad): return bad
+                case Ok(body): {
+                    match (self.bank.createCustomer(body.getString("name", ""), body.getString("email", ""))) {
+                        case Ok(c): return Api.created(c.toJson())
+                        case Err(e): return Api.error(e)
+                    }
+                }
+            }
+        }
+
+        // GET /api/customers
+        fn list(req: HttpRequest) -> HttpResponse {
+            let items = Json.array()
+            self.bank.store.lock.lock()
+            try {
+                for (c in self.bank.store.customers) { items.push(c.toJson()) }
+            } finally {
+                self.bank.store.lock.unlock()
+            }
+            return Api.list(items)
+        }
+
+        // GET /api/customers/:id — the customer with their accounts.
+        fn show(req: HttpRequest) -> HttpResponse {
+            match (self.bank.customer(Api.id(req, "id"))) {
+                case Err(e): return Api.error(e)
+                case Ok(c): {
+                    let accounts = Json.array()
+                    for (a in self.bank.accountsOf(c.id)) { accounts.push(a.toJson()) }
+                    return Api.ok(c.toJson().set("accounts", accounts))
+                }
+            }
+        }
+    }
+
+}
