@@ -1,0 +1,11 @@
+running 9 tests
+  ok    locals and temporaries are freed at once
+  ok    reassignment frees the old object
+  ok    a long chain is freed without deep recursion
+  ok    containers hold their elements
+  ok    closures keep what they capture
+  ok    free runs the destructor now, other references stay safe
+  ok    weak back-references let a parent and its children go
+  ok    a weak reference reads null once its object is gone
+  ok    string += keeps building correctly
+result: 9 passed, 0 failed
