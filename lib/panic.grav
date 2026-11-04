@@ -1,0 +1,2 @@
+// lib/panic.grav — kept so a flat import works: the module is lib/core/panic.grav (namespace std.core).
+import "core/panic.grav"
