@@ -1,0 +1,51 @@
+// controllers/transfer_controller.grav — /api/transfers and /api/admin/interest
+import "std"
+import "std/net"
+import "services/bank_service"
+import "http/api"
+
+namespace bank.controllers {
+    use bank.services.*
+    use bank.http.Api
+
+    class TransferController {
+        private bank: BankService
+        constructor(bank: BankService) { self.bank = bank }
+
+        // POST /api/transfers {"from", "to", "amount", "memo"?}
+        fn create(req: HttpRequest) -> HttpResponse {
+            match (Api.body(req)) {
+                case Err(bad): return bad
+                case Ok(body): {
+                    let from = Api.field(body, "from")
+                    if (from.isErr()) { return from.unwrapErr() }
+                    let to = Api.field(body, "to")
+                    if (to.isErr()) { return to.unwrapErr() }
+                    match (Api.amount(body)) {
+                        case Err(bad): return bad
+                        case Ok(cents): {
+                            match (self.bank.transfer(from.unwrap(), to.unwrap(), cents, body.getString("memo", "transfer"))) {
+                                case Ok(receipt): return Api.created(receipt.toJson())
+                                case Err(e): return Api.error(e)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // POST /api/admin/interest {"basisPoints": 125}   (125 = 1.25%)
+        fn interest(req: HttpRequest) -> HttpResponse {
+            match (Api.body(req)) {
+                case Err(bad): return bad
+                case Ok(body): {
+                    match (self.bank.payInterest(body.getLong("basisPoints", 0))) {
+                        case Ok(n): return Api.ok(Json.object().set("accountsPaid", n as long))
+                        case Err(e): return Api.error(e)
+                    }
+                }
+            }
+        }
+    }
+
+}
