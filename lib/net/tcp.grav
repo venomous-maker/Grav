@@ -51,14 +51,14 @@ namespace std.net {
     }
     static const char* grav_net_errstr(int e) {
         const char* m = strerror(e);
-        char* c = (char*)malloc(strlen(m) + 1);
+        char* c = grav_str_alloc(strlen(m) + 1);
         if (!c) abort();
         strcpy(c, m);
         return c;
     }
     static const char* grav_net_err(const char* what, const char* detail) {
         size_t n = strlen(what) + strlen(detail) + 3;
-        char* c = (char*)malloc(n);
+        char* c = grav_str_alloc(n);
         if (!c) abort();
         snprintf(c, n, "%s: %s", what, detail);
         return c;
@@ -80,7 +80,7 @@ namespace std.net {
             inet_ntop(AF_INET6, &a->sin6_addr, host, sizeof host);
             port = ntohs(a->sin6_port);
         }
-        char* out = (char*)malloc(strlen(host) + 16);
+        char* out = grav_str_alloc(strlen(host) + 16);
         if (!out) abort();
         if (sa->sa_family == AF_INET6) sprintf(out, "[%s]:%d", host, port);
         else sprintf(out, "%s:%d", host, port);
@@ -218,7 +218,7 @@ namespace std.net {
                 int stop = end;
                 if (stop > s->pos && s->buf[stop - 1] == '\r') stop--;
                 int n = stop - s->pos;
-                char* out = (char*)malloc((size_t)n + 1);
+                char* out = grav_str_alloc((size_t)n + 1);
                 if (!out) abort();
                 memcpy(out, s->buf + s->pos, (size_t)n); out[n] = 0;
                 s->pos = nl ? end + 1 : end;
@@ -466,7 +466,7 @@ namespace std.net {
     static const char* grav_net_slice(const char* s, int n) {
         int start = (s[0] == '[') ? 1 : 0;
         int end = (n > 0 && s[n - 1] == ']') ? n - 1 : n;
-        char* out = (char*)malloc((size_t)(end - start) + 1);
+        char* out = grav_str_alloc((size_t)(end - start) + 1);
         if (!out) abort();
         memcpy(out, s + start, (size_t)(end - start));
         out[end - start] = 0;
