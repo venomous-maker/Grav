@@ -1,5 +1,6 @@
 // lib/collections/map.grav — a generic Map over parallel key/value arrays (linear lookup,
 // insertion-ordered). For large maps prefer HashMap<K,V> (lib/hashmap.grav).
+import "../core/exception.grav"
 import "array.grav"
 
 namespace std.collections {
@@ -16,7 +17,7 @@ namespace std.collections {
         }
         public fn get(key: K) -> V {
             let i = self.ks.indexOf(key);
-            if (i < 0) { panic("Map.get: key not found"); }
+            if (i < 0) { throw new NotFound("Map.get: key not found"); }
             return self.vs.get(i);
         }
         fn operator[](key: K) -> V { return self.get(key); }
