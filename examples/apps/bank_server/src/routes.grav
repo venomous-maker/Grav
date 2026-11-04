@@ -1,0 +1,47 @@
+// routes.grav — every endpoint, and the controller method that handles it.
+import "std"
+import "std/net"
+import "controllers/customer_controller"
+import "controllers/account_controller"
+import "controllers/transfer_controller"
+import "controllers/report_controller"
+
+namespace bank {
+    use bank.controllers.*
+
+    class Controllers {
+        public customers: CustomerController
+        public accounts: AccountController
+        public transfers: TransferController
+        public reports: ReportController
+        constructor(customers: CustomerController, accounts: AccountController,
+            transfers: TransferController, reports: ReportController) {
+            self.customers = customers
+            self.accounts = accounts
+            self.transfers = transfers
+            self.reports = reports
+        }
+    }
+
+    fn registerRoutes(app: HttpServer, c: Controllers) {
+        app.get("/api/health", fn(r: HttpRequest) => c.reports.health(r))
+        app.get("/api/reports/summary", fn(r: HttpRequest) => c.reports.summary(r))
+
+        app.post("/api/customers", fn(r: HttpRequest) => c.customers.create(r))
+        app.get("/api/customers", fn(r: HttpRequest) => c.customers.list(r))
+        app.get("/api/customers/:id", fn(r: HttpRequest) => c.customers.show(r))
+
+        app.post("/api/accounts", fn(r: HttpRequest) => c.accounts.open(r))
+        app.get("/api/accounts/:number", fn(r: HttpRequest) => c.accounts.show(r))
+        app.get("/api/accounts/:number/transactions", fn(r: HttpRequest) => c.accounts.transactions(r))
+        app.post("/api/accounts/:number/deposit", fn(r: HttpRequest) => c.accounts.deposit(r))
+        app.post("/api/accounts/:number/withdraw", fn(r: HttpRequest) => c.accounts.withdraw(r))
+        app.post("/api/accounts/:number/freeze", fn(r: HttpRequest) => c.accounts.freeze(r))
+        app.post("/api/accounts/:number/unfreeze", fn(r: HttpRequest) => c.accounts.unfreeze(r))
+        app.post("/api/accounts/:number/close", fn(r: HttpRequest) => c.accounts.close(r))
+
+        app.post("/api/transfers", fn(r: HttpRequest) => c.transfers.create(r))
+        app.post("/api/admin/interest", fn(r: HttpRequest) => c.transfers.interest(r))
+    }
+
+}
