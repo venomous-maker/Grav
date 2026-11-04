@@ -9,18 +9,18 @@ namespace std.text {
     #include <stdlib.h>
     #include <ctype.h>
     static const char* grav_str_upper(const char* s) {
-        size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+        size_t n = strlen(s); char* r = grav_str_alloc(n + 1);
         for (size_t i = 0; i < n; i++) r[i] = (char)toupper((unsigned char)s[i]);
         r[n] = 0; return r;
     }
     static const char* grav_str_lower(const char* s) {
-        size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+        size_t n = strlen(s); char* r = grav_str_alloc(n + 1);
         for (size_t i = 0; i < n; i++) r[i] = (char)tolower((unsigned char)s[i]);
         r[n] = 0; return r;
     }
     static const char* grav_str_repeat(const char* s, int k) {
         if (k < 0) k = 0;
-        size_t n = strlen(s); char* r = (char*)malloc(n * (size_t)k + 1);
+        size_t n = strlen(s); char* r = grav_str_alloc(n * (size_t)k + 1);
         char* p = r;
         for (int i = 0; i < k; i++) { memcpy(p, s, n); p += n; }
         *p = 0; return r;
@@ -30,7 +30,7 @@ namespace std.text {
         if (start < 0) start = 0;
         if (start > n) start = n;
         if (len < 0 || start + len > n) len = n - start;
-        char* r = (char*)malloc((size_t)len + 1);
+        char* r = grav_str_alloc((size_t)len + 1);
         memcpy(r, s + start, (size_t)len); r[len] = 0; return r;
     }
     static int grav_str_indexof(const char* s, const char* sub, int from) {
@@ -40,7 +40,7 @@ namespace std.text {
         return p ? (int)(p - s) : -1;
     }
     static const char* grav_str_reverse(const char* s) {
-        size_t n = strlen(s); char* r = (char*)malloc(n + 1);
+        size_t n = strlen(s); char* r = grav_str_alloc(n + 1);
         for (size_t i = 0; i < n; i++) r[i] = s[n - 1 - i];
         r[n] = 0; return r;
     }
@@ -48,26 +48,26 @@ namespace std.text {
         const char* a = s; const char* b = s + strlen(s);
         if (left)  while (*a && isspace((unsigned char)*a)) a++;
         if (right) while (b > a && isspace((unsigned char)b[-1])) b--;
-        size_t n = (size_t)(b - a); char* r = (char*)malloc(n + 1);
+        size_t n = (size_t)(b - a); char* r = grav_str_alloc(n + 1);
         memcpy(r, a, n); r[n] = 0; return r;
     }
     static const char* grav_str_pad(const char* s, int len, char c, int left) {
         int n = (int)strlen(s);
-        if (n >= len) { char* r = (char*)malloc((size_t)n + 1); memcpy(r, s, n + 1); return r; }
-        char* r = (char*)malloc((size_t)len + 1);
+        if (n >= len) { char* r = grav_str_alloc((size_t)n + 1); memcpy(r, s, n + 1); return r; }
+        char* r = grav_str_alloc((size_t)len + 1);
         int pad = len - n;
         if (left)  { memset(r, c, pad); memcpy(r + pad, s, n); }
         else       { memcpy(r, s, n); memset(r + n, c, pad); }
         r[len] = 0; return r;
     }
     static char* grav_str_dup(const char* s) {
-        size_t n = strlen(s); char* r = (char*)malloc(n + 1); memcpy(r, s, n + 1); return r;
+        size_t n = strlen(s); char* r = grav_str_alloc(n + 1); memcpy(r, s, n + 1); return r;
     }
     static const char* grav_str_replace(const char* s, const char* o, const char* n) {
         size_t ol = strlen(o); if (ol == 0) return grav_str_dup(s);
         size_t nl = strlen(n), cnt = 0;
         for (const char* p = s; (p = strstr(p, o)); p += ol) cnt++;
-        char* r = (char*)malloc(strlen(s) + cnt * (nl > ol ? nl - ol : 0) + 1);
+        char* r = grav_str_alloc(strlen(s) + cnt * (nl > ol ? nl - ol : 0) + 1);
         char* w = r; const char* p = s; const char* q;
         while ((q = strstr(p, o))) { memcpy(w, p, q - p); w += q - p; memcpy(w, n, nl); w += nl; p = q + ol; }
         strcpy(w, p); return r;
@@ -86,7 +86,7 @@ namespace std.text {
     static const char* grav_str_join(const char** parts, int count, const char* delim) {
         size_t dl = strlen(delim), total = 0;
         for (int i = 0; i < count; i++) total += strlen(parts[i]) + (i ? dl : 0);
-        char* r = (char*)malloc(total + 1); char* w = r;
+        char* r = grav_str_alloc(total + 1); char* w = r;
         for (int i = 0; i < count; i++) {
             if (i) { memcpy(w, delim, dl); w += dl; }
             size_t l = strlen(parts[i]); memcpy(w, parts[i], l); w += l;
@@ -94,7 +94,7 @@ namespace std.text {
         *w = 0; return r;
     }
     static const char* grav_str_capitalize(const char* s) {
-        size_t n = strlen(s); char* r = (char*)malloc(n + 1); memcpy(r, s, n + 1);
+        size_t n = strlen(s); char* r = grav_str_alloc(n + 1); memcpy(r, s, n + 1);
         if (n) r[0] = (char)toupper((unsigned char)r[0]);
         return r;
     }
@@ -118,12 +118,12 @@ namespace std.text {
         int n = (int)strlen(s);
         if (n >= width) return grav_str_dup(s);
         int left = (width - n) / 2, right = width - n - left;
-        char* r = (char*)malloc((size_t)width + 1);
+        char* r = grav_str_alloc((size_t)width + 1);
         memset(r, c, left); memcpy(r + left, s, n); memset(r + left + n, c, right); r[width] = 0;
         return r;
     }
     static const char* grav_str_from_char(int code) {
-        char* r = (char*)malloc(2); r[0] = (char)code; r[1] = 0; return r;
+        char* r = grav_str_alloc(2); r[0] = (char)code; r[1] = 0; return r;
     }
     static int grav_str_count(const char* s, const char* sub) {
         size_t l = strlen(sub); if (l == 0) return 0;
