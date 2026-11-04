@@ -1,0 +1,8 @@
+running 6 tests
+  ok    an interface value converts to another interface its object implements
+  ok    an interface value converts to its object's class
+  ok    a class value converts to an interface a subclass implements
+  ok    any values convert to interfaces
+  ok    array literals and ?: take their type from context
+  ok    sibling classes unify to their common base
+result: 6 passed, 0 failed

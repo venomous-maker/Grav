@@ -1,0 +1,74 @@
+// Interfaces at run time (is / as in every direction) and the element type
+// of array literals and `?:` taken from context.
+import "std"
+
+interface Shape { fn area() -> float }
+interface Named { fn name() -> string }
+class Square implements Shape, Named {
+    fn area() -> float { return 4.0 }
+    fn name() -> string { return "square" }
+}
+class Circle implements Shape { fn area() -> float { return 3.0 } }
+class Animal { fn speak() -> string { return "..." } }
+class Dog extends Animal implements Named {
+    fn speak() -> string { return "woof" }
+    fn name() -> string { return "dog" }
+}
+class Cat extends Animal { fn speak() -> string { return "meow" } }
+
+fn total(xs: Shape[3]) -> float { let t = 0.0  for (x in xs) { t += x.area() } return t }
+fn pick(square: bool) -> Shape { return square ? new Square() : new Circle() }
+
+test "an interface value converts to another interface its object implements" {
+    let s: Shape = new Square()
+    assertEq(s is Named, true)
+    assertEq((s as Named).name(), "square")
+    let c: Shape = new Circle()
+    assertEq(c is Named, false)
+    let msg = ""
+    try { print((c as Named).name()) } catch (e: TypeError) { msg = e.message() }
+    assertEq(msg, "a Circle does not implement Named")
+}
+
+test "an interface value converts to its object's class" {
+    let s: Shape = new Square()
+    assertEq(s is Square, true)
+    assertEq(s is Circle, false)
+    assertEq((s as Square).name(), "square")
+    let msg = ""
+    try { print((s as Circle).area()) } catch (e: TypeError) { msg = e.message() }
+    assertEq(msg, "cannot cast a Square to Circle")
+}
+
+test "a class value converts to an interface a subclass implements" {
+    let pet: Animal = new Dog()
+    assertEq(pet is Named, true)
+    assertEq((pet as Named).name(), "dog")
+    let cat: Animal = new Cat()
+    assertEq(cat is Named, false)
+}
+
+test "any values convert to interfaces" {
+    let box: any = new Square()
+    assertEq(box is Named, true)
+    assertEq((box as Named).name(), "square")
+    let none: Shape = null
+    assertEq(none is Named, false)
+    assertEq((none as Named) == null, true)
+}
+
+test "array literals and ?: take their type from context" {
+    let shapes: Shape[3] = [new Square(), new Circle(), new Square()]
+    assertEq(total(shapes), 11.0)
+    assertEq(total([new Circle(), new Circle(), new Square()]), 10.0)
+    assertEq(pick(false).area(), 3.0)
+    let grid: Shape[2][2] = [[new Square(), new Circle()], [new Circle(), new Square()]]
+    assertEq(grid[1][0].area(), 3.0)
+}
+
+test "sibling classes unify to their common base" {
+    let pets = [new Dog(), new Cat()]
+    assertEq(pets[0].speak() + pets[1].speak(), "woofmeow")
+    let one = pets.length > 1 ? new Cat() : new Dog()
+    assertEq(one.speak(), "meow")
+}

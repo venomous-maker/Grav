@@ -172,6 +172,7 @@ private:
                           int line, int col, const std::string &what);
     TypeRef checkMember(MemberExpr &e); // value position (field read)
     bool isLvalue(const Expr &e) const;
+    std::optional<TypeRef> commonBase(const TypeRef &a, const TypeRef &b) const;
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
     // a scalar/reference/enum (not a value-type struct or interface fat pointer).
     void checkOptionalResult(int line, int col, const TypeRef &t, bool allowVoid);

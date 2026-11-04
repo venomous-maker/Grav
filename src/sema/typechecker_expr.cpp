@@ -347,6 +347,8 @@ TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
     if (a == b) return a;
     if (isAssignable(b, a)) return a;
     if (isAssignable(a, b)) return b;
+    if (outer && !want.isError() && isAssignable(a, want) && isAssignable(b, want)) return want;
+    if (auto base = commonBase(a, b)) return *base;
     error(e.line, e.col, "ternary branches have incompatible types " +
                              typeRefName(a) + " and " + typeRefName(b));
     return TypeRef::prim(TypeRef::Kind::Error);
@@ -590,7 +592,34 @@ TypeRef TypeChecker::checkSizeof(SizeofExpr &e) {
     return TypeRef::prim(TypeRef::Kind::Int);
 }
 
+// The nearest class both `a` and `b` are (or derive from), if they share one.
+std::optional<TypeRef> TypeChecker::commonBase(const TypeRef &a, const TypeRef &b) const {
+    if (!a.isNamed() || !b.isNamed() || !reg_->isClass(a.name) || !reg_->isClass(b.name)) return std::nullopt;
+    for (std::string cur = a.name; !cur.empty();) {
+        if (reg_->isSubclass(b.name, cur)) return TypeRef::named(cur);
+        const ClassInfo *ci = reg_->cls(cur);
+        cur = ci ? ci->baseClass : "";
+    }
+    return std::nullopt;
+}
+
 TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
+    // With a known `T[N]` (a typed variable, parameter, field or return), every
+    // element converts to T: `let shapes: Shape[2] = [new Square(1), new Circle(2)]`.
+    const TypeRef *exp = expected_;
+    expected_ = nullptr;
+    if (exp && exp->isArray() && !exp->isSlice() && exp->elem &&
+        exp->arrayLen == static_cast<int>(e.elements.size()) && !e.elements.empty()) {
+        const TypeRef &want = *exp->elem;
+        for (size_t i = 0; i < e.elements.size(); ++i) {
+            TypeRef et = checkExprExpect(*e.elements[i], want);
+            if (!isAssignable(et, want))
+                error(e.elements[i]->line, e.elements[i]->col,
+                      "array element " + std::to_string(i + 1) + " has type " + typeRefName(et) +
+                          ", but the array holds " + typeRefName(want));
+        }
+        return *exp;
+    }
     if (e.elements.empty()) {
         error(e.line, e.col,
               "an empty array literal '[]' has no element type; "
@@ -604,6 +633,7 @@ TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
         if (et.isError() || elem.isError()) continue;
         if (isAssignable(et, elem)) continue;
         if (isAssignable(elem, et)) { elem = et; continue; }
+        if (auto base = commonBase(elem, et)) { elem = *base; continue; }
         error(e.elements[i]->line, e.elements[i]->col,
               "array element " + std::to_string(i + 1) + " has type " +
                   typeRefName(et) + ", incompatible with " + typeRefName(elem));

@@ -23,7 +23,7 @@ class Puppy extends Dog {
 }
 
 fn main() {
-    let animals = [new Animal("Generic") as Animal, new Dog("Rex") as Animal, new Puppy("Bit") as Animal]
+    let animals = [new Animal("Generic"), new Dog("Rex"), new Puppy("Bit")]   // all Animals
     for (a in animals) { print(a.speak()) }
 }
 ```
@@ -104,6 +104,43 @@ Output:
 ```text
 rendering [box 10]
 ```
+
+`is` and `as` work with interfaces in every direction, checked at run time:
+`r is Drawable` asks whether the object behind `r` implements `Drawable`,
+`r as Drawable` converts to it, and `r as Box` gets the object back as its class.
+A conversion the object does not support throws `TypeError`.
+
+```grav
+import "std"
+
+interface Shape { fn area() -> float }
+interface Named { fn name() -> string }
+class Square implements Shape, Named {
+    fn area() -> float { return 4.0 }
+    fn name() -> string { return "square" }
+}
+class Circle implements Shape { fn area() -> float { return 3.0 } }
+
+fn main() {
+    let shapes: Shape[2] = [new Square(), new Circle()]
+    for (s in shapes) {
+        if (s is Named) { print("${(s as Named).name()}: ${s.area()}") }
+        else { print("unnamed: ${s.area()}") }
+    }
+    print((shapes[0] as Square).name())
+}
+```
+
+Output:
+
+```text
+square: 4
+unnamed: 3
+square
+```
+
+An array literal takes its element type from where it goes (here `Shape[2]`);
+without one, elements of sibling classes share their nearest common base class.
 
 ## Traits
 
