@@ -182,11 +182,48 @@ Output:
 stopped after 2: bad input 'x'
 ```
 
+## Errors from the standard library
+
+The standard library reports misuse with exceptions, so a `catch` can handle it:
+
+| Exception | When |
+|-----------|------|
+| `IndexError` | an index out of range: `Array`, `List`, `Deque`, `LinkedList`, `Bytes`, `Str.charAt`, `insert` past the end, a negative `BitSet` bit |
+| `StateError` | taking from something empty (`pop`, `peek`, `dequeue`, `removeFirst`, `first`, `Random.choice`, `Optional.get`), receiving on a closed channel, `unwrap()` on an `Err` or `None`, `unwrapErr()` on an `Ok` |
+| `NotFound` | `Map.get` / `SortedMap.get` with a missing key |
+| `ValueError` | bad input, such as a sort comparison that does not define an order |
+
+```grav
+import "std"
+
+fn main() {
+    let xs = new Array<int>()
+    try {
+        print(xs.get(3))
+    } catch (e: IndexError) {
+        print("caught " + e.describe())
+    }
+    let missing: Result<int, string> = Result.Err("no such user")
+    try {
+        missing.unwrap()
+    } catch (e: StateError) {
+        print(e.message())
+    }
+}
+```
+
+Output:
+
+```text
+caught IndexError: Array index 3 out of range (length 0)
+called unwrap() on Err(no such user)
+```
+
 ## Panics and recovery
 
-A *panic* is for bugs, not expected failures: an out-of-range index, `unwrap()` on
-an `Err` or `None`, a failed check, or `panic("...")` itself. Normally it prints
-its message and stops the program.
+A *panic* is for bugs that should stop the program: `panic("...")` itself, a
+failed internal check, running out of memory. Normally it prints its message and
+stops the program; no `catch` takes it.
 
 Inside a *recovery point* a panic is recovered instead. It unwinds like an
 exception that no `catch` can catch: `finally` blocks still run (so locks taken
@@ -197,10 +234,9 @@ with `withLock` are released), and the recovery point gets the message.
 import "std"
 
 fn main() {
-    let scores = new Array<int>()
     let failure = Panic.recover(fn() {
         try {
-            print(scores.get(3))
+            panic("the ledger does not balance")
         } catch (e: Exception) {
             print("not reached: a catch never takes a panic")
         } finally {
@@ -210,8 +246,7 @@ fn main() {
     print("recovered: " + failure)
 
     let missing: Result<int, string> = Result.Err("no such user")
-    print(Panic.recover(fn() { missing.unwrap() }))
-    print(Panic.recover(fn() { throw new StateError("escaped") }))
+    print(Panic.recover(fn() { missing.unwrap() }))       // an exception nobody caught
     print("still running")
 }
 ```
@@ -220,9 +255,8 @@ Output:
 
 ```text
 finally still runs
-recovered: panic: Array index 3 out of range (length 0)
-panic: called unwrap() on Err(no such user)
-uncaught exception: StateError: escaped
+recovered: panic: the ledger does not balance
+uncaught exception: StateError: called unwrap() on Err(no such user)
 still running
 ```
 
