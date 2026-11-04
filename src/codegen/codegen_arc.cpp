@@ -209,6 +209,10 @@ std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const
 bool CodeGen::isRefProducer(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
     if (dynamic_cast<const NewExpr *>(&e)) return true;
+    // `a + b` through a class's operator method is a call too.
+    if (auto *b = dynamic_cast<const BinaryExpr *>(&e); b && !b->overloadMethod.empty()) return true;
+    // `obj[k]` through operator[] is a method call: its result is the caller's.
+    if (auto *ix = dynamic_cast<const IndexExpr *>(&e); ix && !ix->overloadClass.empty()) return true;
     // A struct or fixed-array literal holds its own references (+1 each).
     if (refKind(e.type) == RefKind::Value &&
         (dynamic_cast<const StructLiteralExpr *>(&e) || dynamic_cast<const ArrayLiteralExpr *>(&e)))
@@ -265,7 +269,10 @@ bool CodeGen::exprMayAutorelease(const Expr *e) const {
             else if (auto *i = dynamic_cast<const IsExpr *>(x)) expr(i->operand.get());
             else if (auto *c = dynamic_cast<const CastExpr *>(x)) expr(c->operand.get());
             else if (auto *co = dynamic_cast<const CoalesceExpr *>(x)) { expr(co->left.get()); expr(co->right.get()); }
-            else if (auto *ix = dynamic_cast<const IndexExpr *>(x)) { expr(ix->base.get()); expr(ix->index.get()); }
+            else if (auto *ix = dynamic_cast<const IndexExpr *>(x)) {
+                expr(ix->base.get()); expr(ix->index.get());
+                for (const auto &m : ix->more) expr(m.get());
+            }
             else if (auto *m = dynamic_cast<const MemberExpr *>(x)) {
                 if (g->isWeakField(*m)) { found = true; return; } // a weak read is held on the list
                 expr(m->object.get());
@@ -419,9 +426,8 @@ bool CodeGen::isWeakField(const MemberExpr &m) const {
 
 bool CodeGen::isUnstableRef(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
-    if (dynamic_cast<const MemberExpr *>(&e) || dynamic_cast<const IndexExpr *>(&e) ||
-        dynamic_cast<const DerefExpr *>(&e))
-        return true;
+    if (auto *ix = dynamic_cast<const IndexExpr *>(&e)) return ix->overloadClass.empty(); // operator[] results are fresh
+    if (dynamic_cast<const MemberExpr *>(&e) || dynamic_cast<const DerefExpr *>(&e)) return true;
     if (auto *n = dynamic_cast<const NameExpr *>(&e)) return !n->resolvedGlobal.empty();
     return false;
 }
