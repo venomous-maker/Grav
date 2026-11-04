@@ -19,9 +19,9 @@ namespace std.sys {
     }
     static const char* grav_exec_capture(const char* cmd, int* code) {
         FILE* p = popen(cmd, "r"); if (!p) { *code = -1; return ""; }
-        size_t cap = 4096, n = 0; char* b = (char*)malloc(cap); int c;
+        size_t cap = 4096, n = 0; char* b = grav_str_alloc(cap); int c;
         while ((c = fgetc(p)) != EOF) {
-            if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            if (n + 1 >= cap) { cap *= 2; b = grav_str_grow(b, cap); }
             b[n++] = (char)c;
         }
         b[n] = 0; *code = grav_exit_code(pclose(p)); return b;
