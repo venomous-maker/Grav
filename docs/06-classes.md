@@ -100,7 +100,9 @@ ID-2
 ## Constructors
 
 A class may declare several constructors with different parameter types; `new` picks
-the matching one. A class without a constructor gets an empty, parameterless one.
+the matching one. A class without a constructor gets an empty, parameterless one (or,
+in a subclass, its parent's constructors). Fields a constructor leaves unset start
+out as zero values: `0`, `false`, `""`, or `null`.
 
 ```grav
 class Color {

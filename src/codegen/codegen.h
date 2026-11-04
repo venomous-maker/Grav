@@ -96,6 +96,8 @@ private:
     void emitMethod(const ClassDecl &cls, const MethodDecl &m);
     void emitConstructor(const ClassDecl &cls);
     void emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *ctor, int idx);
+    // C statements setting every string inside the value `lv` of type `t` to "".
+    std::string stringDefaults(const std::string &lv, const TypeRef &t, int depth = 0) const;
     std::string accessorSig(const std::string &classFq, const MethodInfo &m) const;
     void emitAccessorBody(const std::string &classFq, const MethodInfo &m);
     void emitMainWrapper();

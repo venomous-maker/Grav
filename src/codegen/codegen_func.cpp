@@ -224,6 +224,8 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
     }
     defs_ += "    self->__type = &" + mangle(cls.fqName) + "_typeinfo;\n";
     defs_ += "    self->__rc = 1;\n"; // the creator's reference
+    for (const auto &f : collectFields(cls.fqName))
+        defs_ += stringDefaults("self->" + memberCName(f.name), f.type);
 
     if (ctor) {
         defs_ += "    " + ctorInitCName(cls.fqName, idx) + "(self";
@@ -231,6 +233,25 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
         defs_ += ");\n";
     }
     defs_ += "    return self;\n}\n\n";
+}
+
+// Zeroed memory holds null pointers, but a string is never null: string fields
+// (also those inside struct and fixed-array fields) start out empty.
+std::string CodeGen::stringDefaults(const std::string &lv, const TypeRef &t, int depth) const {
+    if (t.kind == TypeRef::Kind::String) return "    " + lv + " = \"\";\n";
+    if (t.isArray() && !t.isSlice() && t.elem) {
+        std::string i = "__si" + std::to_string(depth);
+        std::string inner = stringDefaults(lv + ".data[" + i + "]", *t.elem, depth + 1);
+        if (inner.empty()) return "";
+        return "    for (int " + i + " = 0; " + i + " < " + std::to_string(t.arrayLen) + "; ++" + i +
+               ") {\n    " + inner + "    }\n";
+    }
+    std::string out;
+    if (t.isNamed())
+        if (const StructInfo *si = reg_->strct(t.name))
+            for (const auto &f : si->fields)
+                out += stringDefaults(lv + "." + memberCName(f.name), f.type, depth);
+    return out;
 }
 
 void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
