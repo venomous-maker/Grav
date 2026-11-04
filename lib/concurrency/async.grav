@@ -99,6 +99,8 @@ namespace std.concurrency {
             self.h = %{ (unsigned char*)grav_sync_new() %} as byte*;
         }
         // One reference per queued value (reference types).
+        // For the cycle collector: the values waiting in the channel.
+        private fn __visitRefs() { for (i in 0..self.count) { __visit(self.buf[(self.head + i) % self.cap]) } }
         destructor() {
             for (i in 0..self.count) { __release(self.buf[(self.head + i) % self.cap]); }
             free(self.buf);
