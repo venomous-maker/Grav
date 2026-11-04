@@ -3,7 +3,8 @@
 # add (with a transitive dependency), import, update, install from grav.lock, remove.
 set -u
 cd "$(dirname "$0")/.."
-GRAV="$(pwd)/${GRAVC:-build/gravc}"
+GRAV="${GRAVC:-build/gravc}"
+case "$GRAV" in /*) ;; *) GRAV="$(pwd)/$GRAV" ;; esac
 command -v git >/dev/null || { echo "packages: skipped (no git)"; exit 0; }
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 export GRAV_PACKAGES="$T/cache" GIT_CONFIG_NOSYSTEM=1 HOME="$T"
