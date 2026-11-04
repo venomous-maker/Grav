@@ -1,0 +1,97 @@
+// TimSort (Array.sortBy / Sort): correctness on every input shape, stability,
+// the typed overloads, searching, and a comparator that throws.
+import "std"
+
+class Rec {
+    public key: int
+    public seq: int
+    constructor(key: int, seq: int) { self.key = key; self.seq = seq }
+}
+
+fn ints(n: int, gen: fn(int) -> int) -> Array<int> {
+    let xs = new Array<int>()
+    for (i in 0..n) { xs.push(gen(i)) }
+    return xs
+}
+
+fn sortedOk(xs: Array<int>) -> bool {
+    for (i in 1..xs.size()) { if (xs.get(i - 1) > xs.get(i)) { return false } }
+    return true
+}
+
+test "every size around the run boundaries" {
+    Random.seed(11)
+    for (n in [0, 1, 2, 3, 31, 32, 33, 63, 64, 65, 127, 128, 1000, 5000]) {
+        let xs = ints(n, fn(i: int) => Random.nextInt(-1000, 1000))
+        let total = 0
+        for (v in xs) { total += v }
+        Sort.sort(xs)
+        assert(sortedOk(xs), "n=${n} sorted")
+        let after = 0
+        for (v in xs) { after += v }
+        assertEq(after, total)
+    }
+}
+
+test "input shapes" {
+    let n = 20000
+    let shapes = new Array<Array<int>>()
+    shapes.push(ints(n, fn(i: int) => i))                              // sorted
+    shapes.push(ints(n, fn(i: int) => n - i))                          // reversed
+    shapes.push(ints(n, fn(i: int) => i % 100))                        // sawtooth
+    shapes.push(ints(n, fn(i: int) => 7))                              // all equal
+    shapes.push(ints(n, fn(i: int) => i % 2 == 0 ? i : n - i))         // interleaved
+    shapes.push(ints(n, fn(i: int) => i % 500 == 0 ? Random.nextInt(0, n) : i))   // nearly sorted
+    for (xs in shapes) {
+        Sort.sort(xs)
+        assert(sortedOk(xs))
+    }
+}
+
+test "stable: equal keys keep their order" {
+    Random.seed(5)
+    let recs = new Array<Rec>()
+    for (i in 0..10000) { recs.push(new Rec(Random.nextInt(0, 20), i)) }
+    recs.sortBy(fn(a, b) => a.key - b.key)
+    for (i in 1..recs.size()) {
+        let p = recs.get(i - 1)
+        let q = recs.get(i)
+        assert(p.key < q.key || (p.key == q.key && p.seq < q.seq))
+    }
+}
+
+test "typed overloads, descending and searching" {
+    let words = new Array<string>()
+    for (w in ["pear", "Apple", "fig", "apple", "banana"]) { words.push(w) }
+    Sort.sort(words)
+    assertEq(Str.join(words, " "), "Apple apple banana fig pear")
+    assert(Sort.isSorted(words))
+    assertEq(Sort.binarySearch(words, "fig"), 3)
+    assertEq(Sort.binarySearch(words, "cherry"), -4)
+    let fs = new Array<float>()
+    for (f in [2.5, -1.0, 9.75, 0.0]) { fs.push(f) }
+    Sort.sortDescending(fs)
+    assertEq(fs.get(0), 9.75)
+    assertEq(fs.get(3), -1.0)
+    let ls = new Array<long>()
+    for (v in [30, 10, 20]) { ls.push(v as long) }
+    Sort.sort(ls)
+    assertEq(Sort.binarySearch(ls, 20 as long), 1)
+}
+
+test "a comparator that throws leaves every element in place" {
+    let recs = new Array<Rec>()
+    for (i in 0..3000) { recs.push(new Rec((i * 7919) % 1000, i)) }
+    let calls = new AtomicInt(0)
+    let failed = false
+    try {
+        recs.sortBy(fn(a: Rec, b: Rec) -> int {
+            if (calls.increment() == 9000) { throw new ValueError("stop") }
+            return a.key - b.key
+        })
+    } catch (e: ValueError) { failed = true }
+    assert(failed)
+    let seen = new HashSet<int>()
+    for (r in recs) { seen.add(r.seq) }
+    assertEq(seen.size(), 3000)
+}
