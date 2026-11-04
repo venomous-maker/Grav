@@ -579,7 +579,14 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                 matchToken(TokenType::Semicolon);
                 cls->staticFields.push_back(std::move(sf));
             } else {
+                // `weak` is contextual: a modifier only when a field name follows.
+                bool isWeak = false;
+                if (peek().lexeme == "weak" && peekAt(1).type == TokenType::Identifier) {
+                    advance();
+                    isWeak = true;
+                }
                 cls->fields.push_back(parseField(access, isReadonly));
+                cls->fields.back().isWeak = isWeak;
                 matchToken(TokenType::Semicolon); // `x: int;` is accepted too
             }
         } else {
