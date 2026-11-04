@@ -42,8 +42,18 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
             if (refKind(c.type) != RefKind::None) rel += " " + releaseOf(c.type, "e->" + c.name);
         lambdaDecls_ += "static void " + env + "__arc_fields(void* o) { " + env + "* e = (" + env +
                         "*)o; (void)e;" + rel + " }\n";
+        std::string vis;
+        for (const auto &c : lam.captures) {
+            std::string v = visitOf(c.type, "e->" + c.name);
+            if (!v.empty()) vis += " " + v;
+        }
+        std::string visit = "0";
+        if (!vis.empty()) {
+            visit = env + "__gc_visit";
+            lambdaDecls_ += "static void " + visit + "(void* o) { " + env + "* e = (" + env + "*)o;" + vis + " }\n";
+        }
         lambdaDecls_ += "static const GravTypeInfo " + env + "_typeinfo = { \"<closure>\", 0, 0, 0, 0, 0, 0, " +
-                        env + "__arc_fields };\n";
+                        env + "__arc_fields, " + visit + " };\n";
     }
     lambdaDecls_ += head + ";\n";
     if (!lam.captures.empty()) {
