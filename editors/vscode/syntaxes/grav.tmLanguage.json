@@ -647,7 +647,7 @@
           "name": "keyword.control.async.grav"
         },
         {
-          "match": "\\b(public|private|protected|static|readonly|abstract|final|export)\\b",
+          "match": "\\b(public|private|protected|static|readonly|weak|abstract|final|export)\\b",
           "name": "storage.modifier.grav"
         },
         {
