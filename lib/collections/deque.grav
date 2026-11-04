@@ -20,6 +20,8 @@ namespace std.collections {
 
         constructor() { self.buf = null; self.cap = 0; self.head = 0; self.len = 0; }
         // One reference per element (reference types), like Array.
+        // For the cycle collector: the elements this deque holds.
+        private fn __visitRefs() { for (i in 0..self.len) { __visit(self.buf[(self.head + i) & (self.cap - 1)]) } }
         destructor() {
             for (i in 0..self.len) { __release(self.buf[(self.head + i) & (self.cap - 1)]); }
             free(self.buf);
