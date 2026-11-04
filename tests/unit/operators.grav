@@ -1,0 +1,83 @@
+// Operator methods: several index keys, compound assignment through operators,
+// comparisons derived from operator<, evaluation once, and reference balance.
+import "std"
+
+class Live { static count: int = 0 }
+
+class Num {
+    public v: int
+    constructor(v: int) { self.v = v; Live.count += 1 }
+    destructor() { Live.count -= 1 }
+    fn operator+(o: Num) -> Num { return new Num(self.v + o.v) }
+    fn operator*(k: int) -> Num { return new Num(self.v * k) }
+    fn operator<(o: Num) -> bool { return self.v < o.v }
+    fn operator==(o: Num) -> bool { return self.v == o.v }
+}
+
+class Matrix {
+    private cols: int
+    private cells: Array<Num>
+    public reads: int
+    constructor(rows: int, cols: int) {
+        self.cols = cols; self.reads = 0
+        self.cells = new Array<Num>()
+        for (i in 0..rows * cols) { self.cells.push(new Num(0)) }
+    }
+    fn operator[](r: int, c: int) -> Num { self.reads += 1; return self.cells.get(r * self.cols + c) }
+    fn operator[]=(r: int, c: int, v: Num) { self.cells.set(r * self.cols + c, v) }
+}
+
+class Calls { public n: int; constructor() { self.n = 0 } }
+
+fn pick(c: Calls, m: Matrix) -> Matrix { c.n += 1; return m }
+fn at(c: Calls, i: int) -> int { c.n += 1; return i }
+
+test "indexing with several keys" {
+    let m = new Matrix(2, 3)
+    m[1, 2] = new Num(5)
+    assertEq(m[1, 2].v, 5)
+    assertEq(m[0, 0].v, 0)
+}
+
+test "compound assignment through operator[] evaluates once" {
+    let m = new Matrix(2, 2)
+    let calls = new Calls()
+    pick(calls, m)[at(calls, 1), at(calls, 0)] += new Num(4)
+    assertEq(calls.n, 3)                    // the matrix and both keys, once each
+    assertEq(m.reads, 1)
+    assertEq(m[1, 0].v, 4)
+    let counts = new HashMap<string, int>()
+    for (w in ["x", "y", "x"]) { counts[w] += 1 }
+    assertEq(counts["x"], 2)
+    let names = new Array<string>()
+    names.push("a")
+    names[0] += "b"
+    assertEq(names[0], "ab")
+}
+
+test "compound assignment on variables and fields uses the operator" {
+    let n = new Num(2)
+    n += new Num(3)
+    n *= 4
+    assertEq(n.v, 20)
+    let holder = new Matrix(1, 1)
+    holder[0, 0] *= 7                      // 0 * 7
+    assertEq(holder[0, 0].v, 0)
+}
+
+test "comparisons follow from operator<" {
+    let a = new Num(1)
+    let b = new Num(2)
+    assert(a < b && b > a && a <= b && b >= a && a <= new Num(1) && a >= new Num(1))
+    assert(!(a > b) && !(b <= a))
+    assert(a == new Num(1) && a != b)
+}
+
+test "operator results are freed" {
+    if (true) {
+        let m = new Matrix(3, 3)
+        for (i in 0..50) { m[1, 1] += new Num(1); let t = m[1, 1] + m[0, 0] * 2 }
+        assertEq(m[1, 1].v, 50)
+    }
+    assertEq(Live.count, 0)
+}
