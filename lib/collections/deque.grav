@@ -19,7 +19,11 @@ namespace std.collections {
         private len: int
 
         constructor() { self.buf = null; self.cap = 0; self.head = 0; self.len = 0; }
-        destructor() { free(self.buf); }
+        // One reference per element (reference types), like Array.
+        destructor() {
+            for (i in 0..self.len) { __release(self.buf[(self.head + i) & (self.cap - 1)]); }
+            free(self.buf);
+        }
 
         private fn grow() {
             let nc = self.cap == 0 ? 8 : self.cap * 2;
@@ -39,17 +43,21 @@ namespace std.collections {
         public fn size() -> int { return self.len; }
         public fn length() -> int { return self.len; }
         public fn isEmpty() -> bool { return self.len == 0; }
-        public fn clear() { self.len = 0; self.head = 0; }
+        public fn clear() {
+            for (i in 0..self.len) { __release(self.buf[(self.head + i) & (self.cap - 1)]); }
+            self.len = 0;
+            self.head = 0;
+        }
 
         public fn pushBack(item: T) {
             if (self.len == self.cap) { self.grow(); }
-            self.buf[(self.head + self.len) & (self.cap - 1)] = item;
+            self.buf[(self.head + self.len) & (self.cap - 1)] = __retain(item);
             self.len = self.len + 1;
         }
         public fn pushFront(item: T) {
             if (self.len == self.cap) { self.grow(); }
             self.head = (self.head - 1) & (self.cap - 1);
-            self.buf[self.head] = item;
+            self.buf[self.head] = __retain(item);
             self.len = self.len + 1;
         }
         public fn popFront() -> T {
@@ -57,17 +65,26 @@ namespace std.collections {
             let item = self.buf[self.head];
             self.head = (self.head + 1) & (self.cap - 1);
             self.len = self.len - 1;
+            __release(item);          // the deque's reference
             return item;
         }
         public fn popBack() -> T {
             if (self.len == 0) { panic("Deque.popBack on an empty deque"); }
             self.len = self.len - 1;
-            return self.buf[(self.head + self.len) & (self.cap - 1)];
+            let item = self.buf[(self.head + self.len) & (self.cap - 1)];
+            __release(item);          // the deque's reference
+            return item;
         }
         public fn peekFront() -> T { self.check(0); return self.buf[self.head]; }
         public fn peekBack() -> T { self.check(self.len - 1); return self.buf[(self.head + self.len - 1) & (self.cap - 1)]; }
         public fn get(i: int) -> T { self.check(i); return self.buf[(self.head + i) & (self.cap - 1)]; }
-        public fn set(i: int, item: T) { self.check(i); self.buf[(self.head + i) & (self.cap - 1)] = item; }
+        public fn set(i: int, item: T) {
+            self.check(i);
+            let k = (self.head + i) & (self.cap - 1);
+            let old = self.buf[k];
+            self.buf[k] = __retain(item);
+            __release(old);
+        }
         fn operator[](i: int) -> T { return self.get(i); }
         fn operator[]=(i: int, item: T) { self.set(i, item); }
 
