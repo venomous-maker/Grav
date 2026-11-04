@@ -18,6 +18,7 @@ void CodeGen::emitPrelude() {
 #include <setjmp.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/mman.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 /* Locals at real risk across setjmp/longjmp are declared volatile by the
@@ -104,10 +105,12 @@ typedef struct GravTypeInfo {
     void (*drop)(void*);                        /* destructor chain, or 0 */
     const char* (*str)(void*);                  /* toString(), or 0 */
     bool (*eq)(void*, void*);                   /* operator==(other), or 0 */
+    void (*fields)(void*);                      /* release the object's reference fields, or 0 */
 } GravTypeInfo;
 
-/* Common object header: vtable pointer + runtime type descriptor. */
-struct GravObject { const void* __vt; const GravTypeInfo* __type; };
+/* Common object header: vtable pointer, runtime type descriptor, reference count.
+   Closure environments share the header (their type info releases the captures). */
+struct GravObject { const void* __vt; const GravTypeInfo* __type; long long __rc; };
 
 /* A function value: code pointer + captured environment (0 when nothing is
    captured). Called as ((R (*)(void*, A...))f.fn)(f.env, a...). */
@@ -119,13 +122,354 @@ struct GravIface { void* obj; const void* itab; };
 
 static inline bool grav_iface_eq(struct GravIface a, struct GravIface b) { return a.obj == b.obj; }
 
-/* `free(obj)`: run the dynamic type's destructor chain, then release the memory. */
-static void grav_free_obj(void* o) {
-    if (!o) return;
+/* ---- Automatic reference counting ------------------------------------------
+   Every object starts with one reference (its creator's). Owning places --
+   locals, fields, globals, closure environments, container slots -- hold one
+   each; when the count reaches zero the destructor chain runs, the object's
+   reference fields are released, and the memory is freed. Counts change
+   atomically, so objects may be shared between threads.
+   `free(obj)` disposes early: the destructor runs and the fields are released
+   now, but the memory stays until the last reference is gone (no dangling
+   pointers). GRAV_RC_DEAD marks a disposed object. */
+/* The 64-bit count: strong references in bits 0-39, weak references in bits
+   40-59, DEAD (disposed: destructor and fields done) at 60, GONE (no strong
+   references left; the memory waits for the last weak one) at 61. */
+#define GRAV_RC_DEAD (1LL << 60)
+#define GRAV_RC_GONE (1LL << 61)
+#define GRAV_RC_WEAK1 (1LL << 40)
+#define GRAV_RC_COUNT(v) ((v) & (GRAV_RC_WEAK1 - 1))
+#define GRAV_RC_WEAKS(v) (((v) >> 40) & ((1LL << 20) - 1))
+static int grav_mt = 0;
+static void grav_obj_teardown(void* o) {
     const GravTypeInfo* t = ((struct GravObject*)o)->__type;
     if (t && t->drop) t->drop(o);
-    free(o);
+    if (t && t->fields) t->fields(o);
 }
+/* Destruction is iterative: an object whose count reaches zero while another is
+   being torn down is queued, so freeing a long chain (a million-node linked
+   list) uses constant stack instead of recursing once per node. */
+static _Thread_local void** grav_dead = 0;
+static _Thread_local size_t grav_dead_n = 0, grav_dead_cap = 0;
+static _Thread_local int grav_destroying = 0;
+static void grav_obj_destroy(void* o) {
+    if (grav_destroying) {
+        if (grav_dead_n == grav_dead_cap) {
+            grav_dead_cap = grav_dead_cap ? grav_dead_cap * 2 : 64;
+            grav_dead = (void**)realloc(grav_dead, grav_dead_cap * sizeof(void*));
+            if (!grav_dead) abort();
+        }
+        grav_dead[grav_dead_n++] = o;
+        return;
+    }
+    grav_destroying = 1;
+    for (;;) {
+        long long v = __atomic_load_n(&((struct GravObject*)o)->__rc, __ATOMIC_ACQUIRE);
+        if (!(v & GRAV_RC_DEAD)) grav_obj_teardown(o);
+        /* weak references keep the memory (not the object) until they go */
+        long long old = __atomic_fetch_or(&((struct GravObject*)o)->__rc, GRAV_RC_GONE | GRAV_RC_DEAD, __ATOMIC_ACQ_REL);
+        if (GRAV_RC_WEAKS(old) == 0) free(o);
+        if (grav_dead_n == 0) break;
+        o = grav_dead[--grav_dead_n];
+    }
+    grav_destroying = 0;
+}
+/* Counts need atomic updates only once a second thread exists. Until the first
+   thread starts (grav_mt_on, called before pthread_create) they are plain
+   increments and decrements; afterwards they are atomic for good. */
+/* Written once, while only one thread exists; read-only afterwards. */
+static void grav_mt_on(void) { if (!grav_mt) __atomic_store_n(&grav_mt, 1, __ATOMIC_SEQ_CST); }
+static inline void* grav_retain(void* o) {
+    if (o) {
+        if (GRAV_LIKELY(!grav_mt)) ((struct GravObject*)o)->__rc++;
+        else __atomic_add_fetch(&((struct GravObject*)o)->__rc, 1, __ATOMIC_RELAXED);
+    }
+    return o;
+}
+static inline void grav_release(void* o) {
+    if (!o) return;
+    long long v;
+    if (GRAV_LIKELY(!grav_mt)) v = --((struct GravObject*)o)->__rc;
+    else v = __atomic_sub_fetch(&((struct GravObject*)o)->__rc, 1, __ATOMIC_ACQ_REL);
+    if (GRAV_UNLIKELY(GRAV_RC_COUNT(v) == 0)) grav_obj_destroy(o);
+}
+/* `free(obj)`: run the destructor and release the fields now (once). */
+static void grav_free_obj(void* o) {
+    if (!o) return;
+    long long before = __atomic_fetch_or(&((struct GravObject*)o)->__rc, GRAV_RC_DEAD, __ATOMIC_ACQ_REL);
+    if (before & GRAV_RC_DEAD) return;
+    grav_obj_teardown(o);
+}
+/* Weak references (`weak` fields). */
+static inline void grav_weak_retain(void* o) {
+    if (!o) return;
+    if (GRAV_LIKELY(!grav_mt)) ((struct GravObject*)o)->__rc += GRAV_RC_WEAK1;
+    else __atomic_add_fetch(&((struct GravObject*)o)->__rc, GRAV_RC_WEAK1, __ATOMIC_RELAXED);
+}
+static inline void grav_weak_release(void* o) {
+    if (!o) return;
+    long long v;
+    if (GRAV_LIKELY(!grav_mt)) v = (((struct GravObject*)o)->__rc -= GRAV_RC_WEAK1);
+    else v = __atomic_sub_fetch(&((struct GravObject*)o)->__rc, GRAV_RC_WEAK1, __ATOMIC_ACQ_REL);
+    if ((v & GRAV_RC_GONE) && GRAV_RC_WEAKS(v) == 0) free(o);
+}
+static void* grav_autorelease(void* o);
+/* Read a weak reference: the object, held until the statement ends, or null
+   once it is gone or disposed. Never revives an object that is being freed. */
+static void* grav_weak_load(void* o) {
+    if (!o) return 0;
+    long long* rc = &((struct GravObject*)o)->__rc;
+    if (GRAV_LIKELY(!grav_mt)) {
+        if ((*rc & (GRAV_RC_DEAD | GRAV_RC_GONE)) || GRAV_RC_COUNT(*rc) == 0) return 0;
+        ++*rc;
+        return grav_autorelease(o);
+    }
+    long long v = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
+    for (;;) {
+        if ((v & (GRAV_RC_DEAD | GRAV_RC_GONE)) || GRAV_RC_COUNT(v) == 0) return 0;
+        if (__atomic_compare_exchange_n(rc, &v, v + 1, 1, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            return grav_autorelease(o);
+    }
+}
+static inline GravFn grav_fn_retain(GravFn f) { grav_retain(f.env); return f; }
+static inline void grav_fn_release(GravFn f) { grav_release(f.env); }
+static inline struct GravIface grav_iface_retain(struct GravIface i) { grav_retain(i.obj); return i; }
+static inline void grav_iface_release(struct GravIface i) { grav_release(i.obj); }
+
+/* ---- Heap strings -----------------------------------------------------------
+   Strings are `const char*`. Literals, strings from C (getenv, strerror, static
+   buffers) and Grav-built strings look alike, so Grav builds its strings in a
+   reserved address range, each behind a 16-byte header: a reference count and a
+   check word tying the header to its address. A pointer is a counted string only
+   if it lies in the range AND its header checks out; anything else (a literal, a
+   C string, a pointer into the middle of a string) is permanent: retain and
+   release do nothing, so an unrecognized string can leak but never be freed.
+   Blocks come in size classes; freed blocks go to a per-thread cache (no lock),
+   which spills to a shared list when it grows large. */
+typedef struct GravStrHdr { long long rc; unsigned long long meta; } GravStrHdr;
+#define GRAV_SCLASSES 34
+static size_t grav_ssize[GRAV_SCLASSES];
+static char* grav_sbase = 0;            /* reserved range [grav_sbase, grav_slimit) */
+static char* grav_slimit = 0;
+static char* grav_sbump = 0;            /* next unused byte */
+static char* grav_scommit = 0;          /* end of the committed (readable) part */
+static unsigned long long grav_skey = 0;
+static pthread_mutex_t grav_slock = PTHREAD_MUTEX_INITIALIZER;
+static void* grav_sshared[GRAV_SCLASSES];       /* shared free lists (under grav_slock) */
+static _Thread_local void* grav_scache[GRAV_SCLASSES];
+static _Thread_local int grav_scache_n[GRAV_SCLASSES];
+static int grav_sinit_done = 0;
+static long long grav_str_nlive = 0;     /* counted strings alive (diagnostics) */
+static GRAV_UNUSED long long grav_str_live(void) { return __atomic_load_n(&grav_str_nlive, __ATOMIC_RELAXED); }
+static void grav_sinit(void) {
+    pthread_mutex_lock(&grav_slock);
+    if (!grav_sinit_done) {
+        static const size_t small[] = {32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536,
+                                       2048, 3072, 4096, 8192, 16384, 32768, 65536, 131072};
+        int k = 0;
+        for (; k < 20; k++) grav_ssize[k] = small[k];
+        for (size_t z = 262144; k < GRAV_SCLASSES; k++, z *= 2) grav_ssize[k] = z;
+        for (int shift = 38; shift >= 30 && !grav_sbase; shift--) {   /* 256 GiB .. 1 GiB of address space */
+            void* p = mmap(0, (size_t)1 << shift, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+            if (p != MAP_FAILED) { grav_slimit = (char*)p + ((size_t)1 << shift); __atomic_store_n(&grav_sbase, (char*)p, __ATOMIC_RELEASE); }
+        }
+        grav_scommit = grav_sbase;
+        __atomic_store_n(&grav_sbump, grav_sbase, __ATOMIC_RELEASE);
+        grav_skey = ((unsigned long long)(uintptr_t)&grav_skey * 0x9E3779B97F4A7C15ULL) ^ (unsigned long long)getpid() ^ 0x5bd1e995ULL;
+        __atomic_store_n(&grav_sinit_done, 1, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&grav_slock);
+}
+static inline unsigned long long grav_smeta(const GravStrHdr* h, int cls) {
+    return ((((unsigned long long)(uintptr_t)h) ^ grav_skey) << 8) | (unsigned long long)cls;
+}
+static inline GravStrHdr* grav_shdr(const char* s) {
+    /* The range only grows (under grav_slock); a string reaching this thread came
+       through synchronization, so even a relaxed read covers it. */
+    char* base = __atomic_load_n(&grav_sbase, __ATOMIC_RELAXED);
+    uintptr_t off = (uintptr_t)s - (uintptr_t)base;          /* the header must lie inside the used range */
+    if (off < sizeof(GravStrHdr) || off >= (uintptr_t)(__atomic_load_n(&grav_sbump, __ATOMIC_RELAXED) - base) || ((uintptr_t)s & 15)) return 0;
+    GravStrHdr* h = (GravStrHdr*)(s - sizeof(GravStrHdr));
+    int cls = (int)(h->meta & 0xff);
+    if (cls >= GRAV_SCLASSES || h->meta != grav_smeta(h, cls)) return 0;
+    return h;
+}
+/* A fresh counted string with room for n bytes plus a terminator (count 1). Falls
+   back to malloc (a permanent string) if the reserved range is unavailable. */
+static char* grav_str_new(size_t n) {
+    if (GRAV_UNLIKELY(!__atomic_load_n(&grav_sinit_done, __ATOMIC_ACQUIRE))) grav_sinit();
+    size_t need = n + 1 + sizeof(GravStrHdr);
+    int cls = 0;
+    while (cls < GRAV_SCLASSES && grav_ssize[cls] < need) cls++;
+    GravStrHdr* h = 0;
+    if (cls < GRAV_SCLASSES && grav_sbase) {
+        if (grav_scache[cls]) {
+            h = (GravStrHdr*)grav_scache[cls];
+            grav_scache[cls] = *(void**)(h + 1);
+            grav_scache_n[cls]--;
+        } else {
+            pthread_mutex_lock(&grav_slock);
+            if (grav_sshared[cls]) {
+                h = (GravStrHdr*)grav_sshared[cls];
+                grav_sshared[cls] = *(void**)(h + 1);
+            } else if ((size_t)(grav_slimit - grav_sbump) >= grav_ssize[cls]) {
+                char* end = grav_sbump + grav_ssize[cls];
+                if (end > grav_scommit) {          /* commit in 4 MiB steps (or the whole block) */
+                    size_t step = (size_t)(end - grav_scommit);
+                    if (step < ((size_t)4 << 20)) step = (size_t)4 << 20;
+                    if ((size_t)(grav_slimit - grav_scommit) < step) step = (size_t)(grav_slimit - grav_scommit);
+                    if (mprotect(grav_scommit, step, PROT_READ | PROT_WRITE) == 0) grav_scommit += step;
+                }
+                if (end <= grav_scommit) { h = (GravStrHdr*)grav_sbump; __atomic_store_n(&grav_sbump, end, __ATOMIC_RELEASE); }
+            }
+            pthread_mutex_unlock(&grav_slock);
+        }
+    }
+    if (!h) {
+        char* m = (char*)malloc(n + 1);           /* permanent: never counted, never freed */
+        if (GRAV_UNLIKELY(!m)) grav_panic("out of memory");
+        return m;
+    }
+    h->rc = 1;
+    h->meta = grav_smeta(h, cls);
+    __atomic_add_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
+    char* s = (char*)(h + 1);
+    s[0] = 0;
+    return s;
+}
+#if defined(__SANITIZE_ADDRESS__)
+#define GRAV_STR_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define GRAV_STR_ASAN 1
+#endif
+#endif
+#ifdef GRAV_STR_ASAN
+void __asan_poison_memory_region(void const volatile* addr, size_t size);
+#endif
+static void grav_sblock_free(GravStrHdr* h) {
+    int cls = (int)(h->meta & 0xff);
+    __atomic_sub_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
+    h->meta = 0;                                  /* no longer a valid string */
+#ifdef GRAV_STR_ASAN
+    /* --sanitize: never reuse a freed string, and make any later access an error */
+    __asan_poison_memory_region(h, grav_ssize[cls]);
+    return;
+#endif
+    if (cls >= 20) madvise((char*)h + 4096, grav_ssize[cls] - 4096, MADV_DONTNEED); /* give large blocks' pages back */
+    if (grav_scache_n[cls] < 256 || cls >= 20) {
+        if (cls >= 20) {                          /* large blocks: always shared */
+            pthread_mutex_lock(&grav_slock);
+            *(void**)(h + 1) = grav_sshared[cls];
+            grav_sshared[cls] = h;
+            pthread_mutex_unlock(&grav_slock);
+            return;
+        }
+        *(void**)(h + 1) = grav_scache[cls];
+        grav_scache[cls] = h;
+        grav_scache_n[cls]++;
+        return;
+    }
+    pthread_mutex_lock(&grav_slock);
+    *(void**)(h + 1) = grav_sshared[cls];
+    grav_sshared[cls] = h;
+    pthread_mutex_unlock(&grav_slock);
+}
+/* For C helpers in libraries: a buffer of `bytes` bytes (terminator included)
+   that becomes a counted string, and growing one. */
+static char* grav_str_alloc(size_t bytes) { return grav_str_new(bytes ? bytes - 1 : 0); }
+static char* grav_str_realloc(char* s, size_t n);
+static char* grav_str_grow(char* s, size_t bytes) { return grav_str_realloc(s, bytes ? bytes - 1 : 0); }
+/* Free a counted string outright (an unshared buffer a C helper is discarding). */
+static void grav_str_free(const char* s) {
+    GravStrHdr* h = s ? grav_shdr(s) : 0;
+    if (h) grav_sblock_free(h);
+}
+/* Grow a string buffer a C helper is filling (only it holds the string). */
+static char* grav_str_realloc(char* s, size_t n) {
+    if (!s) return grav_str_new(n);
+    GravStrHdr* h = grav_shdr(s);
+    if (h && grav_ssize[h->meta & 0xff] >= n + 1 + sizeof(GravStrHdr)) return s;
+    char* r = grav_str_new(n);
+    size_t old = h ? grav_ssize[h->meta & 0xff] - sizeof(GravStrHdr) : strlen(s) + 1;
+    memcpy(r, s, old < n + 1 ? old : n + 1);
+    if (h) grav_sblock_free(h);
+    return r;
+}
+/* A counted copy of a malloc'd buffer the caller owns (the buffer is freed). */
+static const char* grav_str_take(char* m) {
+    if (!m) return "";
+    size_t n = strlen(m);
+    char* r = grav_str_new(n);
+    memcpy(r, m, n + 1);
+    free(m);
+    return r;
+}
+static inline const char* grav_str_retain(const char* s) {
+    GravStrHdr* h = s ? grav_shdr(s) : 0;
+    if (h) {
+        if (GRAV_LIKELY(!grav_mt)) h->rc++;
+        else __atomic_add_fetch(&h->rc, 1, __ATOMIC_RELAXED);
+    }
+    return s;
+}
+static inline void grav_str_release(const char* s) {
+    GravStrHdr* h = s ? grav_shdr(s) : 0;
+    if (!h) return;
+    long long v;
+    if (GRAV_LIKELY(!grav_mt)) v = --h->rc;
+    else v = __atomic_sub_fetch(&h->rc, 1, __ATOMIC_ACQ_REL);
+    if (v == 0) grav_sblock_free(h);
+}
+
+/* The release list: results of calls and constructors used inside an expression
+   are borrowed until the statement ends, then released together. Per thread; a
+   statement records the depth before it runs and releases back to it after, so
+   an exception's skipped releases are made by whoever handles it. */
+static _Thread_local void** grav_pool = 0;
+static _Thread_local size_t grav_pool_top = 0;
+static _Thread_local size_t grav_pool_cap = 0;
+static void* grav_autorelease(void* o) {
+    if (!o) return o;
+    if (grav_pool_top == grav_pool_cap) {
+        grav_pool_cap = grav_pool_cap ? grav_pool_cap * 2 : 64;
+        grav_pool = (void**)realloc(grav_pool, grav_pool_cap * sizeof(void*));
+        if (!grav_pool) abort();
+    }
+    grav_pool[grav_pool_top++] = o;
+    return o;
+}
+static void grav_pool_drain(size_t mark) {
+    while (grav_pool_top > mark) {
+        void* p = grav_pool[--grav_pool_top];
+        if ((uintptr_t)p & 1) grav_str_release((const char*)((uintptr_t)p & ~(uintptr_t)1));
+        else grav_release(p);
+    }
+}
+/* A thread is ending: release what it still holds and give back its per-thread
+   buffers (release list, destruction queue, cached string blocks), so threads
+   that come and go (one per HTTP connection) leave nothing behind. */
+static void grav_thread_end(void) {
+    grav_pool_drain(0);
+    free(grav_pool); grav_pool = 0; grav_pool_cap = 0;
+    free(grav_dead); grav_dead = 0; grav_dead_cap = 0; grav_dead_n = 0;
+    pthread_mutex_lock(&grav_slock);
+    for (int c = 0; c < GRAV_SCLASSES; c++) {
+        while (grav_scache[c]) {
+            void* h = grav_scache[c];
+            grav_scache[c] = *(void**)((GravStrHdr*)h + 1);
+            *(void**)((GravStrHdr*)h + 1) = grav_sshared[c];
+            grav_sshared[c] = h;
+        }
+        grav_scache_n[c] = 0;
+    }
+    pthread_mutex_unlock(&grav_slock);
+}
+static inline const char* grav_str_autorelease(const char* s) {
+    if (s && grav_shdr(s)) grav_autorelease((void*)((uintptr_t)s | 1));
+    return s;
+}
+static inline GravFn grav_fn_autorelease(GravFn f) { grav_autorelease(f.env); return f; }
+static inline struct GravIface grav_iface_autorelease(struct GravIface i) { grav_autorelease(i.obj); return i; }
 
 /* A binary blob: byte buffer + length (may contain embedded NULs). */
 typedef struct GravBytes { unsigned char* data; long long len; } GravBytes;
@@ -138,7 +482,7 @@ static inline bool grav_bytes_eq(GravBytes a, GravBytes b) {
     return a.len == b.len && (a.len == 0 || memcmp(a.data, b.data, (size_t)a.len) == 0);
 }
 static const char* grav_bytes_to_str(GravBytes b) {
-    char* r = (char*)grav_alloc((size_t)b.len + 1);
+    char* r = grav_str_new((size_t)b.len);
     if (b.data) memcpy(r, b.data, (size_t)b.len);
     r[b.len] = 0; return r;
 }
@@ -150,7 +494,7 @@ static inline bool grav_streq(const char* a, const char* b) {
 }
 static const char* grav_strdup(const char* s) {
     size_t n = strlen(s);
-    char* r = (char*)grav_alloc(n + 1);
+    char* r = grav_str_new(n);
     memcpy(r, s, n + 1);
     return r;
 }
@@ -159,13 +503,13 @@ static bool grav_streq_tmp(const char* a, const char* b, int freeA, int freeB) {
     /* no `a == b` shortcut: with it, GCC infers a fresh operand may be the other
        side's literal and warns about freeing it */
     bool r = strcmp(a, b) == 0;
-    if (freeA) free((void*)a);
-    if (freeB) free((void*)b);
+    if (freeA) grav_str_release(a);
+    if (freeB) grav_str_release(b);
     return r;
 }
 static const char* grav_str_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);
-    char* r = (char*)grav_alloc(la + lb + 1);
+    char* r = grav_str_new(la + lb);
     memcpy(r, a, la);
     memcpy(r + la, b, lb + 1);
     return r;
@@ -179,7 +523,7 @@ static const char* grav_concatn(int n, ...) {
         total += l;
     }
     va_end(ap);
-    char* r = (char*)grav_alloc(total + 1); char* w = r;
+    char* r = grav_str_new(total); char* w = r;
     va_start(ap, n);
     for (int i = 0; i < n; i++) {
         const char* s = va_arg(ap, const char*);
@@ -196,7 +540,7 @@ static const char* grav_fmt(const char* fmt, ...) {
     int n = vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     if (n < 0) n = 0;
-    char* r = (char*)grav_alloc((size_t)n + 1);
+    char* r = grav_str_new((size_t)n);
     if ((size_t)n < sizeof buf) memcpy(r, buf, (size_t)n + 1);
     else vsnprintf(r, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
@@ -229,13 +573,13 @@ static bool grav_is_instance(const void* obj, const GravTypeInfo* want) {
 
 /* Value-to-string helpers (used by str()). */
 static const char* grav_int_to_str(long long v) {
-    char* b = (char*)grav_alloc(24); snprintf(b, 24, "%lld", v); return b;
+    char* b = grav_str_new(23); snprintf(b, 24, "%lld", v); return b;
 }
 static const char* grav_uint_to_str(unsigned long long v) {
-    char* b = (char*)grav_alloc(24); snprintf(b, 24, "%llu", v); return b;
+    char* b = grav_str_new(23); snprintf(b, 24, "%llu", v); return b;
 }
 static const char* grav_float_to_str(double v) {
-    char* b = (char*)grav_alloc(32); snprintf(b, 32, "%g", v); return b;
+    char* b = grav_str_new(31); snprintf(b, 32, "%g", v); return b;
 }
 
 /* Command-line arguments and stdin. */
@@ -257,7 +601,7 @@ static const char* grav_input(void) {
     }
     if (c == EOF && n == 0) { free(b); return ""; }
     if (n > 0 && b[n - 1] == '\r') n--; /* tolerate CRLF input */
-    b[n] = 0; return b;
+    b[n] = 0; return grav_str_take(b);
 }
 
 /* `any`: a tagged box for a value of any boxable type. */
@@ -286,6 +630,25 @@ static inline GravAny grav_any_enum(long long x, const char* tname, const char* 
 static inline GravAny grav_any_fn(GravFn f, const char* sig) {
     GravAny a = grav_any_null();
     if (f.fn) { a.tag = GRAV_ANY_FN; a.v.fn = f; a.tname = sig; }
+    return a;
+}
+/* An `any` holding an object or a closure owns a reference to it like any other
+   owning place; the other kinds are plain values. */
+static inline GravAny grav_any_retain(GravAny a) {
+    if (a.tag == GRAV_ANY_OBJ) grav_retain(a.v.p);
+    else if (a.tag == GRAV_ANY_FN) grav_retain(a.v.fn.env);
+    else if (a.tag == GRAV_ANY_STR) grav_str_retain(a.v.s);
+    return a;
+}
+static inline void grav_any_release(GravAny a) {
+    if (a.tag == GRAV_ANY_OBJ) grav_release(a.v.p);
+    else if (a.tag == GRAV_ANY_FN) grav_release(a.v.fn.env);
+    else if (a.tag == GRAV_ANY_STR) grav_str_release(a.v.s);
+}
+static inline GravAny grav_any_autorelease(GravAny a) {
+    if (a.tag == GRAV_ANY_OBJ) grav_autorelease(a.v.p);
+    else if (a.tag == GRAV_ANY_FN) grav_autorelease(a.v.fn.env);
+    else if (a.tag == GRAV_ANY_STR) grav_str_autorelease(a.v.s);
     return a;
 }
 static const char* grav_any_typename(GravAny a) {
@@ -353,7 +716,7 @@ static const char* grav_any_to_string(GravAny a) {
         case GRAV_ANY_UINT: return grav_uint_to_str(a.v.u);
         case GRAV_ANY_FLOAT: return grav_float_to_str(a.v.f);
         case GRAV_ANY_BOOL: return a.v.b ? "true" : "false";
-        case GRAV_ANY_STR: return a.v.s;
+        case GRAV_ANY_STR: return grav_str_retain(a.v.s);   /* results are the caller's */
         case GRAV_ANY_OBJ: {
             const GravTypeInfo* t = ((const struct GravObject*)a.v.p)->__type;
             return t->str ? t->str(a.v.p) : t->name;   /* the dynamic class's toString() */
@@ -437,7 +800,7 @@ static _Thread_local int grav_recover_top = 0;
 static _Thread_local char grav_recover_msg[2048];
 /* A recovered panic unwinds as an exception of this type: no `catch` matches it
    (there is no object), so `finally` blocks run and it reaches the recovery point. */
-static const GravTypeInfo grav_panic_typeinfo = { "panic", 0, 0, 0, 0, 0, 0 };
+static const GravTypeInfo grav_panic_typeinfo = { "panic", 0, 0, 0, 0, 0, 0, 0 };
 /* The try depth below which handlers belong outside the innermost recovery region. */
 static inline int grav_try_floor(void) {
     return grav_recover_top > 0 ? grav_recover_try[grav_recover_top - 1] : 0;
@@ -546,8 +909,7 @@ static const char* grav_recover_call(GravFn f) {
     grav_jmp_top = grav_recover_try[k];
     grav_frames_restore(grav_recover_nf[k]);
     size_t n = strlen(grav_recover_msg);
-    char* out = (char*)malloc(n + 1);
-    if (!out) abort();
+    char* out = grav_str_new(n);
     memcpy(out, grav_recover_msg, n + 1);
     return out;
 }
@@ -658,6 +1020,7 @@ static GravTask* grav_spawn(GravTask* t, void (*run)(GravTask*), void* result) {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        grav_mt_on();
         if (pthread_create(&th, &attr, grav_worker, 0) == 0) grav_workers++;
         pthread_attr_destroy(&attr);
     }
