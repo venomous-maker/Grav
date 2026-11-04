@@ -28,12 +28,146 @@ CodeGen::RefKind CodeGen::refKind(const TypeRef &t) const {
     if (t.isNamed()) {
         if (reg_->isInterface(t.name)) return RefKind::Iface;
         if (reg_->isClass(t.name)) return RefKind::Obj;
+        if (reg_->isStruct(t.name) && valueHasRefs(t)) return RefKind::Value;
         return RefKind::None;
     }
+    if (t.isArray()) return valueHasRefs(t) ? RefKind::Value : RefKind::None;
     if (t.kind == TypeRef::Kind::String) return RefKind::Str;
     if (t.isFunction()) return RefKind::Fn;
     if (t.isAny()) return RefKind::Any;
     return RefKind::None;
+}
+
+bool CodeGen::valueHasRefs(const TypeRef &t) const {
+    std::string key = valueTypeName(t);
+    if (key.empty()) return false;
+    auto it = valueRefsMemo_.find(key);
+    if (it != valueRefsMemo_.end()) return it->second == 1;
+    valueRefsMemo_[key] = 0; // value containment is acyclic; this only guards the walk
+    bool has = false;
+    if (t.isArray()) {
+        has = t.elem && refKind(*t.elem) != RefKind::None;
+    } else if (const StructInfo *si = reg_->strct(t.name)) {
+        for (const auto &f : si->fields)
+            if (refKind(f.type) != RefKind::None) { has = true; break; }
+    }
+    valueRefsMemo_[key] = has ? 1 : 0;
+    return has;
+}
+
+std::string CodeGen::valueTypeName(const TypeRef &t) const {
+    if (t.isArray()) return arrayStructName(t);
+    if (t.isNamed() && reg_->isStruct(t.name)) return structName(t.name);
+    return "";
+}
+
+// The ARC helpers of a value struct or fixed array `key` that holds references.
+std::string CodeGen::emitValueArc(const std::string &key, const TypeRef &t) const {
+    std::string ret, rel;
+    auto member = [&](const TypeRef &ft, const std::string &m) {
+        if (refKind(ft) == RefKind::None) return;
+        ret += "    " + m + " = " + retainOf(ft, m) + ";\n";
+        rel += "    " + releaseOf(ft, m) + "\n";
+    };
+    std::string pre;
+    if (t.isArray()) {
+        pre = "    for (int i = 0; i < " + std::to_string(t.arrayLen) + "; i++) {\n";
+        member(*t.elem, "v.data[i]");
+        ret = pre + ret + "    }\n";
+        rel = pre + rel + "    }\n";
+    } else if (const StructInfo *si = reg_->strct(t.name)) {
+        for (const auto &f : si->fields) member(f.type, "v." + memberCName(f.name));
+    }
+    std::string out;
+    out += "static GRAV_UNUSED " + key + " " + key + "__retain(" + key + " v) {\n" + ret + "    return v;\n}\n";
+    out += "static GRAV_UNUSED void " + key + "__release(" + key + " v) {\n" + rel + "}\n";
+    out += "static GRAV_UNUSED void " + key + "__release_box(void* p) { " + key + "__release(*(" + key + "*)p); }\n";
+    std::string vis;
+    if (t.isArray()) {
+        std::string v = visitOf(*t.elem, "v.data[i]");
+        if (!v.empty()) vis = "    for (int i = 0; i < " + std::to_string(t.arrayLen) + "; i++) { " + v + " }\n";
+    } else if (const StructInfo *si = reg_->strct(t.name)) {
+        for (const auto &f : si->fields) {
+            std::string v = visitOf(f.type, "v." + memberCName(f.name));
+            if (!v.empty()) vis += "    " + v + "\n";
+        }
+    }
+    out += "static GRAV_UNUSED void " + key + "__visit(" + key + " v) {\n    (void)v;\n" + vis + "}\n";
+    out += "static GRAV_UNUSED " + key + " " + key + "__autorelease(" + key + " v) { grav_autorelease_box(" + key +
+           "__release_box, &v, sizeof v); return v; }\n\n";
+    return out;
+}
+
+bool CodeGen::gcRelevant(const TypeRef &t) const {
+    switch (refKind(t)) {
+        case RefKind::Obj: case RefKind::Iface: case RefKind::Fn: case RefKind::Any: return true;
+        case RefKind::Value:
+            if (t.isArray()) return t.elem && gcRelevant(*t.elem);
+            if (const StructInfo *si = reg_->strct(t.name))
+                for (const auto &f : si->fields)
+                    if (gcRelevant(f.type)) return true;
+            return false;
+        default: return false;
+    }
+}
+
+std::string CodeGen::visitOf(const TypeRef &t, const std::string &c) const {
+    if (!gcRelevant(t)) return "";
+    switch (refKind(t)) {
+        case RefKind::Obj: return "grav_gc_visit((void*)(" + c + "));";
+        case RefKind::Iface: return "grav_gc_visit((" + c + ").obj);";
+        case RefKind::Fn: return "grav_gc_visit((" + c + ").env);";
+        case RefKind::Any: return "grav_gc_visit_any(" + c + ");";
+        case RefKind::Value: return valueTypeName(t) + "__visit(" + c + ");";
+        default: return "";
+    }
+}
+
+namespace {
+// Whether a `__visitRefs` body reports anything the collector cares about (an
+// Array<int> instance's loop of __visit calls on ints does not).
+using RelevantFn = std::function<bool(const TypeRef &)>;
+bool visitsRelevant(const RelevantFn &g, const Block &b);
+bool visitsRelevantStmt(const RelevantFn &g, const Stmt *s) {
+    if (!s) return false;
+    if (auto *x = dynamic_cast<const ExprStmt *>(s)) {
+        auto *c = dynamic_cast<const CallExpr *>(x->expr.get());
+        return c && c->kind == CallKind::Builtin && c->targetName == "__visit" && c->args.size() == 1 &&
+               g(c->args[0]->type);
+    }
+    if (auto *x = dynamic_cast<const BlockStmt *>(s)) return visitsRelevant(g, x->block);
+    if (auto *x = dynamic_cast<const IfStmt *>(s)) return visitsRelevant(g, x->thenBlock) || visitsRelevantStmt(g, x->elseStmt.get());
+    if (auto *x = dynamic_cast<const WhileStmt *>(s)) return visitsRelevant(g, x->body);
+    if (auto *x = dynamic_cast<const ForStmt *>(s)) return visitsRelevant(g, x->body);
+    if (auto *x = dynamic_cast<const ForInStmt *>(s)) return visitsRelevant(g, x->body);
+    return false;
+}
+bool visitsRelevant(const RelevantFn &g, const Block &b) {
+    for (const auto &s : b.statements)
+        if (visitsRelevantStmt(g, s.get())) return true;
+    return false;
+}
+} // namespace
+
+std::string CodeGen::emitVisitFields(const std::string &classFq) {
+    std::string body;
+    for (const auto &f : collectFields(classFq)) {
+        if (f.isWeak) continue; // weak references are not part of a cycle
+        std::string v = visitOf(f.type, "self->" + memberCName(f.name));
+        if (!v.empty()) body += "    " + v + "\n";
+    }
+    // Containers report the references in their buffers with a __visitRefs method.
+    std::string impl = reg_->findMethodImpl(classFq, "__visitRefs");
+    if (!impl.empty())
+        if (const ClassInfo *ci = reg_->cls(impl); ci && ci->decl)
+            for (const auto &m : ci->decl->methods)
+                if (m.name == "__visitRefs" && m.hasBody && visitsRelevant([this](const TypeRef &t) { return gcRelevant(t); }, m.body))
+                    body += "    " + methodCName(impl, "__visitRefs") + "((" + structName(impl) + "*)self);\n";
+    if (body.empty()) return "0";
+    std::string S = structName(classFq);
+    std::string fn = mangle(classFq) + "__gc_visit";
+    vtables_ += "static void " + fn + "(void* o) {\n    " + S + "* self = (" + S + "*)o;\n" + body + "}\n";
+    return fn;
 }
 
 std::string CodeGen::retainOf(const TypeRef &t, const std::string &c) const {
@@ -43,6 +177,7 @@ std::string CodeGen::retainOf(const TypeRef &t, const std::string &c) const {
         case RefKind::Fn: return "grav_fn_retain(" + c + ")";
         case RefKind::Any: return "grav_any_retain(" + c + ")";
         case RefKind::Str: return "grav_str_retain(" + c + ")";
+        case RefKind::Value: return valueTypeName(t) + "__retain(" + c + ")";
         default: return c;
     }
 }
@@ -54,6 +189,7 @@ std::string CodeGen::releaseOf(const TypeRef &t, const std::string &c) const {
         case RefKind::Fn: return "grav_fn_release(" + c + ");";
         case RefKind::Any: return "grav_any_release(" + c + ");";
         case RefKind::Str: return "grav_str_release(" + c + ");";
+        case RefKind::Value: return valueTypeName(t) + "__release(" + c + ");";
         default: return "";
     }
 }
@@ -65,6 +201,7 @@ std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const
         case RefKind::Fn: return "grav_fn_autorelease(" + c + ")";
         case RefKind::Any: return "grav_any_autorelease(" + c + ")";
         case RefKind::Str: return "grav_str_autorelease(" + c + ")";
+        case RefKind::Value: return valueTypeName(t) + "__autorelease(" + c + ")";
         default: return c;
     }
 }
@@ -72,6 +209,10 @@ std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const
 bool CodeGen::isRefProducer(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
     if (dynamic_cast<const NewExpr *>(&e)) return true;
+    // A struct or fixed-array literal holds its own references (+1 each).
+    if (refKind(e.type) == RefKind::Value &&
+        (dynamic_cast<const StructLiteralExpr *>(&e) || dynamic_cast<const ArrayLiteralExpr *>(&e)))
+        return true;
     if (auto *l = dynamic_cast<const LambdaExpr *>(&e)) return !l->captures.empty();
     if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
         if (c->kind == CallKind::Builtin) {
