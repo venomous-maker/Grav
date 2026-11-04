@@ -63,7 +63,7 @@ void CodeGen::emitGlobals() {
         // `T const name`: qualifies the object itself (for strings that yields
         // `const char* const`, not the invalid-looking `const const char*`).
         globals_ += "static GRAV_UNUSED " + cTy(gi->type) + (gi->isConst ? " const " : " ") +
-                    gi->cName + " = " + emitAs(*init, gi->type) + ";\n";
+                    gi->cName + " = " + emitOwned(*init, gi->type) + ";\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *g = dynamic_cast<const GlobalVarDecl *>(declPtr.get())) {
@@ -390,6 +390,7 @@ void CodeGen::emitStruct(const std::string &classFq) {
     structs_ += "struct " + s + " {\n";
     structs_ += "    const void* __vt;\n";
     structs_ += "    const GravTypeInfo* __type;\n";
+    structs_ += "    long long __rc;\n";
     for (const auto &f : collectFields(classFq)) {
         structs_ += "    " + cTy(f.type) + " " + memberCName(f.name) + ";\n";
     }
@@ -499,9 +500,12 @@ void CodeGen::emitTypeInfos() {
                 eqHook = w;
             }
         }
+        // Releasing the reference fields when the object is destroyed.
+        emitReleaseFields(fq);
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
-                    std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + " };\n";
+                    std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + ", " +
+                    mangle(fq) + "__arc_fields };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
