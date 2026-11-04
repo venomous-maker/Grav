@@ -111,10 +111,21 @@ private:
     // fields, globals, captures, returns) hold one reference each. emitExpr()
     // yields a *borrowed* value valid until the statement ends (call and `new`
     // results go on the per-thread release list); emitOwned() yields +1.
-    enum class RefKind { None, Obj, Iface, Fn, Any, Str };
+    enum class RefKind { None, Obj, Iface, Fn, Any, Str, Value };
+    // Value structs and fixed arrays that hold references: copied by value, with
+    // generated K__retain/K__release/K__autorelease for their reference members.
+    bool valueHasRefs(const TypeRef &t) const;
+    std::string valueTypeName(const TypeRef &t) const;
+    std::string emitValueArc(const std::string &key, const TypeRef &t) const;
+    mutable std::unordered_map<std::string, int> valueRefsMemo_;
     bool concatAllocates(const Expr &e) const;
     bool isUnstableRef(const Expr &e) const;
     bool isWeakField(const MemberExpr &m) const;
+    // Cycle collection: whether a type can hold (strong) object references, and
+    // the statement that reports a value's referenced objects to the collector.
+    bool gcRelevant(const TypeRef &t) const;
+    std::string visitOf(const TypeRef &t, const std::string &c) const;
+    std::string emitVisitFields(const std::string &classFq); // returns the hook name, or "0"
     RefKind refKind(const TypeRef &t) const;
     std::string retainOf(const TypeRef &t, const std::string &c) const;
     std::string releaseOf(const TypeRef &t, const std::string &c) const;   // a statement
@@ -165,7 +176,8 @@ private:
     void emitBlock(const Block &block);
     void emitStmt(const Stmt &stmt);
     void emitIf(const IfStmt &s);        // if / else-if / else chain
-    void emitTry(const TryStmt &s);      // try / catch / finally via setjmp
+    void emitTry(const TryStmt &s);
+    void emitFinallyThenRethrow(const Block *fin);      // try / catch / finally via setjmp
     int tryCounter_ = 0;
     std::string emitAssign(const AssignStmt &s) const; // plain or compound assignment
     void emitBraced(const Block &block); // "{\n …\n}" at the current indent
