@@ -4,6 +4,7 @@
 // The default seed is fixed, so an unseeded program is deterministic.
 //
 // For an independent stream (e.g. one per simulation), create an `Rng`.
+import "exception.grav"
 import "../collections/array.grav"
 
 namespace std.core {
@@ -94,7 +95,7 @@ namespace std.core {
             for (i in xs.size() - 1..0 step -1) { xs.swap(i, Random.nextInt(0, i)); }
         }
         static fn choice<T>(xs: Array<T>) -> T {
-            if (xs.isEmpty()) { panic("Random.choice on an empty array"); }
+            if (xs.isEmpty()) { throw new StateError("Random.choice on an empty array"); }
             return xs.get(Random.nextInt(0, xs.size() - 1));
         }
     }
