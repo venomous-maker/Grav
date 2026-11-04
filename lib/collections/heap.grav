@@ -4,6 +4,7 @@
 //
 //   let minFirst = new PriorityQueue<int>(fn(a, b) => a - b)
 //   let maxFirst = new PriorityQueue<int>(fn(a, b) => b - a)
+import "../core/exception.grav"
 import "array.grav"
 
 namespace std.collections {
@@ -26,7 +27,7 @@ namespace std.collections {
             }
         }
         public fn pop() -> T {
-            if (self.items.isEmpty()) { panic("PriorityQueue.pop on an empty queue"); }
+            if (self.items.isEmpty()) { throw new StateError("PriorityQueue.pop on an empty queue"); }
             let top = self.items[0];
             let last = self.items.pop();
             let n = self.items.size();
@@ -47,7 +48,7 @@ namespace std.collections {
             return top;
         }
         public fn peek() -> T {
-            if (self.items.isEmpty()) { panic("PriorityQueue.peek on an empty queue"); }
+            if (self.items.isEmpty()) { throw new StateError("PriorityQueue.peek on an empty queue"); }
             return self.items[0];
         }
         public fn size() -> int { return self.items.size(); }
