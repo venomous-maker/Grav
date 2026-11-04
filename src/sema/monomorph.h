@@ -15,6 +15,9 @@ namespace grav {
 // instances are appended. Generic classes are reported as unsupported.
 std::vector<GravError> monomorphize(Program &program);
 
+// A deep copy of an expression (for rewrites such as `obj[k] += v`).
+ExprPtr cloneExpression(const Expr *e);
+
 } // namespace grav
 
 #endif // GRAV_SEMA_MONOMORPH_H
