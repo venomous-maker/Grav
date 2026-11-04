@@ -239,8 +239,10 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             std::vector<TypeRef> params;
             if (const MethodInfo *mi = reg_->findMethod(e->overloadClass, e->overloadMethod))
                 params = mi->paramTypes;
-            std::string arg = params.empty() ? emitExpr(*e->right) : emitAs(*e->right, params[0]);
-            std::string call = methodCall(emitExpr(*e->left), e->left->type, e->overloadMethod, arg);
+            const Expr &recv = e->overloadSwap ? *e->right : *e->left;  // `a > b` calls b.op_lt(a)
+            const Expr &other = e->overloadSwap ? *e->left : *e->right;
+            std::string arg = params.empty() ? emitExpr(other) : emitAs(other, params[0]);
+            std::string call = methodCall(emitStable(recv, recv.type), recv.type, e->overloadMethod, arg);
             return e->overloadNegate ? "(!" + call + ")" : call;
         }
         // `+` chains on strings fuse into one allocation (see emitStringExpr).
@@ -360,8 +362,12 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             std::vector<TypeRef> params;
             if (const MethodInfo *mi = reg_->findMethod(e->overloadClass, e->overloadMethod))
                 params = mi->paramTypes;
-            std::string arg = params.empty() ? emitExpr(*e->index) : emitAs(*e->index, params[0]);
-            return methodCall(emitExpr(*e->base), e->base->type, e->overloadMethod, arg);
+            std::vector<const Expr *> keys{e->index.get()};
+            for (const auto &m : e->more) keys.push_back(m.get());
+            std::string args;
+            for (size_t i = 0; i < keys.size(); ++i)
+                args += (i ? ", " : "") + (i < params.size() ? emitStable(*keys[i], params[i]) : emitExpr(*keys[i]));
+            return methodCall(emitStable(*e->base, e->base->type), e->base->type, e->overloadMethod, args);
         }
         std::string base = emitExpr(*e->base);
         std::string idx = emitExpr(*e->index);
