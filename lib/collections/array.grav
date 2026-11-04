@@ -31,7 +31,12 @@ namespace std.collections {
             self.len = 0; self.cap = 0; self.data = null;
             if (capacity > 0) { self.ensure(capacity); }
         }
-        destructor() { free(self.data); }
+        // The array owns one reference to each element (for reference types):
+        // __retain when an element goes in, __release when it comes out.
+        destructor() {
+            for (i in 0..self.len) { __release(self.data[i]); }
+            free(self.data);
+        }
 
         private fn check(i: int) {
             if (i < 0 || i >= self.len) { panic("Array index ${i} out of range (length ${self.len})"); }
@@ -54,13 +59,21 @@ namespace std.collections {
         public fn size() -> int { return self.len; }
         public fn length() -> int { return self.len; }
         public fn isEmpty() -> bool { return self.len == 0; }
-        public fn clear() { self.len = 0; }
+        public fn clear() {
+            for (i in 0..self.len) { __release(self.data[i]); }
+            self.len = 0;
+        }
 
         // ── element access ─────────────────────────────────────────────────────
         public fn get(i: int) -> T { self.check(i); return self.data[i]; }
-        public fn set(i: int, item: T) { self.check(i); self.data[i] = item; }
+        public fn set(i: int, item: T) {
+            self.check(i);
+            let old = self.data[i];
+            self.data[i] = __retain(item);
+            __release(old);
+        }
         fn operator[](i: int) -> T { self.check(i); return self.data[i]; }
-        fn operator[]=(i: int, item: T) { self.check(i); self.data[i] = item; }
+        fn operator[]=(i: int, item: T) { self.set(i, item); }
         public fn first() -> T { self.check(0); return self.data[0]; }
         public fn last() -> T { self.check(self.len - 1); return self.data[self.len - 1]; }
         public fn getOr(i: int, fallback: T) -> T {
@@ -70,7 +83,7 @@ namespace std.collections {
         // ── adding and removing ────────────────────────────────────────────────
         public fn push(item: T) {
             if (self.len == self.cap) { self.ensure(self.len + 1); }
-            self.data[self.len] = item;
+            self.data[self.len] = __retain(item);
             self.len = self.len + 1;
         }
         public fn add(item: T) { self.push(item); }
@@ -83,14 +96,16 @@ namespace std.collections {
         public fn pop() -> T {
             if (self.len == 0) { panic("Array.pop on an empty array"); }
             self.len = self.len - 1;
-            return self.data[self.len];
+            let item = self.data[self.len];
+            __release(item);          // the array's reference (the caller gets its own)
+            return item;
         }
         public fn insert(index: int, item: T) {
             if (index < 0 || index > self.len) { panic("Array.insert index ${index} out of range"); }
             self.ensure(self.len + 1);
             let n = self.len - index;
             %{ memmove(self->data + index + 1, self->data + index, (size_t)n * sizeof(*self->data)); %};
-            self.data[index] = item;
+            self.data[index] = __retain(item);
             self.len = self.len + 1;
         }
         public fn removeAt(index: int) -> T {
@@ -99,6 +114,7 @@ namespace std.collections {
             let n = self.len - index - 1;
             %{ memmove(self->data + index, self->data + index + 1, (size_t)n * sizeof(*self->data)); %};
             self.len = self.len - 1;
+            __release(item);          // the array's reference (the caller gets its own)
             return item;
         }
         // Removes the first element equal to `item`; reports whether one was found.
@@ -113,6 +129,7 @@ namespace std.collections {
             let w = 0;
             for (r in 0..self.len) {
                 if (!pred(self.data[r])) { self.data[w] = self.data[r]; w += 1; }
+                else { __release(self.data[r]); }
             }
             let removed = self.len - w;
             self.len = w;
@@ -125,7 +142,7 @@ namespace std.collections {
             self.data[i] = self.data[j];
             self.data[j] = t;
         }
-        public fn fill(item: T) { for (i in 0..self.len) { self.data[i] = item; } }
+        public fn fill(item: T) { for (i in 0..self.len) { self.set(i, item); } }
 
         // ── searching ──────────────────────────────────────────────────────────
         public fn indexOf(item: T) -> int {
@@ -152,6 +169,7 @@ namespace std.collections {
             let out = new Array<T>(self.len);
             let n = self.len;
             %{ if (n > 0) memcpy(out->data, self->data, (size_t)n * sizeof(*self->data)); %};
+            for (i in 0..n) { out.data[i] = __retain(out.data[i]); }   // the copy's own references
             out.len = n;
             return out;
         }
@@ -164,7 +182,10 @@ namespace std.collections {
             for (i in s..e) { out.push(self.data[i]); }
             return out;
         }
-        public fn dispose() { free(self.data); self.data = null; self.len = 0; self.cap = 0; }
+        public fn dispose() {
+            for (i in 0..self.len) { __release(self.data[i]); }
+            free(self.data); self.data = null; self.len = 0; self.cap = 0;
+        }
 
         // ── higher-order operations ────────────────────────────────────────────
         public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.data[i]); } }
