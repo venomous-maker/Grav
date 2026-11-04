@@ -320,9 +320,14 @@ TypeRef TypeChecker::checkUnary(UnaryExpr &e) {
 }
 
 TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
+    // The expected type (a declared variable, parameter or return type) flows
+    // into both branches: `return ok ? Result.Ok(x) : Result.Err(e)` infers both.
+    const TypeRef *outer = expected_;
+    TypeRef want = outer ? *outer : TypeRef::prim(TypeRef::Kind::Error);
+    expected_ = nullptr;
     requireBool(*e.cond, "a ternary condition");
-    TypeRef a = checkExpr(*e.thenExpr);
-    TypeRef b = checkExpr(*e.elseExpr);
+    TypeRef a = outer ? checkExprExpect(*e.thenExpr, want) : checkExpr(*e.thenExpr);
+    TypeRef b = outer ? checkExprExpect(*e.elseExpr, want) : checkExpr(*e.elseExpr);
     if (a.isError() || b.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     // Pick the common type of the two branches (handles `cond ? obj : null`).
     if (a == b) return a;
