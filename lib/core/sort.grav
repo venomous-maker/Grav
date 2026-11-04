@@ -1,0 +1,63 @@
+// lib/core/sort.grav — sorting and searching arrays (namespace std.core, next to Math).
+//
+// Sorting is TimSort (lib/core/timsort.grav): stable (equal elements keep their
+// order), O(n log n) in the worst case and close to O(n) on input that is already
+// sorted, reversed, or made of a few sorted stretches.
+//
+//   Sort.sort(nums)                                   // int, long, float, string arrays
+//   Sort.sortDescending(nums)
+//   Sort.sortBy(people, fn(a, b) => a.age - b.age)    // any type: cmp(a, b) < 0 puts a first
+//   Sort.isSorted(nums)
+//   Sort.binarySearch(nums, 42)                       // index, or -(insertion point) - 1
+//
+// `xs.sortBy(cmp)` on an Array is the same sort. Strings compare byte by byte
+// (like Str.compare): "B" < "a".
+import "../collections/array.grav"
+import "timsort.grav"
+
+namespace std.core {
+
+    %{ #include <string.h> %}
+
+    class Sort {
+        // ── natural order (ascending; Descending reverses it) ──────────────────
+        static fn sort(xs: Array<int>) { xs.sortBy(fn(a: int, b: int) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn sortDescending(xs: Array<int>) { xs.sortBy(fn(a: int, b: int) -> int { return b < a ? -1 : (b > a ? 1 : 0); }) }
+        static fn isSorted(xs: Array<int>) -> bool { return Sort.isSortedBy(xs, fn(a: int, b: int) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn binarySearch(xs: Array<int>, key: int) -> int { return Sort.binarySearchBy(xs, key, fn(a: int, b: int) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn sort(xs: Array<long>) { xs.sortBy(fn(a: long, b: long) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn sortDescending(xs: Array<long>) { xs.sortBy(fn(a: long, b: long) -> int { return b < a ? -1 : (b > a ? 1 : 0); }) }
+        static fn isSorted(xs: Array<long>) -> bool { return Sort.isSortedBy(xs, fn(a: long, b: long) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn binarySearch(xs: Array<long>, key: long) -> int { return Sort.binarySearchBy(xs, key, fn(a: long, b: long) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn sort(xs: Array<float>) { xs.sortBy(fn(a: float, b: float) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn sortDescending(xs: Array<float>) { xs.sortBy(fn(a: float, b: float) -> int { return b < a ? -1 : (b > a ? 1 : 0); }) }
+        static fn isSorted(xs: Array<float>) -> bool { return Sort.isSortedBy(xs, fn(a: float, b: float) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn binarySearch(xs: Array<float>, key: float) -> int { return Sort.binarySearchBy(xs, key, fn(a: float, b: float) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        static fn sort(xs: Array<string>) { xs.sortBy(fn(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }) }
+        static fn sortDescending(xs: Array<string>) { xs.sortBy(fn(a: string, b: string) -> int { return %{ strcmp(b, a) %} as int; }) }
+        static fn isSorted(xs: Array<string>) -> bool { return Sort.isSortedBy(xs, fn(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }) }
+        static fn binarySearch(xs: Array<string>, key: string) -> int { return Sort.binarySearchBy(xs, key, fn(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }) }
+
+        // ── any type, by a comparison: cmp(a, b) < 0 puts a first, > 0 puts b first
+        static fn sortBy<T>(xs: Array<T>, cmp: fn(T, T) -> int) { xs.sortBy(cmp) }
+        static fn isSortedBy<T>(xs: Array<T>, cmp: fn(T, T) -> int) -> bool {
+            for (i in 1..xs.size()) { if (cmp(xs.get(i - 1), xs.get(i)) > 0) { return false } }
+            return true
+        }
+        // In an array sorted by cmp: the index of an element equal to `key`, or
+        // -(where it would go) - 1.
+        static fn binarySearchBy<T>(xs: Array<T>, key: T, cmp: fn(T, T) -> int) -> int {
+            let lo = 0
+            let hi = xs.size() - 1
+            while (lo <= hi) {
+                let mid = (lo + hi) >> 1
+                let c = cmp(xs.get(mid), key)
+                if (c < 0) { lo = mid + 1 }
+                else if (c > 0) { hi = mid - 1 }
+                else { return mid }
+            }
+            return -(lo + 1)
+        }
+    }
+
+}
