@@ -125,6 +125,12 @@ private:
                                                const TypeRef &rt);
     // `obj[i]` on a class with `operator[]`; nullopt when `base` is not such a class.
     std::optional<TypeRef> tryIndexOverload(IndexExpr &e, const TypeRef &base);
+    // operator[] / operator[]= taking `keys` (plus the value, `extra` = 1): the
+    // best match by parameter count and types, or null.
+    const MethodInfo *pickIndexMethod(const std::vector<const MethodInfo *> &cands,
+                                      const std::vector<TypeRef> &keys, size_t extra) const;
+    std::vector<TypeRef> checkIndexKeys(IndexExpr &e);
+    void checkIndexAssign(AssignStmt &s, IndexExpr &ix, const TypeRef &base);
     // Values print/str/interpolation can render: primitives, enums (member name),
     // and classes/interfaces with `toString() -> string`.
     bool isDisplayable(const TypeRef &t) const;
