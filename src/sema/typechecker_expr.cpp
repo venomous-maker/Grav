@@ -861,6 +861,15 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             }
             return TypeRef::prim(TypeRef::Kind::Void);
         }
+        // Library-internal reference counting for values kept in raw buffers:
+        // __retain(x) is x with one more reference, __release(x) drops one.
+        // Both do nothing for non-reference types (so they work in generic code).
+        if ((name->name == "__retain" || name->name == "__release") && e.args.size() == 1) {
+            e.kind = CallKind::Builtin;
+            e.targetName = name->name;
+            TypeRef t = checkExpr(*e.args[0]);
+            return name->name == "__retain" ? t : TypeRef::prim(TypeRef::Kind::Void);
+        }
         if (name->name == "__show" && e.args.size() == 1) {
             // Internal (generated data-enum toString): any value as text; values
             // that cannot be boxed show their type name.
