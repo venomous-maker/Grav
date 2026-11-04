@@ -6,6 +6,7 @@
 //   print(b.size())          // 3
 //   print(b.toHex())         // 816869
 //   print(b.slice(1, 3).toString())   // hi
+import "../core/exception.grav"
 import "../collections/array.grav"
 
 namespace std.data {
@@ -68,11 +69,11 @@ namespace std.data {
         public fn clear() { self.len = 0; }
 
         public fn get(i: int) -> int {
-            if (i < 0 || i >= self.len) { panic("Bytes index ${i} out of range (size ${self.len})"); }
+            if (i < 0 || i >= self.len) { throw new IndexError("Bytes index ${i} out of range (size ${self.len})"); }
             return self.data[i] as int;
         }
         public fn set(i: int, v: int) {
-            if (i < 0 || i >= self.len) { panic("Bytes index ${i} out of range (size ${self.len})"); }
+            if (i < 0 || i >= self.len) { throw new IndexError("Bytes index ${i} out of range (size ${self.len})"); }
             self.data[i] = v as byte;
         }
         fn operator[](i: int) -> int { return self.get(i); }
