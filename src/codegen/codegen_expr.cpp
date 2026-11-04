@@ -326,9 +326,13 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         return "(*" + emitExpr(*e->operand) + ")";
     }
     if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
-        // `a ?? b` -> "is a null? then b else a". The left is re-evaluated for the
-        // test (keep `??` operands side-effect free).
+        // `a ?? b` -> "is a null? then b else a", evaluating `a` once.
         std::string l = emitExpr(*e->left);
+        if (e->left->type == e->type) {
+            bool iface = e->type.isNamed() && reg_->isInterface(e->type.name);
+            return "({ " + cTy(e->type) + " grav_co_ = " + l + "; " + (iface ? "grav_co_.obj" : "grav_co_") +
+                   " != 0 ? grav_co_ : " + emitAs(*e->right, e->type) + "; })";
+        }
         std::string guard = (e->left->type.isNamed() && reg_->isInterface(e->left->type.name))
                                 ? "(" + l + ").obj != 0"
                                 : l + " != 0";
