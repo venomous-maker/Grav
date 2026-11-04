@@ -25,6 +25,9 @@ void CodeGen::emitPrelude() {
    compiler; GCC's remaining -Wclobbered reports (loop counters around a `try`
    that re-runs setjmp every iteration) are false positives. */
 #pragma GCC diagnostic ignored "-Wclobbered"
+/* GCC misreads the reference-count header in front of a string as an
+   out-of-bounds write when it inlines retains of string literals. */
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
 #endif
 #if defined(__GNUC__) || defined(__clang__)
 #define GRAV_LIKELY(x) __builtin_expect(!!(x), 1)
