@@ -47,3 +47,4 @@ module-level global shared across files.
 | [apps/word_freq.grav](apps/word_freq.grav) | tokenizing text, word counts with `HashMap`, sorting with lambdas, statistics |
 | [apps/life.grav](apps/life.grav) | Conway's Game of Life on a wrapping grid |
 | [apps/todo.grav](apps/todo.grav) | a command-driven task manager: string `switch`, enums, operator overloading, exceptions |
+| [apps/bank_server/](apps/bank_server/) | a multi-file **banking REST API**: entities, repository, services, controllers and routes in their own namespaces; token auth, overdrafts, atomic transfers, interest, persistence, `grav test` unit tests |
