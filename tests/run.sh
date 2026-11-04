@@ -39,6 +39,8 @@ for f in examples/*.grav examples/apps/*.grav; do
   esac
 done
 run examples/project/main.grav ''
+# The bank_server project: its self-test (a scripted API session) and its unit tests.
+run examples/apps/bank_server/src/main.grav ''
 # Library tests: every standard-library module, golden-checked like the examples.
 for f in tests/lib/*.grav; do run "$f" ''; done
 
@@ -53,8 +55,19 @@ for f in tests/unit/*.grav; do
   else echo "ok   $f (grav test)"; pass=$((pass+1)); fi
 done
 
+# Project test suites run with `grav test` from the project directory.
+for p in examples/apps/bank_server; do
+  name="project_$(basename "$p")"; gold="tests/expected/$name.out"
+  G="$(cd "$(dirname "$GRAV")" && pwd)/$(basename "$GRAV")"
+  (cd "$p" && "$G" test tests/*.grav) >"$TMP/$name.out" 2>&1
+  if [ $UPDATE = 1 ]; then cp "$TMP/$name.out" "$gold"; echo "updated $gold"; pass=$((pass+1)); continue; fi
+  if [ ! -f "$gold" ] || ! diff -q "$gold" "$TMP/$name.out" >/dev/null; then
+    echo "FAIL (test)    $p"; diff "$gold" "$TMP/$name.out" 2>&1 | sed 's/^/    /' | head -30; fail=$((fail+1))
+  else echo "ok   $p (grav test)"; pass=$((pass+1)); fi
+done
+
 # Every example must also build in release mode (no tracing, -O3).
-for f in examples/*.grav examples/apps/*.grav examples/project/main.grav; do
+for f in examples/*.grav examples/apps/*.grav examples/project/main.grav examples/apps/bank_server/src/main.grav; do
   if ! "$GRAV" "$f" --release --emit bin -o "$TMP/rel" >"$TMP/err" 2>&1; then
     echo "FAIL (release) $f"; sed 's/^/    /' "$TMP/err"; fail=$((fail+1))
   fi
