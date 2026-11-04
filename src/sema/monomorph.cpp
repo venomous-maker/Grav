@@ -154,7 +154,9 @@ ExprPtr cloneExpr(const Expr *e) {
     }
     if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
         auto n = mkE<IndexExpr>(e); n->base = cloneExpr(x->base.get());
-        n->index = cloneExpr(x->index.get()); return n;
+        n->index = cloneExpr(x->index.get());
+        for (const auto &m : x->more) n->more.push_back(cloneExpr(m.get()));
+        return n;
     }
     if (auto *x = dynamic_cast<const MemberExpr *>(e)) {
         auto n = mkE<MemberExpr>(e); n->member = x->member; n->optional = x->optional;
@@ -832,6 +834,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         walkBlock(x->body, subst);
     } else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
         walkExpr(x->base.get(), subst); walkExpr(x->index.get(), subst);
+        for (auto &m : x->more) walkExpr(m.get(), subst);
     } else if (auto *x = dynamic_cast<MemberExpr *>(e)) {
         walkExpr(x->object.get(), subst);
     }
@@ -1150,6 +1153,9 @@ void Mono::synthesizeTraits() {
 }
 
 } // namespace
+
+// A deep copy of an expression (for rewrites such as `obj[k] += v`).
+ExprPtr cloneExpression(const Expr *e) { return cloneExpr(e); }
 
 std::vector<GravError> monomorphize(Program &program) {
     Mono m(program);
