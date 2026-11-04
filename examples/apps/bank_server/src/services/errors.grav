@@ -1,0 +1,47 @@
+// services/errors.grav — everything a banking operation can refuse, as one data
+// enum. Each variant knows its HTTP status and message, so controllers just
+// translate.
+import "std"
+import "entities/money"
+
+namespace bank.services {
+    use bank.entities.*
+
+    enum BankError {
+        NotFound(entity: string, key: string),
+        Invalid(reason: string),
+        InsufficientFunds(account: string, available: long, requested: long),
+        NotActive(account: string, status: string),
+        Conflict(reason: string),
+
+        fn httpStatus() -> int {
+            match (self) {
+                case NotFound: return 404
+                case Invalid: return 400
+                case InsufficientFunds, NotActive, Conflict: return 409
+            }
+        }
+
+        fn code() -> string {
+            match (self) {
+                case NotFound: return "not_found"
+                case Invalid: return "invalid"
+                case InsufficientFunds: return "insufficient_funds"
+                case NotActive: return "account_not_active"
+                case Conflict: return "conflict"
+            }
+        }
+
+        fn message() -> string {
+            match (self) {
+                case NotFound(entity, key): return "no " + entity + " " + key
+                case Invalid(reason): return reason
+                case InsufficientFunds(account, available, requested):
+                    return account + " has " + Money.format(available) + " available, " + Money.format(requested) + " requested"
+                case NotActive(account, status): return account + " is " + status
+                case Conflict(reason): return reason
+            }
+        }
+    }
+
+}
