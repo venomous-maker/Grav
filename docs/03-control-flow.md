@@ -189,6 +189,9 @@ weekday
 Inside a loop, `break` in a case body leaves the loop (cases never fall through,
 so there is nothing else for it to mean).
 
+A `switch` on an enum without a `default` should handle every member: leaving one
+out is a warning that names it, and handling a member twice is an error.
+
 ## defer
 
 `defer stmt` or `defer { ... }` schedules code to run when the enclosing block exits —

@@ -398,6 +398,24 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
         checkBlock(c.body);
     }
     if (s.hasDefault) checkBlock(s.defaultBody);
+    // On an enum: each member handled once, and (without a default) all of them.
+    if (subj.isNamed() && reg_->isEnum(subj.name)) {
+        std::vector<std::string> seen;
+        for (auto &c : s.cases)
+            for (auto &v : c.values)
+                if (auto *m = dynamic_cast<MemberExpr *>(v.get()); m && m->kind == MemberKind::EnumValue) {
+                    if (std::find(seen.begin(), seen.end(), m->member) != seen.end())
+                        error(v->line, v->col, "'" + m->member + "' is already handled by an earlier case");
+                    seen.push_back(m->member);
+                }
+        std::string missing;
+        if (const EnumInfo *ei = reg_->en(subj.name); ei && !s.hasDefault)
+            for (const auto &mem : ei->members)
+                if (std::find(seen.begin(), seen.end(), mem) == seen.end()) missing += (missing.empty() ? "" : ", ") + mem;
+        if (!missing.empty())
+            warn(s.line, s.col, "switch on " + subj.name + " does not handle " + missing +
+                                    " (add the cases or a default)");
+    }
 }
 
 void TypeChecker::checkLet(LetStmt &s) {

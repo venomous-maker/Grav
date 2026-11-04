@@ -1,0 +1,11 @@
+enum Color { Red, Green, Blue }
+fn main() {
+    let c = Color.Blue
+    switch (c) {
+        case Color.Red: { print("r") }
+        case Color.Green: { print("g") }
+    }
+    switch (c) { case Color.Red: { } case Color.Red: { } default: { } }
+    let s = "abc"
+    s[0] = 65
+}

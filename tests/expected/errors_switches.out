@@ -1,0 +1,10 @@
+gravc: tests/errors/switches.grav:4:5: warning: switch on Color does not handle Blue (add the cases or a default)
+        switch (c) {
+        ^
+gravc: tests/errors/switches.grav:8:48: type error: 'Red' is already handled by an earlier case
+        switch (c) { case Color.Red: { } case Color.Red: { } default: { } }
+                                                   ^
+gravc: tests/errors/switches.grav:10:10: type error: strings are immutable: build a new one instead (Str.replace, + or StringBuilder)
+        s[0] = 65
+             ^
+gravc: 2 error(s); aborting
