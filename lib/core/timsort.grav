@@ -1,0 +1,478 @@
+// lib/core/timsort.grav — TimSort: the stable, adaptive merge sort used by
+// Array.sortBy and Sort (lib/core/sort.grav).
+//
+// It finds the runs already in the data (reversing strictly descending ones),
+// extends short runs to `minRun` with binary insertion sort, and merges runs off a
+// stack kept balanced by TimSort's invariants (with the fix from "OpenJDK's
+// java.utils.Collection.sort() is broken", Auger et al. 2015). Merges "gallop"
+// (exponential search) when one run keeps winning, so sorted, reversed and
+// partly ordered input costs close to n comparisons; random input n log n.
+//
+// It sorts a raw buffer in place. Elements are only moved, never copied, so the
+// buffer's references stay balanced; if the comparator throws (or panics under
+// recovery) in the middle of a merge, the elements parked in the scratch buffer
+// are put back first, leaving the buffer a permutation of what it was.
+namespace std.core {
+
+    %{ #include <string.h> %}
+
+    class TimSorter<T> {
+        private a: T*
+        private n: int
+        private cmp: fn(T, T) -> int
+        private tmp: T*
+        private tmpCap: int
+        private minGallop: int
+        private runBase: int*
+        private runLen: int*
+        private stackSize: int
+        // Merge in progress (for putting elements back if the comparator throws):
+        // 0 none; 1 mergeLo: tmp[c2..tmpEnd) belongs at a[dest..]; 2 mergeHi:
+        // tmp[0..c2] belongs at a[dest-c2..dest].
+        private mode: int
+        private dest: int
+        private c2: int
+        private tmpEnd: int
+
+        constructor(a: T*, n: int, cmp: fn(T, T) -> int) {
+            self.a = a
+            self.n = n
+            self.cmp = cmp
+            self.tmp = %{ (void*)0 %} as T*
+            self.tmpCap = 0
+            self.minGallop = 7
+            // 85 runs cover any int length (run lengths grow like Fibonacci numbers).
+            self.runBase = %{ (int*)malloc(85 * sizeof(int)) %} as int*
+            self.runLen = %{ (int*)malloc(85 * sizeof(int)) %} as int*
+            self.stackSize = 0
+            self.mode = 0
+            self.dest = 0
+            self.c2 = 0
+            self.tmpEnd = 0
+        }
+        destructor() {
+            %{ free((void*)self->tmp); free(self->runBase); free(self->runLen); %};
+        }
+
+        fn sort() {
+            if (self.n < 2) { return }
+            try {
+                self.run()
+            } finally {
+                self.restore()
+            }
+        }
+
+        private fn run() {
+            let n = self.n
+            if (n < 64) {                      // small: one run, binary insertion sort
+                let init = self.countRunAndMakeAscending(0, n)
+                self.binarySort(0, n, init)
+                return
+            }
+            let minRun = self.minRunLength(n)
+            let lo = 0
+            let remaining = n
+            while (remaining != 0) {
+                let len = self.countRunAndMakeAscending(lo, lo + remaining)
+                if (len < minRun) {
+                    let force = remaining <= minRun ? remaining : minRun
+                    self.binarySort(lo, lo + force, lo + len)
+                    len = force
+                }
+                self.runBase[self.stackSize] = lo
+                self.runLen[self.stackSize] = len
+                self.stackSize += 1
+                self.mergeCollapse()
+                lo += len
+                remaining -= len
+            }
+            self.mergeForceCollapse()
+        }
+
+        // The run length below which runs are extended: between 32 and 64, chosen
+        // so n / minRun is a power of two or just below one.
+        private fn minRunLength(n: int) -> int {
+            let m = n
+            let r = 0
+            while (m >= 64) { r = r | (m & 1); m = m >> 1 }
+            return m + r
+        }
+
+        // Sorts a[lo..hi) given that a[lo..start) is already sorted.
+        private fn binarySort(lo: int, hi: int, startAt: int) {
+            let start = startAt == lo ? startAt + 1 : startAt
+            let a = self.a
+            for (s in start..hi) {
+                // a[s] stays put while its place is searched for, then is rotated
+                // in as raw bytes: it is moved, not copied (no reference taken).
+                let left = lo
+                let right = s
+                while (left < right) {             // first position whose element is > a[s] (stable)
+                    let mid = (left + right) >> 1
+                    if (self.cmp(a[s], a[mid]) < 0) { right = mid } else { left = mid + 1 }
+                }
+                %{
+                    unsigned char pv[sizeof(*self->a)];
+                    memcpy(pv, self->a + s, sizeof pv);
+                    memmove(self->a + left + 1, self->a + left, (size_t)(s - left) * sizeof(*self->a));
+                    memcpy(self->a + left, pv, sizeof pv);
+                %};
+            }
+        }
+
+        // Length of the run starting at lo; a strictly descending run is reversed
+        // (strictly, so equal elements keep their order).
+        private fn countRunAndMakeAscending(lo: int, hi: int) -> int {
+            let a = self.a
+            let runHi = lo + 1
+            if (runHi == hi) { return 1 }
+            if (self.cmp(a[runHi], a[lo]) < 0) {
+                runHi += 1
+                while (runHi < hi && self.cmp(a[runHi], a[runHi - 1]) < 0) { runHi += 1 }
+                self.reverseRange(lo, runHi)
+            } else {
+                runHi += 1
+                while (runHi < hi && self.cmp(a[runHi], a[runHi - 1]) >= 0) { runHi += 1 }
+            }
+            return runHi - lo
+        }
+
+        private fn reverseRange(lo: int, hi: int) {
+            let i = lo
+            let j = hi - 1
+            while (i < j) {
+                %{
+                    unsigned char t[sizeof(*self->a)];
+                    memcpy(t, self->a + i, sizeof t);
+                    memcpy(self->a + i, self->a + j, sizeof t);
+                    memcpy(self->a + j, t, sizeof t);
+                %};
+                i += 1
+                j -= 1
+            }
+        }
+
+        // Keeps the run stack balanced: each run is longer than the next two
+        // combined, and each longer than the next.
+        private fn mergeCollapse() {
+            while (self.stackSize > 1) {
+                let k = self.stackSize - 2
+                let rl = self.runLen
+                if ((k > 0 && rl[k - 1] <= rl[k] + rl[k + 1]) || (k > 1 && rl[k - 2] <= rl[k] + rl[k - 1])) {
+                    if (rl[k - 1] < rl[k + 1]) { k -= 1 }
+                } else if (rl[k] > rl[k + 1]) {
+                    return
+                }
+                self.mergeAt(k)
+            }
+        }
+
+        private fn mergeForceCollapse() {
+            while (self.stackSize > 1) {
+                let k = self.stackSize - 2
+                if (k > 0 && self.runLen[k - 1] < self.runLen[k + 1]) { k -= 1 }
+                self.mergeAt(k)
+            }
+        }
+
+        // Merges runs i and i+1 of the stack.
+        private fn mergeAt(i: int) {
+            let a = self.a
+            let base1 = self.runBase[i]
+            let len1 = self.runLen[i]
+            let base2 = self.runBase[i + 1]
+            let len2 = self.runLen[i + 1]
+            self.runLen[i] = len1 + len2
+            if (i == self.stackSize - 3) {
+                self.runBase[i + 1] = self.runBase[i + 2]
+                self.runLen[i + 1] = self.runLen[i + 2]
+            }
+            self.stackSize -= 1
+            // Elements of run 1 before run 2's first, and of run 2 after run 1's
+            // last, are already in place.
+            let k = self.gallopRight(a[base2], a, base1, len1, 0)
+            base1 += k
+            len1 -= k
+            if (len1 == 0) { return }
+            len2 = self.gallopLeft(a[base1 + len1 - 1], a, base2, len2, len2 - 1)
+            if (len2 == 0) { return }
+            if (len1 <= len2) { self.mergeLo(base1, len1, base2, len2) }
+            else { self.mergeHi(base1, len1, base2, len2) }
+        }
+
+        // Where `key` goes in the sorted arr[base..base+len): before any equal
+        // elements. `hint` is where to start looking.
+        private fn gallopLeft(key: T, arr: T*, base: int, len: int, hint: int) -> int {
+            let lastOfs = 0
+            let ofs = 1
+            if (self.cmp(key, arr[base + hint]) > 0) {
+                let maxOfs = len - hint
+                while (ofs < maxOfs && self.cmp(key, arr[base + hint + ofs]) > 0) {
+                    lastOfs = ofs
+                    ofs = (ofs << 1) + 1
+                    if (ofs <= 0) { ofs = maxOfs }
+                }
+                if (ofs > maxOfs) { ofs = maxOfs }
+                lastOfs += hint
+                ofs += hint
+            } else {
+                let maxOfs = hint + 1
+                while (ofs < maxOfs && self.cmp(key, arr[base + hint - ofs]) <= 0) {
+                    lastOfs = ofs
+                    ofs = (ofs << 1) + 1
+                    if (ofs <= 0) { ofs = maxOfs }
+                }
+                if (ofs > maxOfs) { ofs = maxOfs }
+                let t = lastOfs
+                lastOfs = hint - ofs
+                ofs = hint - t
+            }
+            lastOfs += 1
+            while (lastOfs < ofs) {
+                let m = lastOfs + ((ofs - lastOfs) >> 1)
+                if (self.cmp(key, arr[base + m]) > 0) { lastOfs = m + 1 } else { ofs = m }
+            }
+            return ofs
+        }
+
+        // Like gallopLeft, but after any equal elements.
+        private fn gallopRight(key: T, arr: T*, base: int, len: int, hint: int) -> int {
+            let lastOfs = 0
+            let ofs = 1
+            if (self.cmp(key, arr[base + hint]) < 0) {
+                let maxOfs = hint + 1
+                while (ofs < maxOfs && self.cmp(key, arr[base + hint - ofs]) < 0) {
+                    lastOfs = ofs
+                    ofs = (ofs << 1) + 1
+                    if (ofs <= 0) { ofs = maxOfs }
+                }
+                if (ofs > maxOfs) { ofs = maxOfs }
+                let t = lastOfs
+                lastOfs = hint - ofs
+                ofs = hint - t
+            } else {
+                let maxOfs = len - hint
+                while (ofs < maxOfs && self.cmp(key, arr[base + hint + ofs]) >= 0) {
+                    lastOfs = ofs
+                    ofs = (ofs << 1) + 1
+                    if (ofs <= 0) { ofs = maxOfs }
+                }
+                if (ofs > maxOfs) { ofs = maxOfs }
+                lastOfs += hint
+                ofs += hint
+            }
+            lastOfs += 1
+            while (lastOfs < ofs) {
+                let m = lastOfs + ((ofs - lastOfs) >> 1)
+                if (self.cmp(key, arr[base + m]) < 0) { ofs = m } else { lastOfs = m + 1 }
+            }
+            return ofs
+        }
+
+        private fn ensureTmp(need: int) {
+            if (self.tmpCap >= need) { return }
+            let cap = self.tmpCap == 0 ? 256 : self.tmpCap
+            while (cap < need) { cap = cap * 2 }
+            if (cap > self.n) { cap = self.n }
+            %{
+                void* nb = realloc((void*)self->tmp, (size_t)cap * sizeof(*self->a));
+                if (!nb) grav_panic("out of memory");
+                self->tmp = nb;
+            %};
+            self.tmpCap = cap
+        }
+
+        // Moves count elements between buffers (memmove: ranges may overlap).
+        private fn move(dst: T*, d: int, src: T*, s: int, count: int) {
+            if (count > 0) { %{ memmove(dst + d, src + s, (size_t)count * sizeof(*dst)); %}; }
+        }
+
+        // Merges a[base1..+len1) and a[base2..+len2) (adjacent, len1 <= len2),
+        // with run 1 parked in tmp. a[base1] belongs to run 2 and a[base2+len2-1]
+        // to run 1 (mergeAt trimmed the rest).
+        private fn mergeLo(base1: int, len1In: int, base2: int, len2In: int) {
+            let a = self.a
+            let len1 = len1In
+            let len2 = len2In
+            self.ensureTmp(len1)
+            let tmp = self.tmp
+            self.move(tmp, 0, a, base1, len1)
+            let cursor1 = 0
+            let cursor2 = base2
+            let dest = base1
+            a[dest] = a[cursor2]
+            dest += 1
+            cursor2 += 1
+            len2 -= 1
+            if (len2 == 0) { self.move(a, dest, tmp, cursor1, len1); return }
+            if (len1 == 1) {
+                self.move(a, dest, a, cursor2, len2)
+                a[dest + len2] = tmp[cursor1]
+                return
+            }
+            self.mode = 1
+            self.tmpEnd = len1In
+            self.dest = dest; self.c2 = cursor1
+            let minG = self.minGallop
+            let done = false
+            while (!done) {
+                let count1 = 0                     // how many times in a row run 1 won
+                let count2 = 0                     // ... and run 2
+                // One element at a time, until one run wins minG times in a row.
+                while (!done && (count1 | count2) < minG) {
+                    if (self.cmp(a[cursor2], tmp[cursor1]) < 0) {
+                        a[dest] = a[cursor2]; dest += 1; cursor2 += 1
+                        count2 += 1; count1 = 0
+                        len2 -= 1
+                        if (len2 == 0) { done = true }
+                    } else {
+                        a[dest] = tmp[cursor1]; dest += 1; cursor1 += 1
+                        count1 += 1; count2 = 0
+                        len1 -= 1
+                        if (len1 == 1) { done = true }
+                    }
+                    self.dest = dest; self.c2 = cursor1
+                }
+                // Galloping: move whole stretches while either run keeps winning.
+                while (!done) {
+                    count1 = self.gallopRight(a[cursor2], tmp, cursor1, len1, 0)
+                    if (count1 != 0) {
+                        self.move(a, dest, tmp, cursor1, count1)
+                        dest += count1; cursor1 += count1; len1 -= count1
+                        self.dest = dest; self.c2 = cursor1
+                        if (len1 <= 1) { done = true; break }
+                    }
+                    a[dest] = a[cursor2]; dest += 1; cursor2 += 1
+                    self.dest = dest
+                    len2 -= 1
+                    if (len2 == 0) { done = true; break }
+                    count2 = self.gallopLeft(tmp[cursor1], a, cursor2, len2, 0)
+                    if (count2 != 0) {
+                        self.move(a, dest, a, cursor2, count2)
+                        dest += count2; cursor2 += count2; len2 -= count2
+                        self.dest = dest
+                        if (len2 == 0) { done = true; break }
+                    }
+                    a[dest] = tmp[cursor1]; dest += 1; cursor1 += 1
+                    len1 -= 1
+                    self.dest = dest; self.c2 = cursor1
+                    if (len1 == 1) { done = true; break }
+                    minG -= 1
+                    if (count1 < 7 && count2 < 7) { break }   // galloping stopped paying off
+                }
+                if (!done) {
+                    if (minG < 0) { minG = 0 }
+                    minG += 2                      // penalize leaving gallop mode
+                }
+            }
+            self.minGallop = minG < 1 ? 1 : minG
+            self.mode = 0
+            if (len1 == 1) {
+                self.move(a, dest, a, cursor2, len2)
+                a[dest + len2] = tmp[cursor1]
+            } else if (len1 == 0) {
+                panic("TimSort: the comparison is inconsistent (it does not define an order)")
+            } else {
+                self.move(a, dest, tmp, cursor1, len1)
+            }
+        }
+
+        // Like mergeLo, from the right end, with run 2 parked in tmp (len1 >= len2).
+        private fn mergeHi(base1: int, len1In: int, base2: int, len2In: int) {
+            let a = self.a
+            let len1 = len1In
+            let len2 = len2In
+            self.ensureTmp(len2)
+            let tmp = self.tmp
+            self.move(tmp, 0, a, base2, len2)
+            let cursor1 = base1 + len1 - 1
+            let cursor2 = len2 - 1
+            let dest = base2 + len2 - 1
+            a[dest] = a[cursor1]
+            dest -= 1
+            cursor1 -= 1
+            len1 -= 1
+            if (len1 == 0) { self.move(a, dest - (len2 - 1), tmp, 0, len2); return }
+            if (len2 == 1) {
+                dest -= len1
+                cursor1 -= len1
+                self.move(a, dest + 1, a, cursor1 + 1, len1)
+                a[dest] = tmp[cursor2]
+                return
+            }
+            self.mode = 2
+            self.dest = dest; self.c2 = cursor2
+            let minG = self.minGallop
+            let done = false
+            while (!done) {
+                let count1 = 0
+                let count2 = 0
+                while (!done && (count1 | count2) < minG) {
+                    if (self.cmp(tmp[cursor2], a[cursor1]) < 0) {
+                        a[dest] = a[cursor1]; dest -= 1; cursor1 -= 1
+                        count1 += 1; count2 = 0
+                        len1 -= 1
+                        if (len1 == 0) { done = true }
+                    } else {
+                        a[dest] = tmp[cursor2]; dest -= 1; cursor2 -= 1
+                        count2 += 1; count1 = 0
+                        len2 -= 1
+                        if (len2 == 1) { done = true }
+                    }
+                    self.dest = dest; self.c2 = cursor2
+                }
+                while (!done) {
+                    count1 = len1 - self.gallopRight(tmp[cursor2], a, base1, len1, len1 - 1)
+                    if (count1 != 0) {
+                        dest -= count1; cursor1 -= count1; len1 -= count1
+                        self.move(a, dest + 1, a, cursor1 + 1, count1)
+                        self.dest = dest
+                        if (len1 == 0) { done = true; break }
+                    }
+                    a[dest] = tmp[cursor2]; dest -= 1; cursor2 -= 1
+                    len2 -= 1
+                    self.dest = dest; self.c2 = cursor2
+                    if (len2 == 1) { done = true; break }
+                    count2 = len2 - self.gallopLeft(a[cursor1], tmp, 0, len2, len2 - 1)
+                    if (count2 != 0) {
+                        dest -= count2; cursor2 -= count2; len2 -= count2
+                        self.move(a, dest + 1, tmp, cursor2 + 1, count2)
+                        self.dest = dest; self.c2 = cursor2
+                        if (len2 <= 1) { done = true; break }
+                    }
+                    a[dest] = a[cursor1]; dest -= 1; cursor1 -= 1
+                    self.dest = dest
+                    len1 -= 1
+                    if (len1 == 0) { done = true; break }
+                    minG -= 1
+                    if (count1 < 7 && count2 < 7) { break }
+                }
+                if (!done) {
+                    if (minG < 0) { minG = 0 }
+                    minG += 2
+                }
+            }
+            self.minGallop = minG < 1 ? 1 : minG
+            self.mode = 0
+            if (len2 == 1) {
+                dest -= len1
+                cursor1 -= len1
+                self.move(a, dest + 1, a, cursor1 + 1, len1)
+                a[dest] = tmp[cursor2]
+            } else if (len2 == 0) {
+                panic("TimSort: the comparison is inconsistent (it does not define an order)")
+            } else {
+                self.move(a, dest - (len2 - 1), tmp, 0, len2)
+            }
+        }
+
+        // After an exception in a merge: put the parked elements back in the gap.
+        private fn restore() {
+            if (self.mode == 1) { self.move(self.a, self.dest, self.tmp, self.c2, self.tmpEnd - self.c2) }
+            else if (self.mode == 2) { self.move(self.a, self.dest - self.c2, self.tmp, 0, self.c2 + 1) }
+            self.mode = 0
+        }
+    }
+
+}
