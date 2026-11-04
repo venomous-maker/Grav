@@ -38,7 +38,7 @@ const KEYWORDS = [
   "fn", "class", "struct", "enum", "type", "interface", "trait", "abstract", "final",
   "namespace", "constructor", "destructor", "extends", "implements", "uses", "use",
   "import", "from", "export", "new", "return", "async", "await", "let", "const",
-  "static", "readonly", "public", "private", "protected", "if", "else", "while", "for",
+  "static", "readonly", "weak", "public", "private", "protected", "if", "else", "while", "for",
   "do", "switch", "case", "default", "match", "break", "continue", "in", "step", "try",
   "catch", "finally", "throw", "as", "is", "sizeof", "defer", "operator", "test",
   "self", "super", "true", "false", "null", "free", "auto",
@@ -158,7 +158,7 @@ function signatureFrom(line, at) {
 // ---------------------------------------------------------------------------
 // parseFile: declarations, imports, uses
 // ---------------------------------------------------------------------------
-const MODS = "(?:(?:export|public|private|protected|static|abstract|final|async|readonly)\\s+)*";
+const MODS = "(?:(?:export|public|private|protected|static|abstract|final|async|readonly|weak)\\s+)*";
 const RE = {
   namespace: new RegExp(`^\\s*namespace\\s+(${IDENT}(?:\\.${IDENT})*)`),
   classLike: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(class|struct|interface|trait|enum)\\s+(${IDENT})\\s*(<[^>{]*>)?`),
@@ -168,7 +168,7 @@ const RE = {
   dtor: /^\s*destructor\s*\(/,
   global: new RegExp(`^\\s*${MODS}(const|let)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=`),
   local: new RegExp(`\\b(let|const)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=\\s*(.*)$`),
-  field: new RegExp(`^\\s*(?:(?:public|private|protected|readonly|static)\\s+)*(${IDENT})\\s*:\\s*([^=]+?)\\s*(?:=.*)?$`),
+  field: new RegExp(`^\\s*(?:(?:public|private|protected|readonly|static|weak)\\s+)*(${IDENT})\\s*:\\s*([^=]+?)\\s*(?:=.*)?$`),
   test: /^\s*test\s+"([^"]*)"/,
   forVar: new RegExp(`\\bfor\\s*\\(\\s*(${IDENT})(?:\\s*,\\s*(${IDENT}))?\\s+in\\b`),
   catchVar: new RegExp(`\\bcatch\\s*\\(\\s*(${IDENT})\\s*:\\s*(${IDENT}(?:\\.${IDENT})*)`),
@@ -715,13 +715,32 @@ class Workspace {
   }
 
   // Members of a type (and its bases), by type name.
+  // What a name written in `file` really refers to, after `use a.B as C` and
+  // `import { B as C } from ...` aliases: { name, qualifier }.
+  unalias(file, name, qualifier) {
+    const info = this.info(file);
+    if (!info || qualifier) return { name, qualifier };
+    for (const imp of info.imports) for (const n of imp.names) if (n.as === name && n.name !== name) return { name: n.name, qualifier: "" };
+    for (const u of info.uses) {
+      if (u.glob || u.alias !== name) continue;
+      const parts = u.target.split(".");
+      if (parts[parts.length - 1] !== name || parts.length > 1) return { name: parts.pop(), qualifier: parts.join(".") };
+    }
+    return { name, qualifier };
+  }
+
   membersOf(file, typeName, seen = new Set()) {
-    const base = String(typeName).replace(/<.*$/, "").replace(/\?$/, "").trim();
-    const short = base.split(".").pop();
+    let base = String(typeName).replace(/<.*$/, "").replace(/\?$/, "").trim();
+    let short = base.split(".").pop();
+    let qual = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : "";
+    ({ name: short, qualifier: qual } = this.unalias(file, short, qual));   // Dict -> std.collections.HashMap
     if (!short || seen.has(short)) return [];
     seen.add(short);
     const out = [];
-    for (const { file: f, sym } of this.symbolsNamed(file, short, base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : "")) {
+    let found = this.symbolsNamed(file, short, qual).filter((x) =>
+      [KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(x.sym.kind));
+    found = this.rank(file, found, qual);
+    for (const { file: f, sym } of found) {
       if (![KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(sym.kind)) continue;
       for (const m of sym.members || []) out.push({ file: f, sym: m });
       if (sym.base) out.push(...this.membersOf(file, sym.base, seen));
@@ -850,7 +869,7 @@ class Workspace {
       for (const s of nsItems) push(s.name, COMPLETION_KIND[s.kind] || 6, s.detail, s.doc);
       if (t) {
         for (const { sym } of this.membersOf(file, t)) {
-          if (sym.kind === KIND.Constructor) continue;
+          if (sym.kind === KIND.Constructor || sym.name.startsWith("operator")) continue;   // used as syntax, not by name
           if (isTypeName && sym.kind !== KIND.EnumMember && !sym.isStatic) continue;   // Type.<static members>
           if (!isTypeName && sym.isStatic) continue;
           const cls = this.enclosingClass(file, pos);
