@@ -57,7 +57,11 @@ static GRAV_COLD GRAV_NORETURN void grav_test_fail(const char* m) {
     snprintf(grav_test_msg, sizeof grav_test_msg, "%s", m);
     longjmp(grav_test_jmp, 1);
 }
+/* Panic recovery (see the "Panic recovery" section below). */
+static int grav_recovery_active(void);
+static GRAV_NORETURN void grav_panic_unwind(const char* m);
 static GRAV_COLD GRAV_NORETURN void grav_panic(const char* m) {
+    if (grav_recovery_active()) grav_panic_unwind(m);
     if (grav_testing) {
         char b[2048]; snprintf(b, sizeof b, "panic: %s", m); grav_test_fail(b);
     }
@@ -422,6 +426,29 @@ typedef struct GravExc {
 static _Thread_local jmp_buf grav_jmp_stack[GRAV_MAXTRY];
 static _Thread_local int grav_jmp_top = 0;
 static _Thread_local GravExc grav_current_exc;
+/* Panic recovery points (Panic.recover, servers, threads): each remembers the try
+   depth and call depth where it was set. An exception that would leave the region
+   stops there, and so does a panic while recovery is enabled for this thread. */
+#define GRAV_MAXRECOVER 64
+static _Thread_local jmp_buf grav_recover_stack[GRAV_MAXRECOVER];
+static _Thread_local int grav_recover_try[GRAV_MAXRECOVER];
+static _Thread_local int grav_recover_nf[GRAV_MAXRECOVER];
+static _Thread_local int grav_recover_top = 0;
+static _Thread_local char grav_recover_msg[2048];
+/* A recovered panic unwinds as an exception of this type: no `catch` matches it
+   (there is no object), so `finally` blocks run and it reaches the recovery point. */
+static const GravTypeInfo grav_panic_typeinfo = { "panic", 0, 0, 0, 0, 0, 0 };
+/* The try depth below which handlers belong outside the innermost recovery region. */
+static inline int grav_try_floor(void) {
+    return grav_recover_top > 0 ? grav_recover_try[grav_recover_top - 1] : 0;
+}
+static GRAV_NORETURN void grav_recover_land(const char* what, const char* msg, const GravTypeInfo* t) {
+    snprintf(grav_recover_msg, sizeof grav_recover_msg, "%s: %s", what,
+             (msg && msg[0]) ? msg : (t ? t->name : "?"));
+    int k = grav_recover_top - 1;
+    if (k < 0 || k >= GRAV_MAXRECOVER) abort(); /* only called inside a recovery region */
+    longjmp(grav_recover_stack[k], 1);
+}
 static inline int grav_try_push(void) {
     if (GRAV_UNLIKELY(grav_jmp_top >= GRAV_MAXTRY)) grav_panic("try blocks nested too deeply");
     return grav_jmp_top++;
@@ -444,7 +471,8 @@ static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char*
         grav_current_exc.ntrace = n;
     }
 #endif
-    if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_jmp_top > grav_try_floor()) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_recover_top > 0) grav_recover_land(t == &grav_panic_typeinfo ? "panic" : "uncaught exception", msg, t);
     if (grav_testing) {
         char b[2048];
         snprintf(b, sizeof b, "uncaught exception: %s", (msg && msg[0]) ? msg : (t ? t->name : "?"));
@@ -458,7 +486,10 @@ static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char*
 }
 /* Re-raise the in-flight exception, keeping the trace from its original throw. */
 static GRAV_NORETURN void grav_rethrow(void) {
-    if (grav_jmp_top > 0) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_jmp_top > grav_try_floor()) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_recover_top > 0)
+        grav_recover_land(grav_current_exc.type == &grav_panic_typeinfo ? "panic" : "uncaught exception",
+                          grav_current_exc.message, grav_current_exc.type);
     if (grav_testing) {
         char b[2048];
         snprintf(b, sizeof b, "uncaught exception: %s", (grav_current_exc.message && grav_current_exc.message[0])
@@ -472,6 +503,53 @@ static GRAV_NORETURN void grav_rethrow(void) {
                 : (grav_current_exc.type ? grav_current_exc.type->name : "?"));
     grav_print_trace(grav_current_exc.trace, grav_current_exc.ntrace);
     exit(1);
+}
+
+/* ---- Panic recovery ------------------------------------------------------
+   Effective setting = this thread's override if it has one, else the global
+   setting (default on; GRAV_PANIC_RECOVERY=off|0|false turns it off at start). */
+static int grav_recovery_global = -1;               /* -1: not read from the environment yet */
+static _Thread_local int grav_recovery_thread = -1; /* -1: follow the global setting */
+static int grav_recovery_enabled(void) {
+    if (grav_recovery_thread >= 0) return grav_recovery_thread;
+    int g = __atomic_load_n(&grav_recovery_global, __ATOMIC_SEQ_CST);
+    if (g < 0) {
+        const char* e = getenv("GRAV_PANIC_RECOVERY");
+        g = (e && (strcmp(e, "off") == 0 || strcmp(e, "0") == 0 || strcmp(e, "false") == 0)) ? 0 : 1;
+        __atomic_store_n(&grav_recovery_global, g, __ATOMIC_SEQ_CST);
+    }
+    return g;
+}
+static void grav_set_recovery_global(int on) { __atomic_store_n(&grav_recovery_global, on ? 1 : 0, __ATOMIC_SEQ_CST); }
+static void grav_set_recovery_thread(int mode) { grav_recovery_thread = mode < 0 ? -1 : (mode ? 1 : 0); }
+static int grav_recovery_active(void) { return grav_recover_top > 0 && grav_recovery_enabled(); }
+/* A panic in a recovery region: unwind like an exception nobody can catch. */
+static GRAV_NORETURN void grav_panic_unwind(const char* m) {
+    static _Thread_local char msg[1024];
+    snprintf(msg, sizeof msg, "%s", m ? m : "");
+    grav_throw(0, &grav_panic_typeinfo, msg);
+}
+/* Run the closure `f` as a recovery point. Returns "" when it finished, else
+   "panic: <message>" or "uncaught exception: <message>" (a fresh string). */
+static const char* grav_recover_call(GravFn f) {
+    if (grav_recover_top >= GRAV_MAXRECOVER) grav_panic("Panic.recover nested too deeply");
+    int k = grav_recover_top;
+    grav_recover_try[k] = grav_jmp_top;
+    grav_recover_nf[k] = grav_nframes;
+    grav_recover_top = k + 1;
+    if (setjmp(grav_recover_stack[k]) == 0) {
+        if (f.fn) ((void (*)(void*))f.fn)(f.env);
+        grav_recover_top = k;
+        return "";
+    }
+    grav_recover_top = k;
+    grav_jmp_top = grav_recover_try[k];
+    grav_frames_restore(grav_recover_nf[k]);
+    size_t n = strlen(grav_recover_msg);
+    char* out = (char*)malloc(n + 1);
+    if (!out) abort();
+    memcpy(out, grav_recover_msg, n + 1);
+    return out;
 }
 
 /* ---- async tasks: a worker pool of GRAV_MAXPROCS threads ------------------
