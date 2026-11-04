@@ -1,29 +1,128 @@
 # 12. Memory
 
-Grav has no garbage collector and no runtime overhead for memory management. Objects
-are released explicitly, cleanup is made reliable with destructors and `defer`, and
-the compiler frees strings and closures automatically wherever it can prove it is
-safe.
+Grav manages memory with automatic reference counting (ARC). There is no garbage
+collector and no pause: every object counts the references to it, and when the last
+one goes away the destructor runs and the memory is freed, right then. Strings
+built at run time are counted the same way (see below).
 
-## new and free
+## Objects are freed when the last reference goes
 
-`new` allocates an object; `free(obj)` releases it. Freeing an object runs its
-destructor chain first — the dynamic type's destructor, then each base class's.
+Local variables, fields, globals, closures and collections each hold a reference.
+When a variable goes out of scope, is reassigned, or the object holding it is
+destroyed, its reference is dropped:
 
 ```grav
+import "std"
+
 class Resource {
     protected name: string
-    constructor(name: string) { self.name = name }
-    destructor() { print("release ${self.name}") }
-}
-class Database extends Resource {
-    constructor(name: string) { super(name) }
-    destructor() { print("flush ${self.name}") }     // runs first
+    constructor(name: string) { self.name = name; print("open " + name) }
+    destructor() { print("close " + self.name) }
 }
 
 fn main() {
-    let r: Resource = new Database("main")
-    free(r)
+    if (true) {
+        let a = new Resource("a")
+        let b = new Resource("b")
+    }                                  // both closed here, b first
+    let x = new Resource("x1")
+    x = new Resource("x2")             // x1 closed: nothing refers to it any more
+    new Resource("temp")               // a result nobody keeps: closed after the statement
+    let items = new Array<Resource>()
+    items.push(new Resource("kept"))   // the array keeps it alive
+    print("end of main")
+}                                      // items, x2 and kept are closed on the way out
+```
+
+Output:
+
+```text
+open a
+open b
+close b
+close a
+open x1
+open x2
+close x1
+open temp
+close temp
+open kept
+end of main
+close kept
+close x2
+```
+
+- A result used only inside an expression (`makeThing().name`) lives until the
+  end of that statement.
+- Counts are atomic, so objects can be shared between threads; a running `Thread`
+  keeps its own object alive.
+- Long chains (a million-node linked list) are freed iteratively, without deep
+  recursion.
+
+## Cycles and weak fields
+
+Two objects that refer to each other, such as a parent whose `children` point back
+at it, would keep each other alive forever. Mark the back-reference `weak`: a weak
+field does not keep its object alive, and reads as `null` once that object is gone.
+
+```grav
+import "std"
+
+class TreeNode {
+    public name: string
+    public children: Array<TreeNode>
+    public weak parent: TreeNode
+    constructor(name: string) { self.name = name; self.children = new Array<TreeNode>(); self.parent = null }
+    destructor() { print("free " + self.name) }
+    fn add(child: TreeNode) -> TreeNode { child.parent = self; self.children.push(child); return child }
+}
+
+fn main() {
+    let leaf: TreeNode = null
+    if (true) {
+        let root = new TreeNode("root")
+        leaf = root.add(new TreeNode("leaf"))
+        print("parent: " + leaf.parent.name)
+    }                                  // root goes: nothing strong refers to it
+    print("parent gone: ${leaf.parent == null}")
+}
+```
+
+Output:
+
+```text
+parent: root
+free root
+parent gone: true
+free leaf
+```
+
+- `weak` applies to fields of class type. Reading one gives the object for the
+  rest of the statement, or `null`; store it in a local to keep it longer.
+- An object disposed with `free` also reads as `null` through weak fields.
+- Without `weak`, break a cycle by hand: set one side to `null`, or call `free` on
+  one of the objects, when you are done.
+
+## free
+
+`free(obj)` runs the destructor chain now, the dynamic type's destructor and then
+each base class's, and releases the object's fields (object fields become `null`,
+strings `""`). The memory itself stays until the last reference is gone, so
+another variable still pointing at the object never dangles. You rarely need it now; it is useful to close a resource
+deterministically while other references may remain.
+
+```grav
+class Database {
+    public name: string
+    constructor(name: string) { self.name = name }
+    destructor() { print("flush ${self.name}") }
+}
+
+fn main() {
+    let db = new Database("main")
+    let alias = db
+    free(db)                           // flushed now, once
+    print("still safe to read: [" + alias.name + "]")
 }
 ```
 
@@ -31,12 +130,8 @@ Output:
 
 ```text
 flush main
-release main
+still safe to read: []
 ```
-
-The standard collections have destructors that free their internal buffers, so
-`free(list)` releases everything the list allocated (but not objects stored in it —
-free those yourself if nothing else refers to them).
 
 ## defer for guaranteed cleanup
 
@@ -71,58 +166,46 @@ close b.txt
 failed
 ```
 
-## Automatic string freeing
+## Strings
 
-Strings produced by `+`, interpolation, `str()`, and string functions are heap
-allocated. The compiler analyses each function and frees a local string variable
-automatically when it can prove the variable *owns* its value — that every use only
-reads or copies the text (part of another `+` chain, printed, compared, a `switch`
-subject, or passed to a library call that keeps no reference). An owned variable
-frees its old value when reassigned (including `+=`) and its final value when its
-block exits.
+Strings built at run time (by `+`, interpolation, `str()` and the string
+functions) are reference counted like objects, wherever they are kept: locals,
+fields, collections, closures. Text is freed as soon as nothing refers to it.
+Literals are permanent, and copying a string only adds a reference.
 
 ```grav
-import "../lib/std.grav"
+import "std"
+
+class Log {
+    public lines: Array<string>
+    constructor() { self.lines = new Array<string>() }
+}
 
 fn main() {
     let report = ""
+    let log = new Log()
     for (i in 0..1000) {
-        let line = "item ${i}"           // freed at the end of every iteration
-        if (i % 250 == 0) { report += line + "; " }   // old `report` freed each time
+        let line = "item ${i}"           // freed at the end of the iteration...
+        if (i % 250 == 0) {
+            report += line + "; "        // ...unless kept; the old report is freed
+            log.lines.push(line)
+        }
     }
-    IO.print("report: " + report)        // this temporary is freed after the call
-}
+    print("report: " + report)
+    print("kept ${log.lines.size()} lines")
+}                                        // the log and its lines are freed here
 ```
 
 Output:
 
 ```text
 report: item 0; item 250; item 500; item 750; 
+kept 4 lines
 ```
 
-Ownership crosses function boundaries: a function whose every `return` hands back a
-new string gives it to the caller, who frees it in turn.
-
-```grav
-fn banner(title: string) -> string { return "== " + title + " ==" }
-
-fn main() {
-    let b = banner("Grav")               // owned by main, freed at its end
-    print(b)
-    banner("unused")                     // a discarded result is freed at once
-}
-```
-
-Output:
-
-```text
-== Grav ==
-```
-
-A string is left alone (never freed automatically) when it may be shared: when it is
-returned from a function that sometimes returns a borrowed string, stored in a field,
-array, or collection, captured by a lambda, passed to your own functions, or named in
-inline C. Literals are never freed.
+C code that makes strings for Grav (in `%{ … %}` blocks) allocates them with
+`grav_str_new(len)` (or `grav_str_alloc(bytes)`); strings from `malloc`, static
+buffers and C libraries are treated as permanent and never freed by Grav.
 
 ## StringBuilder
 
@@ -150,10 +233,8 @@ Output:
 
 ## Closures
 
-A lambda's captured variables live in a small heap environment. It is freed
-automatically for a local function value that is only ever called, and for a
-capturing lambda passed directly to `forEach`/`map`/`filter`/`reduce`/`sortBy`/…;
-`free(f)` releases one explicitly.
+A closure keeps the variables it captures alive (objects included) for as long as
+the closure itself exists; closures are reference counted like objects.
 
 ## Pointers and C memory
 
