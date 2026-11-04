@@ -12,6 +12,7 @@
 // buffer's references stay balanced; if the comparator throws (or panics under
 // recovery) in the middle of a merge, the elements parked in the scratch buffer
 // are put back first, leaving the buffer a permutation of what it was.
+import "exception.grav"
 namespace std.core {
 
     %{ #include <string.h> %}
@@ -372,7 +373,7 @@ namespace std.core {
                 self.move(a, dest, a, cursor2, len2)
                 a[dest + len2] = tmp[cursor1]
             } else if (len1 == 0) {
-                panic("TimSort: the comparison is inconsistent (it does not define an order)")
+                throw new ValueError("TimSort: the comparison is inconsistent (it does not define an order)")
             } else {
                 self.move(a, dest, tmp, cursor1, len1)
             }
@@ -461,7 +462,7 @@ namespace std.core {
                 self.move(a, dest + 1, a, cursor1 + 1, len1)
                 a[dest] = tmp[cursor2]
             } else if (len2 == 0) {
-                panic("TimSort: the comparison is inconsistent (it does not define an order)")
+                throw new ValueError("TimSort: the comparison is inconsistent (it does not define an order)")
             } else {
                 self.move(a, dest - (len2 - 1), tmp, 0, len2)
             }
