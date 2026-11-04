@@ -5,6 +5,7 @@
 //   flags.set(3); flags.set(64)
 //   print(flags.get(3))          // true
 
+import "../core/exception.grav"
 namespace std.collections {
 
     %{
@@ -30,7 +31,7 @@ namespace std.collections {
             %{ memset(self->words + oldN, 0, (size_t)(nw - oldN) * 8); %};
             self.nwords = nw;
         }
-        private fn checkBit(bit: int) { if (bit < 0) { panic("BitSet: negative bit ${bit}"); } }
+        private fn checkBit(bit: int) { if (bit < 0) { throw new IndexError("BitSet: negative bit ${bit}"); } }
 
         public fn set(bit: int) {
             self.checkBit(bit);
