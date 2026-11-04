@@ -106,6 +106,24 @@ void CodeGen::emitLoopBody(const Block &body) {
     cleanups_.pop_back();
 }
 
+// On the exception path: run `finally` with the pending exception set aside (an
+// exception thrown and caught inside it must not replace it), then re-raise it.
+void CodeGen::emitFinallyThenRethrow(const Block *fin) {
+    if (fin) {
+        std::string sv = "__pend" + std::to_string(tryCounter_++);
+        line("{");
+        indent_++;
+        line("GravExc* " + sv + " = (GravExc*)grav_alloc(sizeof(GravExc));");
+        line("grav_exc_save(" + sv + ");");
+        emitBraced(*fin);
+        line("grav_exc_restore(" + sv + ");");
+        line("free(" + sv + ");");
+        indent_--;
+        line("}");
+    }
+    line("grav_rethrow();");
+}
+
 void CodeGen::emitTry(const TryStmt &s) {
     std::string t = "__try" + std::to_string(tryCounter_++);
     std::string exc = "grav_current_exc";
@@ -114,6 +132,7 @@ void CodeGen::emitTry(const TryStmt &s) {
     indent_++;
     line("int " + t + " = grav_try_push();");
     line("int " + t + "_nf = grav_nframes;"); // frame depth to restore on unwind
+    line("size_t " + t + "_ap = grav_pool_top;"); // release-list height to drain back to
     line("if (setjmp(grav_jmp_stack[" + t + "]) == 0) {");
     indent_++;
     cleanups_.push_back({Cleanup::Try, t, fin});
@@ -125,6 +144,7 @@ void CodeGen::emitTry(const TryStmt &s) {
     indent_++;
     line("grav_jmp_top = " + t + ";"); // exception in flight: pop, then handle
     line("grav_frames_restore(" + t + "_nf);"); // unwinding skipped grav_leave()s
+    line("grav_pool_drain(" + t + "_ap);"); // temporaries of the abandoned statements
     // Clauses are tested in order; the first matching class handles it. With a
     // `finally`, the handlers run in their own protected region so an exception
     // escaping a handler (e.g. a re-throw) still runs `finally` on its way out.
@@ -142,12 +162,16 @@ void CodeGen::emitTry(const TryStmt &s) {
              mangle(c.type.name) + "_typeinfo)) {");
         first = false;
         indent_++;
-        line(ct + "* " + c.var + " = (" + ct + "*)" + exc + ".value;");
+        // The handler owns the caught object, released when the handler ends.
+        line(ct + "* " + c.var + " = (" + ct + "*)grav_exc_take();");
         line("(void)" + c.var + ";");
+        cleanups_.push_back({Cleanup::Code, "", nullptr, "grav_release((void*)" + c.var + ");"});
         // A `return`/`break` out of the handler must still run `finally`.
         if (guard) cleanups_.push_back({Cleanup::Try, tc, fin});
         emitBlock(c.block);
         if (guard) cleanups_.pop_back();
+        line("grav_release((void*)" + c.var + ");");
+        cleanups_.pop_back();
         indent_--;
     }
     if (!s.catches.empty()) {
@@ -155,8 +179,7 @@ void CodeGen::emitTry(const TryStmt &s) {
         indent_++;
     }
     if (guard) line("grav_jmp_top = " + tc + ";");
-    if (fin) emitBraced(*fin);
-    line("grav_rethrow();"); // unhandled here: propagate (after finally)
+    emitFinallyThenRethrow(fin); // unhandled here: propagate (after finally)
     if (!s.catches.empty()) {
         indent_--;
         line("}");
@@ -168,8 +191,7 @@ void CodeGen::emitTry(const TryStmt &s) {
         indent_++;
         line("grav_jmp_top = " + tc + ";"); // a handler threw: finally, then propagate
         line("grav_frames_restore(" + t + "_nf);");
-        emitBraced(*fin);
-        line("grav_rethrow();");
+        emitFinallyThenRethrow(fin);
         indent_--;
         line("}");
     }
