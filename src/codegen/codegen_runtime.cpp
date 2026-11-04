@@ -152,7 +152,9 @@ static const char* grav_strdup(const char* s) {
 }
 /* Compare, then release whichever operands were temporaries. */
 static bool grav_streq_tmp(const char* a, const char* b, int freeA, int freeB) {
-    bool r = a == b || strcmp(a, b) == 0;
+    /* no `a == b` shortcut: with it, GCC infers a fresh operand may be the other
+       side's literal and warns about freeing it */
+    bool r = strcmp(a, b) == 0;
     if (freeA) free((void*)a);
     if (freeB) free((void*)b);
     return r;
