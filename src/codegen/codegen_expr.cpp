@@ -142,7 +142,7 @@ void CodeGen::emitArgs(std::string &out, const CallExpr &call,
     for (size_t i = 0; i < call.args.size(); ++i) {
         if (!first) out += ", ";
         first = false;
-        if (i < params.size()) out += emitAs(*call.args[i], params[i]);
+        if (i < params.size()) out += emitStable(*call.args[i], params[i]);
         else out += emitExpr(*call.args[i]);
     }
 }
@@ -154,7 +154,7 @@ void CodeGen::emitVariadicArgs(std::string &out, const CallExpr &call,
     std::string elemTy = cTy(elem);
     for (size_t i = 0; i < fixed; ++i) {
         if (i) out += ", ";
-        out += emitAs(*call.args[i], params[i]);
+        out += emitStable(*call.args[i], params[i]);
     }
     if (fixed) out += ", ";
     size_t count = call.args.size() - fixed;
@@ -165,15 +165,27 @@ void CodeGen::emitVariadicArgs(std::string &out, const CallExpr &call,
         out += "(" + elemTy + "[]){ ";
         for (size_t i = fixed; i < call.args.size(); ++i) {
             if (i > fixed) out += ", ";
-            out += emitAs(*call.args[i], elem);
+            out += emitStable(*call.args[i], elem);
         }
         out += " }";
     }
 }
 
+// Every reference-typed call / `new` result evaluated here is borrowed: it goes
+// on the release list (freed when the statement ends) unless emitOwned() is
+// taking it over.
 std::string CodeGen::emitExpr(const Expr &expr) const {
     if (!exprOverride_.empty())
         if (auto it = exprOverride_.find(&expr); it != exprOverride_.end()) return it->second;
+    std::string out = emitExprRaw(expr);
+    if (isRefProducer(expr)) {
+        if (ownedRoot_ == &expr) { ownedRoot_ = nullptr; return out; }
+        return autoreleaseOf(expr.type, out);
+    }
+    return out;
+}
+
+std::string CodeGen::emitExprRaw(const Expr &expr) const {
     if (auto *e = dynamic_cast<const IntLiteralExpr *>(&expr)) return e->raw;
     if (auto *e = dynamic_cast<const FloatLiteralExpr *>(&expr)) return e->raw;
     if (auto *e = dynamic_cast<const BoolLiteralExpr *>(&expr))
@@ -338,7 +350,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         const TypeRef elem = e->type.elem ? *e->type.elem : TypeRef::prim(TypeRef::Kind::Int);
         for (size_t i = 0; i < e->elements.size(); ++i) {
             if (i) out += ", ";
-            out += emitAs(*e->elements[i], elem);
+            out += emitOwned(*e->elements[i], elem); // fixed arrays are values: kept for good
         }
         return out + " } }";
     }
@@ -367,7 +379,7 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         std::string out = ctorCName(e->className, e->ctorIndex) + "(";
         for (size_t i = 0; i < e->args.size(); ++i) {
             if (i) out += ", ";
-            out += (i < params.size()) ? emitAs(*e->args[i], params[i])
+            out += (i < params.size()) ? emitStable(*e->args[i], params[i])
                                        : emitExpr(*e->args[i]);
         }
         out += ")";
@@ -382,7 +394,8 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         for (size_t i = 0; i < e->fields.size(); ++i) {
             if (i) out += ", ";
             const FieldInfo *f = reg_->findStructField(e->typeName, e->fields[i].name);
-            std::string v = f ? emitAs(*e->fields[i].value, f->type)
+            // Struct copies are not tracked: a reference stored in one is kept for good.
+            std::string v = f ? emitOwned(*e->fields[i].value, f->type)
                               : emitExpr(*e->fields[i].value);
             out += "." + memberCName(e->fields[i].name) + " = " + v;
         }
@@ -409,6 +422,9 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
         bool valueObj = e->object->type.isNamed() && reg_->isStruct(e->object->type.name);
         std::string obj = emitExpr(*e->object);
         std::string access = "(" + obj + (valueObj ? ")." : ")->") + memberCName(e->member);
+        // A weak field reads as the object (held until the statement ends) or null.
+        if (!valueObj && isWeakField(*e))
+            access = "((" + cTy(e->type) + ")grav_weak_load((void*)" + access + "))";
         // `a?.field` guards against a null object, yielding a zero value when null.
         if (e->optional) {
             std::string nul = e->type.kind == TypeRef::Kind::String ? "\"\"" : "0";
@@ -458,8 +474,8 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                     return "grav_free_obj((void*)(" + emitExpr(*call.args[0]) + "))";
                 if (ft.isFuture()) // waits for the task, then releases its record
                     return "grav_task_free(" + emitExpr(*call.args[0]) + ")";
-                if (ft.isFunction()) // releases a closure's captured environment
-                    return "free((" + emitExpr(*call.args[0]) + ").env)";
+                if (ft.isFunction() || ft.kind == TypeRef::Kind::String) // counted: released with their last reference
+                    return "((void)(" + emitExpr(*call.args[0]) + "))";
                 return "free((void*)(" + emitExpr(*call.args[0]) + "))";
             }
             if (call.targetName == "exit") return "exit(" + emitExpr(*call.args[0]) + ")";
@@ -471,6 +487,12 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 std::string loc = "\"" + escapeC(o.file) + ":" + std::to_string(o.line) + "\"";
                 std::string msg = call.args.size() == 2 ? emitExpr(*call.args[1]) : ("\"" + escapeC(cond) + "\"");
                 return "grav_assert_at(" + cond + ", " + msg + ", " + loc + ")";
+            }
+            if (call.targetName == "__retain") return retainOf(call.args[0]->type, emitExpr(*call.args[0]));
+            if (call.targetName == "__release") {
+                std::string r = releaseOf(call.args[0]->type, emitExpr(*call.args[0]));
+                if (r.empty()) return "((void)0)";
+                return "(" + r.substr(0, r.size() - 1) + ")"; // as an expression
             }
             if (call.targetName == "__show") {
                 const TypeRef &t = call.args[0]->type;
@@ -542,7 +564,8 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                                        : reg_->findMethod(call.ownerClass, call.methodName);
             if (mi) params = mi->paramTypes;
             std::string args = methodArgs(call.args, params);
-            std::string obj = emitExpr(*mem->object);
+            // The receiver is held for the call too (a method may drop its own owner).
+            std::string obj = mem->optional ? emitExpr(*mem->object) : emitStable(*mem->object, mem->object->type);
             if (!mem->optional) return methodCall(obj, recv, call.methodName, args);
             // `a?.m(...)`: a side-effect-free receiver keeps the cheap inline guard
             // (and skips evaluating the arguments); anything else goes through a
