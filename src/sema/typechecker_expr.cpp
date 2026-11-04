@@ -600,6 +600,11 @@ TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
 TypeRef TypeChecker::checkIndex(IndexExpr &e) {
     TypeRef base = checkExpr(*e.base);
     if (auto ov = tryIndexOverload(e, base)) return *ov;
+    if (!e.more.empty()) {
+        error(e.more[0]->line, e.more[0]->col,
+              "several indices need a class with an 'operator[]' taking them; arrays and pointers take one");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     TypeRef idx = checkExpr(*e.index);
     if (!idx.isError() && idx.kind != TypeRef::Kind::Int)
         error(e.index->line, e.index->col,
