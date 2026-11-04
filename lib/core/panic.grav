@@ -1,0 +1,41 @@
+// lib/core/panic.grav — recovering from panics.
+//
+// A panic (an out-of-range index, unwrap() on Err/None, panic("...")) normally
+// stops the program. Inside a recovery point it is recovered instead: it unwinds
+// like an exception that no `catch` can catch (so `finally` blocks still run and
+// locks taken with withLock are released), and the recovery point gets its
+// message. HttpServer handlers and Thread bodies are recovery points.
+//
+//   let failure = Panic.recover(fn() { risky() })
+//   if (failure != "") { print("recovered: " + failure) }    // "panic: ..." 
+//
+// Recovery can be switched at run time, for the whole program or one thread:
+//   Panic.setRecovery(false)          every thread: panics stop the program again
+//   Panic.setThreadRecovery(false)    only the calling thread
+//   Panic.followGlobalRecovery()      the calling thread follows the global setting again
+// It starts on; GRAV_PANIC_RECOVERY=off turns it off for the whole program at start.
+// An exception that escapes a recovery point is always stopped there too
+// ("uncaught exception: ..."), whatever the setting.
+
+namespace std.core {
+
+    class Panic {
+        // Run `body`. Returns "" when it finished; otherwise what stopped it:
+        // "panic: <message>" (when recovery is enabled for this thread) or
+        // "uncaught exception: <message>".
+        static fn recover(body: fn()) -> string {
+            return %{ grav_recover_call(body) %} as string;
+        }
+
+        // Turn recovery on or off for every thread (threads with their own
+        // setting keep it).
+        static fn setRecovery(on: bool) { %{ grav_set_recovery_global(on); %}; }
+        // Turn recovery on or off for the calling thread only.
+        static fn setThreadRecovery(on: bool) { %{ grav_set_recovery_thread(on ? 1 : 0); %}; }
+        // Drop the calling thread's own setting: follow the global one again.
+        static fn followGlobalRecovery() { %{ grav_set_recovery_thread(-1); %}; }
+        // Whether a panic on this thread would be recovered right now.
+        static fn recoveryEnabled() -> bool { return %{ grav_recovery_enabled() %} as bool; }
+    }
+
+}
