@@ -116,3 +116,61 @@ test "string += keeps building correctly" {
     for (i in 0..3) { n.name += "!" }
     assertEq(n.name, "a!!!")
 }
+
+class Oops extends Exception {
+    constructor(m: string) { super(m); Live.count += 1 }
+    destructor() { Live.count -= 1 }
+}
+
+test "thrown exceptions are freed once handled" {
+    for (i in 0..100) {
+        try { throw new Oops("boom") } catch (e: Oops) {}
+        try { try { throw new Oops("inner") } catch (e: Oops) { throw e } } catch (e: Oops) {}
+    }
+    assertEq(Live.count, 0)
+}
+
+test "finally keeps the pending exception" {
+    let seen = ""
+    try {
+        try { throw new Oops("first") } finally { try { throw new Oops("second") } catch (x: Oops) {} }
+    } catch (e: Oops) { seen = e.message() }
+    assertEq(seen, "first")
+    assertEq(Live.count, 0)
+}
+
+struct Slot { item: Tracked  label: string }
+
+test "value structs and fixed arrays own their references" {
+    if (true) {
+        let a = Slot { item: new Tracked(1), label: "one" }
+        let b = a
+        b.item = new Tracked(2)
+        let pair: Tracked[2] = [new Tracked(3), new Tracked(4)]
+        pair[0] = new Tracked(5)
+        let xs = new Array<Slot>()
+        for (i in 0..10) { xs.push(Slot { item: new Tracked(i), label: "s${i}" }) }
+        assertEq(Live.count, 14)
+        assertEq(a.item.n + b.item.n + pair[0].n, 8)
+    }
+    assertEq(Live.count, 0)
+}
+
+test "the cycle collector frees unreachable cycles" {
+    GC.collect()
+    if (true) {
+        let a = new Tracked(1)
+        let b = new Tracked(2)
+        a.next = b
+        b.next = a                         // a cycle, no weak side
+        let c = new Tracked(3)
+        c.next = c                         // a self-reference
+    }
+    assertEq(Live.count, 3)
+    let keep = new Tracked(4)
+    keep.next = new Tracked(5)
+    keep.next.next = keep                  // a cycle still in use
+    assert(GC.collect() >= 3)
+    assertEq(Live.count, 2)
+    assertEq(keep.next.n, 5)
+}
