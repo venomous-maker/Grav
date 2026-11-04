@@ -365,6 +365,8 @@ void CodeGen::emitValueStructs() {
         }
         structs_ += "static inline GRAV_UNUSED bool " + key + "__eq(" + key + " a, " + key +
                     " b) { (void)a; (void)b; return " + body + "; }\n\n";
+        TypeRef st = TypeRef::named(fq);
+        if (refKind(st) == RefKind::Value) structs_ += emitValueArc(key, st);
     };
     std::function<void(const TypeRef &)> emitArray = [&](const TypeRef &t) {
         std::string key = arrayStructName(t);
@@ -373,6 +375,7 @@ void CodeGen::emitValueStructs() {
         if (t.elem) ensure(*t.elem);
         structs_ += "typedef struct " + key + " {\n    " + cTy(*t.elem) + " data[" +
                     std::to_string(t.arrayLen) + "];\n} " + key + ";\n\n";
+        if (refKind(t) == RefKind::Value) structs_ += emitValueArc(key, t);
     };
     ensure = [&](const TypeRef &t) {
         // Only by-value containment forces an ordering: value structs and arrays.
@@ -502,10 +505,11 @@ void CodeGen::emitTypeInfos() {
         }
         // Releasing the reference fields when the object is destroyed.
         emitReleaseFields(fq);
+        std::string visit = emitVisitFields(fq);
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
                     std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + ", " +
-                    mangle(fq) + "__arc_fields };\n";
+                    mangle(fq) + "__arc_fields, " + visit + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
