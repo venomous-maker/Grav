@@ -8,7 +8,7 @@
 // message. HttpServer handlers and Thread bodies are recovery points.
 //
 //   let failure = Panic.recover(fn() { risky() })
-//   if (failure != "") { print("recovered: " + failure) }    // "panic: ..." 
+//   if (failure != "") { print("recovered: " + failure) }    // "panic: ..."
 //
 // Recovery can be switched at run time, for the whole program or one thread:
 //   Panic.setRecovery(false)          every thread: panics stop the program again
