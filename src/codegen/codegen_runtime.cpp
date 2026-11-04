@@ -106,6 +106,7 @@ typedef struct GravTypeInfo {
     const char* (*str)(void*);                  /* toString(), or 0 */
     bool (*eq)(void*, void*);                   /* operator==(other), or 0 */
     void (*fields)(void*);                      /* release the object's reference fields, or 0 */
+    void (*visit)(void*);                       /* report each object it refers to (cycle collector), or 0 */
 } GravTypeInfo;
 
 /* Common object header: vtable pointer, runtime type descriptor, reference count.
@@ -131,14 +132,18 @@ static inline bool grav_iface_eq(struct GravIface a, struct GravIface b) { retur
    `free(obj)` disposes early: the destructor runs and the fields are released
    now, but the memory stays until the last reference is gone (no dangling
    pointers). GRAV_RC_DEAD marks a disposed object. */
-/* The 64-bit count: strong references in bits 0-39, weak references in bits
-   40-59, DEAD (disposed: destructor and fields done) at 60, GONE (no strong
-   references left; the memory waits for the last weak one) at 61. */
+/* The 64-bit count: strong references in bits 0-31, weak references in bits
+   32-55, the cycle collector's color in 56-57 and BUFFERED (a cycle candidate) at
+   58, DEAD (disposed: destructor and fields done) at 60, GONE (no strong
+   references left; the memory waits for the last weak one, or the collector) at 61. */
 #define GRAV_RC_DEAD (1LL << 60)
 #define GRAV_RC_GONE (1LL << 61)
-#define GRAV_RC_WEAK1 (1LL << 40)
+#define GRAV_RC_BUFFERED (1LL << 58)
+#define GRAV_RC_WEAK1 (1LL << 32)
 #define GRAV_RC_COUNT(v) ((v) & (GRAV_RC_WEAK1 - 1))
-#define GRAV_RC_WEAKS(v) (((v) >> 40) & ((1LL << 20) - 1))
+#define GRAV_RC_WEAKS(v) (((v) >> 32) & ((1LL << 24) - 1))
+#define GRAV_RC_COLOR(v) ((int)(((v) >> 56) & 3))
+enum { GRAV_BLACK = 0, GRAV_GRAY = 1, GRAV_WHITE = 2, GRAV_PURPLE = 3 };
 static int grav_mt = 0;
 static void grav_obj_teardown(void* o) {
     const GravTypeInfo* t = ((struct GravObject*)o)->__type;
@@ -167,7 +172,8 @@ static void grav_obj_destroy(void* o) {
         if (!(v & GRAV_RC_DEAD)) grav_obj_teardown(o);
         /* weak references keep the memory (not the object) until they go */
         long long old = __atomic_fetch_or(&((struct GravObject*)o)->__rc, GRAV_RC_GONE | GRAV_RC_DEAD, __ATOMIC_ACQ_REL);
-        if (GRAV_RC_WEAKS(old) == 0) free(o);
+        /* a cycle candidate stays until the collector drops it from its list */
+        if (GRAV_RC_WEAKS(old) == 0 && !(old & GRAV_RC_BUFFERED)) free(o);
         if (grav_dead_n == 0) break;
         o = grav_dead[--grav_dead_n];
     }
@@ -185,12 +191,34 @@ static inline void* grav_retain(void* o) {
     }
     return o;
 }
+/* Cycle candidates: objects whose count dropped but not to zero. Kept only
+   while this is the sole thread touching objects (see grav_gc_collect). */
+static int grav_gc_others = 0;          /* other threads and async tasks running */
+static int grav_gc_running = 0;
+static void** grav_gc_roots = 0;
+static size_t grav_gc_nroots = 0, grav_gc_cap = 0, grav_gc_threshold = 10000;
+static void grav_gc_candidate(void* o) {
+    long long* rc = &((struct GravObject*)o)->__rc;
+    *rc = (*rc & ~(3LL << 56)) | ((long long)GRAV_PURPLE << 56);
+    if (*rc & GRAV_RC_BUFFERED) return;
+    if (grav_gc_nroots == grav_gc_cap) {
+        size_t cap = grav_gc_cap ? grav_gc_cap * 2 : 1024;
+        void** n = (void**)realloc(grav_gc_roots, cap * sizeof(void*));
+        if (!n) return;                 /* no room: just not a candidate */
+        grav_gc_roots = n; grav_gc_cap = cap;
+    }
+    *rc |= GRAV_RC_BUFFERED;
+    grav_gc_roots[grav_gc_nroots++] = o;
+}
 static inline void grav_release(void* o) {
     if (!o) return;
     long long v;
     if (GRAV_LIKELY(!grav_mt)) v = --((struct GravObject*)o)->__rc;
     else v = __atomic_sub_fetch(&((struct GravObject*)o)->__rc, 1, __ATOMIC_ACQ_REL);
     if (GRAV_UNLIKELY(GRAV_RC_COUNT(v) == 0)) grav_obj_destroy(o);
+    else if (!__atomic_load_n(&grav_gc_others, __ATOMIC_RELAXED) && !grav_gc_running &&
+             ((struct GravObject*)o)->__type && ((struct GravObject*)o)->__type->visit)
+        grav_gc_candidate(o);
 }
 /* `free(obj)`: run the destructor and release the fields now (once). */
 static void grav_free_obj(void* o) {
@@ -210,7 +238,7 @@ static inline void grav_weak_release(void* o) {
     long long v;
     if (GRAV_LIKELY(!grav_mt)) v = (((struct GravObject*)o)->__rc -= GRAV_RC_WEAK1);
     else v = __atomic_sub_fetch(&((struct GravObject*)o)->__rc, GRAV_RC_WEAK1, __ATOMIC_ACQ_REL);
-    if ((v & GRAV_RC_GONE) && GRAV_RC_WEAKS(v) == 0) free(o);
+    if ((v & GRAV_RC_GONE) && GRAV_RC_WEAKS(v) == 0 && !(v & GRAV_RC_BUFFERED)) free(o);
 }
 static void* grav_autorelease(void* o);
 /* Read a weak reference: the object, held until the statement ends, or null
@@ -438,18 +466,141 @@ static void* grav_autorelease(void* o) {
     grav_pool[grav_pool_top++] = o;
     return o;
 }
+/* Release-list entries: an object, a string (tag 1), or a boxed copy of a value
+   struct with references (tag 2: its release function and bytes). */
+typedef struct GravBox { void (*rel)(void*); long long data[]; } GravBox;
+static size_t grav_gc_collect(void);
 static void grav_pool_drain(size_t mark) {
+    if (GRAV_UNLIKELY(grav_gc_nroots >= grav_gc_threshold)) grav_gc_collect();
     while (grav_pool_top > mark) {
         void* p = grav_pool[--grav_pool_top];
-        if ((uintptr_t)p & 1) grav_str_release((const char*)((uintptr_t)p & ~(uintptr_t)1));
-        else grav_release(p);
+        uintptr_t tag = (uintptr_t)p & 3;
+        if (tag == 1) grav_str_release((const char*)((uintptr_t)p & ~(uintptr_t)3));
+        else if (tag == 2) {
+            GravBox* b = (GravBox*)((uintptr_t)p & ~(uintptr_t)3);
+            b->rel(b->data);
+            free(b);
+        } else grav_release(p);
     }
+}
+/* ---- Cycle collector (trial deletion, after Bacon & Rajan) -------------------
+   Reference counting alone never frees objects that refer to each other. From
+   the candidates, subtract every reference that comes from inside the candidate
+   graph (gray); what still has references is reachable from outside and gets them
+   back (black); what drops to zero is garbage (white). White objects get their
+   real counts back, are held, disposed (destructors run, fields released) and then
+   released, so ordinary reference counting frees them. It runs only while this is
+   the only thread touching objects; with other threads or async tasks running,
+   candidates are not even recorded. */
+static void (*grav_gc_cb)(void*) = 0;
+static void** grav_gc_stack = 0;
+static size_t grav_gc_sn = 0, grav_gc_scap = 0;
+static void grav_gc_push(void* o) {
+    if (grav_gc_sn == grav_gc_scap) {
+        grav_gc_scap = grav_gc_scap ? grav_gc_scap * 2 : 1024;
+        grav_gc_stack = (void**)realloc(grav_gc_stack, grav_gc_scap * sizeof(void*));
+        if (!grav_gc_stack) abort();
+    }
+    grav_gc_stack[grav_gc_sn++] = o;
+}
+static GRAV_UNUSED void grav_gc_visit(void* o) { if (o) grav_gc_cb(o); }
+static inline long long* grav_gc_rc(void* o) { return &((struct GravObject*)o)->__rc; }
+static inline int grav_gc_color(void* o) { return GRAV_RC_COLOR(*grav_gc_rc(o)); }
+static inline void grav_gc_paint(void* o, int c) { long long* rc = grav_gc_rc(o); *rc = (*rc & ~(3LL << 56)) | ((long long)c << 56); }
+static void grav_gc_children(void* o, void (*cb)(void*)) {
+    const GravTypeInfo* t = ((struct GravObject*)o)->__type;
+    if (!t || !t->visit || (*grav_gc_rc(o) & GRAV_RC_DEAD)) return; /* disposed: holds nothing */
+    grav_gc_cb = cb;
+    t->visit(o);
+}
+static size_t grav_gc_work = 0;           /* objects the last pass traversed */
+static void grav_gc_gray_child(void* t) { --*grav_gc_rc(t); if (grav_gc_color(t) != GRAV_GRAY) { grav_gc_paint(t, GRAV_GRAY); grav_gc_push(t); grav_gc_work++; } }
+static void grav_gc_black_child(void* t) { ++*grav_gc_rc(t); if (grav_gc_color(t) != GRAV_BLACK) { grav_gc_paint(t, GRAV_BLACK); grav_gc_push(t); } }
+static void grav_gc_scan_child(void* t) { grav_gc_push(t); }
+static void grav_gc_white_child(void* t) { if (grav_gc_color(t) == GRAV_WHITE) { grav_gc_paint(t, GRAV_BLACK); grav_gc_push(t); } }
+static void grav_gc_restore_child(void* t) { ++*grav_gc_rc(t); }
+static void grav_gc_scan_black(void* o) {
+    size_t base = grav_gc_sn;
+    grav_gc_paint(o, GRAV_BLACK);
+    grav_gc_push(o);
+    while (grav_gc_sn > base) grav_gc_children(grav_gc_stack[--grav_gc_sn], grav_gc_black_child);
+}
+static size_t grav_gc_collect(void) {
+    if (grav_gc_running || __atomic_load_n(&grav_gc_others, __ATOMIC_RELAXED) || grav_destroying) return 0;
+    grav_gc_running = 1;
+    size_t k = 0;
+    /* 1. Keep the live candidates; forget the rest (freeing the ones that died meanwhile). */
+    for (size_t i = 0; i < grav_gc_nroots; i++) {
+        void* o = grav_gc_roots[i];
+        long long* rc = grav_gc_rc(o);
+        *rc &= ~GRAV_RC_BUFFERED;
+        if (*rc & GRAV_RC_GONE) { if (GRAV_RC_WEAKS(*rc) == 0) free(o); continue; }
+        if (GRAV_RC_COUNT(*rc) == 0 || (*rc & GRAV_RC_DEAD)) { grav_gc_paint(o, GRAV_BLACK); continue; }
+        grav_gc_roots[k++] = o;
+    }
+    grav_gc_nroots = k;
+    grav_gc_work = k;
+    /* 2. Gray: take away the references from inside the graph. */
+    for (size_t i = 0; i < k; i++) {
+        void* o = grav_gc_roots[i];
+        if (grav_gc_color(o) == GRAV_GRAY) continue;
+        grav_gc_paint(o, GRAV_GRAY);
+        grav_gc_push(o);
+        while (grav_gc_sn) grav_gc_children(grav_gc_stack[--grav_gc_sn], grav_gc_gray_child);
+    }
+    /* 3. Scan: still referenced -> black (references given back), else white. */
+    for (size_t i = 0; i < k; i++) {
+        grav_gc_push(grav_gc_roots[i]);
+        while (grav_gc_sn) {
+            void* o = grav_gc_stack[--grav_gc_sn];
+            if (grav_gc_color(o) != GRAV_GRAY) continue;
+            if (GRAV_RC_COUNT(*grav_gc_rc(o)) > 0) { grav_gc_scan_black(o); continue; }
+            grav_gc_paint(o, GRAV_WHITE);
+            grav_gc_children(o, grav_gc_scan_child);
+        }
+    }
+    /* 4. Gather the white objects (painted black as they are taken). */
+    void** white = 0; size_t nw = 0, cw = 0;
+    for (size_t i = 0; i < k; i++) {
+        void* r = grav_gc_roots[i];
+        if (grav_gc_color(r) != GRAV_WHITE) { grav_gc_paint(r, GRAV_BLACK); continue; }
+        grav_gc_paint(r, GRAV_BLACK);
+        grav_gc_push(r);
+        while (grav_gc_sn) {
+            void* o = grav_gc_stack[--grav_gc_sn];
+            if (nw == cw) { cw = cw ? cw * 2 : 256; white = (void**)realloc(white, cw * sizeof(void*)); if (!white) abort(); }
+            white[nw++] = o;
+            grav_gc_children(o, grav_gc_white_child);
+        }
+    }
+    grav_gc_nroots = 0;
+    /* 5. Give the garbage its real counts back, hold it, dispose of it, let go. */
+    for (size_t i = 0; i < nw; i++) grav_gc_children(white[i], grav_gc_restore_child);
+    for (size_t i = 0; i < nw; i++) ++*grav_gc_rc(white[i]);
+    for (size_t i = 0; i < nw; i++) grav_free_obj(white[i]);
+    for (size_t i = 0; i < nw; i++) grav_release(white[i]);
+    free(white);
+    /* The next pass waits for twice as many candidates as this one traversed, so
+       collecting costs at most a constant per candidate (walking a long list
+       that is still in use does not make every pass re-walk it). What a pass
+       frees does not count against it: productive passes keep the pace. */
+    size_t wasted = grav_gc_work > nw ? grav_gc_work - nw : 0;   /* traversed but still alive */
+    grav_gc_threshold = wasted * 2 > 10000 ? wasted * 2 : 10000;
+    grav_gc_running = 0;
+    return nw;
+}
+static void grav_autorelease_box(void (*rel)(void*), const void* v, size_t n) {
+    GravBox* b = (GravBox*)grav_alloc(sizeof(GravBox) + n);
+    b->rel = rel;
+    memcpy(b->data, v, n);
+    grav_autorelease((void*)((uintptr_t)b | 2));
 }
 /* A thread is ending: release what it still holds and give back its per-thread
    buffers (release list, destruction queue, cached string blocks), so threads
    that come and go (one per HTTP connection) leave nothing behind. */
 static void grav_thread_end(void) {
     grav_pool_drain(0);
+    __atomic_sub_fetch(&grav_gc_others, 1, __ATOMIC_SEQ_CST);  /* counted in Thread.start */
     free(grav_pool); grav_pool = 0; grav_pool_cap = 0;
     free(grav_dead); grav_dead = 0; grav_dead_cap = 0; grav_dead_n = 0;
     pthread_mutex_lock(&grav_slock);
@@ -651,6 +802,10 @@ static inline GravAny grav_any_autorelease(GravAny a) {
     else if (a.tag == GRAV_ANY_STR) grav_str_autorelease(a.v.s);
     return a;
 }
+static GRAV_UNUSED void grav_gc_visit_any(GravAny a) {
+    if (a.tag == GRAV_ANY_OBJ) grav_gc_visit(a.v.p);
+    else if (a.tag == GRAV_ANY_FN) grav_gc_visit(a.v.fn.env);
+}
 static const char* grav_any_typename(GravAny a) {
     switch (a.tag) {
         case GRAV_ANY_INT: return "int";
@@ -800,7 +955,7 @@ static _Thread_local int grav_recover_top = 0;
 static _Thread_local char grav_recover_msg[2048];
 /* A recovered panic unwinds as an exception of this type: no `catch` matches it
    (there is no object), so `finally` blocks run and it reaches the recovery point. */
-static const GravTypeInfo grav_panic_typeinfo = { "panic", 0, 0, 0, 0, 0, 0, 0 };
+static const GravTypeInfo grav_panic_typeinfo = { "panic", 0, 0, 0, 0, 0, 0, 0, 0 };
 /* The try depth below which handlers belong outside the innermost recovery region. */
 static inline int grav_try_floor(void) {
     return grav_recover_top > 0 ? grav_recover_try[grav_recover_top - 1] : 0;
@@ -824,7 +979,33 @@ static void grav_print_trace(const GravFrame* fr, int n) {
         fprintf(stderr, "    at %s (%s:%d)\n",
                 fr[i].fn ? fr[i].fn : "?", fr[i].file ? fr[i].file : "?", fr[i].line);
 }
+/* The in-flight exception owns one reference to its object and its message.
+   A `catch` moves the object out (grav_exc_take); a `finally` on the way out
+   saves and restores it (grav_exc_save/grav_exc_restore). */
+static void grav_exc_clear(void) {
+    void* v = grav_current_exc.value; const char* m = grav_current_exc.message;
+    grav_current_exc.value = 0; grav_current_exc.message = 0;
+    grav_release(v);
+    grav_str_release(m);
+}
+static void* grav_exc_take(void) {
+    void* v = grav_current_exc.value;
+    grav_current_exc.value = 0;
+    grav_str_release(grav_current_exc.message);
+    grav_current_exc.message = 0;
+    return v;
+}
+static void grav_exc_save(GravExc* out) {
+    memcpy(out, &grav_current_exc, sizeof(GravExc));
+    grav_current_exc.value = 0; grav_current_exc.message = 0;
+}
+static void grav_exc_restore(const GravExc* in) {
+    grav_exc_clear();
+    memcpy(&grav_current_exc, in, sizeof(GravExc));
+}
 static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char* msg) {
+    if (grav_current_exc.value != v) grav_exc_clear();
+    else grav_str_release(grav_current_exc.message);
     grav_current_exc.value = v; grav_current_exc.type = t; grav_current_exc.message = msg;
 #ifndef GRAV_NO_TRACE
     /* Snapshot the live call stack at the throw site (before any unwinding). */
@@ -974,10 +1155,11 @@ static void grav_task_exec(GravTask* t) {
         grav_jmp_top = slot;
         grav_frames_restore(nf);
         GravExc* copy = (GravExc*)grav_alloc(sizeof(GravExc));
-        memcpy(copy, &grav_current_exc, sizeof(GravExc));
+        grav_exc_save(copy);              /* the task record now owns the exception */
         t->exc = copy;
         t->failed = 1;
     }
+    __atomic_sub_fetch(&grav_gc_others, 1, __ATOMIC_SEQ_CST);
     pthread_mutex_lock(&t->mu);
     t->state = 2;
     pthread_cond_broadcast(&t->cv);
@@ -1004,6 +1186,7 @@ static void* grav_worker(void* arg) {
 }
 
 static GravTask* grav_spawn(GravTask* t, void (*run)(GravTask*), void* result) {
+    __atomic_add_fetch(&grav_gc_others, 1, __ATOMIC_SEQ_CST); /* until the task finishes */
     t->run = run;
     t->result = result;
     pthread_mutex_init(&t->mu, 0);
@@ -1041,7 +1224,9 @@ static void* grav_await(GravTask* t) {
     t->awaited = 1;
     pthread_mutex_unlock(&t->mu);
     if (t->failed) {
-        memcpy(&grav_current_exc, t->exc, sizeof(GravExc));
+        grav_exc_restore(t->exc);
+        grav_retain(grav_current_exc.value);  /* the task keeps its copy too */
+        grav_str_retain(grav_current_exc.message);
         grav_rethrow();
     }
     return t->result;
@@ -1071,6 +1256,7 @@ static void grav_task_free(GravTask* t) {
     pthread_mutex_unlock(&grav_pool_mu);
     pthread_mutex_destroy(&t->mu);
     pthread_cond_destroy(&t->cv);
+    if (t->exc) { grav_release(t->exc->value); grav_str_release(t->exc->message); }
     free(t->exc);
     free(t); /* the task is the first member of its record */
 }
