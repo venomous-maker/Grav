@@ -1,0 +1,265 @@
+// services/bank_service.grav — the business rules. Every operation takes the
+// store's lock for its whole duration, validates, changes balances, records the
+// transactions, and saves; it returns Ok(result) or Err(BankError).
+import "std"
+import "entities/money"
+import "entities/customer"
+import "entities/account"
+import "entities/transaction"
+import "repository/store"
+import "services/errors"
+
+namespace bank.services {
+    use bank.entities.*
+    use bank.repository.Store
+
+    // A transfer's two statement lines.
+    class TransferReceipt {
+        public from: Account
+        public to: Account
+        public amount: long
+        public memo: string
+        constructor(from: Account, to: Account, amount: long, memo: string) {
+            self.from = from; self.to = to; self.amount = amount; self.memo = memo
+        }
+        fn toJson() -> JsonValue {
+            return Json.object()
+                .set("from", self.from.number).set("to", self.to.number)
+                .set("amount", Money.format(self.amount)).set("memo", self.memo)
+                .set("fromBalance", Money.format(self.from.balance))
+                .set("toBalance", Money.format(self.to.balance))
+        }
+    }
+
+    class BankService {
+        public store: Store
+        // The largest single deposit, withdrawal or transfer (cents).
+        public maxAmount: long
+
+        constructor(store: Store) {
+            self.store = store
+            self.maxAmount = 1000000000            // 10,000,000.00
+        }
+
+        // ── customers ──
+        fn createCustomer(name: string, email: string) -> Result<Customer, BankError> {
+            let n = Str.trim(name)
+            let e = Str.trim(Str.lower(email))
+            if (Str.length(n) < 2) { return Result.Err(BankError.Invalid("'name' needs at least 2 characters")) }
+            if (!Str.contains(e, "@") || Str.startsWith(e, "@") || Str.endsWith(e, "@")) {
+                return Result.Err(BankError.Invalid("'" + email + "' is not an email address"))
+            }
+            self.store.lock.lock()
+            try {
+                if (self.store.customerByEmail(e) != null) {
+                    return Result.Err(BankError.Conflict("a customer with email " + e + " already exists"))
+                }
+                let c = new Customer(self.store.nextId("customer"), n, e)
+                self.store.customers.push(c)
+                self.store.save()
+                return Result.Ok(c)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        fn customer(id: long) -> Result<Customer, BankError> {
+            self.store.lock.lock()
+            try {
+                let c = self.store.customer(id)
+                return c == null ? Result.Err(BankError.NotFound("customer", "${id}")) : Result.Ok(c)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        // ── accounts ──
+        fn openAccount(customerId: long, kindText: string) -> Result<Account, BankError> {
+            let kind = AccountKind.Checking
+            match (parseKind(kindText)) {
+                case Ok(k): kind = k
+                case Err(why): return Result.Err(BankError.Invalid(why))
+            }
+            self.store.lock.lock()
+            try {
+                if (self.store.customer(customerId) == null) {
+                    return Result.Err(BankError.NotFound("customer", "${customerId}"))
+                }
+                let a = new Account(self.store.nextId("account"), customerId, kind)
+                self.store.accounts.push(a)
+                self.store.save()
+                return Result.Ok(a)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        fn account(number: string) -> Result<Account, BankError> {
+            self.store.lock.lock()
+            try {
+                let a = self.store.account(number)
+                return a == null ? Result.Err(BankError.NotFound("account", number)) : Result.Ok(a)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        fn setStatus(number: string, status: AccountStatus) -> Result<Account, BankError> {
+            self.store.lock.lock()
+            try {
+                let a = self.store.account(number)
+                if (a == null) { return Result.Err(BankError.NotFound("account", number)) }
+                if (a.status == AccountStatus.Closed) { return Result.Err(BankError.NotActive(number, "closed")) }
+                if (status == AccountStatus.Closed && a.balance != 0) {
+                    return Result.Err(BankError.Conflict(number + " still holds " + Money.format(a.balance) + "; empty it first"))
+                }
+                a.status = status
+                self.store.save()
+                return Result.Ok(a)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        // ── money movement ──
+        private fn checkAmount(cents: long) -> BankError {
+            if (cents <= 0) { return BankError.Invalid("the amount must be more than zero") }
+            if (cents > self.maxAmount) { return BankError.Invalid("the amount is over the limit of " + Money.format(self.maxAmount)) }
+            return null
+        }
+        private fn checkActive(a: Account) -> BankError {
+            return a.isActive() ? null : BankError.NotActive(a.number, statusName(a.status))
+        }
+        private fn record(a: Account, kind: TxKind, amount: long, counterparty: string, memo: string) {
+            self.store.transactions.push(new Transaction(self.store.nextId("transaction"), a.id, kind, amount,
+                a.balance, counterparty, memo))
+        }
+
+        fn deposit(number: string, cents: long, memo: string) -> Result<Account, BankError> {
+            let bad = self.checkAmount(cents)
+            if (bad != null) { return Result.Err(bad) }
+            self.store.lock.lock()
+            try {
+                let a = self.store.account(number)
+                if (a == null) { return Result.Err(BankError.NotFound("account", number)) }
+                let inactive = self.checkActive(a)
+                if (inactive != null) { return Result.Err(inactive) }
+                a.balance += cents
+                self.record(a, TxKind.Deposit, cents, "", memo)
+                self.store.save()
+                return Result.Ok(a)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        fn withdraw(number: string, cents: long, memo: string) -> Result<Account, BankError> {
+            let bad = self.checkAmount(cents)
+            if (bad != null) { return Result.Err(bad) }
+            self.store.lock.lock()
+            try {
+                let a = self.store.account(number)
+                if (a == null) { return Result.Err(BankError.NotFound("account", number)) }
+                let inactive = self.checkActive(a)
+                if (inactive != null) { return Result.Err(inactive) }
+                if (cents > a.available()) { return Result.Err(BankError.InsufficientFunds(number, a.available(), cents)) }
+                a.balance -= cents
+                self.record(a, TxKind.Withdrawal, cents, "", memo)
+                self.store.save()
+                return Result.Ok(a)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        // Moves money between two accounts atomically: both change, or neither.
+        fn transfer(fromNumber: string, toNumber: string, cents: long, memo: string) -> Result<TransferReceipt, BankError> {
+            let bad = self.checkAmount(cents)
+            if (bad != null) { return Result.Err(bad) }
+            if (fromNumber == toNumber) { return Result.Err(BankError.Invalid("cannot transfer an account to itself")) }
+            self.store.lock.lock()
+            try {
+                let from = self.store.account(fromNumber)
+                if (from == null) { return Result.Err(BankError.NotFound("account", fromNumber)) }
+                let to = self.store.account(toNumber)
+                if (to == null) { return Result.Err(BankError.NotFound("account", toNumber)) }
+                for (a in [from, to]) {
+                    let inactive = self.checkActive(a)
+                    if (inactive != null) { return Result.Err(inactive) }
+                }
+                if (cents > from.available()) { return Result.Err(BankError.InsufficientFunds(fromNumber, from.available(), cents)) }
+                from.balance -= cents
+                to.balance += cents
+                self.record(from, TxKind.TransferOut, cents, toNumber, memo)
+                self.record(to, TxKind.TransferIn, cents, fromNumber, memo)
+                self.store.save()
+                return Result.Ok(new TransferReceipt(from, to, cents, memo))
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        // Pays interest on every active savings account with a positive balance.
+        // `basisPoints`: 125 = 1.25%. Returns how many accounts were paid.
+        fn payInterest(basisPoints: long) -> Result<int, BankError> {
+            if (basisPoints <= 0 || basisPoints > 2000) {
+                return Result.Err(BankError.Invalid("the rate must be between 0.01% and 20%"))
+            }
+            self.store.lock.lock()
+            try {
+                let paid = 0
+                for (a in self.store.accounts) {
+                    if (a.kind != AccountKind.Savings || !a.isActive() || a.balance <= 0) { continue }
+                    let interest = a.balance * basisPoints / 10000        // rounded down to the cent
+                    if (interest == 0) { continue }
+                    a.balance += interest
+                    self.record(a, TxKind.Interest, interest, "", "interest ${basisPoints / 100}.${Str.padLeft("${basisPoints % 100}", 2, "0")}%")
+                    paid += 1
+                }
+                self.store.save()
+                return Result.Ok(paid)
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        // ── reports ──
+        fn statement(number: string) -> Result<Array<Transaction>, BankError> {
+            self.store.lock.lock()
+            try {
+                let a = self.store.account(number)
+                if (a == null) { return Result.Err(BankError.NotFound("account", number)) }
+                return Result.Ok(self.store.transactionsOf(a.id))
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        fn summary() -> JsonValue {
+            self.store.lock.lock()
+            try {
+                let total: long = 0
+                let byKind = Json.object()
+                for (a in self.store.accounts) {
+                    total += a.balance
+                    let k = kindName(a.kind)
+                    byKind.set(k, byKind.getLong(k, 0) + 1)
+                }
+                return Json.object()
+                    .set("customers", self.store.customers.size() as long)
+                    .set("accounts", self.store.accounts.size() as long)
+                    .set("accountsByKind", byKind)
+                    .set("transactions", self.store.transactions.size() as long)
+                    .set("totalDeposits", Money.format(total))
+            } finally {
+                self.store.lock.unlock()
+            }
+        }
+
+        fn accountsOf(customerId: long) -> Array<Account> {
+            self.store.lock.lock()
+            try { return self.store.accountsOf(customerId) } finally { self.store.lock.unlock() }
+        }
+    }
+
+}
