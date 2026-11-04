@@ -504,6 +504,7 @@ void Registry::registerDecls(Program &program) {
             info.isFinal = c->isFinal;
             for (auto &f : c->fields) {
                 FieldInfo fi{f.access, f.isReadonly, f.name, f.type, c->fqName};
+                fi.isWeak = f.isWeak;
                 info.fields.push_back(std::move(fi));
             }
             for (auto &m : c->methods) {
@@ -760,6 +761,12 @@ void Registry::canonicalize() {
             cd->fields[i].type = canonType(cd->fields[i].type, ns,
                                            cd->fields[i].line, cd->fields[i].col);
             ci.fields[i].type = cd->fields[i].type;
+            if (cd->fields[i].isWeak) {
+                const TypeRef &wt = cd->fields[i].type;
+                if (!wt.isNamed() || !classes_.count(wt.name))
+                    error(cd->fields[i].line, cd->fields[i].col,
+                          "'weak' needs a class type: field '" + cd->fields[i].name + "' is " + typeRefName(wt));
+            }
         }
         for (auto &p : cd->constructor.params) p.type = canonType(p.type, ns, line, col);
         for (auto &x : cd->extraCtors)
