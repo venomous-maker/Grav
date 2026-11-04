@@ -1,0 +1,22 @@
+gravc: tests/errors/redeclare.grav:1:24: sema error: duplicate field 'x' in struct 'Point'
+    struct Point { x: int  x: string }
+                           ^
+gravc: tests/errors/redeclare.grav:3:56: sema error: duplicate field 'name' in class 'Twice'
+    class Twice extends Base { public name: string  public name: int }
+                                                           ^
+gravc: tests/errors/redeclare.grav:4:36: sema error: field 'id' is already declared in base class 'Base'
+    class Shadow extends Base { public id: int }
+                                       ^
+gravc: tests/errors/redeclare.grav:6:5: type error: 'n' is already declared in this scope
+        let n = 5
+        ^
+gravc: tests/errors/redeclare.grav:11:5: type error: 'y' is already declared in this scope
+        let y = 2
+        ^
+gravc: tests/errors/redeclare.grav:13:23: type error: 'i' is already declared in this scope
+        for (i in 0..2) { let i = 4  print(i) }
+                          ^
+gravc: tests/errors/redeclare.grav:14:26: type error: 'k' is already declared in this scope
+        let g = fn(k: int) { let k = 2  print(k) }
+                             ^
+gravc: 7 error(s); aborting

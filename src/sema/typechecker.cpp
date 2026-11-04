@@ -26,6 +26,15 @@ void TypeChecker::popScope() {
 
 void TypeChecker::declareLocal(const std::string &name, const TypeRef &type,
                                bool isParam, bool isConst, int line, int col) {
+    // One name per scope. A function's (or lambda's, loop's, catch's) parameters
+    // share a scope with the top of its body, so a local there cannot reuse one.
+    const LocalVar *prev = nullptr;
+    if (auto it = scopes_.back().find(name); it != scopes_.back().end()) prev = &it->second;
+    if (!prev && !isParam && scopes_.size() >= 2) {
+        const auto &outer = scopes_[scopes_.size() - 2];
+        if (auto it = outer.find(name); it != outer.end() && it->second.isParam) prev = &it->second;
+    }
+    if (prev) error(line, col, "'" + name + "' is already declared in this scope");
     LocalVar v;
     v.type = type;
     v.isParam = isParam;

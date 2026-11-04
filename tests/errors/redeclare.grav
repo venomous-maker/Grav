@@ -1,0 +1,17 @@
+struct Point { x: int  x: string }
+class Base { public id: int }
+class Twice extends Base { public name: string  public name: int }
+class Shadow extends Base { public id: int }
+fn f(n: int) -> int {
+    let n = 5
+    return n
+}
+fn main() {
+    let y = 1
+    let y = 2
+    { let y = 3  print(y) }      // an inner block may shadow
+    for (i in 0..2) { let i = 4  print(i) }
+    let g = fn(k: int) { let k = 2  print(k) }
+    g(1)
+    print(y + f(1))
+}

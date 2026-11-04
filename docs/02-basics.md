@@ -23,7 +23,9 @@ Output:
 
 `let x: auto = 5` spells out the inference explicitly (it is the same as `let x = 5`).
 Assigning to a `const` is a compile error, and so is using a variable before it is
-declared. Unused local variables produce a warning (an error with `-Werror`).
+declared. A name is declared once per block: an inner block may reuse an outer name
+(shadowing it), but the same block, or the top of a function body and its parameters,
+may not. Unused local variables produce a warning (an error with `-Werror`).
 
 ## Primitive types
 

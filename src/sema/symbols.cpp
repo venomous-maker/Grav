@@ -272,6 +272,10 @@ const std::vector<GravError> &Registry::build(Program &program) {
     computeSlots();
     checkHierarchies();
     checkStructCycles();
+    // Checks walk hash maps: report in source order.
+    std::stable_sort(errors_.begin(), errors_.end(), [](const GravError &a, const GravError &b) {
+        return a.line() != b.line() ? a.line() < b.line() : a.col() < b.col();
+    });
     return errors_;
 }
 
@@ -894,6 +898,29 @@ void Registry::checkStructCycles() {
 }
 
 void Registry::checkHierarchies() {
+    // A field name is declared once per struct, and once along a class's chain
+    // of bases (base fields are part of every subclass instance).
+    for (auto &[fq, si] : structs_)
+        for (size_t i = 0; i < si.decl->fields.size(); ++i)
+            for (size_t j = 0; j < i; ++j)
+                if (si.decl->fields[j].name == si.decl->fields[i].name) {
+                    error(si.decl->fields[i].line, si.decl->fields[i].col,
+                          "duplicate field '" + si.decl->fields[i].name + "' in struct '" + fq + "'");
+                    break;
+                }
+    for (auto &[fq, ci] : classes_) {
+        const auto &fields = ci.decl->fields;
+        for (size_t i = 0; i < fields.size(); ++i) {
+            bool dup = false;
+            for (size_t j = 0; j < i && !dup; ++j) dup = fields[j].name == fields[i].name;
+            const FieldInfo *inherited = ci.baseClass.empty() ? nullptr : findField(ci.baseClass, fields[i].name);
+            if (dup)
+                error(fields[i].line, fields[i].col, "duplicate field '" + fields[i].name + "' in class '" + fq + "'");
+            else if (inherited)
+                error(fields[i].line, fields[i].col, "field '" + fields[i].name + "' is already declared in base class '" +
+                                                         inherited->definingClass + "'");
+        }
+    }
     for (auto &[fq, ci] : classes_) {
         int line = ci.decl->line, col = ci.decl->col;
 
