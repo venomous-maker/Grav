@@ -1,5 +1,6 @@
 // lib/collections/stack.grav — Stack<T> (LIFO, over Array) and Queue<T> (FIFO, over a ring
 // buffer — every operation is O(1)).
+import "../core/exception.grav"
 import "array.grav"
 import "deque.grav"
 
@@ -11,11 +12,11 @@ namespace std.collections {
         destructor() { free(self.items); }
         public fn push(item: T) { self.items.push(item); }
         public fn pop() -> T {
-            if (self.items.isEmpty()) { panic("Stack.pop on an empty stack"); }
+            if (self.items.isEmpty()) { throw new StateError("Stack.pop on an empty stack"); }
             return self.items.pop();
         }
         public fn peek() -> T {
-            if (self.items.isEmpty()) { panic("Stack.peek on an empty stack"); }
+            if (self.items.isEmpty()) { throw new StateError("Stack.peek on an empty stack"); }
             return self.items.last();
         }
         public fn peekOr(fallback: T) -> T { return self.items.isEmpty() ? fallback : self.items.last(); }
@@ -36,11 +37,11 @@ namespace std.collections {
         destructor() { free(self.items); }
         public fn enqueue(item: T) { self.items.pushBack(item); }
         public fn dequeue() -> T {
-            if (self.items.isEmpty()) { panic("Queue.dequeue on an empty queue"); }
+            if (self.items.isEmpty()) { throw new StateError("Queue.dequeue on an empty queue"); }
             return self.items.popFront();
         }
         public fn peek() -> T {
-            if (self.items.isEmpty()) { panic("Queue.peek on an empty queue"); }
+            if (self.items.isEmpty()) { throw new StateError("Queue.peek on an empty queue"); }
             return self.items.peekFront();
         }
         public fn peekOr(fallback: T) -> T { return self.items.isEmpty() ? fallback : self.items.peekFront(); }
