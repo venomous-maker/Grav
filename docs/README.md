@@ -54,6 +54,7 @@ Hello, Grace!
 | 16 | [Concurrency](16-concurrency.md) | async tasks on a worker pool, `GRAV_MAXPROCS`, mutexes, atomics, channels, `--race` |
 | 17 | [Testing](17-testing.md) | `test` blocks, `assertEq`, `grav test`, filtering |
 | 18 | [Networking, JSON, threads & processes](18-networking.md) | `Json`, `Thread`/`WaitGroup`/`Semaphore`, `Command`, TCP, `HttpServer`/`HttpClient`, WebSockets |
+| — | [Writing operators](operators.md) | every overloadable operator, indexing with several keys, compound assignment, derived comparisons |
 | — | [Reference](reference.md) | keywords, operator precedence, built-ins, grammar summary |
 
 Runnable programs for every chapter live in [`../examples/`](../examples/README.md).
