@@ -1,0 +1,39 @@
+// app.grav — builds the server: store -> service -> controllers -> routes, with
+// the auth/counting middleware in front.
+import "std"
+import "std/net"
+import "repository/store"
+import "services/bank_service"
+import "http/api"
+import "routes"
+
+namespace bank {
+    use bank.repository.Store
+    use bank.services.BankService
+    use bank.http.Gate
+    use bank.controllers.*
+
+    class BankApp {
+        public store: Store
+        public bank: BankService
+        public gate: Gate
+        public server: HttpServer
+
+        // `dataFile` "" keeps everything in memory.
+        constructor(dataFile: string, token: string) {
+            self.store = new Store(dataFile)
+            self.bank = new BankService(self.store)
+            self.gate = new Gate(token)
+            self.server = new HttpServer()
+            let gate = self.gate
+            self.server.use(fn(req: HttpRequest) => gate.check(req))
+            let controllers = new Controllers(
+                new CustomerController(self.bank),
+                new AccountController(self.bank),
+                new TransferController(self.bank),
+                new ReportController(self.bank, self.gate))
+            registerRoutes(self.server, controllers)
+        }
+    }
+
+}
