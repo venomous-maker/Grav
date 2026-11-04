@@ -1,0 +1,25 @@
+// controllers/report_controller.grav — /api/health and /api/reports
+import "std"
+import "std/net"
+import "services/bank_service"
+import "http/api"
+
+namespace bank.controllers {
+    use bank.services.*
+    use bank.http.*
+
+    class ReportController {
+        private bank: BankService
+        private gate: Gate
+        constructor(bank: BankService, gate: Gate) { self.bank = bank; self.gate = gate }
+
+        // GET /api/health — needs no token.
+        fn health(req: HttpRequest) -> HttpResponse {
+            return Api.ok(Json.object().set("status", "up").set("requests", self.gate.requests.get()))
+        }
+
+        // GET /api/reports/summary
+        fn summary(req: HttpRequest) -> HttpResponse { return Api.ok(self.bank.summary()) }
+    }
+
+}
