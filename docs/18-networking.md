@@ -220,8 +220,10 @@ echo: hello
 
 `HttpServer` routes requests by method and path: `:name` captures one segment and
 a trailing `*` captures the rest. Each connection is served on its own thread with
-keep-alive. If a handler throws, the client gets a 500 response, and unknown
-paths get 404 or 405.
+keep-alive. If a handler throws, or even panics, the client gets a 500 response
+and the server keeps running (panics are logged; see
+[Panics and recovery](11-exceptions.md#panics-and-recovery)). Unknown paths get
+404 or 405.
 
 ```grav
 import "std"
