@@ -5,6 +5,7 @@
 //   d.pushBack(1); d.pushFront(0)        // 0 1
 //   for (x in d) { print(x) }
 
+import "../core/exception.grav"
 namespace std.collections {
 
     %{
@@ -39,7 +40,7 @@ namespace std.collections {
             self.head = 0;
         }
         private fn check(i: int) {
-            if (i < 0 || i >= self.len) { panic("Deque index ${i} out of range (size ${self.len})"); }
+            if (i < 0 || i >= self.len) { throw new IndexError("Deque index ${i} out of range (size ${self.len})"); }
         }
 
         public fn size() -> int { return self.len; }
@@ -63,7 +64,7 @@ namespace std.collections {
             self.len = self.len + 1;
         }
         public fn popFront() -> T {
-            if (self.len == 0) { panic("Deque.popFront on an empty deque"); }
+            if (self.len == 0) { throw new StateError("Deque.popFront on an empty deque"); }
             let item = self.buf[self.head];
             self.head = (self.head + 1) & (self.cap - 1);
             self.len = self.len - 1;
@@ -71,7 +72,7 @@ namespace std.collections {
             return item;
         }
         public fn popBack() -> T {
-            if (self.len == 0) { panic("Deque.popBack on an empty deque"); }
+            if (self.len == 0) { throw new StateError("Deque.popBack on an empty deque"); }
             self.len = self.len - 1;
             let item = self.buf[(self.head + self.len) & (self.cap - 1)];
             __release(item);          // the deque's reference
