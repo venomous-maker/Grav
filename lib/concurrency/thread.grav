@@ -167,8 +167,9 @@ namespace std.concurrency {
                 grav_retain(self);         /* the thread keeps its Thread object alive while it runs */
                 st->obj = self;
                 grav_mt_on();              /* reference counts become atomic from here on */
+                __atomic_add_fetch(&grav_gc_others, 1, __ATOMIC_SEQ_CST); /* no cycle collection meanwhile */
                 rc = pthread_create((pthread_t*)self->h, 0, grav_thread_tramp, st);
-                if (rc != 0) { free(st); grav_release(self); }
+                if (rc != 0) { free(st); grav_release(self); __atomic_sub_fetch(&grav_gc_others, 1, __ATOMIC_SEQ_CST); }
             %};
             if (rc != 0) { throw new StateError("could not start thread '" + self.name + "'"); }
         }
