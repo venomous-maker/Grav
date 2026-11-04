@@ -5,12 +5,19 @@ import "std/net"
 class Box { public n: int; constructor() { self.n = 0 } }
 
 test "recover returns the panic message" {
-    let xs = new Array<int>()
     assertEq(Panic.recover(fn() {}), "")
-    assertEq(Panic.recover(fn() { xs.get(2) }), "panic: Array index 2 out of range (length 0)")
-    let r: Result<int, string> = Result.Err("gone")
-    assertEq(Panic.recover(fn() { r.unwrap() }), "panic: called unwrap() on Err(gone)")
     assertEq(Panic.recover(fn() { panic("custom") }), "panic: custom")
+}
+
+test "library misuse throws exceptions, stopped at a recovery point" {
+    let xs = new Array<int>()
+    assertEq(Panic.recover(fn() { xs.get(2) }), "uncaught exception: IndexError: Array index 2 out of range (length 0)")
+    let r: Result<int, string> = Result.Err("gone")
+    assertEq(Panic.recover(fn() { r.unwrap() }), "uncaught exception: StateError: called unwrap() on Err(gone)")
+    let caught = new Box()
+    try { xs.pop() } catch (e: StateError) { caught.n += 1 }
+    try { xs[5] = 1 } catch (e: IndexError) { caught.n += 1 }
+    assertEq(caught.n, 2)
 }
 
 test "escaping exceptions stop at a recovery point" {
@@ -46,21 +53,19 @@ test "nested recovery points" {
 }
 
 test "a panicking thread reports through join" {
-    let xs = new Array<int>()
-    assertEq(Thread.spawn(fn() { xs.get(1) }).joinResult(), "panic: Array index 1 out of range (length 0)")
+    assertEq(Thread.spawn(fn() { panic("worker broke") }).joinResult(), "panic: worker broke")
 }
 
 test "servers answer 500 and keep serving" {
-    let xs = new Array<int>()
     let app = new HttpServer()
     app.get("/ok", fn(q: HttpRequest) => HttpResponse.text("fine"))
-    app.get("/boom", fn(q: HttpRequest) -> HttpResponse { return HttpResponse.text("${xs.get(0)}") })
+    app.get("/boom", fn(q: HttpRequest) -> HttpResponse { panic("boom") })
     app.start(0)
     let base = "http://127.0.0.1:${app.port()}"
     let c = new HttpClient()
     assertEq(c.get(base + "/boom").status, 500)
     assertEq(c.get(base + "/ok").body(), "fine")
-    assertEq(c.get(base + "/boom").body(), "internal error: panic: Array index 0 out of range (length 0)")
+    assertEq(c.get(base + "/boom").body(), "internal error: panic: boom")
     app.stop()
 }
 
