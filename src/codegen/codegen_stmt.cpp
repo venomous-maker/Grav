@@ -77,9 +77,41 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
+        // `obj[k] op= v` (rewritten to obj[k] = obj[k] op v): evaluate obj and
+        // the indices once, for both the read and the write.
+        std::vector<const Expr *> once;
+        std::vector<std::pair<const Expr *, const Expr *>> pairs; // (target part, read-back part)
+        if (s->readBack) {
+            if (auto *ix = dynamic_cast<const IndexExpr *>(s->target.get())) {
+                auto *rb = static_cast<const IndexExpr *>(s->readBack);
+                pairs = {{ix->base.get(), rb->base.get()}, {ix->index.get(), rb->index.get()}};
+                for (size_t i = 0; i < ix->more.size() && i < rb->more.size(); ++i)
+                    pairs.push_back({ix->more[i].get(), rb->more[i].get()});
+            } else if (auto *m = dynamic_cast<const MemberExpr *>(s->target.get());
+                       m && m->kind == MemberKind::InstanceField) {
+                pairs = {{m->object.get(), static_cast<const MemberExpr *>(s->readBack)->object.get()}};
+            }
+        }
+        if (!pairs.empty()) {
+            line("{");
+            indent_++;
+            for (auto &[w, r] : pairs) {
+                std::string t = "__ix" + std::to_string(throwCounter_++);
+                line(cTy(w->type) + " " + t + " = " + emitStable(*w, w->type) + ";");
+                exprOverride_[w] = t;
+                exprOverride_[r] = t;
+                once.push_back(w);
+                once.push_back(r);
+            }
+        }
         auto temps = hoistTemps(s->value.get());
         if (!emitOwnedAssign(*s)) line(emitAssign(*s) + ";");
         freeTemps(temps);
+        if (!once.empty()) {
+            for (const Expr *x : once) exprOverride_.erase(x);
+            indent_--;
+            line("}");
+        }
         return;
     }
     if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
@@ -324,10 +356,13 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
         std::vector<TypeRef> params;
         if (const MethodInfo *mi = reg_->findMethod(ix->overloadClass, ix->overloadMethod))
             params = mi->paramTypes;
-        std::string args = params.size() == 2
-                               ? emitAs(*ix->index, params[0]) + ", " + emitAs(*s.value, params[1])
-                               : emitExpr(*ix->index) + ", " + emitExpr(*s.value);
-        return methodCall(emitExpr(*ix->base), ix->base->type, ix->overloadMethod, args);
+        std::vector<const Expr *> keys{ix->index.get()};
+        for (const auto &m : ix->more) keys.push_back(m.get());
+        std::string args;
+        for (size_t i = 0; i < keys.size(); ++i)
+            args += (i ? ", " : "") + (i < params.size() ? emitStable(*keys[i], params[i]) : emitExpr(*keys[i]));
+        args += ", " + (params.size() == keys.size() + 1 ? emitStable(*s.value, params.back()) : emitExpr(*s.value));
+        return methodCall(emitStable(*ix->base, ix->base->type), ix->base->type, ix->overloadMethod, args);
     }
     std::string target = emitExpr(*s.target);
     if (!s.isCompound)
