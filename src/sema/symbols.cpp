@@ -565,6 +565,7 @@ void Registry::registerDecls(Program &program) {
                 mi.returnType = m.returnType;
                 mi.definingClass = ifc->fqName;
                 mi.hasBody = false;
+                mi.decl = &m; // for its parameters' default values
                 for (auto &p : m.params) {
                     mi.paramTypes.push_back(p.type);
                     mi.paramNames.push_back(p.name);

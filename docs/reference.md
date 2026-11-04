@@ -77,7 +77,7 @@ Future<T>                  handle to a running async call (await it for the T)
 ## Declarations
 
 ```text
-fn name<T>(a: A, ...rest: R) -> Ret { ... }          function (generic, variadic optional)
+fn name<T>(a: A, b: B = value, ...rest: R) -> Ret { ... }   function (generic, defaults, variadic optional)
 async fn name(...) -> T { ... }                      (runs on the worker pool; no variadics)
 [final|abstract] class Name<T> extends Base, Other implements I, J uses f: T { ... }
     [public|private|protected] [static] [readonly] field: T [= init for static]
@@ -110,6 +110,7 @@ for (i in a..b [step s]) { } / for (i in a..=b) { }
 for (x in xs) { } / for (i, x in xs) { }
 switch (v) { case a, b: { } default: { } }            (match is a synonym)
 break [label] / continue [label] / return [e]
+f(x, name: value)                                     (named arguments)
 defer stmt / defer { }
 throw e
 try { } catch (e: T) { } [catch (e: U) { }] [finally { }]

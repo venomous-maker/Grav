@@ -122,6 +122,8 @@ struct Visitor {
         else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee.get()); for (auto &a : x->args) expr(a.get()); }
         else if (auto *x = dynamic_cast<MemberExpr *>(e)) expr(x->object.get());
         else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody.get()); block(x->body); }
+        else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value.get());
+        else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value.get());
     }
 };
 // Like Visitor, but hands out the owning ExprPtr so expressions can be replaced.
@@ -179,6 +181,8 @@ struct Rewriter {
         else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee); for (auto &a : x->args) expr(a); }
         else if (auto *x = dynamic_cast<MemberExpr *>(e)) expr(x->object);
         else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody); block(x->body); }
+        else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value);
+        else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value);
     }
 };
 } // namespace

@@ -184,6 +184,12 @@ ExprPtr cloneExpr(const Expr *e) {
         for (const auto &a : x->args) n->args.push_back(cloneExpr(a.get()));
         return n;
     }
+    if (auto *x = dynamic_cast<const NamedArgExpr *>(e)) {
+        auto n = mkE<NamedArgExpr>(e); n->name = x->name; n->value = cloneExpr(x->value.get()); return n;
+    }
+    if (auto *x = dynamic_cast<const DefaultArgExpr *>(e)) {
+        auto n = mkE<DefaultArgExpr>(e); n->ns = x->ns; n->value = cloneExpr(x->value.get()); return n;
+    }
     return nullptr; // unreachable for known nodes
 }
 
@@ -318,6 +324,7 @@ private:
     void walkStmt(Stmt *s, const Subst &subst);
     void walkExpr(Expr *e, const Subst &subst);
     void walkDeclTypes(Decl *d, const Subst &subst);
+    void rewriteParams(std::vector<Param> &ps, const Subst &subst, int line, int col);
     void synthesizeTraits(); // copy interface/trait default methods into implementers
     // Generic methods: templates (with the owning class's substitution) and the
     // `obj.m::<Args>(...)` requests seen so far; instantiated to a fixed point.
@@ -543,11 +550,8 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
     auto out = std::make_unique<FunctionDecl>();
     out->line = tpl->line; out->col = tpl->col;
     out->name = inst; out->fqName = inst; out->isAsync = tpl->isAsync;
-    for (const auto &p : tpl->params) {
-        Param np = p;
-        rewriteType(np.type, subst, tpl->line, tpl->col);
-        out->params.push_back(std::move(np));
-    }
+    out->params = tpl->params;
+    rewriteParams(out->params, subst, tpl->line, tpl->col);
     out->returnType = tpl->returnType;
     rewriteType(out->returnType, subst, tpl->line, tpl->col);
     out->body = cloneBlock(tpl->body);
@@ -590,7 +594,7 @@ std::string Mono::instantiateInterface(const std::string &name, const std::vecto
     out->name = inst; out->fqName = inst;
     for (const auto &m : tpl->methods) {
         MethodDecl nm = cloneMethod(m);
-        for (auto &p : nm.params) rewriteType(p.type, subst, m.line, m.col);
+        rewriteParams(nm.params, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
         out->methods.push_back(std::move(nm));
     }
@@ -662,13 +666,13 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     out->constructor.present = tpl->constructor.present;
     out->constructor.line = tpl->constructor.line; out->constructor.col = tpl->constructor.col;
     out->constructor.params = tpl->constructor.params;
-    for (auto &p : out->constructor.params) rewriteType(p.type, subst, tpl->constructor.line, tpl->constructor.col);
+    rewriteParams(out->constructor.params, subst, tpl->constructor.line, tpl->constructor.col);
     out->constructor.body = cloneBlock(tpl->constructor.body);
     walkBlock(out->constructor.body, subst);
     for (const auto &x : tpl->extraCtors) {
         ConstructorDecl nc;
         nc.present = true; nc.line = x.line; nc.col = x.col; nc.params = x.params;
-        for (auto &p : nc.params) rewriteType(p.type, subst, x.line, x.col);
+        rewriteParams(nc.params, subst, x.line, x.col);
         nc.body = cloneBlock(x.body);
         walkBlock(nc.body, subst);
         out->extraCtors.push_back(std::move(nc));
@@ -685,7 +689,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
             continue;
         }
         MethodDecl nm = cloneMethod(m);
-        for (auto &p : nm.params) rewriteType(p.type, subst, m.line, m.col);
+        rewriteParams(nm.params, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
         if (nm.hasBody) walkBlock(nm.body, subst);
         out->methods.push_back(std::move(nm));
@@ -845,6 +849,8 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         for (auto &m : x->more) walkExpr(m.get(), subst);
     } else if (auto *x = dynamic_cast<MemberExpr *>(e)) {
         walkExpr(x->object.get(), subst);
+    } else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) {
+        walkExpr(x->value.get(), subst);
     }
 }
 
@@ -880,7 +886,10 @@ GenericSig Mono::exportSig(const std::vector<std::string> &own, const std::vecto
     for (const auto &p : params) {
         g.params.push_back(exportType(p.type, own, cls));
         if (p.variadic) g.variadic = true;
+        g.paramNames.push_back(p.name);
+        g.defaults.push_back(p.defaultValue);
     }
+    g.ns = currentNs_;
     g.ret = exportType(ret, own, cls);
     return g;
 }
@@ -911,13 +920,24 @@ bool Mono::rejectUnknownArgs(const std::string &generic, const std::vector<TypeR
     return false;
 }
 
+// Parameter types, and default values: those are shared with the declaration
+// they were copied from, so each copy gets its own, walked like any expression.
+void Mono::rewriteParams(std::vector<Param> &ps, const Subst &subst, int line, int col) {
+    for (auto &p : ps) {
+        rewriteType(p.type, subst, line, col);
+        if (!p.defaultValue) continue;
+        p.defaultValue = std::shared_ptr<Expr>(cloneExpr(p.defaultValue.get()).release());
+        walkExpr(p.defaultValue.get(), subst);
+    }
+}
+
 void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
     NsScope nsScope(currentNs_, nsOf(d->fqName));
     if (auto *t = dynamic_cast<TestDecl *>(d)) { walkBlock(t->body, subst); return; }
     if (auto *st = dynamic_cast<StructDecl *>(d)) {
         for (auto &f : st->fields) rewriteType(f.type, subst, f.line, f.col);
     } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
-        for (auto &p : fn->params) rewriteType(p.type, subst, fn->line, fn->col);
+        rewriteParams(fn->params, subst, fn->line, fn->col);
         rewriteType(fn->returnType, subst, fn->line, fn->col);
         walkBlock(fn->body, subst);
     } else if (auto *cd = dynamic_cast<ClassDecl *>(d)) {
@@ -937,15 +957,15 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             rewriteType(sf.type, subst, sf.line, sf.col);
             walkExpr(sf.init.get(), subst);
         }
-        for (auto &p : cd->constructor.params) rewriteType(p.type, subst, cd->line, cd->col);
+        rewriteParams(cd->constructor.params, subst, cd->line, cd->col);
         if (cd->constructor.present) walkBlock(cd->constructor.body, subst);
         for (auto &x : cd->extraCtors) {
-            for (auto &p : x.params) rewriteType(p.type, subst, x.line, x.col);
+            rewriteParams(x.params, subst, x.line, x.col);
             walkBlock(x.body, subst);
         }
         if (cd->destructor.present) walkBlock(cd->destructor.body, subst);
         for (auto &m : cd->methods) {
-            for (auto &p : m.params) rewriteType(p.type, subst, m.line, m.col);
+            rewriteParams(m.params, subst, m.line, m.col);
             rewriteType(m.returnType, subst, m.line, m.col);
             if (m.hasBody) walkBlock(m.body, subst);
         }
@@ -1057,7 +1077,7 @@ void Mono::instantiateGenericMethods() {
                 for (size_t i = 0; i < args.size(); ++i) s[m.typeParams[i]] = args[i];
                 m.name = inst;
                 m.typeParams.clear();
-                for (auto &p : m.params) rewriteType(p.type, s, m.line, m.col);
+                rewriteParams(m.params, s, m.line, m.col);
                 rewriteType(m.returnType, s, m.line, m.col);
                 if (m.hasBody) walkBlock(m.body, s);
                 owner->methods.push_back(std::move(m));
@@ -1151,7 +1171,7 @@ void Mono::synthesizeTraits() {
                 if (classHasMethod(c, m.name)) continue; // overridden / already present
                 MethodDecl nm = cloneMethod(m);
                 nm.access = Access::Public;
-                for (auto &p : nm.params) rewriteType(p.type, selfSubst, m.line, m.col);
+                rewriteParams(nm.params, selfSubst, m.line, m.col);
                 rewriteType(nm.returnType, selfSubst, m.line, m.col);
                 walkBlock(nm.body, selfSubst);
                 c->methods.push_back(std::move(nm));

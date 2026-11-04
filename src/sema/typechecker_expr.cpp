@@ -162,14 +162,22 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         t = checkIndex(*e);
     } else if (auto *e = dynamic_cast<NewExpr *>(&expr)) {
         t = checkNew(*e);
+        unwrapDefaults(e->args);
     } else if (auto *e = dynamic_cast<StructLiteralExpr *>(&expr)) {
         t = checkStructLiteral(*e);
     } else if (auto *e = dynamic_cast<CallExpr *>(&expr)) {
         t = checkCall(*e);
+        unwrapDefaults(e->args);
     } else if (auto *e = dynamic_cast<MemberExpr *>(&expr)) {
         t = checkMember(*e);
     } else if (auto *e = dynamic_cast<LambdaExpr *>(&expr)) {
         t = checkLambda(*e);
+    } else if (auto *e = dynamic_cast<DefaultArgExpr *>(&expr)) {
+        t = checkDefaultArg(*e);
+    } else if (auto *e = dynamic_cast<NamedArgExpr *>(&expr)) {
+        error(e->line, e->col, "named arguments ('" + e->name + ": ...') are for calls to functions, "
+                               "methods and constructors by name");
+        checkExpr(*e->value);
     }
     expr.type = t;
     return t;
@@ -792,6 +800,15 @@ const FunctionInfo *TypeChecker::pickOverload(const std::vector<FunctionInfo> &c
 // Resolves a call to a free function, choosing among overloads of the name.
 TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
     const std::vector<FunctionInfo> &cands = reg_->funcOverloads(fnFq);
+    {
+        std::vector<ParamList> pls;
+        for (const auto &c : cands)
+            pls.push_back(c.decl ? paramList(c.decl->params, Registry::namespaceOf(fnFq)) : ParamList{c.paramNames, std::vector<std::shared_ptr<Expr>>(c.paramNames.size()), c.isVariadic, ""});
+        if (completeArgs(e.args, pls, e.line, e.col, "function '" + fnFq + "'") == -2) {
+            checkArgValues(e.args);
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+    }
     std::vector<TypeRef> argTypes;
     argTypes.reserve(e.args.size());
     for (size_t i = 0; i < e.args.size(); ++i) {
@@ -1191,8 +1208,8 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         e.ifaceDispatch = true;
         e.ownerClass = objType.name; // interface fq
         e.methodName = mem->member;
-        checkArgs(e.args, mi->paramTypes, e.line, e.col,
-                  "method '" + objType.name + "." + mem->member + "'");
+        if (!resolveMethodOverload({mi}, e.args, e.line, e.col, "method '" + objType.name + "." + mem->member + "'"))
+            return TypeRef::prim(TypeRef::Kind::Error);
         return mi->returnType;
     }
 

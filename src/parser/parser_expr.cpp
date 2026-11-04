@@ -333,7 +333,18 @@ std::vector<ExprPtr> Parser::parseArguments() {
     expect(TokenType::LParen, "to begin the argument list");
     if (!check(TokenType::RParen)) {
         do {
-            args.push_back(parseExpression());
+            // `name: value` — a named argument.
+            if (check(TokenType::Identifier) && pos_ + 1 < tokens_.size() &&
+                tokens_[pos_ + 1].type == TokenType::Colon) {
+                const Token &n = advance();
+                advance(); // ':'
+                auto na = at<NamedArgExpr>(n);
+                na->name = n.lexeme;
+                na->value = parseExpression();
+                args.push_back(std::move(na));
+            } else {
+                args.push_back(parseExpression());
+            }
         } while (matchToken(TokenType::Comma));
     }
     expect(TokenType::RParen, "to end the argument list");

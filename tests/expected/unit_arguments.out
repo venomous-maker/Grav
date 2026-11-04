@@ -1,0 +1,6 @@
+running 4 tests
+  ok    defaults fill the arguments a call leaves out
+  ok    named arguments go to their parameter
+  ok    a default is evaluated at each call that needs it
+  ok    labeled break and continue
+result: 4 passed, 0 failed

@@ -73,6 +73,21 @@ struct SelfExpr : Expr {};
 // callee of `super(...)` (parent constructor) or `super.method(...)`.
 struct SuperExpr : Expr {};
 
+// `name: value` in an argument list. The checker moves it to its parameter's
+// position; none are left by the time code is generated.
+struct NamedArgExpr : Expr {
+    std::string name;
+    ExprPtr value;
+};
+
+// A parameter's default value standing in for an argument the call left out.
+// It is checked where the callee was declared (its namespace, no caller locals),
+// then replaced by `value` once the call is resolved.
+struct DefaultArgExpr : Expr {
+    ExprPtr value;
+    std::string ns;
+};
+
 enum class BinaryOp {
     Add, Sub, Mul, Div, Mod,
     BitAnd, BitOr, BitXor, Shl, Shr,
@@ -404,6 +419,9 @@ struct Param {
     std::string name;
     TypeRef type;
     bool variadic = false; // `...name: T` — collects trailing args (last param only)
+    // `name: T = value`: used when a call leaves the argument out. Shared between
+    // copies of a declaration; every use works on a clone.
+    std::shared_ptr<Expr> defaultValue;
 };
 
 struct FieldDecl {
@@ -599,6 +617,9 @@ struct GenericSig {
     std::vector<TypeRef> params;         // in terms of typeParams
     TypeRef ret;
     bool variadic = false;
+    std::vector<std::string> paramNames;               // for named arguments
+    std::vector<std::shared_ptr<Expr>> defaults;       // parallel to params (null: required)
+    std::string ns;                                    // where the defaults are written
 };
 struct GenericTables {
     std::map<std::string, std::vector<GenericSig>> functions; // generic fn name -> signature

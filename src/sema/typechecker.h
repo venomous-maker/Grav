@@ -172,6 +172,23 @@ private:
                           int line, int col, const std::string &what);
     TypeRef checkMember(MemberExpr &e); // value position (field read)
     bool isLvalue(const Expr &e) const;
+    // Named arguments and defaults (typechecker_args.cpp).
+public:
+    struct ParamList {
+        std::vector<std::string> names;
+        std::vector<std::shared_ptr<Expr>> defaults;
+        bool variadic = false;
+        std::string ns;
+    };
+private:
+    static ParamList paramList(const std::vector<Param> &ps, const std::string &ns);
+    static ParamList paramList(const GenericSig &sig);
+    int completeArgs(std::vector<ExprPtr> &args, const std::vector<ParamList> &cands, int line, int col,
+                     const std::string &what);
+    TypeRef checkDefaultArg(DefaultArgExpr &e);
+    void checkDefaults(const std::vector<Param> &params);
+    static void unwrapDefaults(std::vector<ExprPtr> &args);
+    void checkArgValues(std::vector<ExprPtr> &args);
     std::optional<TypeRef> commonBase(const TypeRef &a, const TypeRef &b) const;
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
     // a scalar/reference/enum (not a value-type struct or interface fat pointer).

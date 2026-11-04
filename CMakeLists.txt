@@ -26,6 +26,7 @@ add_executable(gravc
         src/sema/typechecker_ops.cpp
         src/sema/typechecker_lambda.cpp
         src/sema/typechecker_infer.cpp
+        src/sema/typechecker_args.cpp
         src/sema/sanitize.cpp
         src/sema/enums.cpp
         src/sema/typechecker_match.cpp

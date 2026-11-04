@@ -194,6 +194,7 @@ void TypeChecker::checkFunction(FunctionDecl &fn) {
     inConstructor_ = false;
     inStatic_ = false;
     inAsync_ = fn.isAsync;
+    checkDefaults(fn.params);
     pushScope();
     for (auto &p : fn.params) {
         // A variadic parameter is bound as a slice (runtime-length sequence).
@@ -215,6 +216,7 @@ void TypeChecker::checkClass(ClassDecl &cls) {
         inConstructor_ = true;
         inStatic_ = false;
         currentReturn_ = TypeRef::prim(TypeRef::Kind::Void);
+        checkDefaults(ctor.params);
         pushScope();
         for (auto &p : ctor.params) declareLocal(p.name, p.type, true, false, ctor.line, ctor.col);
         checkBlock(ctor.body);
@@ -237,6 +239,7 @@ void TypeChecker::checkClass(ClassDecl &cls) {
         inConstructor_ = false;
         inStatic_ = m.isStatic;
         currentReturn_ = m.returnType;
+        checkDefaults(m.params);
         pushScope();
         for (auto &p : m.params) declareLocal(p.name, p.type, true, false, m.line, m.col);
         checkBlock(m.body);

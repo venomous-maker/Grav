@@ -130,6 +130,16 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
                                                      std::vector<ExprPtr> &args, int line, int col,
                                                      const std::string &what) {
     if (cands.empty()) return nullptr;
+    {
+        std::vector<ParamList> pls;
+        for (const MethodInfo *m : cands)
+            pls.push_back(m->decl ? paramList(m->decl->params, Registry::namespaceOf(m->definingClass))
+                                  : ParamList{m->paramNames, std::vector<std::shared_ptr<Expr>>(m->paramNames.size()), false, ""});
+        if (completeArgs(args, pls, line, col, what) == -2) {
+            checkArgValues(args);
+            return nullptr;
+        }
+    }
     auto sigOf = [](const MethodInfo *m) {
         return signatureText(m->paramNames, m->paramTypes, m->returnType, false);
     };
@@ -172,6 +182,14 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
 int TypeChecker::resolveCtor(const std::string &classFq, std::vector<ExprPtr> &args, int line,
                              int col, const std::string &what) {
     const ClassInfo *ci = reg_->cls(classFq);
+    if (ci && !ci->ctors.empty()) {
+        std::vector<ParamList> pls;
+        for (const ConstructorDecl *c : ci->ctors) pls.push_back(paramList(c->params, Registry::namespaceOf(classFq)));
+        if (completeArgs(args, pls, line, col, what) == -2) {
+            checkArgValues(args);
+            return -1;
+        }
+    }
     if (!ci || ci->ctors.empty()) { // implicit no-argument constructor
         checkArgs(args, {}, line, col, what);
         return 0;

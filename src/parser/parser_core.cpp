@@ -371,6 +371,12 @@ std::vector<Param> Parser::parseParams(bool allowVariadic) {
             p.name = expect(TokenType::Identifier, "as a parameter name").lexeme;
             expect(TokenType::Colon, "after the parameter name");
             p.type = parseType("for the parameter");
+            if (matchToken(TokenType::Assign)) {
+                if (p.variadic) fail(peek(), "a variadic parameter cannot have a default value");
+                p.defaultValue = std::shared_ptr<Expr>(parseExpression().release());
+            } else if (!params.empty() && params.back().defaultValue && !p.variadic) {
+                fail(peek(), "parameter '" + p.name + "' needs a default value: it follows one that has one");
+            }
             bool isVar = p.variadic;
             params.push_back(std::move(p));
             if (isVar && check(TokenType::Comma))

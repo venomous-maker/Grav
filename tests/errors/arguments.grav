@@ -1,0 +1,15 @@
+fn f(a: int, b: int = 2) -> int { return a + b }
+fn g(a: int = "x") -> int { return a }
+fn main() {
+    print(f(b: 1))
+    print(f(1, a: 2))
+    print(f(1, c: 2))
+    print(f(a: 1, 2))
+    let h = fn(x: int) => x
+    print(h(x: 1))
+    print(g())
+    loop: for (i in 0..2) {
+        inner: for (j in 0..2) { break nowhere }
+        loop: while (true) { break loop }
+    }
+}

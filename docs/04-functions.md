@@ -29,6 +29,50 @@ class instances are references, so a function can modify the object it receives.
 A function with a non-`void` return type must return on every path — the compiler
 reports `may reach the end without returning a value` otherwise.
 
+## Default values and named arguments
+
+A parameter may have a default value, used when a call leaves the argument out;
+parameters after one with a default need defaults too. Any argument can also be
+passed by name, in any order after the positional ones. Both work for functions,
+methods and constructors.
+
+```grav
+fn greet(name: string, greeting: string = "Hello", times: int = 1) -> string {
+    let out = ""
+    for (i in 0..times) { out += "${greeting}, ${name}! " }
+    return out
+}
+
+class Window {
+    public w: int
+    public h: int
+    constructor(w: int = 640, h: int = 480) { self.w = w; self.h = h }
+}
+
+fn main() {
+    print(greet("Ada"))
+    print(greet("Ada", "Hi"))
+    print(greet("Ada", times: 2))
+    print(greet(times: 1, greeting: "Hey", name: "Bob"))
+    let win = new Window(h: 600)
+    print("${win.w}x${win.h}")
+}
+```
+
+Output:
+
+```text
+Hello, Ada! 
+Hi, Ada! 
+Hello, Ada! Hello, Ada! 
+Hey, Bob! 
+640x600
+```
+
+A default is evaluated each time a call needs it, as written where the function is
+declared: it can use that file's constants and functions, not the caller's locals
+or the other parameters.
+
 ## Recursion
 
 ```grav

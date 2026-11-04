@@ -190,6 +190,9 @@ std::optional<TypeRef> TypeChecker::recordInference(int line, int col, const std
 std::optional<TypeRef> TypeChecker::tryInferCall(CallExpr &e, const std::string &name,
                                                  const std::vector<GenericSig> &sigs,
                                                  const TypeRef *expected) {
+    std::vector<ParamList> pls;
+    for (const auto &sig : sigs) pls.push_back(paramList(sig));
+    if (completeArgs(e.args, pls, e.line, e.col, "'" + name + "'") == -2) return TypeRef::prim(TypeRef::Kind::Error);
     std::string lastWhy = "no matching signature";
     for (const auto &sig : sigs) {
         Subst s;
@@ -209,6 +212,10 @@ std::optional<TypeRef> TypeChecker::tryInferNew(NewExpr &e, const TypeRef *expec
     for (const auto &cand : nameCandidates(e.className, currentNs_, program_->uses))
         if ((it = program_->generics.ctors.find(cand)) != program_->generics.ctors.end()) break;
     if (it == program_->generics.ctors.end()) return std::nullopt;
+    std::vector<ParamList> pls;
+    for (const auto &sig : it->second) pls.push_back(paramList(sig));
+    if (completeArgs(e.args, pls, e.line, e.col, "the constructor of '" + e.className + "'") == -2)
+        return TypeRef::prim(TypeRef::Kind::Error);
     std::string lastWhy = "no constructor matches the arguments";
     for (const auto &sig : it->second) {
         Subst s;

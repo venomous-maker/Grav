@@ -1,0 +1,79 @@
+// Default parameter values, named arguments, and labeled break/continue.
+import "std"
+
+namespace net { const PORT: int = 8080  fn address(host: string, port: int = PORT, tls: bool = false) -> string {
+    return "${tls ? "https" : "http"}://${host}:${port}"
+} }
+
+class Counter { static calls: int = 0 }
+fn next() -> int { Counter.calls += 1; return Counter.calls }
+fn stamp(label: string, n: int = next()) -> string { return "${label}${n}" }
+
+interface Logger { fn log(msg: string, level: int = 1) -> string }
+class Console implements Logger {
+    fn log(msg: string, level: int = 1) -> string { return "[${level}] ${msg}" }
+}
+class Size {
+    public w: int
+    public h: int
+    constructor(w: int = 1, h: int = 2) { self.w = w; self.h = h }
+    fn area(scale: int = 1) -> int { return self.w * self.h * scale }
+    static fn square(side: int = 3) -> Size { return new Size(side, side) }
+}
+class Tall extends Size { }
+fn label<T>(x: T, prefix: string = "item") -> string { return "${prefix}=${x}" }
+
+test "defaults fill the arguments a call leaves out" {
+    assertEq(net.address("example.org"), "http://example.org:8080")
+    assertEq(net.address("h", 99), "http://h:99")
+    assertEq(new Size().area(), 2)
+    assertEq(Size.square().area(), 9)
+    assertEq(new Tall().h, 2)
+    assertEq(label(5), "item=5")
+}
+
+test "named arguments go to their parameter" {
+    assertEq(net.address("h", tls: true), "https://h:8080")
+    assertEq(net.address(port: 1, host: "x"), "http://x:1")
+    assertEq(new Size(h: 5).area(scale: 2), 10)
+    assertEq(label("s", prefix: "name"), "name=s")
+    let l: Logger = new Console()
+    assertEq(l.log("hi"), "[1] hi")
+    assertEq(l.log("hi", level: 3), "[3] hi")
+}
+
+test "a default is evaluated at each call that needs it" {
+    Counter.calls = 0
+    assertEq(stamp("a"), "a1")
+    assertEq(stamp("b"), "b2")
+    assertEq(stamp("c", 10), "c10")
+    assertEq(Counter.calls, 2)
+}
+
+test "labeled break and continue" {
+    let seen = ""
+    outer: for (i in 0..3) {
+        for (j in 0..3) {
+            if (j == 1) { continue outer }
+            if (i == 2) { break outer }
+            seen += "${i}${j} "
+        }
+    }
+    assertEq(seen, "00 10 ")
+    let words = new Array<string>()
+    for (w in ["a", "bb", "ccc"]) { words.push(w) }
+    let found = ""
+    rows: for (w in words) {
+        for (c in w) {
+            if (c == "b") { continue rows }
+            if (c == "c") { found = w; break rows }
+        }
+    }
+    assertEq(found, "ccc")
+    let n = 0
+    spin: while (true) {
+        n++
+        do { if (n > 3) { break spin } } while (false)
+    }
+    assertEq(n, 4)
+}
