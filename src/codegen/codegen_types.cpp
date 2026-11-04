@@ -164,6 +164,7 @@ void CodeGen::collectInExpr(const Expr &expr) {
         for (const auto &el : e->elements) collectInExpr(*el);
     } else if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
         collectInExpr(*e->base); collectInExpr(*e->index);
+        for (const auto &m : e->more) collectInExpr(*m);
     } else if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
         for (const auto &a : e->args) collectInExpr(*a);
     } else if (auto *e = dynamic_cast<const StructLiteralExpr *>(&expr)) {
