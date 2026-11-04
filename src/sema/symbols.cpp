@@ -265,6 +265,7 @@ const std::vector<GravError> &Registry::build(Program &program) {
     registerDecls(program);
     canonicalizeAliases();
     canonicalize();
+    inheritConstructors();
     assignMethodNames();
     synthesizeAccessors();
     synthesizeDelegates();

@@ -635,6 +635,8 @@ struct Program {
 // Calls `f` on every expression in the program (pre-order, including lambda
 // bodies, initializers of globals and static fields).
 void visitExprs(Program &program, const std::function<void(Expr &)> &f);
+// The same walk over one block.
+void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f);
 
 // Calls `f` on every expression slot so it can replace the expression. Pre-order:
 // after `f` returns, the (possibly new) expression's children are visited.

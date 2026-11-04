@@ -38,6 +38,12 @@ Bit barks (softly)
 
 An override must keep the parent method's parameter and return types.
 
+A subclass without a constructor of its own inherits its parent's constructors, so
+`Puppy` above could leave its constructor out and still be built with
+`new Puppy("Bit")`. A constructor that never calls `super(...)` runs the parent's
+parameterless constructor first; if the parent has no such constructor, leaving out
+`super(...)` is a compile error.
+
 ## Abstract classes
 
 An `abstract class` cannot be instantiated; its `abstract fn` methods have no body

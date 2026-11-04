@@ -1,0 +1,9 @@
+class NeedsArg { constructor(n: int) { } }
+class Forgets extends NeedsArg {
+    constructor() { print("no super call") }
+}
+class Inherited extends NeedsArg { }
+fn main() {
+    print(typename(new Inherited()))
+    print(typename(new Forgets()))
+}

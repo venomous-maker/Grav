@@ -209,6 +209,7 @@ private:
     void assignMethodNames(); // give overloads distinct internal names
     void synthesizeAccessors();
     void synthesizeDelegates(); // forwarders for `uses` composition
+    void inheritConstructors(); // implicit parent constructors and super() calls
     TypeRef canonType(const TypeRef &t, const std::string &nsContext, int line, int col);
     void computeSlots();
     void checkHierarchies();

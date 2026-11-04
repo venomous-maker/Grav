@@ -20,6 +20,7 @@ add_executable(gravc
         src/parser/parser_enum.cpp
         src/sema/monomorph.cpp
         src/sema/symbols.cpp
+        src/sema/symbols_ctors.cpp
         src/sema/typechecker.cpp
         src/sema/typechecker_expr.cpp
         src/sema/typechecker_ops.cpp

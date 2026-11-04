@@ -1,0 +1,7 @@
+gravc: tests/errors/constructors.grav:3:5: sema error: constructor of 'Forgets' must call super(...): 'NeedsArg' has no constructor without parameters
+        constructor() { print("no super call") }
+        ^
+gravc: tests/errors/constructors.grav:7:20: type error: constructor of 'Inherited(n: int)' expects 1 argument(s), but got 0
+        print(typename(new Inherited()))
+                       ^
+gravc: 2 error(s); aborting

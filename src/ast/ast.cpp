@@ -223,6 +223,11 @@ void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f) {
     }
 }
 
+void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f) {
+    Visitor v{f};
+    v.block(block);
+}
+
 void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
     Visitor v{f};
     for (auto &d : program.decls) {
