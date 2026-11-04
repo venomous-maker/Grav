@@ -393,6 +393,7 @@ struct Param {
 struct FieldDecl {
     Access access = Access::Public;
     bool isReadonly = false;
+    bool isWeak = false; // `weak parent: Node`: does not keep the object alive
     std::string name;
     TypeRef type;
     int line = 0, col = 0;
