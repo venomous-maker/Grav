@@ -1,0 +1,2 @@
+// lib/sort.grav — kept so a flat import works: the module is lib/core/sort.grav (namespace std.core).
+import "core/sort.grav"
