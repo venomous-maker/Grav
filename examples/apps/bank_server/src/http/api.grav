@@ -1,0 +1,72 @@
+// http/api.grav — what every controller shares: JSON responses, error mapping,
+// request body parsing, and the middleware (auth + request counting).
+import "std"
+import "std/net"
+import "entities/money"
+import "services/errors"
+
+namespace bank.http {
+    use bank.entities.*
+    use bank.services.*
+
+    class Api {
+        static fn ok(body: JsonValue) -> HttpResponse { return HttpResponse.json(body) }
+        static fn created(body: JsonValue) -> HttpResponse { return HttpResponse.json(body).withStatus(201) }
+        static fn list(items: JsonValue) -> HttpResponse {
+            return HttpResponse.json(Json.object().set("count", items.size() as long).set("items", items))
+        }
+        static fn fail(status: int, code: string, message: string) -> HttpResponse {
+            return HttpResponse.json(Json.object().set("error", Json.object().set("code", code).set("message", message)))
+                .withStatus(status)
+        }
+        // A BankError as an HTTP response: its status, code and message.
+        static fn error(e: BankError) -> HttpResponse { return Api.fail(e.httpStatus(), e.code(), e.message()) }
+
+        // The JSON object in the request body.
+        static fn body(req: HttpRequest) -> Result<JsonValue, HttpResponse> {
+            let doc = Json.tryParse(req.body())
+            if (doc == null || !doc.isObject()) {
+                return Result.Err(Api.fail(400, "bad_json", "the body must be a JSON object"))
+            }
+            return Result.Ok(doc)
+        }
+
+        // A required string field.
+        static fn field(body: JsonValue, name: string) -> Result<string, HttpResponse> {
+            let v = body[name]
+            if (!v.isString() || Str.trim(v.asString()) == "") {
+                return Result.Err(Api.fail(400, "invalid", "'" + name + "' is required"))
+            }
+            return Result.Ok(v.asString())
+        }
+
+        // The "amount" field in cents.
+        static fn amount(body: JsonValue) -> Result<long, HttpResponse> {
+            match (Money.fromJson(body["amount"])) {
+                case Ok(c): return Result.Ok(c)
+                case Err(why): return Result.Err(Api.fail(400, "invalid", body.has("amount") ? why : "'amount' is required"))
+            }
+        }
+
+        // A numeric route parameter such as /customers/:id.
+        static fn id(req: HttpRequest, name: string) -> long { return Format.toLongOr(req.param(name), -1) }
+    }
+
+    // Middleware: every /api request except health needs `Authorization: Bearer <token>`;
+    // every request is counted (shown by /api/health).
+    class Gate {
+        public requests: AtomicInt
+        private token: string
+        constructor(token: string) { self.requests = new AtomicInt(0); self.token = token }
+
+        fn check(req: HttpRequest) -> HttpResponse {
+            self.requests.increment()
+            if (!Str.startsWith(req.path, "/api/") || req.path == "/api/health") { return null }
+            if (req.header("Authorization") != "Bearer " + self.token) {
+                return Api.fail(401, "unauthorized", "send Authorization: Bearer <token>")
+            }
+            return null
+        }
+    }
+
+}
