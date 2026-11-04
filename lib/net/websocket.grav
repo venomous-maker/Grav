@@ -70,7 +70,7 @@ namespace std.net {
     }
     static const char* grav_base64(const unsigned char* d, size_t n) {
         static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        char* out = (char*)malloc((n + 2) / 3 * 4 + 1);
+        char* out = grav_str_alloc((n + 2) / 3 * 4 + 1);
         if (!out) abort();
         size_t o = 0;
         for (size_t i = 0; i < n; i += 3) {
