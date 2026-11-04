@@ -74,9 +74,13 @@ A class can define what operators mean for its instances with
 |-----------|-------------|-------|
 | `+ - * / %` | `fn operator+(o: T) -> R` | any return type |
 | `== !=` | `fn operator==(o: T) -> bool` | `!=` defaults to `!(a == b)` |
-| `< <= > >=` | `fn operator<(o: T) -> bool` | must return `bool` |
-| `obj[k]` | `fn operator[](k: K) -> V` | reading |
-| `obj[k] = v` | `fn operator[]=(k: K, v: V)` | writing |
+| `< <= > >=` | `fn operator<(o: T) -> bool` | must return `bool`; `>`, `<=`, `>=` follow from `<` |
+| `obj[k]`, `obj[r, c]` | `fn operator[](k: K) -> V` | reading; one or more keys |
+| `obj[k] = v` | `fn operator[]=(k: K, v: V)` | writing; the keys, then the value |
+
+Compound assignments use them too: `a += b` is `a = a + b`, and `obj[k] += v` reads
+with `operator[]` and writes with `operator[]=`. [Writing operators](operators.md)
+covers every operator, its rules, and the compiler's checks.
 
 Operator methods can themselves be overloaded (here `*` scales or takes a dot
 product depending on the right operand):
