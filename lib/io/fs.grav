@@ -36,7 +36,11 @@ namespace std.io {
     }
     static const char* grav_file_read(const char* path) {
         GravBytes b = grav_file_read_bytes(path);
-        return b.data ? (const char*)b.data : "";
+        if (!b.data) return "";
+        char* r = grav_str_new((size_t)b.len);      /* a counted copy: freed with its last reference */
+        memcpy(r, b.data, (size_t)b.len + 1);
+        free(b.data);
+        return r;
     }
     static int grav_file_write_bytes(const char* path, const unsigned char* data, long long len, const char* mode) {
         FILE* f = fopen(path, mode); if (!f) return 0;
@@ -62,7 +66,7 @@ namespace std.io {
     /* The next entry name of an open directory (heap copy), or 0 at the end. */
     static const char* grav_dir_next(void* d) {
         struct dirent* e = readdir((DIR*)d);
-        return e ? strdup(e->d_name) : 0;
+        return e ? grav_strdup(e->d_name) : 0;
     }
     static int grav_mkdirs(const char* path) {
         char buf[4096]; size_t n = strlen(path); if (n == 0 || n >= sizeof buf) return 0;
