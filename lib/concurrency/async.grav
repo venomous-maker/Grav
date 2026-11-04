@@ -8,6 +8,7 @@
 //
 //   let m = new Mutex()
 //   m.withLock(fn() { counter.value = counter.value + 1 })
+import "../core/exception.grav"
 import "../collections/array.grav"
 
 namespace std.concurrency {
@@ -146,7 +147,7 @@ namespace std.concurrency {
                while (self->count == 0 && !self->closed) pthread_cond_wait(&s->notEmpty, &s->mu); %};
             if (self.count == 0) {
                 %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %};
-                panic("receive on a closed, empty channel");
+                throw new StateError("receive on a closed, empty channel");
             }
             let v = self.buf[self.head];
             self.head = (self.head + 1) % self.cap;
