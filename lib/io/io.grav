@@ -14,9 +14,9 @@ namespace std.io {
     #include <stdio.h>
     #include <stdlib.h>
     static const char* grav_read_all(void) {
-        size_t cap = 4096, n = 0; char* b = (char*)malloc(cap); int c;
+        size_t cap = 4096, n = 0; char* b = grav_str_alloc(cap); int c;
         while ((c = getchar()) != EOF) {
-            if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            if (n + 1 >= cap) { cap *= 2; b = grav_str_grow(b, cap); }
             b[n++] = (char)c;
         }
         b[n] = 0; return b;
