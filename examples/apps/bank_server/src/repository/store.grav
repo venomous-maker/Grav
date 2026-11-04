@@ -1,0 +1,90 @@
+// repository/store.grav — where entities live: in memory, optionally saved to a
+// JSON file after every change. The store does not lock; the service holds
+// `store.lock` around each whole operation (so a transfer is atomic).
+import "std"
+import "entities/customer"
+import "entities/account"
+import "entities/transaction"
+
+namespace bank.repository {
+    use bank.entities.*
+
+    class Store {
+        public lock: Mutex
+        public customers: Array<Customer>
+        public accounts: Array<Account>
+        public transactions: Array<Transaction>
+        private nextIds: HashMap<string, long>
+        private file: string
+
+        constructor(file: string) {
+            self.lock = new Mutex()
+            self.customers = new Array<Customer>()
+            self.accounts = new Array<Account>()
+            self.transactions = new Array<Transaction>()
+            self.nextIds = new HashMap<string, long>()
+            self.file = file
+        }
+
+        // The next id for a kind of entity: 1, 2, 3, ...
+        fn nextId(kind: string) -> long {
+            let id = self.nextIds.getOr(kind, 1)
+            self.nextIds.put(kind, id + 1)
+            return id
+        }
+
+        // ── queries ──
+        fn customer(id: long) -> Customer {
+            for (c in self.customers) { if (c.id == id) { return c } }
+            return null
+        }
+        fn customerByEmail(email: string) -> Customer {
+            for (c in self.customers) { if (Str.equalsIgnoreCase(c.email, email)) { return c } }
+            return null
+        }
+        fn account(number: string) -> Account {
+            for (a in self.accounts) { if (a.number == number) { return a } }
+            return null
+        }
+        fn accountById(id: long) -> Account {
+            for (a in self.accounts) { if (a.id == id) { return a } }
+            return null
+        }
+        fn accountsOf(customerId: long) -> Array<Account> {
+            return self.accounts.filter(fn(a: Account) => a.customerId == customerId)
+        }
+        fn transactionsOf(accountId: long) -> Array<Transaction> {
+            return self.transactions.filter(fn(t: Transaction) => t.accountId == accountId)
+        }
+
+        // ── persistence ──
+        fn save() {
+            if (self.file == "") { return }
+            let doc = Json.object()
+            let ids = Json.object()
+            for (k in self.nextIds.keys()) { ids.set(k, self.nextIds.get(k)) }
+            doc.set("nextIds", ids)
+            doc.set("customers", Json.array())
+            doc.set("accounts", Json.array())
+            doc.set("transactions", Json.array())
+            for (c in self.customers) { doc["customers"].push(c.toJson()) }
+            for (a in self.accounts) { doc["accounts"].push(a.toRecord()) }
+            for (t in self.transactions) { doc["transactions"].push(t.toRecord()) }
+            let tmp = self.file + ".tmp"            // write then rename: never a half-written file
+            if (new File(tmp).write(doc.pretty())) { new File(tmp).moveTo(self.file) }
+        }
+
+        // Load a saved store; a missing file is an empty bank.
+        fn load() -> Result<int, string> {
+            if (self.file == "" || !new File(self.file).exists()) { return Result.Ok(0) }
+            let doc = Json.tryParse(new File(self.file).read())
+            if (doc == null || !doc.isObject()) { return Result.Err(self.file + " is not a saved bank") }
+            for (k in doc["nextIds"].keys()) { self.nextIds.put(k, doc["nextIds"][k].asLong()) }
+            for (c in doc["customers"].asArray()) { self.customers.push(Customer.fromJson(c)) }
+            for (a in doc["accounts"].asArray()) { self.accounts.push(Account.fromRecord(a)) }
+            for (t in doc["transactions"].asArray()) { self.transactions.push(Transaction.fromRecord(t)) }
+            return Result.Ok(self.customers.size() + self.accounts.size() + self.transactions.size())
+        }
+    }
+
+}
