@@ -216,7 +216,7 @@ static inline void grav_release(void* o) {
     if (GRAV_LIKELY(!grav_mt)) v = --((struct GravObject*)o)->__rc;
     else v = __atomic_sub_fetch(&((struct GravObject*)o)->__rc, 1, __ATOMIC_ACQ_REL);
     if (GRAV_UNLIKELY(GRAV_RC_COUNT(v) == 0)) grav_obj_destroy(o);
-    else if (!__atomic_load_n(&grav_gc_others, __ATOMIC_RELAXED) && !grav_gc_running &&
+    else if (!__atomic_load_n(&grav_gc_others, __ATOMIC_ACQUIRE) && !grav_gc_running &&
              ((struct GravObject*)o)->__type && ((struct GravObject*)o)->__type->visit)
         grav_gc_candidate(o);
 }
@@ -526,7 +526,7 @@ static void grav_gc_scan_black(void* o) {
     while (grav_gc_sn > base) grav_gc_children(grav_gc_stack[--grav_gc_sn], grav_gc_black_child);
 }
 static size_t grav_gc_collect(void) {
-    if (grav_gc_running || __atomic_load_n(&grav_gc_others, __ATOMIC_RELAXED) || grav_destroying) return 0;
+    if (grav_gc_running || __atomic_load_n(&grav_gc_others, __ATOMIC_ACQUIRE) || grav_destroying) return 0;
     grav_gc_running = 1;
     size_t k = 0;
     /* 1. Keep the live candidates; forget the rest (freeing the ones that died meanwhile). */
