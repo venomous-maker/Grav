@@ -3,6 +3,7 @@
 // in order, ask for the first/last key, or the keys in a range.
 //
 //   let ages = new SortedMap<string, int>(fn(a, b) => Str.compare(a, b))
+import "../core/exception.grav"
 import "array.grav"
 
 namespace std.collections {
@@ -37,7 +38,7 @@ namespace std.collections {
         }
         public fn get(key: K) -> V {
             let i = self.find(key);
-            if (i < 0) { panic("SortedMap.get: key not found"); }
+            if (i < 0) { throw new NotFound("SortedMap.get: key not found"); }
             return self.vs[i];
         }
         public fn getOr(key: K, fallback: V) -> V {
