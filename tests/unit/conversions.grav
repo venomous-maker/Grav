@@ -1,0 +1,70 @@
+// Conversions between numbers, text, enums and classes.
+import "std"
+
+enum Color { Red, Green, Blue }
+class Animal { }
+class Dog extends Animal { }
+class Cat extends Animal { }
+class Counter { static calls: int = 0 }
+class Node { public v: int  constructor(v: int) { self.v = v } }
+
+fn counted(n: Node) -> Node { Counter.calls += 1; return n }
+
+test "floats print the shortest text that reads back the same" {
+    let f = 0.1 + 0.2
+    assertEq(str(f), "0.30000000000000004")
+    assertEq("${f}", "0.30000000000000004")
+    assertEq(str(2.5), "2.5")
+    assertEq(str(1.0), "1")
+    assertEq(str(1e10), "10000000000")
+    assertEq(str(1e21), "1e+21")
+    assertEq(str(1.0 / 3.0), "0.3333333333333333")
+    let small: float32 = 0.1
+    assertEq(str(small), "0.1")
+}
+
+test "integer literals beyond int are longs" {
+    let big = 9000000000
+    assertEq(big + 1, 9000000001)
+    let wide: long = big * 2
+    assertEq(wide, 18000000000)
+    assertEq((1 as long) << 40, 1099511627776)
+}
+
+test "text to integers checks the range" {
+    assertEq(Format.toInt("42"), 42)
+    assertEq(Format.toLong("9000000000"), 9000000000)
+    assertEq(Format.toIntOr("99999999999", -1), -1)
+    let failed = false
+    try { Format.toInt("99999999999") } catch (e: ValueError) { failed = true }
+    assertEq(failed, true)
+    failed = false
+    try { Format.toByte("256") } catch (e: ValueError) { failed = true }
+    assertEq(failed, true)
+}
+
+test "numbers into enums must name a member" {
+    assertEq(2 as Color, Color.Blue)
+    let n = 7
+    let msg = ""
+    try { print(n as Color) } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg, "7 is not a Color (its values are 0 to 2)")
+}
+
+test "downcasts check the class" {
+    let a: Animal = new Dog()
+    assertEq(typename(a as Dog), "Dog")
+    let msg = ""
+    try { print(typename(a as Cat)) } catch (e: TypeError) { msg = e.message() }
+    assertEq(msg, "cannot cast a Dog to Cat")
+    let none: Animal = null
+    assertEq((none as Dog) == null, true)
+}
+
+test "?? evaluates its left side once" {
+    Counter.calls = 0
+    let missing: Node = null
+    assertEq((counted(missing) ?? new Node(2)).v, 2)
+    assertEq((counted(new Node(5)) ?? new Node(2)).v, 5)
+    assertEq(Counter.calls, 2)
+}

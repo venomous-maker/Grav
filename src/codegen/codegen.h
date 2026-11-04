@@ -50,6 +50,8 @@ private:
     void emitPrelude();
     // Run-time fault checks (codegen_faults.cpp).
     void emitFaultSupport();
+    std::vector<std::string> classInterfaces(const std::string &classFq) const;
+    std::string ifaceCast(const std::string &obj, const std::string &iface) const;
     void emitFaultRaisers();
     std::string checkedIndex(const std::string &idx, int length) const;
     std::string checkedDivision(BinaryOp op, const TypeRef &type, const std::string &l,

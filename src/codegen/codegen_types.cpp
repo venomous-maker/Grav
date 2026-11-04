@@ -509,10 +509,17 @@ void CodeGen::emitTypeInfos() {
         // Releasing the reference fields when the object is destroyed.
         emitReleaseFields(fq);
         std::string visit = emitVisitFields(fq);
+        // The interface tables (defined with the tables in emitInterfaceTables).
+        size_t nitabs = classInterfaces(fq).size();
+        std::string itabs = "0";
+        if (nitabs) {
+            itabs = mangle(fq) + "__itabs";
+            vtables_ += "static const GravItab " + itabs + "[" + std::to_string(nitabs) + "];\n";
+        }
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
                     std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + ", " +
-                    mangle(fq) + "__arc_fields, " + visit + " };\n";
+                    mangle(fq) + "__arc_fields, " + visit + ", " + itabs + ", " + std::to_string(nitabs) + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
@@ -536,26 +543,16 @@ void CodeGen::emitInterfaceTables() {
             vtableTypes_ += "    " + cTy(m.returnType) + " (*" + memberCName(m.name) + ")(" +
                             params + ");\n";
         }
-        vtableTypes_ += "} " + itabType(id->fqName) + ";\n\n";
+        vtableTypes_ += "} " + itabType(id->fqName) + ";\n";
+        // Its identity at run time (`x is I`, `x as I`): the marker's address.
+        vtableTypes_ += "static const GRAV_UNUSED char " + mangle(id->fqName) + "__iface = 0;\n\n";
     }
 
     // One table instance per (class, interface-it-implements) pair.
     for (const auto &declPtr : program_->decls) {
         auto *c = dynamic_cast<const ClassDecl *>(declPtr.get());
         if (!c) continue;
-        // Collect interfaces from the whole inheritance chain.
-        std::vector<std::string> ifaces;
-        std::string cur = c->fqName;
-        int guard = 0;
-        while (!cur.empty() && guard++ < 100) {
-            const ClassInfo *ci = reg_->cls(cur);
-            if (!ci) break;
-            for (const auto &i : ci->interfaces)
-                if (!i.empty() &&
-                    std::find(ifaces.begin(), ifaces.end(), i) == ifaces.end())
-                    ifaces.push_back(i);
-            cur = ci->baseClass;
-        }
+        std::vector<std::string> ifaces = classInterfaces(c->fqName);
         for (const auto &ifq : ifaces) {
             const InterfaceInfo *ii = reg_->iface(ifq);
             if (!ii) continue;
@@ -576,7 +573,30 @@ void CodeGen::emitInterfaceTables() {
             }
             vtables_ += "};\n\n";
         }
+        if (!ifaces.empty()) {
+            vtables_ += "static const GravItab " + mangle(c->fqName) + "__itabs[" + std::to_string(ifaces.size()) + "] = {";
+            for (size_t i = 0; i < ifaces.size(); ++i)
+                vtables_ += std::string(i ? ", " : " ") + "{ &" + mangle(ifaces[i]) + "__iface, &" + mangle(c->fqName) +
+                            "__itab__" + mangle(ifaces[i]) + " }";
+            vtables_ += " };\n\n";
+        }
     }
+}
+
+// Every interface `classFq` implements, through its whole chain of bases.
+std::vector<std::string> CodeGen::classInterfaces(const std::string &classFq) const {
+    std::vector<std::string> ifaces;
+    std::string cur = classFq;
+    int guard = 0;
+    while (!cur.empty() && guard++ < 100) {
+        const ClassInfo *ci = reg_->cls(cur);
+        if (!ci) break;
+        for (const auto &i : ci->interfaces)
+            if (!i.empty() && reg_->iface(i) && std::find(ifaces.begin(), ifaces.end(), i) == ifaces.end())
+                ifaces.push_back(i);
+        cur = ci->baseClass;
+    }
+    return ifaces;
 }
 
 void CodeGen::emitVTableInstance(const ClassInfo &ci) {

@@ -110,7 +110,11 @@ typedef struct GravTypeInfo {
     bool (*eq)(void*, void*);                   /* operator==(other), or 0 */
     void (*fields)(void*);                      /* release the object's reference fields, or 0 */
     void (*visit)(void*);                       /* report each object it refers to (cycle collector), or 0 */
+    const struct GravItab* itabs;               /* every interface the class implements */
+    int nitabs;
 } GravTypeInfo;
+/* An interface a class implements: the interface's marker and the class's table for it. */
+typedef struct GravItab { const char* iface; const void* tbl; } GravItab;
 
 /* Common object header: vtable pointer, runtime type descriptor, reference count.
    Closure environments share the header (their type info releases the captures). */
@@ -866,8 +870,9 @@ static long long grav_any_to_enum(GravAny a, const char* name) {
 }
 static void* grav_any_to_obj(GravAny a, const GravTypeInfo* want) {
     if (a.tag == GRAV_ANY_NULL) return 0;
-    if (a.tag == GRAV_ANY_OBJ && grav_type_is(((const struct GravObject*)a.v.p)->__type, want)) return a.v.p;
-    grav_any_bad(a, want->name);
+    /* want == 0: any object (an interface cast checks it next). */
+    if (a.tag == GRAV_ANY_OBJ && (!want || grav_type_is(((const struct GravObject*)a.v.p)->__type, want))) return a.v.p;
+    grav_any_bad(a, want ? want->name : "an object");
 }
 static GravFn grav_any_to_fn(GravAny a, const char* sig) {
     if (a.tag == GRAV_ANY_NULL) { GravFn z = {0, 0}; return z; }

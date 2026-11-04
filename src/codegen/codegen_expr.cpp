@@ -75,6 +75,11 @@ std::string CodeGen::boxAny(const Expr &e) const {
     return "grav_any_obj((void*)(" + v + "))";
 }
 
+// `obj as I` checked at run time: a fat pointer with the object's table for I.
+std::string CodeGen::ifaceCast(const std::string &obj, const std::string &iface) const {
+    return "grav_iface_cast(" + obj + ", &" + mangle(iface) + "__iface, \"" + escapeC(iface) + "\")";
+}
+
 std::string CodeGen::unboxAny(const std::string &c, const TypeRef &t) const {
     switch (t.kind) {
         case TypeRef::Kind::Any: return c;
@@ -89,6 +94,8 @@ std::string CodeGen::unboxAny(const std::string &c, const TypeRef &t) const {
     }
     if (t.isNamed() && reg_->isEnum(t.name))
         return "((" + cTy(t) + ")grav_any_to_enum(" + c + ", \"" + t.name + "\"))";
+    if (t.isNamed() && reg_->isInterface(t.name))
+        return ifaceCast("grav_any_to_obj(" + c + ", 0)", t.name);
     return "((" + cTy(t) + ")grav_any_to_obj(" + c + ", &" + mangle(t.name) + "_typeinfo))";
 }
 
@@ -104,6 +111,8 @@ std::string CodeGen::isAnyTest(const std::string &c, const TypeRef &t) const {
         default: break;
     }
     if (t.isNamed() && reg_->isEnum(t.name)) return "grav_any_is_enum(" + c + ", \"" + t.name + "\")";
+    if (t.isNamed() && reg_->isInterface(t.name))
+        return "(grav_itab_find(grav_any_objptr(" + c + "), &" + mangle(t.name) + "__iface) != 0)";
     return "grav_any_is_obj(" + c + ", &" + mangle(t.name) + "_typeinfo)";
 }
 
@@ -303,16 +312,42 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         if (e->target.isPointer())
             return "((" + cTy(e->target) + ")(" + emitExpr(*e->operand) + "))";
         // Named targets reuse the upcast/box logic; primitives do a C cast.
-        if (e->target.isNamed() && reg_->isEnum(e->target.name))
-            return "((" + cTy(e->target) + ")(" + emitExpr(*e->operand) + "))";
+        // A number into an enum must name one of its members.
+        if (e->target.isNamed() && reg_->isEnum(e->target.name)) {
+            if (e->operand->type == e->target) return emitExpr(*e->operand);
+            const EnumInfo *ei = reg_->en(e->target.name);
+            return "((" + cTy(e->target) + ")grav_enum_check((long long)(" + emitExpr(*e->operand) + "), " +
+                   std::to_string(ei ? ei->members.size() : 0) + ", \"" + escapeC(e->target.name) + "\"))";
+        }
+        const TypeRef &from = e->operand->type;
+        // Into an interface the static types do not prove: look up the object's table.
+        bool fromIface = from.isNamed() && reg_->isInterface(from.name);
+        if (e->target.isNamed() && reg_->isInterface(e->target.name) && from != e->target &&
+            !(from.isNamed() && reg_->isClass(from.name) && reg_->classImplements(from.name, e->target.name)) &&
+            (fromIface || (from.isNamed() && reg_->isClass(from.name))))
+            return ifaceCast(fromIface ? "(" + emitExpr(*e->operand) + ").obj" : "(void*)(" + emitExpr(*e->operand) + ")",
+                             e->target.name);
+        // From an interface to a class: the object inside must be one.
+        if (fromIface && e->target.isNamed() && reg_->isClass(e->target.name))
+            return "((" + cTy(e->target) + ")grav_cast_check((" + emitExpr(*e->operand) + ").obj, &" +
+                   mangle(e->target.name) + "_typeinfo))";
+        // A downcast checks the object's class.
+        if (e->target.isNamed() && from.isNamed() && from != e->target && reg_->isClass(from.name) &&
+            reg_->isClass(e->target.name) && reg_->isSubclass(e->target.name, from.name))
+            return "((" + cTy(e->target) + ")grav_cast_check((void*)(" + emitExpr(*e->operand) + "), &" +
+                   mangle(e->target.name) + "_typeinfo))";
         if (e->target.isNamed()) return emitAs(*e->operand, e->target);
         std::string inner = emitExpr(*e->operand);
         return emitPrimCast(e->target, *e->operand, inner);
     }
     if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
         if (e->operand->type.isAny()) return isAnyTest(emitExpr(*e->operand), e->target);
-        return "grav_is_instance(" + emitExpr(*e->operand) + ", &" +
-               mangle(e->className) + "_typeinfo)";
+        const TypeRef &from = e->operand->type;
+        std::string obj = emitExpr(*e->operand);
+        if (from.isNamed() && reg_->isInterface(from.name)) obj = "(" + obj + ").obj";
+        if (reg_->isInterface(e->className))
+            return "(grav_itab_find(" + obj + ", &" + mangle(e->className) + "__iface) != 0)";
+        return "grav_is_instance(" + obj + ", &" + mangle(e->className) + "_typeinfo)";
     }
     if (auto *e = dynamic_cast<const AwaitExpr *>(&expr)) {
         // `await f`: wait for the task (re-throwing its exception) and read the result.

@@ -388,11 +388,8 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     if (src.isAny()) {
-        if (e.target.isNamed() && reg_->isInterface(e.target.name)) {
-            error(e.line, e.col, "take the object out of 'any' as its class, then use it as '" +
-                                     e.target.name + "'");
-            return TypeRef::prim(TypeRef::Kind::Error);
-        }
+        // An object inside is checked against the interface at run time.
+        if (e.target.isNamed() && reg_->isInterface(e.target.name)) return e.target;
         if (isBoxable(e.target) && e.target.kind != TypeRef::Kind::Null) return e.target;
         error(e.line, e.col, "cannot take a " + typeRefName(e.target) + " out of 'any'");
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -429,8 +426,12 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
                 (reg_->isSubclass(src.name, e.target.name) ||
                  reg_->isSubclass(e.target.name, src.name)))
                 return e.target;
-            if (reg_->isInterface(e.target.name) && src.isNamed() &&
-                reg_->isClass(src.name) && reg_->classImplements(src.name, e.target.name))
+            // Between classes and interfaces in any direction: whatever the static
+            // types cannot prove is checked at run time (a subclass may implement
+            // an interface its base does not; an interface may hold any class).
+            bool srcRef = src.isNamed() && (reg_->isClass(src.name) || reg_->isInterface(src.name));
+            if (srcRef && reg_->isInterface(e.target.name)) return e.target;
+            if (src.isNamed() && reg_->isInterface(src.name) && reg_->isClass(e.target.name))
                 return e.target;
             if (src.kind == TypeRef::Kind::Null &&
                 (reg_->isClass(e.target.name) || reg_->isInterface(e.target.name)))
@@ -465,14 +466,14 @@ TypeRef TypeChecker::checkIs(IsExpr &e) {
         return TypeRef::prim(TypeRef::Kind::Bool);
     }
     std::string fq = reg_->resolveType(e.typeName, currentNs_);
-    if (fq.empty() || !reg_->isClass(fq)) {
-        error(e.line, e.col, "'is' expects a class name, got '" + e.typeName + "'");
+    if (fq.empty() || !(reg_->isClass(fq) || reg_->isInterface(fq))) {
+        error(e.line, e.col, "'is' expects a class or interface name, got '" + e.typeName + "'");
         return TypeRef::prim(TypeRef::Kind::Bool);
     }
     e.className = fq;
-    if (!src.isError() && !(src.isNamed() && reg_->isClass(src.name)))
+    if (!src.isError() && !(src.isNamed() && (reg_->isClass(src.name) || reg_->isInterface(src.name))))
         error(e.operand->line, e.operand->col,
-              "'is' expects a class instance on the left, got " + typeRefName(src));
+              "'is' expects an object or interface value on the left, got " + typeRefName(src));
     return TypeRef::prim(TypeRef::Kind::Bool);
 }
 

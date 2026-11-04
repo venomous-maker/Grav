@@ -208,8 +208,8 @@ Output:
 | Expression | Result |
 |------------|--------|
 | `typename(obj)` | the dynamic class name |
-| `isInstance(obj, T)` / `obj is T` | is the object a `T` or a subclass? |
-| `obj as T` | a cast within the hierarchy (check with `is` first when downcasting) |
+| `isInstance(obj, T)` / `obj is T` | is the object a `T` or a subclass (or, for an interface `T`, does it implement it)? |
+| `obj as T` | a cast within the hierarchy or to an interface (one the object does not support throws `TypeError`) |
 
 ```grav
 class Animal { }

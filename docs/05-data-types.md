@@ -3,7 +3,7 @@
 ## Enums
 
 An enum is a named set of constants. Values print as their names; `int(e)` gives the
-ordinal and `n as E` converts back.
+ordinal and `n as E` converts back (a number that names no member throws `ValueError`).
 
 ```grav
 enum Color { Red, Green, Blue }
@@ -350,8 +350,8 @@ true
 ```
 
 `any` cannot hold structs, fixed arrays, pointers, or `binary`. An object taken out
-of an `any` comes out as its class (or a base class); to use it through an
-interface, unbox it as the class first. Prefer real types where you can — `any` is
+of an `any` comes out as its class, a base class, or an interface it implements
+(`v as Drawable`). Prefer real types where you can — `any` is
 for genuinely mixed data such as configuration, heterogeneous lists, or values
 crossing a plugin boundary.
 

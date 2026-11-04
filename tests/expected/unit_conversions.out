@@ -1,0 +1,8 @@
+running 6 tests
+  ok    floats print the shortest text that reads back the same
+  ok    integer literals beyond int are longs
+  ok    text to integers checks the range
+  ok    numbers into enums must name a member
+  ok    downcasts check the class
+  ok    ?? evaluates its left side once
+result: 6 passed, 0 failed

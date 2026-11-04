@@ -14,6 +14,34 @@ void CodeGen::emitFaultSupport() {
 #include <sys/resource.h>
 static GRAV_COLD GRAV_NORETURN void grav_fault_index(long long i, long long n);
 static GRAV_COLD GRAV_NORETURN void grav_fault_div(void);
+static GRAV_COLD GRAV_NORETURN void grav_fault_enum(long long v, long long n, const char* name);
+static GRAV_COLD GRAV_NORETURN void grav_fault_cast(const GravTypeInfo* from, const GravTypeInfo* to);
+/* `n as E`: the number must name one of E's members. */
+static inline long long grav_enum_check(long long v, long long n, const char* name) {
+    if (GRAV_UNLIKELY((unsigned long long)v >= (unsigned long long)n)) grav_fault_enum(v, n, name);
+    return v;
+}
+/* Interfaces at run time: `x is I` and `x as I` look up the object's table for I. */
+static inline const void* grav_itab_find(const void* o, const char* iface) {
+    if (!o) return 0;
+    const GravTypeInfo* t = ((const struct GravObject*)o)->__type;
+    for (int i = 0; i < t->nitabs; i++)
+        if (t->itabs[i].iface == iface) return t->itabs[i].tbl;
+    return 0;
+}
+static GRAV_COLD GRAV_NORETURN void grav_fault_iface(const void* o, const char* name);
+static inline struct GravIface grav_iface_cast(void* o, const char* iface, const char* name) {
+    struct GravIface r = { o, grav_itab_find(o, iface) };
+    if (GRAV_UNLIKELY(o && !r.itab)) grav_fault_iface(o, name);
+    return r;
+}
+static inline void* grav_any_objptr(GravAny a) { return a.tag == GRAV_ANY_OBJ ? a.v.p : 0; }
+/* `obj as Sub` from a base type: the object must be a Sub (null stays null). */
+static inline void* grav_cast_check(void* o, const GravTypeInfo* to) {
+    if (GRAV_UNLIKELY(o && !grav_type_is(((struct GravObject*)o)->__type, to)))
+        grav_fault_cast(((struct GravObject*)o)->__type, to);
+    return o;
+}
 /* A fixed-array index, checked against the length. */
 static inline long long grav_idx(long long i, long long n) {
     if (GRAV_UNLIKELY((unsigned long long)i >= (unsigned long long)n)) grav_fault_index(i, n);
@@ -92,6 +120,8 @@ void CodeGen::emitFaultRaisers() {
     };
     std::string index = raise("std.core.IndexError");
     std::string div = raise("std.core.ArithmeticError");
+    std::string value = raise("std.core.ValueError");
+    std::string type = raise("std.core.TypeError");
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_index(long long i, long long n) {\n"
              "    char msg[160];\n"
              "    snprintf(msg, sizeof msg, \"array index %lld out of range (length %lld)\", i, n);\n" +
@@ -99,6 +129,18 @@ void CodeGen::emitFaultRaisers() {
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_div(void) {\n"
              "    const char* msg = \"integer division by zero\";\n" +
              (div.empty() ? "    grav_panic(msg);\n" : div) + "}\n";
+    defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_enum(long long v, long long n, const char* name) {\n"
+             "    char msg[200];\n"
+             "    snprintf(msg, sizeof msg, \"%lld is not a %s (its values are 0 to %lld)\", v, name, n - 1);\n" +
+             (value.empty() ? "    grav_panic(msg);\n" : value) + "}\n";
+    defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_iface(const void* o, const char* name) {\n"
+             "    char msg[300];\n"
+             "    snprintf(msg, sizeof msg, \"a %s does not implement %s\", ((const struct GravObject*)o)->__type->name, name);\n" +
+             (type.empty() ? "    grav_panic(msg);\n" : type) + "}\n";
+    defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_cast(const GravTypeInfo* from, const GravTypeInfo* to) {\n"
+             "    char msg[300];\n"
+             "    snprintf(msg, sizeof msg, \"cannot cast a %s to %s\", from->name, to->name);\n" +
+             (type.empty() ? "    grav_panic(msg);\n" : type) + "}\n";
     defs_ += R"C(
 /* A bad memory access (a null reference, or a stack overflow) stops the program
    with a panic and the Grav call stack. The handler runs on its own stack, so a
