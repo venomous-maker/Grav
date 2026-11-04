@@ -32,19 +32,29 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
 
     // Declarations: the environment, the lifted function, and its constructor.
     if (!lam.captures.empty()) {
-        lambdaDecls_ += "typedef struct " + env + " {";
+        // The environment is a counted object: same header as class instances, and
+        // its type info releases the captured references when the count hits zero.
+        lambdaDecls_ += "typedef struct " + env + " { const void* __vt; const GravTypeInfo* __type; long long __rc;";
         for (const auto &c : lam.captures) lambdaDecls_ += " " + cTy(c.type) + " " + c.name + ";";
         lambdaDecls_ += " } " + env + ";\n";
+        std::string rel;
+        for (const auto &c : lam.captures)
+            if (refKind(c.type) != RefKind::None) rel += " " + releaseOf(c.type, "e->" + c.name);
+        lambdaDecls_ += "static void " + env + "__arc_fields(void* o) { " + env + "* e = (" + env +
+                        "*)o; (void)e;" + rel + " }\n";
+        lambdaDecls_ += "static const GravTypeInfo " + env + "_typeinfo = { \"<closure>\", 0, 0, 0, 0, 0, 0, " +
+                        env + "__arc_fields };\n";
     }
     lambdaDecls_ += head + ";\n";
     if (!lam.captures.empty()) {
         std::string ps, sets;
         for (const auto &c : lam.captures) {
             ps += (ps.empty() ? "" : ", ") + cTy(c.type) + " " + c.name;
-            sets += " grav_e->" + c.name + " = " + c.name + ";";
+            sets += " grav_e->" + c.name + " = " + retainOf(c.type, c.name) + ";";
         }
         lambdaDecls_ += "static GravFn grav_mk_lambda_" + n + "(" + ps + ") {\n    " + env +
-                        "* grav_e = (" + env + "*)grav_alloc(sizeof *grav_e);" + sets +
+                        "* grav_e = (" + env + "*)grav_alloc(sizeof *grav_e);" +
+                        " grav_e->__vt = 0; grav_e->__type = &" + env + "_typeinfo; grav_e->__rc = 1;" + sets +
                         "\n    GravFn grav_f; grav_f.fn = (void (*)(void))" + fn +
                         "; grav_f.env = grav_e; return grav_f;\n}\n";
     }
@@ -72,11 +82,11 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
             line(emitExpr(*lam.exprBody) + ";");
             if (trace_) line("grav_leave();");
         } else if (trace_) {
-            line(cTy(ret) + " grav_r = " + emitAs(*lam.exprBody, ret) + ";");
+            line(cTy(ret) + " grav_r = " + emitOwned(*lam.exprBody, ret) + ";");
             line("grav_leave();");
             line("return grav_r;");
         } else {
-            line("return " + emitAs(*lam.exprBody, ret) + ";");
+            line("return " + emitOwned(*lam.exprBody, ret) + ";");
         }
     } else {
         std::vector<std::string> outer;
@@ -144,7 +154,7 @@ std::string CodeGen::emitFnCall(const CallExpr &call) const {
     }
     std::string out = name + "(" + emitExpr(*call.callee);
     for (size_t i = 0; i < call.args.size(); ++i)
-        out += ", " + (i < ft.fnParams.size() ? emitAs(*call.args[i], ft.fnParams[i])
+        out += ", " + (i < ft.fnParams.size() ? emitStable(*call.args[i], ft.fnParams[i])
                                               : emitExpr(*call.args[i]));
     return out + ")";
 }
