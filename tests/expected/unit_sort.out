@@ -1,0 +1,7 @@
+running 5 tests
+  ok    every size around the run boundaries
+  ok    input shapes
+  ok    stable: equal keys keep their order
+  ok    typed overloads, descending and searching
+  ok    a comparator that throws leaves every element in place
+result: 5 passed, 0 failed
