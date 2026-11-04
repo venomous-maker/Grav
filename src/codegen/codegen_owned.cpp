@@ -200,6 +200,7 @@ struct OwnScan {
         }
         if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
             expr(x->base.get(), false); expr(x->index.get(), false);
+            for (const auto &m : x->more) expr(m.get(), false);
             return;
         }
         if (auto *x = dynamic_cast<const NewExpr *>(e)) {
@@ -670,6 +671,7 @@ void CodeGen::collectHoists(const Expr *e, std::vector<const Expr *> &out) const
     if (auto *x = dynamic_cast<const CastExpr *>(e)) { collectHoists(x->operand.get(), out); return; }
     if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
         collectHoists(x->base.get(), out); collectHoists(x->index.get(), out);
+        for (const auto &m : x->more) collectHoists(m.get(), out);
         return;
     }
     if (auto *x = dynamic_cast<const MemberExpr *>(e)) {
