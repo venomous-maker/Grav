@@ -1,0 +1,4 @@
+name = "bank-server"
+main = "src/main.grav"
+# Modules import each other by path from src/: import "entities/account"
+paths = ["src"]
