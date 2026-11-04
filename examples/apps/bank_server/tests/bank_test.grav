@@ -1,0 +1,127 @@
+// tests/bank_test.grav — the business rules, without HTTP.
+//   cd examples/apps/bank_server && grav test tests/bank_test.grav
+import "std"
+import "services/bank_service"
+
+use bank.entities.*
+use bank.services.*
+use bank.repository.Store
+
+fn newBank() -> BankService { return new BankService(new Store("")) }
+
+// Opens a customer with one account of `kind` holding `cents`.
+fn funded(bank: BankService, email: string, kind: string, cents: long) -> Account {
+    let c = bank.createCustomer("Test Person", email).unwrap()
+    let a = bank.openAccount(c.id, kind).unwrap()
+    if (cents > 0) { bank.deposit(a.number, cents, "opening").unwrap() }
+    return a
+}
+
+test "money parses and formats exactly" {
+    assertEq(Money.parse("12.5").unwrap(), 1250 as long)
+    assertEq(Money.parse("1,000.05").unwrap(), 100005 as long)
+    assertEq(Money.parse("7").unwrap(), 700 as long)
+    assert(Money.parse("1.234").isErr())
+    assert(Money.parse("abc").isErr())
+    assertEq(Money.format(123456), "1,234.56")
+    assertEq(Money.format(-5), "-0.05")
+    assertEq(Money.format(Money.parse("0.10").unwrap() + Money.parse("0.20").unwrap()), "0.30")
+}
+
+test "customers need a name and a unique email" {
+    let bank = newBank()
+    assert(bank.createCustomer("Ada Lovelace", "ada@example.com").isOk())
+    assertEq(bank.createCustomer("A", "a@example.com").unwrapErr().code(), "invalid")
+    assertEq(bank.createCustomer("Bob", "not-an-email").unwrapErr().code(), "invalid")
+    assertEq(bank.createCustomer("Ada Again", "ADA@example.com").unwrapErr().code(), "conflict")
+}
+
+test "account numbers and kinds" {
+    let bank = newBank()
+    let c = bank.createCustomer("Ada Lovelace", "ada@example.com").unwrap()
+    assertEq(bank.openAccount(c.id, "checking").unwrap().number, "ACC-000001")
+    assertEq(bank.openAccount(c.id, "SAVINGS").unwrap().number, "ACC-000002")
+    assertEq(bank.openAccount(c.id, "crypto").unwrapErr().code(), "invalid")
+    assertEq(bank.openAccount(99, "checking").unwrapErr().httpStatus(), 404)
+}
+
+test "withdrawals respect the overdraft limit" {
+    let bank = newBank()
+    let checking = funded(bank, "c@example.com", "checking", 10000)    // 100.00, may go 500.00 below
+    let savings = funded(bank, "s@example.com", "savings", 10000)
+    assert(bank.withdraw(checking.number, 55000, "rent").isOk())        // to -450.00
+    let err = bank.withdraw(checking.number, 10000, "more").unwrapErr()
+    assertEq(err.code(), "insufficient_funds")
+    assertEq(err.message(), "ACC-000001 has 50.00 available, 100.00 requested")
+    assertEq(bank.withdraw(savings.number, 10001, "too much").unwrapErr().httpStatus(), 409)
+    assertEq(Money.format(checking.balance), "-450.00")
+}
+
+test "transfers are atomic and recorded on both sides" {
+    let bank = newBank()
+    let a = funded(bank, "a@example.com", "checking", 50000)
+    let b = funded(bank, "b@example.com", "savings", 0)
+    let r = bank.transfer(a.number, b.number, 12550, "rent share").unwrap()
+    assertEq(Money.format(r.from.balance), "374.50")
+    assertEq(Money.format(r.to.balance), "125.50")
+    let failed = bank.transfer(b.number, a.number, 99999999, "nope")
+    assert(failed.isErr())
+    assertEq(Money.format(b.balance), "125.50")                       // unchanged
+    assertEq(bank.statement(b.number).unwrap().size(), 1)
+    assertEq(bank.transfer(a.number, a.number, 100, "").unwrapErr().code(), "invalid")
+}
+
+test "frozen and closed accounts refuse money movement" {
+    let bank = newBank()
+    let a = funded(bank, "a@example.com", "checking", 1000)
+    bank.setStatus(a.number, AccountStatus.Frozen).unwrap()
+    assertEq(bank.deposit(a.number, 100, "").unwrapErr().message(), "ACC-000001 is frozen")
+    bank.setStatus(a.number, AccountStatus.Active).unwrap()
+    assertEq(bank.setStatus(a.number, AccountStatus.Closed).unwrapErr().code(), "conflict")   // still has money
+    bank.withdraw(a.number, 1000, "empty").unwrap()
+    assert(bank.setStatus(a.number, AccountStatus.Closed).isOk())
+    assertEq(bank.deposit(a.number, 100, "").unwrapErr().code(), "account_not_active")
+}
+
+test "interest is paid on savings only, rounded down to the cent" {
+    let bank = newBank()
+    let s = funded(bank, "s@example.com", "savings", 100099)       // 1,000.99
+    let c = funded(bank, "c@example.com", "checking", 100000)
+    assertEq(bank.payInterest(125).unwrap(), 1)                      // 1.25%
+    assertEq(Money.format(s.balance), "1,013.50")                    // + 12.51
+    assertEq(Money.format(c.balance), "1,000.00")
+    assert(bank.payInterest(0).isErr())
+}
+
+test "concurrent transfers keep the total balance" {
+    let bank = newBank()
+    let a = funded(bank, "a@example.com", "checking", 100000)
+    let b = funded(bank, "b@example.com", "checking", 100000)
+    let wg = new WaitGroup()
+    for (i in 0..8) {
+        wg.add(1)
+        Thread.spawn(fn() {
+            for (k in 0..25) {
+                if ((i + k) % 2 == 0) { bank.transfer(a.number, b.number, 300, "ping") }
+                else { bank.transfer(b.number, a.number, 200, "pong") }
+            }
+            wg.done()
+        }).detach()
+    }
+    wg.wait()
+    assertEq(a.balance + b.balance, 200000 as long)
+    assertEq(bank.statement(a.number).unwrap().size(), 201)          // the deposit + 200 transfers
+}
+
+test "the store saves and loads everything" {
+    let file = Dir.temp() + "/grav-bank-test-${Process.pid()}.json"
+    let bank = new BankService(new Store(file))
+    let a = funded(bank, "a@example.com", "savings", 4200)
+    bank.withdraw(a.number, 200, "coffee").unwrap()
+    let reloaded = new Store(file)
+    assertEq(reloaded.load().unwrap(), 4)                            // 1 customer, 1 account, 2 transactions
+    assertEq(Money.format(reloaded.account("ACC-000001").balance), "40.00")
+    let again = new BankService(reloaded)
+    assertEq(again.openAccount(1, "checking").unwrap().number, "ACC-000002")   // ids continue
+    new File(file).delete()
+}
