@@ -182,4 +182,73 @@ Output:
 stopped after 2: bad input 'x'
 ```
 
+## Panics and recovery
+
+A *panic* is for bugs, not expected failures: an out-of-range index, `unwrap()` on
+an `Err` or `None`, a failed check, or `panic("...")` itself. Normally it prints
+its message and stops the program.
+
+Inside a *recovery point* a panic is recovered instead. It unwinds like an
+exception that no `catch` can catch: `finally` blocks still run (so locks taken
+with `withLock` are released), and the recovery point gets the message.
+`Panic.recover(body)` returns `""` when the body finished, or the message.
+
+```grav
+import "std"
+
+fn main() {
+    let scores = new Array<int>()
+    let failure = Panic.recover(fn() {
+        try {
+            print(scores.get(3))
+        } catch (e: Exception) {
+            print("not reached: a catch never takes a panic")
+        } finally {
+            print("finally still runs")
+        }
+    })
+    print("recovered: " + failure)
+
+    let missing: Result<int, string> = Result.Err("no such user")
+    print(Panic.recover(fn() { missing.unwrap() }))
+    print(Panic.recover(fn() { throw new StateError("escaped") }))
+    print("still running")
+}
+```
+
+Output:
+
+```text
+finally still runs
+recovered: panic: Array index 3 out of range (length 0)
+panic: called unwrap() on Err(no such user)
+uncaught exception: StateError: escaped
+still running
+```
+
+An exception that escapes a recovery point is stopped there too, and reported as
+`uncaught exception: ...`.
+
+**Built-in recovery points.** Every `HttpServer` request is one. A panicking
+handler answers `500 internal error: panic: ...`, the panic is logged to stderr,
+and the server keeps serving; set `server.recoverPanics = false` (or
+`.withPanicRecovery(false)`) to opt that server out. Every `Thread` body is one
+too: `join()` reports the panic instead of the program stopping.
+
+**Switching recovery at run time.** Recovery is on by default. The effective
+setting is the current thread's own, if it has one, otherwise the global one:
+
+| Call | Effect |
+|------|--------|
+| `Panic.setRecovery(false)` / `(true)` | every thread (unless it has its own setting) |
+| `Panic.setThreadRecovery(false)` / `(true)` | the calling thread only |
+| `Panic.followGlobalRecovery()` | the calling thread follows the global setting again |
+| `new Thread(body).withPanicRecovery(false)` | a thread's own setting, before it starts |
+| `Panic.recoveryEnabled()` | whether a panic here would be recovered now |
+| `GRAV_PANIC_RECOVERY=off` (environment) | the global setting starts off |
+
+With recovery off, a panic stops the program even inside a recovery point. That
+is useful while debugging, or to crash on bugs in production and have a
+supervisor restart the program.
+
 Next: [Memory →](12-memory.md)
