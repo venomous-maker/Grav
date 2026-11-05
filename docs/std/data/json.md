@@ -70,6 +70,12 @@ true
 - **`==`** compares structure; the order of object keys does not matter.
 - `Json.parse` throws `ValueError` with a line and column; `Json.tryParse` returns
   `null` instead. `Json.quote(s)` escapes a string as a JSON literal.
+- **Storage is compact.** Arrays and objects keep their numbers, booleans and
+  strings inline (16 bytes each, plus the text of strings), and the parser shares
+  repeated keys, so 100,000 three-field records take about 20 MB. Reading a scalar
+  gives a fresh `JsonValue`; nested arrays and objects are shared, so
+  `doc["user"].set("name", "Ada")` changes `doc`. `asArray()` returns a new
+  `Array` each time.
 
 ## API
 
@@ -89,6 +95,8 @@ true
 ### class JsonValue
 
 One JSON value: null, a boolean, a number, a string, an array, or an object.
+Arrays and objects store their elements compactly; reading a number, string or
+boolean out of one gives a fresh JsonValue (scalars cannot be changed anyway).
 
 **Constructors**
 
@@ -118,7 +126,7 @@ One JSON value: null, a boolean, a number, a string, an array, or an object.
 - `fn asLong() -> long` — The number as a long, fraction dropped (TypeError when this is not a number).
 - `fn asInt() -> int` — The number as an int (TypeError when this is not a number).
 - `fn asString() -> string` — The string (TypeError when this is not a string).
-- `fn asArray() -> Array<JsonValue>` — The elements (TypeError when this is not an array).
+- `fn asArray() -> Array<JsonValue>` — The elements, as a new Array (TypeError when this is not an array). Nested arrays and objects in it are shared with this one.
 - `fn size() -> int` — Elements of an array or members of an object (0 for anything else).
 - `fn length() -> int` — The number of elements or members (same as size()).
 - `fn isEmpty() -> bool` — Whether an array or object has nothing in it.
@@ -154,7 +162,8 @@ One JSON value: null, a boolean, a number, a string, an array, or an object.
 
 ### class JsonParser
 
-The recursive-descent parser behind Json.parse.
+The recursive-descent parser behind Json.parse. It writes scalars straight into
+the containers it builds, without a JsonValue per number or string.
 
 **Constructors**
 

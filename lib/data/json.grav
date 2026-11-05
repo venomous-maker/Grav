@@ -198,50 +198,96 @@ namespace std.data {
     }
     %}
 
+    %{
+    /* A container keeps its children in one buffer: `cap` slots of 16 bytes, followed
+       (for objects) by `cap` key pointers. A scalar child lives in its slot; a nested
+       array or object is a counted reference to its own JsonValue. Kinds follow JsonKind. */
+    typedef struct { union { long long i; double d; const char* s; void* o; } u; int kind; int flag; } GravJsonSlot;
+    enum { GRAV_JNULL, GRAV_JBOOL, GRAV_JNUM, GRAV_JSTR, GRAV_JARR, GRAV_JOBJ };
+    static inline GravJsonSlot* grav_jslot(unsigned char* buf, int j) { return (GravJsonSlot*)buf + j; }
+    static inline const char** grav_jkey(unsigned char* buf, int cap, int j) {
+        return (const char**)(buf + sizeof(GravJsonSlot) * (size_t)cap) + j;
+    }
+    static void grav_jslot_drop(GravJsonSlot* s) {
+        if (s->kind == GRAV_JSTR) grav_str_release(s->u.s);
+        else if (s->kind >= GRAV_JARR) grav_release(s->u.o);
+        s->kind = GRAV_JNULL; s->flag = 0; s->u.i = 0;
+    }
+    /* Room for `need` children; keys (objects) move up when the slot area grows. */
+    static unsigned char* grav_jgrow(unsigned char* buf, int* cap, int count, int need, int withKeys) {
+        if (need <= *cap) return buf;
+        int nc = *cap < 4 ? 4 : *cap * 2;
+        if (nc < need) nc = need;
+        size_t per = sizeof(GravJsonSlot) + (withKeys ? sizeof(const char*) : 0);
+        unsigned char* nb = (unsigned char*)realloc(buf, per * (size_t)nc);
+        if (!nb) { fprintf(stderr, "panic: out of memory\n"); exit(1); }
+        if (withKeys && count > 0)
+            memmove(nb + sizeof(GravJsonSlot) * (size_t)nc, nb + sizeof(GravJsonSlot) * (size_t)*cap, sizeof(const char*) * (size_t)count);
+        *cap = nc;
+        return nb;
+    }
+    static inline long long grav_jbits(double d) { long long b; memcpy(&b, &d, sizeof b); return b; }
+    static inline double grav_jdouble(long long b) { double d; memcpy(&d, &b, sizeof d); return d; }
+    static int grav_jfind(unsigned char* buf, int cap, int count, const char* key) {
+        for (int j = 0; j < count; j++) if (strcmp(*grav_jkey(buf, cap, j), key) == 0) return j;
+        return -1;
+    }
+    %}
+
     enum JsonKind { Null, Bool, Number, String, Array, Object }
 
     // One JSON value: null, a boolean, a number, a string, an array, or an object.
+    // Arrays and objects store their elements compactly; reading a number, string or
+    // boolean out of one gives a fresh JsonValue (scalars cannot be changed anyway).
     class JsonValue {
         private k: JsonKind
-        private b: bool
-        private n: double
-        private i: long
-        private isInt: bool
-        private s: string
-        private items: Array<JsonValue>
-        private keyList: Array<string>
-        private index: HashMap<string, int>
+        private flag: bool          // Bool: its value; Number: whether it holds an integer
+        private bits: long          // Number: the integer, or the bits of the double
+        private s: string           // String: the text
+        private buf: byte*          // Array/Object: the children (see GravJsonSlot)
+        private count: int
+        private cap: int
+        private index: HashMap<string, int>   // Object with more than 8 keys: key -> position
 
-        constructor() { self.init(JsonKind.Null); }
+        constructor() { self.k = JsonKind.Null; self.clearFields(); }
         // A new empty value of the given kind (null, false, 0, "", [], {}).
-        constructor(kind: JsonKind) { self.init(kind); }
-        private fn init(kind: JsonKind) {
-            self.k = kind;
-            self.b = false;
-            self.n = 0.0;
-            self.i = 0;
-            self.isInt = false;
-            self.s = "";
-            self.items = null;
-            self.keyList = null;
-            self.index = null;
-            if (kind == JsonKind.Array || kind == JsonKind.Object) { self.items = new Array<JsonValue>(); }
-            if (kind == JsonKind.Object) { self.keyList = new Array<string>(); }
+        constructor(kind: JsonKind) { self.k = kind; self.clearFields(); }
+        private fn clearFields() {
+            self.flag = false; self.bits = 0; self.s = ""; self.buf = null;
+            self.count = 0; self.cap = 0; self.index = null;
         }
+        destructor() {
+            %{
+                int grav_obj = self->k == GRAV_JOBJ;
+                for (int grav_j = 0; grav_j < self->count; grav_j++) {
+                    grav_jslot_drop(grav_jslot(self->buf, grav_j));
+                    if (grav_obj) grav_str_release(*grav_jkey(self->buf, self->cap, grav_j));
+                }
+                free(self->buf);
+                self->buf = 0; self->count = 0; self->cap = 0;
+            %};
+        }
+        // For the cycle collector: the nested arrays and objects this one holds.
+        private fn __visitRefs() {
+            for (j in 0..self.count) {
+                if (self.slotKind(j) >= 4) { __visit(%{ grav_jslot(self->buf, j)->u.o %} as JsonValue) }
+            }
+        }
+
         // A new empty value of the given kind (null, false, 0, "", [], {}).
         static fn ofKind(kind: JsonKind) -> JsonValue { return new JsonValue(kind); }
         // A JSON boolean.
-        static fn ofBool(b: bool) -> JsonValue { let v = JsonValue.ofKind(JsonKind.Bool); v.b = b; return v; }
+        static fn ofBool(b: bool) -> JsonValue { let v = new JsonValue(JsonKind.Bool); v.flag = b; return v; }
         // A JSON number holding an integer.
-        static fn ofInt(n: long) -> JsonValue {
-            let v = JsonValue.ofKind(JsonKind.Number);
-            v.i = n; v.n = n as double; v.isInt = true;
+        static fn ofInt(n: long) -> JsonValue { let v = new JsonValue(JsonKind.Number); v.bits = n; v.flag = true; return v; }
+        // A JSON number.
+        static fn ofFloat(d: double) -> JsonValue {
+            let v = new JsonValue(JsonKind.Number);
+            v.bits = %{ grav_jbits(d) %} as long;
             return v;
         }
-        // A JSON number.
-        static fn ofFloat(d: double) -> JsonValue { let v = JsonValue.ofKind(JsonKind.Number); v.n = d; return v; }
         // A JSON string.
-        static fn ofString(s: string) -> JsonValue { let v = JsonValue.ofKind(JsonKind.String); v.s = s; return v; }
+        static fn ofString(s: string) -> JsonValue { let v = new JsonValue(JsonKind.String); v.s = s; return v; }
 
         // ── what is it? ───────────────────────────────────────────────────────
         // What kind of value this is (Null, Bool, Number, String, Array, Object).
@@ -253,7 +299,7 @@ namespace std.data {
         // Whether this is a number.
         public fn isNumber() -> bool { return self.k == JsonKind.Number; }
         // A number with no fractional part that fits in a long.
-        public fn isInteger() -> bool { return self.k == JsonKind.Number && self.isInt; }
+        public fn isInteger() -> bool { return self.k == JsonKind.Number && self.flag; }
         // Whether this is a string.
         public fn isString() -> bool { return self.k == JsonKind.String; }
         // Whether this is an array.
@@ -261,58 +307,122 @@ namespace std.data {
         // Whether this is an object.
         public fn isObject() -> bool { return self.k == JsonKind.Object; }
 
+        // ── the children of an array or object ────────────────────────────────
+        private fn slotKind(j: int) -> int { return %{ grav_jslot(self->buf, j)->kind %} as int; }
+        // A child's text (its kind must be String).
+        private fn slotStr(j: int) -> string { return %{ grav_str_retain(grav_jslot(self->buf, j)->u.s) %} as string; }
+        // An object's j-th key.
+        private fn keyAt(j: int) -> string { return %{ grav_str_retain(*grav_jkey(self->buf, self->cap, j)) %} as string; }
+        // Child j as a JsonValue: the nested value itself, or a new one holding the scalar.
+        private fn slotValue(j: int) -> JsonValue {
+            let kd = self.slotKind(j);
+            if (kd >= 4) { return %{ grav_jslot(self->buf, j)->u.o %} as JsonValue; }
+            let v = new JsonValue(%{ grav_jslot(self->buf, j)->kind %} as JsonKind);
+            v.flag = %{ grav_jslot(self->buf, j)->flag != 0 %} as bool;
+            v.bits = %{ grav_jslot(self->buf, j)->u.i %} as long;
+            if (kd == 3) { v.s = self.slotStr(j); }
+            return v;
+        }
+        // The slot to write for `key` (objects; null appends to an array): an existing
+        // member's slot (cleared), or a new one at the end.
+        private fn slotFor(key: string?) -> int {
+            if (key != null) {
+                let j = self.find(key);
+                if (j >= 0) { %{ grav_jslot_drop(grav_jslot(self->buf, j)); %}; return j; }
+            }
+            let isObj = key != null;
+            let n = self.count;
+            self.buf = %{ grav_jgrow(self->buf, &self->cap, n, n + 1, isObj) %} as byte*;
+            %{ grav_jslot(self->buf, n)->kind = GRAV_JNULL; %};
+            if (key != null) {
+                %{ *grav_jkey(self->buf, self->cap, n) = grav_str_retain(key); %};
+                if (self.index != null) { self.index.put(key, n); }
+            }
+            self.count = n + 1;
+            if (key != null && self.index == null && self.count > 8) { self.reindex(); }
+            return n;
+        }
+        // Writes `v` into slot j: a nested array or object by reference, a scalar by value.
+        private fn store(j: int, v: JsonValue) {
+            if (v == null) { return; }
+            if (v.isArray() || v.isObject()) {
+                %{ GravJsonSlot* grav_sl = grav_jslot(self->buf, j); grav_sl->u.o = grav_retain((void*)v); grav_sl->kind = (int)v->k; %};
+                return;
+            }
+            let txt = v.s;
+            %{
+                GravJsonSlot* grav_sl = grav_jslot(self->buf, j);
+                grav_sl->kind = (int)v->k; grav_sl->flag = v->flag;
+                if (v->k == GRAV_JSTR) grav_sl->u.s = grav_str_retain(txt); else grav_sl->u.i = v->bits;
+            %};
+        }
+        private fn storeString(j: int, text: string) {
+            %{ GravJsonSlot* grav_sl = grav_jslot(self->buf, j); grav_sl->kind = GRAV_JSTR; grav_sl->u.s = grav_str_retain(text); %};
+        }
+        private fn storeNumber(j: int, isInt: bool, bits: long) {
+            %{ GravJsonSlot* grav_sl = grav_jslot(self->buf, j); grav_sl->kind = GRAV_JNUM; grav_sl->flag = isInt; grav_sl->u.i = bits; %};
+        }
+        private fn storeBool(j: int, b: bool) {
+            %{ GravJsonSlot* grav_sl = grav_jslot(self->buf, j); grav_sl->kind = GRAV_JBOOL; grav_sl->flag = b; grav_sl->u.i = 0; %};
+        }
+
         // ── reading (asX throws TypeError when the value is not an X) ────────
         // Position of `key` in an object (-1 if absent). Small objects are searched
         // linearly; a hash index is built once an object has more than 8 keys.
         private fn find(key: string) -> int {
             if (self.k != JsonKind.Object) { return -1; }
             if (self.index != null) { return self.index.getOr(key, -1); }
-            let n = self.keyList.size();
-            for (j in 0..n) { if (self.keyList.get(j) == key) { return j; } }
-            return -1;
+            return %{ grav_jfind(self->buf, self->cap, self->count, key) %} as int;
         }
         private fn reindex() {
-            if (self.keyList.size() <= 8) { self.index = null; return; }
+            if (self.count <= 8) { self.index = null; return; }
             if (self.index == null) { self.index = new HashMap<string, int>(); } else { self.index.clear(); }
-            for (j, k in self.keyList) { self.index.put(k, j); }
+            for (j in 0..self.count) { self.index.put(self.keyAt(j), j); }
         }
         private fn expect(want: JsonKind, what: string) {
             if (self.k != want) { throw new TypeError("JSON value is ${self.k}, not " + what); }
         }
         // The boolean (TypeError when this is not a boolean).
-        public fn asBool() -> bool { self.expect(JsonKind.Bool, "a boolean"); return self.b; }
+        public fn asBool() -> bool { self.expect(JsonKind.Bool, "a boolean"); return self.flag; }
         // The number as a double (TypeError when this is not a number).
-        public fn asFloat() -> double { self.expect(JsonKind.Number, "a number"); return self.n; }
+        public fn asFloat() -> double {
+            self.expect(JsonKind.Number, "a number");
+            return self.flag ? self.bits as double : %{ grav_jdouble(self->bits) %} as double;
+        }
         // The number as a long, fraction dropped (TypeError when this is not a number).
         public fn asLong() -> long {
             self.expect(JsonKind.Number, "a number");
-            return self.isInt ? self.i : self.n as long;
+            return self.flag ? self.bits : %{ (long long)grav_jdouble(self->bits) %} as long;
         }
         // The number as an int (TypeError when this is not a number).
         public fn asInt() -> int { return self.asLong() as int; }
         // The string (TypeError when this is not a string).
         public fn asString() -> string { self.expect(JsonKind.String, "a string"); return self.s; }
-        // The elements (TypeError when this is not an array).
-        public fn asArray() -> Array<JsonValue> { self.expect(JsonKind.Array, "an array"); return self.items; }
+        // The elements, as a new Array (TypeError when this is not an array). Nested
+        // arrays and objects in it are shared with this one.
+        public fn asArray() -> Array<JsonValue> {
+            self.expect(JsonKind.Array, "an array");
+            let out = new Array<JsonValue>(self.count);
+            for (j in 0..self.count) { out.push(self.slotValue(j)); }
+            return out;
+        }
 
         // Elements of an array or members of an object (0 for anything else).
-        public fn size() -> int {
-            return self.k == JsonKind.Array || self.k == JsonKind.Object ? self.items.size() : 0;
-        }
+        public fn size() -> int { return self.count; }
         // The number of elements or members (same as size()).
-        public fn length() -> int { return self.size(); }
+        public fn length() -> int { return self.count; }
         // Whether an array or object has nothing in it.
-        public fn isEmpty() -> bool { return self.size() == 0; }
+        public fn isEmpty() -> bool { return self.count == 0; }
 
         // Member `key` of an object; a null value when absent or not an object.
         public fn get(key: string) -> JsonValue {
             let j = self.find(key);
-            return j < 0 ? new JsonValue() : self.items.get(j);
+            return j < 0 ? new JsonValue() : self.slotValue(j);
         }
         // Element `i` of an array; a null value when out of range or not an array.
         public fn at(i: int) -> JsonValue {
-            if (self.k != JsonKind.Array || i < 0 || i >= self.items.size()) { return new JsonValue(); }
-            return self.items.get(i);
+            if (self.k != JsonKind.Array || i < 0 || i >= self.count) { return new JsonValue(); }
+            return self.slotValue(i);
         }
         // `v["key"]`: member key of an object (null when absent).
         fn operator[](key: string) -> JsonValue { return self.get(key); }
@@ -322,7 +432,9 @@ namespace std.data {
         public fn has(key: string) -> bool { return self.find(key) >= 0; }
         // An object's keys, in insertion order.
         public fn keys() -> Array<string> {
-            return self.k == JsonKind.Object ? self.keyList.copy() : new Array<string>();
+            let out = new Array<string>();
+            if (self.k == JsonKind.Object) { for (j in 0..self.count) { out.push(self.keyAt(j)); } }
+            return out;
         }
         // A path through nested objects and arrays: "server.ports.0".
         public fn path(dotted: string) -> JsonValue {
@@ -341,78 +453,107 @@ namespace std.data {
 
         // Lookups with a fallback (when absent or of another type).
         public fn getString(key: string, fallback: string) -> string {
-            let v = self.get(key);
-            return v.isString() ? v.s : fallback;
+            let j = self.find(key);
+            return j >= 0 && self.slotKind(j) == 3 ? self.slotStr(j) : fallback;
         }
         // Member `key` as an int, or `fallback` when it is missing or not a number.
-        public fn getInt(key: string, fallback: int) -> int {
-            let v = self.get(key);
-            return v.isNumber() ? v.asInt() : fallback;
-        }
+        public fn getInt(key: string, fallback: int) -> int { return self.getLong(key, fallback) as int; }
         // Member `key` as a long, or `fallback` when it is missing or not a number.
         public fn getLong(key: string, fallback: long) -> long {
-            let v = self.get(key);
-            return v.isNumber() ? v.asLong() : fallback;
+            let j = self.find(key);
+            if (j < 0 || self.slotKind(j) != 2) { return fallback; }
+            return %{ grav_jslot(self->buf, j)->flag ? grav_jslot(self->buf, j)->u.i : (long long)grav_jslot(self->buf, j)->u.d %} as long;
         }
         // Member `key` as a double, or `fallback` when it is missing or not a number.
         public fn getFloat(key: string, fallback: double) -> double {
-            let v = self.get(key);
-            return v.isNumber() ? v.n : fallback;
+            let j = self.find(key);
+            if (j < 0 || self.slotKind(j) != 2) { return fallback; }
+            return %{ grav_jslot(self->buf, j)->flag ? (double)grav_jslot(self->buf, j)->u.i : grav_jslot(self->buf, j)->u.d %} as double;
         }
         // Member `key` as a bool, or `fallback` when it is missing or not a boolean.
         public fn getBool(key: string, fallback: bool) -> bool {
-            let v = self.get(key);
-            return v.isBool() ? v.b : fallback;
+            let j = self.find(key);
+            return j >= 0 && self.slotKind(j) == 1 ? %{ grav_jslot(self->buf, j)->flag != 0 %} as bool : fallback;
         }
 
         // ── building (each returns self, so calls chain) ──────────────────────
         // Set member `key` of an object (replacing an existing one in place).
         public fn set(key: string, value: JsonValue) -> JsonValue {
             self.expect(JsonKind.Object, "an object");
-            let j = self.find(key);
-            if (j >= 0) {
-                self.items.set(j, value);
-            } else {
-                self.keyList.push(key);
-                self.items.push(value);
-                if (self.index != null) { self.index.put(key, self.items.size() - 1); }
-                else if (self.keyList.size() > 8) { self.reindex(); }
-            }
+            self.store(self.slotFor(key), value);
             return self;
         }
         // Sets member `key` to a string (adding it, or replacing its value); returns this object.
-        public fn set(key: string, value: string) -> JsonValue { return self.set(key, JsonValue.ofString(value)); }
+        public fn set(key: string, value: string) -> JsonValue {
+            self.expect(JsonKind.Object, "an object");
+            self.storeString(self.slotFor(key), value);
+            return self;
+        }
         // Sets member `key` to a number; returns this object.
-        public fn set(key: string, value: long) -> JsonValue { return self.set(key, JsonValue.ofInt(value)); }
+        public fn set(key: string, value: long) -> JsonValue {
+            self.expect(JsonKind.Object, "an object");
+            self.storeNumber(self.slotFor(key), true, value);
+            return self;
+        }
         // Sets member `key` to a number; returns this object.
-        public fn set(key: string, value: double) -> JsonValue { return self.set(key, JsonValue.ofFloat(value)); }
+        public fn set(key: string, value: double) -> JsonValue {
+            self.expect(JsonKind.Object, "an object");
+            self.storeNumber(self.slotFor(key), false, %{ grav_jbits(value) %} as long);
+            return self;
+        }
         // Sets member `key` to a boolean; returns this object.
-        public fn set(key: string, value: bool) -> JsonValue { return self.set(key, JsonValue.ofBool(value)); }
+        public fn set(key: string, value: bool) -> JsonValue {
+            self.expect(JsonKind.Object, "an object");
+            self.storeBool(self.slotFor(key), value);
+            return self;
+        }
         // `v["key"] = value`: sets member key of an object.
         fn operator[]=(key: string, value: JsonValue) { self.set(key, value); }
         // Removes member `key`; whether it was there.
         public fn remove(key: string) -> bool {
-            if (!self.has(key)) { return false; }
             let at = self.find(key);
-            self.items.removeAt(at);
-            self.keyList.removeAt(at);
+            if (at < 0) { return false; }
+            %{
+                grav_jslot_drop(grav_jslot(self->buf, at));
+                grav_str_release(*grav_jkey(self->buf, self->cap, at));
+                int grav_tail = self->count - at - 1;
+                memmove(grav_jslot(self->buf, at), grav_jslot(self->buf, at + 1), sizeof(GravJsonSlot) * (size_t)grav_tail);
+                memmove(grav_jkey(self->buf, self->cap, at), grav_jkey(self->buf, self->cap, at + 1), sizeof(const char*) * (size_t)grav_tail);
+            %};
+            self.count -= 1;
             if (self.index != null) { self.reindex(); }
             return true;
         }
         // Append to an array.
         public fn push(value: JsonValue) -> JsonValue {
             self.expect(JsonKind.Array, "an array");
-            self.items.push(value);
+            self.store(self.slotFor(null), value);
             return self;
         }
         // Appends a string to an array; returns this array.
-        public fn push(value: string) -> JsonValue { return self.push(JsonValue.ofString(value)); }
+        public fn push(value: string) -> JsonValue {
+            self.expect(JsonKind.Array, "an array");
+            self.storeString(self.slotFor(null), value);
+            return self;
+        }
         // Appends a number to an array; returns this array.
-        public fn push(value: long) -> JsonValue { return self.push(JsonValue.ofInt(value)); }
+        public fn push(value: long) -> JsonValue {
+            self.expect(JsonKind.Array, "an array");
+            self.storeNumber(self.slotFor(null), true, value);
+            return self;
+        }
         // Appends a number to an array; returns this array.
-        public fn push(value: double) -> JsonValue { return self.push(JsonValue.ofFloat(value)); }
+        public fn push(value: double) -> JsonValue {
+            self.expect(JsonKind.Array, "an array");
+            self.storeNumber(self.slotFor(null), false, %{ grav_jbits(value) %} as long);
+            return self;
+        }
         // Appends a boolean to an array; returns this array.
-        public fn push(value: bool) -> JsonValue { return self.push(JsonValue.ofBool(value)); }
+        public fn push(value: bool) -> JsonValue {
+            self.expect(JsonKind.Array, "an array");
+            self.storeBool(self.slotFor(null), value);
+            return self;
+        }
 
         // ── writing ────────────────────────────────────────────────────────────
         // Compact JSON text.
@@ -446,37 +587,41 @@ namespace std.data {
             if (%{ grav_json_plain(s) %} as bool) { sb.appendChar(34).append(s).appendChar(34); }
             else { sb.append(%{ grav_json_quote(s) %} as string); }
         }
+        private static fn writeNumber(sb: StringBuilder, isInt: bool, bits: long) {
+            if (isInt) { sb.appendInt(bits) } else { sb.append(%{ grav_json_double(grav_jdouble(bits)) %} as string) }
+        }
         private fn write(sb: StringBuilder, indent: int, depth: int) {
             match (self.k) {
                 case JsonKind.Null: sb.append("null")
-                case JsonKind.Bool: sb.append(self.b ? "true" : "false")
-                case JsonKind.Number: {
-                    if (self.isInt) { sb.appendInt(self.i) } else { sb.append(%{ grav_json_double(self->n) %} as string) }
-                }
+                case JsonKind.Bool: sb.append(self.flag ? "true" : "false")
+                case JsonKind.Number: JsonValue.writeNumber(sb, self.flag, self.bits)
                 case JsonKind.String: JsonValue.writeQuoted(sb, self.s)
-                case JsonKind.Array: {
-                    sb.appendChar(91);
-                    for (j, v in self.items) {
+                default: {
+                    let obj = self.k == JsonKind.Object;
+                    sb.appendChar(obj ? 123 : 91);
+                    for (j in 0..self.count) {
                         if (j > 0) { sb.appendChar(44) }
                         self.newline(sb, indent, depth + 1);
-                        v.write(sb, indent, depth + 1);
+                        if (obj) {
+                            JsonValue.writeQuoted(sb, self.keyAt(j));
+                            sb.append(indent < 0 ? ":" : ": ");
+                        }
+                        self.writeSlot(sb, j, indent, depth + 1);
                     }
-                    if (self.items.size() > 0) { self.newline(sb, indent, depth) }
-                    sb.appendChar(93);
-                }
-                case JsonKind.Object: {
-                    sb.appendChar(123);
-                    for (j, v in self.items) {
-                        if (j > 0) { sb.appendChar(44) }
-                        self.newline(sb, indent, depth + 1);
-                        JsonValue.writeQuoted(sb, self.keyList.get(j));
-                        sb.append(indent < 0 ? ":" : ": ");
-                        v.write(sb, indent, depth + 1);
-                    }
-                    if (self.items.size() > 0) { self.newline(sb, indent, depth) }
-                    sb.appendChar(125);
+                    if (self.count > 0) { self.newline(sb, indent, depth) }
+                    sb.appendChar(obj ? 125 : 93);
                 }
             }
+        }
+        private fn writeSlot(sb: StringBuilder, j: int, indent: int, depth: int) {
+            let kd = self.slotKind(j);
+            if (kd == 0) { sb.append("null") }
+            else if (kd == 1) { sb.append(%{ grav_jslot(self->buf, j)->flag %} as bool ? "true" : "false") }
+            else if (kd == 2) {
+                JsonValue.writeNumber(sb, %{ grav_jslot(self->buf, j)->flag != 0 %} as bool, %{ grav_jslot(self->buf, j)->u.i %} as long)
+            }
+            else if (kd == 3) { JsonValue.writeQuoted(sb, self.slotStr(j)) }
+            else { (%{ grav_jslot(self->buf, j)->u.o %} as JsonValue).write(sb, indent, depth) }
         }
 
         // Structural equality (object member order does not matter).
@@ -485,18 +630,19 @@ namespace std.data {
             if (self.k != other.k) { return false; }
             match (self.k) {
                 case JsonKind.Null: return true
-                case JsonKind.Bool: return self.b == other.b
-                case JsonKind.Number: return self.isInt && other.isInt ? self.i == other.i : self.n == other.n
+                case JsonKind.Bool: return self.flag == other.flag
+                case JsonKind.Number: return self.flag && other.flag ? self.bits == other.bits : self.asFloat() == other.asFloat()
                 case JsonKind.String: return self.s == other.s
                 case JsonKind.Array: {
-                    if (self.items.size() != other.items.size()) { return false }
-                    for (j, v in self.items) { if (!(v == other.items.get(j))) { return false } }
+                    if (self.count != other.count) { return false }
+                    for (j in 0..self.count) { if (!(self.slotValue(j) == other.slotValue(j))) { return false } }
                     return true
                 }
                 default: {
-                    if (self.items.size() != other.items.size()) { return false }
-                    for (j, key in self.keyList) {
-                        if (!other.has(key) || !(self.items.get(j) == other.get(key))) { return false }
+                    if (self.count != other.count) { return false }
+                    for (j in 0..self.count) {
+                        let at = other.find(self.keyAt(j));
+                        if (at < 0 || !(self.slotValue(j) == other.slotValue(at))) { return false }
                     }
                     return true
                 }
@@ -504,17 +650,27 @@ namespace std.data {
         }
     }
 
-    // The recursive-descent parser behind Json.parse.
+    // The recursive-descent parser behind Json.parse. It writes scalars straight into
+    // the containers it builds, without a JsonValue per number or string.
     class JsonParser {
         private src: string
         private pos: int
         private len: int
         private depth: int
+        // Object keys seen so far, so repeated keys ("id" in every record) share one string.
+        private keys: HashMap<string, string>
         constructor(src: string) {
             self.src = src;
             self.pos = 0;
             self.len = %{ (int)strlen(src) %} as int;
             self.depth = 0;
+            self.keys = new HashMap<string, string>();
+        }
+        private fn sharedKey(k: string) -> string {
+            let seen = self.keys.getOr(k, "");
+            if (seen != "" || k == "") { return k == "" ? k : seen; }
+            if (self.keys.size() < 4096) { self.keys.put(k, k); }
+            return k;
         }
         private fn fail(msg: string) {
             let line = %{ grav_json_line(self->src, self->pos) %} as int;
@@ -531,14 +687,10 @@ namespace std.data {
                 }
             %};
         }
-        private fn word(w: string, value: JsonValue) -> JsonValue {
+        private fn word(w: string) {
             let n = %{ (int)strlen(w) %} as int;
-            if (%{ strncmp(self->src + self->pos, w, (size_t)n) == 0 %} as bool) {
-                self.pos += n;
-                return value;
-            }
+            if (%{ strncmp(self->src + self->pos, w, (size_t)n) == 0 %} as bool) { self.pos += n; return; }
             self.fail("unexpected character");
-            return value;
         }
         private fn str() -> string {
             let err = "";
@@ -550,20 +702,44 @@ namespace std.data {
         }
         // Parses the whole input as one JSON value (ValueError on bad input or trailing text).
         public fn document() -> JsonValue {
-            let v = self.value();
+            self.skipSpace();
+            let c = self.cur();
+            let v: JsonValue = null;
+            if (c == 123) { v = self.object(); }
+            else if (c == 91) { v = self.array(); }
+            else {
+                let holder = new JsonValue(JsonKind.Array);
+                self.valueInto(holder, null);
+                v = holder.at(0);
+            }
             self.skipSpace();
             if (self.pos < self.len) { self.fail("unexpected text after the JSON value"); }
             return v;
         }
-        private fn value() -> JsonValue {
+        // Parses one value into `target`: as member `key` of an object, or appended to an array.
+        private fn valueInto(target: JsonValue, key: string?) {
             self.skipSpace();
             let c = self.cur();
-            if (c == 34) { return JsonValue.ofString(self.str()); }                  // "
-            if (c == 123) { return self.object(); }                                   // {
-            if (c == 91) { return self.array(); }                                     // [
-            if (c == 116) { return self.word("true", JsonValue.ofBool(true)); }
-            if (c == 102) { return self.word("false", JsonValue.ofBool(false)); }
-            if (c == 110) { return self.word("null", new JsonValue()); }
+            if (c == 34) {                                                            // "
+                let s = self.str();
+                if (key != null) { target.set(key, s); } else { target.push(s); }
+                return;
+            }
+            if (c == 123 || c == 91) {                                                // { or [
+                let child = c == 123 ? self.object() : self.array();
+                if (key != null) { target.set(key, child); } else { target.push(child); }
+                return;
+            }
+            if (c == 116 || c == 102) {                                               // true / false
+                self.word(c == 116 ? "true" : "false");
+                if (key != null) { target.set(key, c == 116); } else { target.push(c == 116); }
+                return;
+            }
+            if (c == 110) {                                                           // null
+                self.word("null");
+                if (key != null) { target.set(key, new JsonValue()); } else { target.push(new JsonValue()); }
+                return;
+            }
             if (c == 45 || (c >= 48 && c <= 57)) {                                    // - or digit
                 let isInt = 0;
                 let iv: long = 0;
@@ -572,11 +748,15 @@ namespace std.data {
                 let d = %{ grav_json_number(self->src, &p, &isInt, &iv, &err) %} as double;
                 self.pos = p;
                 if (err != "") { self.fail(err); }
-                return isInt == 1 ? JsonValue.ofInt(iv) : JsonValue.ofFloat(d);
+                if (isInt == 1) {
+                    if (key != null) { target.set(key, iv); } else { target.push(iv); }
+                } else {
+                    if (key != null) { target.set(key, d); } else { target.push(d); }
+                }
+                return;
             }
             if (c == 0) { self.fail("unexpected end of input"); }
             self.fail("unexpected character");
-            return new JsonValue();
         }
         private fn enter() {
             self.depth += 1;
@@ -585,11 +765,11 @@ namespace std.data {
         private fn array() -> JsonValue {
             self.enter();
             self.pos += 1;
-            let out = JsonValue.ofKind(JsonKind.Array);
+            let out = new JsonValue(JsonKind.Array);
             self.skipSpace();
             if (self.cur() == 93) { self.pos += 1; self.depth -= 1; return out; }
             while (true) {
-                out.push(self.value());
+                self.valueInto(out, null);
                 self.skipSpace();
                 let c = self.cur();
                 if (c == 44) { self.pos += 1; continue; }
@@ -602,17 +782,17 @@ namespace std.data {
         private fn object() -> JsonValue {
             self.enter();
             self.pos += 1;
-            let out = JsonValue.ofKind(JsonKind.Object);
+            let out = new JsonValue(JsonKind.Object);
             self.skipSpace();
             if (self.cur() == 125) { self.pos += 1; self.depth -= 1; return out; }
             while (true) {
                 self.skipSpace();
                 if (self.cur() != 34) { self.fail("expected a string key in an object"); }
-                let key = self.str();
+                let key = self.sharedKey(self.str());
                 self.skipSpace();
                 if (self.cur() != 58) { self.fail("expected ':' after an object key"); }
                 self.pos += 1;
-                out.set(key, self.value());
+                self.valueInto(out, key);
                 self.skipSpace();
                 let c = self.cur();
                 if (c == 44) { self.pos += 1; continue; }
