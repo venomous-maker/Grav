@@ -351,9 +351,12 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
         if (!p.isExpr) {
             emit(TokenType::StringLiteral, p.text);
         } else {
-            emit(TokenType::Identifier, "str");
+            // `${x:.2f}` — a format spec after the last top-level ':' (see splitFormatSpec).
+            std::string exprText = p.text, spec;
+            splitFormatSpec(exprText, spec, sLine, sCol);
+            emit(TokenType::Identifier, spec.empty() ? "str" : "__fmt");
             emit(TokenType::LParen, "(");
-            Lexer sub(p.text);
+            Lexer sub(exprText);
             // Re-anchor the embedded tokens at the string's position so errors
             // inside `${...}` point at the right line (not line 1).
             for (auto &tk : sub.tokenize()) {
@@ -362,10 +365,52 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
                 tk.col = sCol + tk.col;
                 out.push_back(tk);
             }
+            if (!spec.empty()) {
+                emit(TokenType::Comma, ",");
+                emit(TokenType::StringLiteral, spec);
+            }
             emit(TokenType::RParen, ")");
         }
     }
     emit(TokenType::RParen, ")");
+}
+
+// `x:.2f` -> ("x", ".2f"). The spec follows the last ':' outside brackets and
+// quotes, and is `[<>^][+][0][width][.precision][d f e x X o b s %]` with no
+// spaces (so `${a ? b : c}` stays a conditional).
+void Lexer::splitFormatSpec(std::string &expr, std::string &spec, int line, int col) {
+    int depth = 0;
+    bool inStr = false;
+    size_t colon = std::string::npos;
+    for (size_t i = 0; i < expr.size(); ++i) {
+        char c = expr[i];
+        if (inStr) { if (c == '\\') ++i; else if (c == '"') inStr = false; continue; }
+        if (c == '"') inStr = true;
+        else if (c == '(' || c == '[' || c == '{') ++depth;
+        else if (c == ')' || c == ']' || c == '}') --depth;
+        else if (c == ':' && depth == 0 && (i + 1 >= expr.size() || expr[i + 1] != ':') &&
+                 (i == 0 || expr[i - 1] != ':'))
+            colon = i;
+    }
+    if (colon == std::string::npos) return;
+    std::string tail = expr.substr(colon + 1);
+    size_t k = 0;
+    auto digits = [&] { size_t a = k; while (k < tail.size() && std::isdigit(static_cast<unsigned char>(tail[k]))) ++k; return k > a; };
+    if (k < tail.size() && (tail[k] == '<' || tail[k] == '>' || tail[k] == '^')) ++k;
+    if (k < tail.size() && tail[k] == '+') ++k;
+    digits();
+    if (k < tail.size() && tail[k] == '.') { ++k; if (!digits()) return; }
+    if (k < tail.size() && std::string("dfexXobs%").find(tail[k]) != std::string::npos) ++k;
+    if (tail.empty() || k != tail.size()) {
+        // Not a spec: something like `${cond ? a : b}`.
+        bool looksLikeSpec = !tail.empty() && tail.find(' ') == std::string::npos &&
+                             (tail[0] == '.' || std::isdigit(static_cast<unsigned char>(tail[0])) || tail[0] == '<' ||
+                              tail[0] == '>' || tail[0] == '^');
+        if (looksLikeSpec) throw GravError("lex", line, col, "invalid format spec '" + tail + "' in '${...}'");
+        return;
+    }
+    spec = tail;
+    expr = expr.substr(0, colon);
 }
 
 Token Lexer::scanCBlock() {

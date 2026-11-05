@@ -940,6 +940,23 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             TypeRef t = checkExpr(*e.args[0]);
             return name->name == "__retain" ? t : TypeRef::prim(TypeRef::Kind::Void);
         }
+        if (name->name == "__fmt" && e.args.size() == 2 && dynamic_cast<StringLiteralExpr *>(e.args[1].get())) {
+            // `${x:spec}` (lexer-made): the spec's type letter must suit the value.
+            e.kind = CallKind::Builtin;
+            e.targetName = "__fmt";
+            TypeRef t = checkExpr(*e.args[0]);
+            e.args[1]->type = TypeRef::prim(TypeRef::Kind::String);
+            const std::string &spec = static_cast<StringLiteralExpr *>(e.args[1].get())->value;
+            char kind = spec.empty() ? 0 : spec.back();
+            bool intOnly = std::string("xXob").find(kind) != std::string::npos && kind;
+            bool numOnly = std::string("dfe%").find(kind) != std::string::npos && kind;
+            if (!t.isError() && ((intOnly && t.kind != TypeRef::Kind::Int) || (numOnly && !t.isNumeric())))
+                error(e.args[0]->line, e.args[0]->col, "format '" + spec + "' needs " +
+                                                           (intOnly ? "an integer" : "a number") + ", but got " + aTypeName(t));
+            if (!t.isError() && kind == 'd' && t.kind != TypeRef::Kind::Int)
+                error(e.args[0]->line, e.args[0]->col, "format 'd' needs an integer, but got " + aTypeName(t));
+            return TypeRef::prim(TypeRef::Kind::String);
+        }
         if (name->name == "__repr" && e.args.size() == 1) {
             // Internal (collection toString): a value as text, strings quoted.
             e.kind = CallKind::Builtin;

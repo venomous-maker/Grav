@@ -200,6 +200,29 @@ The `Str` class in the standard library adds searching, slicing, splitting, and
 more — see [Standard library](14-standard-library.md#strings).
 
 
+### Formatting
+
+`${value:spec}` formats a value: `[<>^][+][0][width][.precision][type]`, where the
+type is `d` (integer), `f` (fixed), `e` (exponent), `%` (percent), `x`/`X` (hex), `o`
+(octal), `b` (binary) or `s` (text). Numbers align right and text left unless `<`,
+`>` or `^` (centered) says otherwise; a precision cuts text to that length.
+
+```grav
+fn main() {
+    let price = 4.5
+    let qty = 7
+    print("[${qty:3}] [${qty:03}] [${qty:<3}] [${255:x}]")
+    print("${price:.2f} ${0.257:.1%} ${"Grav":>6}")
+}
+```
+
+Output:
+
+```text
+[  7] [007] [7  ] [ff]
+4.50 25.7%   Grav
+```
+
 ## Printing values
 
 `print`, `str()` and `${}` accept any value. Objects use their `toString()`

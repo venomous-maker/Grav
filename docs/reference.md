@@ -54,7 +54,7 @@ are evaluated left to right; `&&`, `||`, `??`, `?:`, and `?.` short-circuit.
 | integers | `42`, `0`, `9000000000` |
 | floats | `3.14`, `0.5`, `2.0` |
 | booleans | `true`, `false` |
-| strings | `"text"`, `"tab\t"`, `"sum=${a + b}"`, `"\u{263A}"` |
+| strings | `"text"`, `"tab\t"`, `"sum=${a + b}"`, `"${x:.2f}"`, `"\u{263A}"` |
 | arrays | `[1, 2, 3]`, `[[1, 2], [3, 4]]` |
 | structs | `Point { x: 1, y: 2 }`, `Pair<int, string> { first: 1, second: "a" }` |
 | lambdas | `fn(x) => x * 2`, `fn(a: int, b: int) -> int { return a + b }` |

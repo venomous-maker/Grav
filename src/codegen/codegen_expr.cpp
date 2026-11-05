@@ -571,6 +571,10 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return displayC(emitExpr(*call.args[0]), t, false);
             }
             if (call.targetName == "__repr") return displayC(emitExpr(*call.args[0]), call.args[0]->type, true);
+            if (call.targetName == "__fmt") {
+                auto *spec = static_cast<const StringLiteralExpr *>(call.args[1].get());
+                return formatC(emitExpr(*call.args[0]), call.args[0]->type, spec->value);
+            }
             if (call.targetName == "assertEq") {
                 SourceMapEntry o = origin(call.line);
                 std::string loc = "\"" + escapeC(o.file) + ":" + std::to_string(o.line) + "\"";

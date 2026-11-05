@@ -35,6 +35,8 @@ private:
     void scanStringInto(std::vector<Token> &out);
     Token scanIdentifierOrKeyword();
     Token scanCBlock(); // `%{ ... %}` verbatim C
+    // `${x:.2f}`: separates a trailing format spec from the expression.
+    static void splitFormatSpec(std::string &expr, std::string &spec, int line, int col);
 
     std::string source_;
     size_t pos_ = 0;

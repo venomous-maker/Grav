@@ -54,6 +54,7 @@ private:
     void emitDisplaySupport();
     std::string displayC(const std::string &c, const TypeRef &t, bool nested) const;
     std::string displayFn(const TypeRef &t) const;
+    std::string formatC(const std::string &c, const TypeRef &t, const std::string &spec) const;
     std::string displayTypeName(const std::string &fq) const;
     mutable std::set<std::string> displayDone_;
     mutable std::string displayProtos_, displayDefs_;
