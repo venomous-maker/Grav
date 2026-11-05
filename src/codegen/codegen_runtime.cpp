@@ -53,12 +53,46 @@ const char* __asan_default_options(void) { return "detect_leaks=0"; }
 #endif
 #endif
 
+/* Unwinding: an owned reference local registers its address and a release
+   function for as long as it is in scope. An exception jumps (longjmp) past the
+   code that would release it, so before jumping the runtime releases every
+   local registered after the handler was set up (their frames are still on the
+   stack then). Per thread, like the handlers. */
+typedef struct GravUnwind { void* addr; void (*rel)(void*); } GravUnwind;
+static _Thread_local GravUnwind* grav_uw = 0;
+static _Thread_local int grav_uw_top = 0;
+static _Thread_local int grav_uw_cap = 0;
+static GRAV_COLD void grav_uw_grow(void) {
+    int cap = grav_uw_cap ? grav_uw_cap * 2 : 256;
+    GravUnwind* n = (GravUnwind*)realloc(grav_uw, (size_t)cap * sizeof(GravUnwind));
+    if (!n) { fprintf(stderr, "out of memory\n"); abort(); }
+    grav_uw = n;
+    grav_uw_cap = cap;
+}
+static inline void grav_uw_push(void* addr, void (*rel)(void*)) {
+    if (GRAV_UNLIKELY(grav_uw_top == grav_uw_cap)) grav_uw_grow();
+    grav_uw[grav_uw_top].addr = addr;
+    grav_uw[grav_uw_top].rel = rel;
+    grav_uw_top++;
+}
+/* Releases the locals registered above height `to`, newest first. Each entry is
+   removed before its release runs, so a destructor that throws cannot release
+   it twice. */
+static void grav_uw_unwind(int to) {
+    while (grav_uw_top > to) {
+        GravUnwind e = grav_uw[--grav_uw_top];
+        e.rel(e.addr);
+    }
+}
+
 /* `grav test`: failures inside a test jump back to the runner instead of exiting. */
 static _Thread_local int grav_testing = 0; /* runner thread only */
 static jmp_buf grav_test_jmp;
+static int grav_test_uw; /* unwind height when the running test started */
 static char grav_test_msg[2048];
 static GRAV_COLD GRAV_NORETURN void grav_test_fail(const char* m) {
     snprintf(grav_test_msg, sizeof grav_test_msg, "%s", m);
+    grav_uw_unwind(grav_test_uw);
     longjmp(grav_test_jmp, 1);
 }
 /* Panic recovery (see the "Panic recovery" section below). */
@@ -234,6 +268,19 @@ static void grav_free_obj(void* o) {
     if (before & GRAV_RC_DEAD) return;
     grav_obj_teardown(o);
 }
+/* Unwinding out of a constructor: its object loses the creator's reference. When
+   nobody else took one, its fields are released but its destructor never runs
+   (the object was never fully built). */
+static GRAV_UNUSED void grav_uw_unbuilt(void* p) {
+    void* o = *(void**)p;
+    long long v = __atomic_load_n(&((struct GravObject*)o)->__rc, __ATOMIC_ACQUIRE);
+    if (GRAV_RC_COUNT(v) == 1 && !(v & GRAV_RC_DEAD)) {
+        __atomic_fetch_or(&((struct GravObject*)o)->__rc, GRAV_RC_DEAD, __ATOMIC_ACQ_REL);
+        const GravTypeInfo* t = ((struct GravObject*)o)->__type;
+        if (t && t->fields) t->fields(o);
+    }
+    grav_release(o);
+}
 /* Weak references (`weak` fields). */
 static inline void grav_weak_retain(void* o) {
     if (!o) return;
@@ -269,6 +316,10 @@ static inline GravFn grav_fn_retain(GravFn f) { grav_retain(f.env); return f; }
 static inline void grav_fn_release(GravFn f) { grav_release(f.env); }
 static inline struct GravIface grav_iface_retain(struct GravIface i) { grav_retain(i.obj); return i; }
 static inline void grav_iface_release(struct GravIface i) { grav_release(i.obj); }
+/* Unwind release functions (see grav_uw_push), by the local's C type. */
+static GRAV_UNUSED void grav_uw_obj(void* p) { grav_release(*(void**)p); }
+static GRAV_UNUSED void grav_uw_fn(void* p) { grav_fn_release(*(GravFn*)p); }
+static GRAV_UNUSED void grav_uw_iface(void* p) { grav_iface_release(*(struct GravIface*)p); }
 
 /* ---- Heap strings -----------------------------------------------------------
    Strings are `const char*`. Literals, strings from C (getenv, strerror, static
@@ -470,6 +521,7 @@ static inline void grav_str_release(const char* s) {
     else v = __atomic_sub_fetch(&h->rc, 1, __ATOMIC_ACQ_REL);
     if (v == 0) grav_sblock_free(h);
 }
+static GRAV_UNUSED void grav_uw_str(void* p) { grav_str_release(*(const char**)p); }
 
 /* The release list: results of calls and constructors used inside an expression
    are borrowed until the statement ends, then released together. Per thread; a
@@ -842,6 +894,7 @@ static inline void grav_any_release(GravAny a) {
     else if (a.tag == GRAV_ANY_FN) grav_release(a.v.fn.env);
     else if (a.tag == GRAV_ANY_STR) grav_str_release(a.v.s);
 }
+static GRAV_UNUSED void grav_uw_any(void* p) { grav_any_release(*(GravAny*)p); }
 static inline GravAny grav_any_autorelease(GravAny a) {
     if (a.tag == GRAV_ANY_OBJ) grav_autorelease(a.v.p);
     else if (a.tag == GRAV_ANY_FN) grav_autorelease(a.v.fn.env);
@@ -990,6 +1043,7 @@ typedef struct GravExc {
 /* Per thread: handlers and the in-flight exception never leak across threads. */
 static _Thread_local jmp_buf grav_jmp_stack[GRAV_MAXTRY];
 static _Thread_local int grav_jmp_top = 0;
+static _Thread_local int grav_jmp_uw[GRAV_MAXTRY]; /* unwind height when each handler was set */
 static _Thread_local GravExc grav_current_exc;
 /* Panic recovery points (Panic.recover, servers, threads): each remembers the try
    depth and call depth where it was set. An exception that would leave the region
@@ -998,6 +1052,7 @@ static _Thread_local GravExc grav_current_exc;
 static _Thread_local jmp_buf grav_recover_stack[GRAV_MAXRECOVER];
 static _Thread_local int grav_recover_try[GRAV_MAXRECOVER];
 static _Thread_local int grav_recover_nf[GRAV_MAXRECOVER];
+static _Thread_local int grav_recover_uw[GRAV_MAXRECOVER];
 static _Thread_local int grav_recover_top = 0;
 static _Thread_local char grav_recover_msg[2048];
 /* A recovered panic unwinds as an exception of this type: no `catch` matches it
@@ -1012,10 +1067,12 @@ static GRAV_NORETURN void grav_recover_land(const char* what, const char* msg, c
              (msg && msg[0]) ? msg : (t ? t->name : "?"));
     int k = grav_recover_top - 1;
     if (k < 0 || k >= GRAV_MAXRECOVER) abort(); /* only called inside a recovery region */
+    grav_uw_unwind(grav_recover_uw[k]);
     longjmp(grav_recover_stack[k], 1);
 }
 static inline int grav_try_push(void) {
     if (GRAV_UNLIKELY(grav_jmp_top >= GRAV_MAXTRY)) grav_panic("try blocks nested too deeply");
+    grav_jmp_uw[grav_jmp_top] = grav_uw_top;
     return grav_jmp_top++;
 }
 static void grav_print_trace(const GravFrame* fr, int n) {
@@ -1062,7 +1119,10 @@ static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char*
         grav_current_exc.ntrace = n;
     }
 #endif
-    if (grav_jmp_top > grav_try_floor()) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_jmp_top > grav_try_floor()) {
+        grav_uw_unwind(grav_jmp_uw[grav_jmp_top - 1]);
+        longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    }
     if (grav_recover_top > 0) grav_recover_land(t == &grav_panic_typeinfo ? "panic" : "uncaught exception", msg, t);
     if (grav_testing) {
         char b[2048];
@@ -1077,7 +1137,10 @@ static GRAV_NORETURN void grav_throw(void* v, const GravTypeInfo* t, const char*
 }
 /* Re-raise the in-flight exception, keeping the trace from its original throw. */
 static GRAV_NORETURN void grav_rethrow(void) {
-    if (grav_jmp_top > grav_try_floor()) longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    if (grav_jmp_top > grav_try_floor()) {
+        grav_uw_unwind(grav_jmp_uw[grav_jmp_top - 1]);
+        longjmp(grav_jmp_stack[grav_jmp_top - 1], 1);
+    }
     if (grav_recover_top > 0)
         grav_recover_land(grav_current_exc.type == &grav_panic_typeinfo ? "panic" : "uncaught exception",
                           grav_current_exc.message, grav_current_exc.type);
@@ -1127,6 +1190,7 @@ static const char* grav_recover_call(GravFn f) {
     int k = grav_recover_top;
     grav_recover_try[k] = grav_jmp_top;
     grav_recover_nf[k] = grav_nframes;
+    grav_recover_uw[k] = grav_uw_top;
     grav_recover_top = k + 1;
     if (setjmp(grav_recover_stack[k]) == 0) {
         if (f.fn) ((void (*)(void*))f.fn)(f.env);
@@ -1136,6 +1200,7 @@ static const char* grav_recover_call(GravFn f) {
     grav_recover_top = k;
     grav_jmp_top = grav_recover_try[k];
     grav_frames_restore(grav_recover_nf[k]);
+    grav_exc_clear(); /* recovered: its message is in grav_recover_msg */
     size_t n = strlen(grav_recover_msg);
     char* out = grav_str_new(n);
     memcpy(out, grav_recover_msg, n + 1);
@@ -1371,6 +1436,7 @@ static int grav_run_tests(const char* const* names, void (*const* fns)(void), in
         if (filter && filter[0] && !strstr(names[i], filter)) { skipped++; continue; }
         grav_jmp_top = 0;
         grav_frames_restore(0);
+        grav_test_uw = grav_uw_top;
         if (setjmp(grav_test_jmp) == 0) {
             fns[i]();
             printf("  ok    %s\n", names[i]);

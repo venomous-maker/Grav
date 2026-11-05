@@ -89,6 +89,9 @@ A few details:
 - Counts are updated atomically, so objects can be shared between threads.
 - Long chains, like a linked list with a million nodes, are freed without deep
   recursion.
+- An exception releases the variables of every function it leaves on its way
+  to a `catch`, so a failed call holds on to nothing. A constructor that throws
+  frees its half-built object without running its destructor.
 
 You do not write any of this: the compiler inserts the counting. Most of the
 time you can forget memory exists.

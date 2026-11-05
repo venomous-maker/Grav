@@ -39,7 +39,13 @@ void CodeGen::emitBlock(const Block &block) {
     size_t base = cleanups_.size();
     cleanups_.push_back({Cleanup::Scope, "", nullptr});
     bool fellOff = true;
+    const Block *outerBlock = curBlock_;
+    size_t outerStmt = curStmt_;
+    curBlock_ = &block;
+    curStmt_ = 0;
     for (const auto &s : block.statements) {
+        curBlock_ = &block; // nested blocks emitted by the previous statement moved it
+        curStmt_ = static_cast<size_t>(&s - block.statements.data());
         if (auto *d = dynamic_cast<const DeferStmt *>(s.get())) {
             cleanups_.push_back({Cleanup::Defer, "", &d->body});
             continue;
@@ -68,6 +74,8 @@ void CodeGen::emitBlock(const Block &block) {
         }
     }
     cleanups_.resize(base);
+    curBlock_ = outerBlock;
+    curStmt_ = outerStmt;
 }
 
 void CodeGen::emitUnwind(bool toLoop, const std::string &labelId) {
@@ -177,12 +185,15 @@ void CodeGen::emitTry(const TryStmt &s) {
         // The handler owns the caught object, released when the handler ends.
         line(ct + "* " + c.var + " = (" + ct + "*)grav_exc_take();");
         line("(void)" + c.var + ";");
-        cleanups_.push_back({Cleanup::Code, "", nullptr, "grav_release((void*)" + c.var + ");"});
+        bool reg = blockMayCall(c.block);
+        if (reg) line("grav_uw_push((void*)&" + c.var + ", grav_uw_obj);");
+        std::string varRelease = std::string(reg ? "grav_uw_top--; " : "") + "grav_release((void*)" + c.var + ");";
+        cleanups_.push_back({Cleanup::Code, "", nullptr, varRelease});
         // A `return`/`break` out of the handler must still run `finally`.
         if (guard) cleanups_.push_back({Cleanup::Try, tc, fin});
         emitBlock(c.block);
         if (guard) cleanups_.pop_back();
-        line("grav_release((void*)" + c.var + ");");
+        line(varRelease);
         cleanups_.pop_back();
         indent_--;
     }
@@ -258,7 +269,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         return;
     }
 
-    bool ownedSrc = false;
+    bool ownedSrc = false, srcReg = false;
     // Element loops: bind the iterable once, then index it.
     std::string idx = s.indexVar.empty() ? "__i" + n : s.indexVar;
     std::string src = "__it" + n;
@@ -296,7 +307,9 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         case ForInKind::Chars:
             // The string is held for the loop; each character is a fresh string.
             line("const char* " + src + " = " + emitOwned(*s.lo, s.lo->type) + ";");
-            cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(s.lo->type, src)});
+            srcReg = blockMayCall(s.body);
+            if (srcReg) line(unwindPush(s.lo->type, src));
+            cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(s.lo->type, src, srcReg)});
             ownedSrc = true;
             break;
         case ForInKind::Object:
@@ -305,7 +318,8 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             // must not free a collection the loop expression just made).
             line(cTy(s.lo->type) + " " + src + " = " + emitOwned(*s.lo, s.lo->type) + ";");
             if (refKind(s.lo->type) != RefKind::None) {
-                cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(s.lo->type, src)});
+                line(unwindPush(s.lo->type, src));
+                cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(s.lo->type, src, true)});
                 ownedSrc = true;
             }
             // length() is re-read each step so the loop tolerates appends.
@@ -329,8 +343,10 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     bool ownedVar = (s.iterKind == ForInKind::Object || s.iterKind == ForInKind::Chars) &&
                     refKind(s.varType) != RefKind::None;
     line(vty + " " + s.var + " = " + elem + ";");
+    bool varReg = ownedVar && blockMayCall(s.body);
+    if (varReg) line(unwindPush(s.varType, s.var));
     indent_--;
-    if (ownedVar) loopVarRelease_ = releaseOf(s.varType, s.var);
+    if (ownedVar) loopVarRelease_ = ownedRelease(s.varType, s.var, varReg);
     emitLoopBody(s.body, s.label);
     line("}");
     popLoopLabel(labelId); // `break <label>` still releases the iterated collection
@@ -462,6 +478,41 @@ bool CodeGen::stmtMayCall(const Stmt &s) const {
     if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) return exprMayCall(x->subject.get());
     if (dynamic_cast<const ThrowStmt *>(&s)) return true;
     return false; // blocks, try, break/continue: their inner statements mark themselves
+}
+
+// Like stmtMayCall, but also looking inside nested blocks: whether running `s`
+// can reach a call (and so an exception that unwinds this frame).
+bool CodeGen::stmtMayCallDeep(const Stmt &s) const {
+    if (stmtMayCall(s)) return true;
+    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return blockMayCall(x->block);
+    if (auto *x = dynamic_cast<const IfStmt *>(&s))
+        return blockMayCall(x->thenBlock) || (x->elseStmt && stmtMayCallDeep(*x->elseStmt));
+    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return blockMayCall(x->body);
+    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return blockMayCall(x->body);
+    if (auto *x = dynamic_cast<const ForStmt *>(&s)) return blockMayCall(x->body);
+    if (auto *x = dynamic_cast<const ForInStmt *>(&s)) return blockMayCall(x->body);
+    if (auto *x = dynamic_cast<const DeferStmt *>(&s)) return blockMayCall(x->body);
+    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+        for (const auto &c : x->cases) {
+            if (exprMayCall(c.guard.get()) || blockMayCall(c.body)) return true;
+            for (const auto &v : c.values) if (exprMayCall(v.get())) return true;
+        }
+        return blockMayCall(x->defaultBody);
+    }
+    if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+        if (blockMayCall(x->tryBlock) || blockMayCall(x->finallyBlock)) return true;
+        for (const auto &c : x->catches) if (blockMayCall(c.block)) return true;
+        return false;
+    }
+    if (dynamic_cast<const BreakStmt *>(&s) || dynamic_cast<const ContinueStmt *>(&s)) return false;
+    return !dynamic_cast<const LetStmt *>(&s) && !dynamic_cast<const AssignStmt *>(&s) &&
+           !dynamic_cast<const ReturnStmt *>(&s) && !dynamic_cast<const ExprStmt *>(&s);
+}
+
+bool CodeGen::blockMayCall(const Block &b, size_t from) const {
+    for (size_t i = from; i < b.statements.size(); i++)
+        if (stmtMayCallDeep(*b.statements[i])) return true;
+    return false;
 }
 
 } // namespace grav

@@ -200,6 +200,12 @@ Output:
 stopped after 2: bad input 'x'
 ```
 
+An exception that passes through functions on its way to a `catch` releases
+what those functions held: their variables are dropped as if each function had
+returned, so their objects are destroyed and nothing leaks. A constructor that
+throws frees its half-built object; its destructor does not run, because the
+object never finished being built.
+
 ### Uncaught exceptions
 
 An exception that nobody catches ends the program. It prints the exception and

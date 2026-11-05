@@ -228,9 +228,12 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
         defs_ += stringDefaults("self->" + memberCName(f.name), f.type);
 
     if (ctor) {
+        // A constructor that throws frees the half-built object (see grav_uw_unbuilt).
+        defs_ += "    grav_uw_push((void*)&self, grav_uw_unbuilt);\n";
         defs_ += "    " + ctorInitCName(cls.fqName, idx) + "(self";
         for (const auto &p : params) defs_ += ", " + p.name;
         defs_ += ");\n";
+        defs_ += "    grav_uw_top--;\n";
     }
     defs_ += "    return self;\n}\n\n";
 }

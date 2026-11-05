@@ -72,6 +72,8 @@ private:
     bool testMode_ = false;
     std::vector<std::pair<std::string, std::string>> tests_; // display name, C function
     int curSrcLine_ = 0; // source line of the statement being emitted (for #line)
+    const Block *curBlock_ = nullptr; // the block whose statement curStmt_ is being emitted
+    size_t curStmt_ = 0;
     std::string lineDirective(int combinedLine) const; // "#line N \"file\"\n" or ""
     void endFunction();                                // close a body + reset marker
 
@@ -150,6 +152,14 @@ private:
     RefKind refKind(const TypeRef &t) const;
     std::string retainOf(const TypeRef &t, const std::string &c) const;
     std::string releaseOf(const TypeRef &t, const std::string &c) const;   // a statement
+    // An owned local (a variable, not an expression) is registered while in
+    // scope so an exception leaving its frame releases it; ownedRelease
+    // unregisters and releases it where its scope ends.
+    // A local whose scope makes no call is never unwound past, so it skips the
+    // registration (`registered` false).
+    std::string unwindPush(const TypeRef &t, const std::string &var) const;
+    std::string ownedRelease(const TypeRef &t, const std::string &var, bool registered) const;
+    bool restOfBlockMayCall(const Stmt &s) const;
     std::string autoreleaseOf(const TypeRef &t, const std::string &c) const;
     // Does evaluating `e` yield a new reference (a call, `new`, a capturing lambda)?
     bool isRefProducer(const Expr &e) const;
@@ -197,6 +207,8 @@ private:
     // Statements that cannot call into other code need no stack-trace line mark.
     bool stmtMayCall(const Stmt &s) const;
     bool exprMayCall(const Expr *e) const;
+    bool stmtMayCallDeep(const Stmt &s) const;
+    bool blockMayCall(const Block &b, size_t from = 0) const;
     bool readsMutable(const Expr *e) const;
 
     // codegen_stmt.cpp

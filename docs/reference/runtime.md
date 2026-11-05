@@ -81,6 +81,11 @@ collector frees groups of objects that only refer to each other; it runs
 automatically while a single thread uses objects, and on `GC.collect()`. See
 [Memory](../learn/15-memory.md).
 
+An exception or a recovered panic releases the local variables of every
+function it unwinds through, in the order those functions would have released
+them. A constructor that throws frees its object without running its
+destructor.
+
 ## Threads and tasks
 
 - `async` calls run on a pool of `GRAV_MAXPROCS` worker threads (default: the

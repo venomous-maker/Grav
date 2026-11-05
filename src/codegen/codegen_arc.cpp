@@ -195,6 +195,35 @@ std::string CodeGen::releaseOf(const TypeRef &t, const std::string &c) const {
     }
 }
 
+std::string CodeGen::unwindPush(const TypeRef &t, const std::string &var) const {
+    std::string rel;
+    switch (refKind(t)) {
+        case RefKind::Obj: rel = "grav_uw_obj"; break;
+        case RefKind::Iface: rel = "grav_uw_iface"; break;
+        case RefKind::Fn: rel = "grav_uw_fn"; break;
+        case RefKind::Any: rel = "grav_uw_any"; break;
+        case RefKind::Str: rel = "grav_uw_str"; break;
+        case RefKind::Value: rel = valueTypeName(t) + "__release_box"; break;
+        default: return "";
+    }
+    return "grav_uw_push((void*)&" + var + ", " + rel + ");";
+}
+
+std::string CodeGen::ownedRelease(const TypeRef &t, const std::string &var, bool registered) const {
+    std::string rel = releaseOf(t, var);
+    return rel.empty() || !registered ? rel : "grav_uw_top--; " + rel;
+}
+
+// Whether a call can happen after `s` while its scope lasts: the statements
+// after it in its block (a statement nested elsewhere, like a `for` header's
+// `let`, is assumed to).
+bool CodeGen::restOfBlockMayCall(const Stmt &s) const {
+    if (!curBlock_ || curStmt_ >= curBlock_->statements.size() ||
+        curBlock_->statements[curStmt_].get() != &s)
+        return true;
+    return blockMayCall(*curBlock_, curStmt_ + 1);
+}
+
 std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const {
     switch (refKind(t)) {
         case RefKind::Obj: return "((" + cTy(t) + ")grav_autorelease((void*)(" + c + ")))";
@@ -413,7 +442,9 @@ void CodeGen::ownAssignedParams(const Block &body, const std::vector<Param> &par
         if (!assigned.count(p.name) || refKind(p.type) == RefKind::None || p.variadic) continue;
         const std::string &n = p.name;
         line(n + " = " + retainOf(p.type, n) + ";");
-        cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(p.type, n)});
+        bool reg = blockMayCall(body);
+        if (reg) line(unwindPush(p.type, n));
+        cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(p.type, n, reg)});
     }
 }
 

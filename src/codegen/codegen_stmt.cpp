@@ -68,7 +68,9 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         if (refKind(t) != RefKind::None) {
             // An owning local: +1 now, released when its scope ends.
             line(cTy(t) + (vol ? " volatile " : " ") + s->name + " = " + emitOwned(*s->init, t) + ";");
-            cleanups_.push_back({Cleanup::Code, "", nullptr, releaseOf(t, s->name)});
+            bool reg = restOfBlockMayCall(*s);
+            if (reg) line(unwindPush(t, s->name));
+            cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(t, s->name, reg)});
             freeTemps(temps);
             return;
         }
