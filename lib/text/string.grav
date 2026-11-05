@@ -10,24 +10,24 @@ namespace std.text {
     #include <stdlib.h>
     #include <ctype.h>
     static const char* grav_str_upper(const char* s) {
-        size_t n = strlen(s); char* r = grav_str_alloc(n + 1);
+        size_t n = grav_str_len(s); char* r = grav_str_alloc(n + 1);
         for (size_t i = 0; i < n; i++) r[i] = (char)toupper((unsigned char)s[i]);
         r[n] = 0; return r;
     }
     static const char* grav_str_lower(const char* s) {
-        size_t n = strlen(s); char* r = grav_str_alloc(n + 1);
+        size_t n = grav_str_len(s); char* r = grav_str_alloc(n + 1);
         for (size_t i = 0; i < n; i++) r[i] = (char)tolower((unsigned char)s[i]);
         r[n] = 0; return r;
     }
     static const char* grav_str_repeat(const char* s, int k) {
         if (k < 0) k = 0;
-        size_t n = strlen(s); char* r = grav_str_alloc(n * (size_t)k + 1);
+        size_t n = grav_str_len(s); char* r = grav_str_alloc(n * (size_t)k + 1);
         char* p = r;
         for (int i = 0; i < k; i++) { memcpy(p, s, n); p += n; }
         *p = 0; return r;
     }
     static const char* grav_str_sub(const char* s, int start, int len) {
-        int n = (int)strlen(s);
+        int n = (int)grav_str_len(s);
         if (start < 0) start = 0;
         if (start > n) start = n;
         if (len < 0 || start + len > n) len = n - start;
@@ -36,24 +36,56 @@ namespace std.text {
     }
     static int grav_str_indexof(const char* s, const char* sub, int from) {
         if (from < 0) from = 0;
-        if (from > (int)strlen(s)) return -1;
+        if (from > (int)grav_str_len(s)) return -1;
         const char* p = strstr(s + from, sub);
         return p ? (int)(p - s) : -1;
     }
+    /* One counted string copied from p[0..n). */
+    static const char* grav_str_piece(const char* p, size_t n) {
+        char* r = grav_str_alloc(n + 1); memcpy(r, p, n); r[n] = 0; return r;
+    }
+    /* Byte offsets of the next piece of s at or after *pos: kind 0 split on `delim`,
+       1 whitespace words, 2 lines. Returns 0 when there is none; else sets *a, *b. */
+    static int grav_str_next_piece(const char* s, long long n, const char* delim, int kind, long long* pos, long long* a, long long* b) {
+        long long i = *pos;
+        if (i > n) return 0;
+        if (kind == 0) {
+            size_t dl = strlen(delim);
+            const char* hit = dl ? strstr(s + i, delim) : 0;
+            *a = i;
+            if (!hit) { *b = n; *pos = n + 1; return 1; }
+            *b = hit - s; *pos = *b + (long long)dl; return 1;
+        }
+        if (kind == 1) {
+            while (i < n && isspace((unsigned char)s[i])) i++;
+            if (i >= n) { *pos = n + 1; return 0; }
+            *a = i;
+            while (i < n && !isspace((unsigned char)s[i])) i++;
+            *b = i; *pos = i; return 1;
+        }
+        if (i >= n) return 0;
+        const char* nl = memchr(s + i, '\n', (size_t)(n - i));
+        *a = i;
+        long long e = nl ? nl - s : n;
+        *pos = e + 1;
+        if (e > i && s[e - 1] == '\r') e--;
+        *b = e;
+        return 1;
+    }
     static const char* grav_str_reverse(const char* s) {
-        size_t n = strlen(s); char* r = grav_str_alloc(n + 1);
+        size_t n = grav_str_len(s); char* r = grav_str_alloc(n + 1);
         for (size_t i = 0; i < n; i++) r[i] = s[n - 1 - i];
         r[n] = 0; return r;
     }
     static const char* grav_str_trim(const char* s, int left, int right) {
-        const char* a = s; const char* b = s + strlen(s);
+        const char* a = s; const char* b = s + grav_str_len(s);
         if (left)  while (*a && isspace((unsigned char)*a)) a++;
         if (right) while (b > a && isspace((unsigned char)b[-1])) b--;
         size_t n = (size_t)(b - a); char* r = grav_str_alloc(n + 1);
         memcpy(r, a, n); r[n] = 0; return r;
     }
     static const char* grav_str_pad(const char* s, int len, char c, int left) {
-        int n = (int)strlen(s);
+        int n = (int)grav_str_len(s);
         if (n >= len) { char* r = grav_str_alloc((size_t)n + 1); memcpy(r, s, n + 1); return r; }
         char* r = grav_str_alloc((size_t)len + 1);
         int pad = len - n;
@@ -62,23 +94,23 @@ namespace std.text {
         r[len] = 0; return r;
     }
     static char* grav_str_dup(const char* s) {
-        size_t n = strlen(s); char* r = grav_str_alloc(n + 1); memcpy(r, s, n + 1); return r;
+        size_t n = grav_str_len(s); char* r = grav_str_alloc(n + 1); memcpy(r, s, n + 1); return r;
     }
     static const char* grav_str_replace(const char* s, const char* o, const char* n) {
         size_t ol = strlen(o); if (ol == 0) return grav_str_dup(s);
         size_t nl = strlen(n), cnt = 0;
         for (const char* p = s; (p = strstr(p, o)); p += ol) cnt++;
-        char* r = grav_str_alloc(strlen(s) + cnt * (nl > ol ? nl - ol : 0) + 1);
+        char* r = grav_str_alloc(grav_str_len(s) + cnt * (nl > ol ? nl - ol : 0) + 1);
         char* w = r; const char* p = s; const char* q;
         while ((q = strstr(p, o))) { memcpy(w, p, q - p); w += q - p; memcpy(w, n, nl); w += nl; p = q + ol; }
         strcpy(w, p); return r;
     }
     static int grav_str_ends(const char* s, const char* suf) {
-        size_t n = strlen(s), m = strlen(suf);
+        size_t n = grav_str_len(s), m = strlen(suf);
         return m <= n && memcmp(s + n - m, suf, m) == 0;
     }
     static int grav_str_lastindexof(const char* s, const char* sub) {
-        size_t n = strlen(s), m = strlen(sub);
+        size_t n = grav_str_len(s), m = grav_str_len(sub);
         if (m > n) return -1;
         for (size_t i = n - m + 1; i-- > 0;) if (memcmp(s + i, sub, m) == 0) return (int)i;
         return -1;
@@ -86,16 +118,16 @@ namespace std.text {
     /* One allocation for the whole result (Str.join). */
     static const char* grav_str_join(const char** parts, int count, const char* delim) {
         size_t dl = strlen(delim), total = 0;
-        for (int i = 0; i < count; i++) total += strlen(parts[i]) + (i ? dl : 0);
+        for (int i = 0; i < count; i++) total += grav_str_len(parts[i]) + (i ? dl : 0);
         char* r = grav_str_alloc(total + 1); char* w = r;
         for (int i = 0; i < count; i++) {
             if (i) { memcpy(w, delim, dl); w += dl; }
-            size_t l = strlen(parts[i]); memcpy(w, parts[i], l); w += l;
+            size_t l = grav_str_len(parts[i]); memcpy(w, parts[i], l); w += l;
         }
         *w = 0; return r;
     }
     static const char* grav_str_capitalize(const char* s) {
-        size_t n = strlen(s); char* r = grav_str_alloc(n + 1); memcpy(r, s, n + 1);
+        size_t n = grav_str_len(s); char* r = grav_str_alloc(n + 1); memcpy(r, s, n + 1);
         if (n) r[0] = (char)toupper((unsigned char)r[0]);
         return r;
     }
@@ -116,7 +148,7 @@ namespace std.text {
         return 1;
     }
     static const char* grav_str_center(const char* s, int width, char c) {
-        int n = (int)strlen(s);
+        int n = (int)grav_str_len(s);
         if (n >= width) return grav_str_dup(s);
         int left = (width - n) / 2, right = width - n - left;
         char* r = grav_str_alloc((size_t)width + 1);
@@ -127,7 +159,7 @@ namespace std.text {
         char* r = grav_str_alloc(2); r[0] = (char)code; r[1] = 0; return r;
     }
     static int grav_str_count(const char* s, const char* sub) {
-        size_t l = strlen(sub); if (l == 0) return 0;
+        size_t l = grav_str_len(sub); if (l == 0) return 0;
         int c = 0; for (const char* p = s; (p = strstr(p, sub)); p += l) c++;
         return c;
     }
@@ -136,7 +168,7 @@ namespace std.text {
     class Str {
         // ── inspecting ─────────────────────────────────────────────────────────
         // The length in bytes (UTF-8: a character may take several).
-        static fn length(s: string) -> int { return %{ (int)strlen(s) %} as int; }
+        static fn length(s: string) -> int { return %{ (int)grav_str_len(s) %} as int; }
         // Whether the string is "".
         static fn isEmpty(s: string) -> bool { return %{ (s[0] == 0) %} as bool; }
         // Empty or only whitespace.
@@ -245,42 +277,22 @@ namespace std.text {
         // ── splitting and joining ──────────────────────────────────────────────
         // The parts between occurrences of `delim` ("a,,b" by "," gives "a", "", "b").
         static fn split(s: string, delim: string) -> Array<string> {
-            let out = new Array<string>();
-            let dl = Str.length(delim);
-            if (dl == 0) { out.push(Str.substring(s, 0, Str.length(s))); return out; }
-            let start = 0;
-            while (true) {
-                let i = Str.indexFrom(s, delim, start);
-                if (i < 0) { out.push(Str.substring(s, start, Str.length(s) - start)); return out; }
-                out.push(Str.substring(s, start, i - start));
-                start = i + dl;
-            }
-            return out;
+            if (delim.length == 0) { let one = new Array<string>(); one.push(s); return one; }
+            return Str.pieces(s, delim, 0);
         }
         // Lines of text (handles \n and \r\n; no trailing empty line for a final newline).
-        static fn lines(s: string) -> Array<string> {
-            let out = new Array<string>();
-            let n = Str.length(s);
-            let start = 0;
-            for (i in 0..n) {
-                if (Str.charAt(s, i) == 10) {
-                    let end = i > start && Str.charAt(s, i - 1) == 13 ? i - 1 : i;
-                    out.push(Str.substring(s, start, end - start));
-                    start = i + 1;
-                }
-            }
-            if (start < n) { out.push(Str.substring(s, start, n - start)); }
-            return out;
-        }
+        static fn lines(s: string) -> Array<string> { return Str.pieces(s, "", 2); }
         // Whitespace-separated words (no empty entries).
-        static fn words(s: string) -> Array<string> {
+        static fn words(s: string) -> Array<string> { return Str.pieces(s, "", 1); }
+        // The pieces of s (one pass; see grav_str_next_piece for the kinds).
+        private static fn pieces(s: string, delim: string, kind: int) -> Array<string> {
             let out = new Array<string>();
-            let n = Str.length(s);
-            let start = -1;
-            for (i in 0..=n) {
-                let space = i == n || %{ isspace((unsigned char)s[i]) %} as bool;
-                if (space && start >= 0) { out.push(Str.substring(s, start, i - start)); start = -1; }
-                else if (!space && start < 0) { start = i; }
+            let n = s.length;
+            let pos: long = 0;
+            let a: long = 0;
+            let b: long = 0;
+            while (%{ grav_str_next_piece(s, n, delim, kind, &pos, &a, &b) %} as bool) {
+                out.push(%{ grav_str_piece(s + a, (size_t)(b - a)) %} as string);
             }
             return out;
         }
