@@ -26,7 +26,7 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | Module | Contents |
 |--------|----------|
 | [exception](core/exception.md) | `Exception` and the standard exception classes |
-| [math](core/math.md) | `Math`: roots, powers, trigonometry, rounding, `gcd`, `isPrime`, constants |
+| [math](core/math.md) | `Math`: roots, powers, trigonometry, rounding, `gcd`, `isPrime`, constants; `Stats`: mean, median, standard deviation, percentiles |
 | [random](core/random.md) | `Random` and `Rng`: random numbers, shuffling, choosing |
 | [result](core/result.md) | `Result<T, E>` and `Option<T>` data enums |
 | [optional](core/optional.md) | `Optional<T>`: a value or nothing, as a class |
@@ -60,6 +60,7 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [string](text/string.md) | `Str`: searching, splitting, trimming, case, padding |
 | [strbuf](text/strbuf.md) | `StringBuilder`: building long strings efficiently |
 | [convert](text/convert.md) | `Format`: text to numbers and numbers to formatted text |
+| [regex](text/regex.md) | `Regex`: regular expressions: find, match, replace, split |
 
 ### data
 
@@ -67,13 +68,16 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 |--------|----------|
 | [json](data/json.md) | `Json` and `JsonValue`: parsing, building, writing JSON |
 | [bytes](data/bytes.md) | `Bytes`: a buffer of raw bytes |
+| [encoding](data/encoding.md) | `Base64`, `Hex`, `Utf8` |
+| [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens) and `Uuid` |
+| [csv](data/csv.md) | `Csv`: reading and writing comma-separated values |
 
 ### io
 
 | Module | Contents |
 |--------|----------|
 | [io](io/io.md) | `IO`: console input and output, `printRaw`, `eprint`, `readLine` |
-| [fs](io/fs.md) | `File` and `Dir`: files and directories |
+| [fs](io/fs.md) | `File`, `Dir`, `FileReader`, `FileWriter`: files and folders, walking and globbing |
 | [path](io/path.md) | `Path`: building and splitting paths |
 | [term](io/term.md) | `Term`: colours and cursor control in the terminal |
 
@@ -84,8 +88,10 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [os](sys/os.md) | `OS`: platform, user, environment variables |
 | [command](sys/command.md) | `Command`: running programs without a shell |
 | [process](sys/process.md) | `Process`: running shell command lines |
-| [time](sys/time.md) | `Time` and `Stopwatch`: clocks and measuring |
-| [datetime](sys/datetime.md) | `DateTime`: calendar dates and times |
+| [time](sys/time.md) | `Time`, `Stopwatch` and `Duration`: clocks, measuring, lengths of time |
+| [datetime](sys/datetime.md) | `DateTime`: calendar dates and times, parsing and arithmetic |
+| [log](sys/log.md) | `Log` and `Logger`: leveled logging to standard error or a file |
+| [args](sys/args.md) | `Args`: command-line options, flags and `--help` |
 
 ### concurrency
 
@@ -99,7 +105,8 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | Module | Contents |
 |--------|----------|
 | [tcp](net/tcp.md) | `TcpStream`, `TcpListener`, `Net`: TCP clients and servers |
-| [http](net/http.md) | `HttpServer`, `HttpClient`, `HttpRequest`, `HttpResponse`, `Url` |
+| [udp](net/udp.md) | `UdpSocket`, `UdpPacket`: datagrams |
+| [http](net/http.md) | `HttpServer` (routing, static files, cookies), `HttpClient`, `HttpRequest`, `HttpResponse`, `Url` |
 | [websocket](net/websocket.md) | `WebSocket`: two-way connections over HTTP |
 
 ## Conventions

@@ -1,0 +1,101 @@
+// Regular expressions, the newer Str helpers, encodings, hashes, UUIDs and CSV.
+import "std"
+
+test "regex: find, groups, replace, split" {
+    let date = new Regex("([0-9]{4})-([0-9]{2})-([0-9]{2})")
+    let m = date.find("due 2024-03-15!")
+    assertEq(m.group(1), "2024")
+    assertEq("${m.start} ${m.end} ${m.groupCount()}", "4 14 3")
+    assertEq(date.replaceAll("2024-03-15 and 1999-12-31", "$3/$2/$1"), "15/03/2024 and 31/12/1999")
+    assertEq(date.test("nope"), false)
+    assertEq(str(new Regex("[0-9]+").findAllText("a1 b22 c333")), "[\"1\", \"22\", \"333\"]")
+    assertEq(str(new Regex("\\s*,\\s*").split("a , b,c ,d")), "[\"a\", \"b\", \"c\", \"d\"]")
+    assertEq(new Regex("^hello$", true).matches("HeLLo"), true)
+    assertEq(new Regex("o").replace("foo", "0"), "f0o")
+    assertEq(new Regex("[aeiou]").replaceAllWith("banana", fn(x: RegexMatch) => Str.upper(x.text)), "bAnAnA")
+    assertEq(new Regex(Regex.escape("1+1")).test("is 1+1 two"), true)
+    assertEq(new Regex("x*").findAll("ab").size(), 3)
+    assertEq(new Regex("[0-9]").count("a1b2c3"), 3)
+    assertEq(new Regex("(a)|(b)").find("b").group(1), "")
+    let msg = ""
+    try { new Regex("(unclosed") } catch (e: ValueError) { msg = e.message() }
+    assertEq(Str.startsWith(msg, "bad regular expression '(unclosed'"), true)
+}
+
+test "Str: splitting, cases, wrapping, distance" {
+    assertEq(Str.replaceFirst("a-b-c", "-", "+"), "a+b-c")
+    assertEq(str(Str.splitN("a=b=c", "=", 2)), "[\"a\", \"b=c\"]")
+    assertEq("${Str.before("user@host", "@")} ${Str.after("user@host", "@")}", "user host")
+    assertEq(Str.truncate("héllo world", 6), "héllo…")
+    assertEq(str(Str.wrap("the quick brown fox jumps over the lazy dog", 12)),
+             "[\"the quick\", \"brown fox\", \"jumps over\", \"the lazy dog\"]")
+    assertEq(Str.indent("a\nb", "> "), "> a\n> b")
+    assertEq(Str.toSnakeCase("parseHTTPRequest"), "parse_http_request")
+    assertEq(Str.toKebabCase("Parse HTTP request"), "parse-http-request")
+    assertEq(Str.toCamelCase("parse_http_request"), "parseHttpRequest")
+    assertEq(Str.toPascalCase("user-id"), "UserId")
+    assertEq(Str.titleCase("the grav book"), "The Grav Book")
+    assertEq(Str.levenshtein("kitten", "sitting"), 3)
+    assertEq(Str.commonPrefix("interstellar", "internet"), "inter")
+    assertEq(Str.containsIgnoreCase("Hello", "ELL"), true)
+}
+
+test "string literals survive C trigraphs" {
+    let s = "??>> ??= ???! what??("
+    assertEq(s.length, 21)
+    assertEq(s, "??" + ">> ??" + "= ???! what??" + "(")
+    assertEq(s[2], '>')
+}
+
+test "Base64, hex and UTF-8" {
+    assertEq(Base64.encode("hello"), "aGVsbG8=")
+    assertEq(Base64.decode("aGVsbG8"), "hello")
+    assertEq(Base64.encodeUrl("??>>"), "Pz8-Pg")
+    assertEq(Base64.decode(Base64.encodeUrl("??>>")), "??>>")
+    assertEq(Base64.isValid("@@"), false)
+    assertEq(Base64.decodeBytes("AAEC").toHex(), "000102")
+    assertEq(Hex.encode("Hi"), "4869")
+    assertEq(Hex.decode("4869"), "Hi")
+    let failed = false
+    try { Hex.decode("abc") } catch (e: ValueError) { failed = true }
+    assertEq(failed, true)
+    assertEq(Utf8.count("héllo"), 5)
+    assertEq(str(Utf8.codePoints("a€")), "[97, 8364]")
+    assertEq(Utf8.fromCodePoints([72, 233, 128512]), "Hé😀")
+    assertEq(Utf8.reverse("añb"), "bña")
+    assertEq(Utf8.slice("héllo", 1, 3), "él")
+    assertEq(Utf8.isValid("\xff"), false)
+}
+
+test "hashes and UUIDs" {
+    assertEq(Hash.sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    assertEq(Hash.sha256(Str.repeat("b", 56)), Hash.sha256Bytes(Bytes.fromString(Str.repeat("b", 56))))
+    assertEq(Hash.sha256(Str.repeat("a", 1000)), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3")
+    assertEq(Hash.sha1("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d")
+    assertEq(Hash.md5("abc"), "900150983cd24fb0d6963f7d28e17f72")
+    assertEq(Hash.md5(Str.repeat("x", 100)), "aed563ecafb4bcc5654c597a421547b2")
+    assertEq(Hash.crc32("123456789"), 3421780262)
+    assertEq(Hash.randomToken(16).length, 32)
+    let u = Uuid.v4()
+    assertEq(Uuid.isValid(u), true)
+    assertEq(u[14], '4')
+    assertEq(Uuid.v4() != u, true)
+    assertEq(Uuid.isValid("not-a-uuid"), false)
+}
+
+test "CSV" {
+    let text = "name,age,note\r\nada,36,\"likes \"\"math\"\", tea\"\nbob,,\"two\nlines\"\n"
+    let rows = Csv.parse(text)
+    assertEq(rows.size(), 3)
+    assertEq(rows[1][2], "likes \"math\", tea")
+    assertEq(rows[2][2], "two\nlines")
+    let recs = Csv.parseRecords(text)
+    assertEq(recs[1]["name"], "bob")
+    assertEq(Csv.format(rows), "name,age,note\nada,36,\"likes \"\"math\"\", tea\"\nbob,,\"two\nlines\"\n")
+    assertEq(str(Csv.parseWith("a\tb\n1\t2", "\t")), "[[\"a\", \"b\"], [\"1\", \"2\"]]")
+    assertEq(str(Csv.parse("a,,b")), "[[\"a\", \"\", \"b\"]]")
+    assertEq(Csv.formatRow(["plain", "a,b", "q\"t"]), "plain,\"a,b\",\"q\"\"t\"")
+    let failed = false
+    try { Csv.parse("\"open") } catch (e: ValueError) { failed = true }
+    assertEq(failed, true)
+}

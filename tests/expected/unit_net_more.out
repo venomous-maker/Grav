@@ -1,0 +1,4 @@
+running 2 tests
+  ok    UDP round trip
+  ok    HTTP static files, cookies and query strings
+result: 2 passed, 0 failed

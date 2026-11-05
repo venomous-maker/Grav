@@ -1,0 +1,51 @@
+// UDP sockets and the newer HTTP helpers (static files, cookies, queries).
+import "std"
+import "std/net"
+
+test "UDP round trip" {
+    let server = UdpSocket.bind("127.0.0.1", 0)
+    server.setTimeoutMs(2000)
+    let client = UdpSocket.open()
+    client.setTimeoutMs(2000)
+    client.sendTo("127.0.0.1", server.port(), "ping")
+    let p = server.receive()
+    assertEq(p.text(), "ping")
+    assertEq(p.port(), client.port())
+    server.sendTo(p.host(), p.port(), "pong")
+    assertEq(client.receive().text(), "pong")
+    server.setTimeoutMs(50)
+    let timedOut = false
+    try { server.receive() } catch (e: TimeoutError) { timedOut = true }
+    assertEq(timedOut, true)
+    server.close()
+    client.close()
+}
+
+test "HTTP static files, cookies and query strings" {
+    let site = Path.combine(Dir.temp(), "grav-unit-site")
+    Dir.removeAll(site)
+    Dir.create(Path.combine(site, "css"))
+    new File(Path.combine(site, "index.html")).write("<h1>hi</h1>")
+    new File(Path.combine(site, "css/a.css")).write("body{}")
+    let app = new HttpServer()
+    app.serveDir("/static", site)
+    app.get("/login", fn(req: HttpRequest) => HttpResponse.text("ok").setCookie("session", "abc"))
+    app.get("/me", fn(req: HttpRequest) => HttpResponse.text("user=" + req.cookie("session")))
+    app.start(0)
+    let base = "http://127.0.0.1:${app.port()}"
+    let http = new HttpClient()
+    let r = http.get(base + "/static/css/a.css")
+    assertEq(r.getHeader("Content-Type"), "text/css; charset=utf-8")
+    assertEq(r.body(), "body{}")
+    assertEq(http.get(base + "/static/").body(), "<h1>hi</h1>")
+    assertEq(http.get(base + "/static/missing").status, 404)
+    assertEq(Str.startsWith(http.get(base + "/login").getHeader("Set-Cookie"), "session=abc;"), true)
+    http.headers.set("Cookie", "theme=dark; session=abc")
+    assertEq(http.get(base + "/me").body(), "user=abc")
+    app.stop()
+    Dir.removeAll(site)
+    let q = new HashMap<string, string>()
+    q["q"] = "grav lang"
+    q["page"] = "2"
+    assertEq(Url.buildQuery(q), "page=2&q=grav%20lang")
+}

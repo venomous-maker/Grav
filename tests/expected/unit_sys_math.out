@@ -1,0 +1,9 @@
+running 7 tests
+  ok    Math extras
+  ok    Stats
+  ok    Array, HashMap, Map and SortedMap helpers
+  ok    folders, FileReader and FileWriter
+  ok    Duration and DateTime
+  ok    logging to a file
+  ok    command-line arguments
+result: 7 passed, 0 failed

@@ -57,9 +57,10 @@ All collections share `size()` (`length()` too), `isEmpty()`, `clear()`,
 
 | Module | Provides |
 |--------|----------|
-| `text/string` | **`Str`** — inspect (`isBlank`, `isDigits`, …), compare (also ignoring case), search (`indexOf`, `lastIndexOf`, …), transform (`upper`, `capitalize`, `replace`, …), cut (`substring`, `slice`, `removePrefix`, …), layout (`padLeft`, `center`), `split`/`lines`/`words`/`join` |
+| `text/string` | **`Str`** — inspect (`isBlank`, `isDigits`, …), compare (also ignoring case), search (`indexOf`, `lastIndexOf`, …), transform (`upper`, `capitalize`, `replace`, …), cut (`substring`, `slice`, `removePrefix`, `before`/`after`, …), layout (`padLeft`, `center`, `wrap`, `truncate`), case conversion (`toSnakeCase`, `toCamelCase`, …), `split`/`splitN`/`lines`/`words`/`join`, `levenshtein` |
+| `text/regex` | **`Regex`**, **`RegexMatch`** — POSIX extended regular expressions: `test`, `matches`, `find`/`findAll` with groups, `replace`/`replaceAll` (`$1`), `split`, `escape` |
 | `text/convert` | **`Format`** — parsing (`toInt`, `isInt`, `toIntOr`, `parseInt(s, base, fallback)`, …) and number formatting (`fixed`, `grouped`, `percent`, `bytes`, `hex`/`binary`/`octal`) |
-| `core/math` | **`Math`** — constants `PI`/`E`/`TAU`, powers/logs, trigonometry, rounding (`roundTo`), `min`/`max`/`abs`/`clamp`/`sign` with integer overloads, `gcd`/`lcm`/`isPrime`/`factorial` |
+| `core/math` | **`Math`** — constants `PI`/`E`/`TAU`, powers/logs, trigonometry, rounding (`roundTo`), `min`/`max`/`abs`/`clamp`/`sign` with integer overloads, `gcd`/`lcm`/`isPrime`/`factorial`, `ipow`/`isqrt`/`floorMod`/`lerp`/`binomial`/`primeFactors`; **`Stats`** — `mean`, `median`, `stddev`, `percentile`, `mode`, `correlation` |
 | `core/random` | **`Random`** (xoshiro256**, per thread, reproducible) — inclusive `nextInt`/`nextLong`, `nextFloat`, `nextGaussian`, `chance`, `shuffle`, `choice`; **`Rng`** for independent streams |
 | `core/exception` | **`Exception`** with `ValueError`, `TypeError`, `IndexError`, `NotFound`, `IOError`, `StateError`, `TimeoutError`, `ArithmeticError`, `RuntimeError` |
 
@@ -68,12 +69,14 @@ All collections share `size()` (`length()` too), `isEmpty()`, `clear()`,
 | Module | Provides |
 |--------|----------|
 | `io/io` | **`IO`** — `print`/`write`/`eprint` (strings or any value), `prompt`, `readInt`/…, `readAll`, `readLines`; free-function mirrors (`printRaw`, `readLine`, …) |
-| `io/fs` | **`File`** — text/lines/binary read and write (writes return success), `size` (64-bit), `modified`, `copyTo`, `moveTo`, `delete`; **`Dir`** — `exists`, `create` (with parents), `remove`, `list`, `temp` |
+| `io/fs` | **`File`** — text/lines/binary read and write (writes return success), `size` (64-bit), `modified`, `copyTo`, `moveTo`, `delete`; **`Dir`** — `exists`, `create` (with parents), `remove`, `removeAll`, `list`, `walk`, `find` (glob), `size`, `temp`; **`FileReader`** (line by line), **`FileWriter`** (buffered) |
 | `io/path` | **`Path`** — `basename`, `dirname`, `extension`, `stem`, `withExtension`, `isAbsolute`, `join`, `combine`, `normalize` |
 | `sys/process` | **`Process`** — `exec` (exit code), `execOutput`, `run` → `ProcessResult`, `args`, `pid`, `exit` |
 | `sys/os` | **`OS`** — platform, host, user, environment, CPU count, `isTerminal` |
-| `sys/time` | **`Time`**, **`Stopwatch`** |
-| `sys/datetime` | **`DateTime`** — `of(y, m, d, …)`, fields, `weekday`, `format`, `toString`, `add…`, `daysUntil`, comparisons, `isLeapYear`, `daysInMonth` |
+| `sys/time` | **`Time`**, **`Stopwatch`**, **`Duration`** (`parse("1h30m")`, arithmetic, compact printing) |
+| `sys/datetime` | **`DateTime`** — `of(y, m, d, …)`, fields, `weekday`, `format`, `toString`, `add…`, `daysUntil`, comparisons, `isLeapYear`, `daysInMonth`, `parse`, `iso`, `addMonths`/`addYears`, `plus`/`until` with `Duration` |
+| `sys/log` | **`Log`**, **`Logger`**, **`LogLevel`** — leveled logging with names, fields and file output |
+| `sys/args` | **`Args`** — command-line flags, options, positional arguments and generated `--help` |
 | `io/term` | **`Term`** — ANSI styles and colours (256 and RGB), cursor control, `width`/`height` |
 | `concurrency/async` | **`Async`**, **`Mutex`**, **`AtomicInt`**, **`Channel<T>`**, `awaitAll` — see [Concurrency](../docs/learn/18-concurrency.md) |
 
@@ -87,10 +90,14 @@ whose output `tests/run.sh` checks against a golden file.
 | `core/result` | **`Result<T, E>`** (`Ok`/`Err`) and **`Option<T>`** (`Some`/`None`) data enums with `unwrap`, `unwrapOr`, `map`, `andThen`, … |
 | `data/json` | **`Json`**, **`JsonValue`** — parse (errors with line/column), build, query (`doc["a"][0]`, `path("a.b")`), `toJson`/`pretty` |
 | `data/bytes` | **`Bytes`** — growable byte buffer: `appendByte`, `appendUint` (big-endian), `slice`, `toHex`/`fromHex`, `[]` |
+| `data/encoding` | **`Base64`** (standard and URL-safe), **`Hex`**, **`Utf8`** (count, chars, code points) |
+| `data/hash` | **`Hash`** — `sha256`, `sha1`, `md5`, `crc32`, `fnv1a`, `randomToken`; **`Uuid`** — `v4`, `isValid` |
+| `data/csv` | **`Csv`** — `parse`/`parseRecords` (RFC 4180 quoting), `format`, other separators |
 | `concurrency/thread` | **`Thread`**, **`WaitGroup`**, **`CountDownLatch`**, **`Semaphore`**, **`RWLock`**, **`Once`** |
 | `sys/command` | **`Command`** — run programs without a shell: args, `cwd`, `env`, `stdin`, separate stdout/stderr, `timeoutMs`, `spawn` → **`Child`** |
 | `net/tcp` | **`TcpStream`**, **`TcpListener`**, **`Net.resolve`**, **`NetError`** |
-| `net/http` | **`HttpServer`** (routes with `:params`, middleware, keep-alive), **`HttpClient`**, **`HttpRequest`**, **`HttpResponse`**, **`Url`**, **`Headers`** |
+| `net/udp` | **`UdpSocket`**, **`UdpPacket`** — datagrams with timeouts and broadcast |
+| `net/http` | **`HttpServer`** (routes with `:params`, middleware, keep-alive, `serveDir`, cookies), **`HttpClient`**, **`HttpRequest`**, **`HttpResponse`**, **`Url`**, **`Headers`** |
 | `net/websocket` | **`WebSocket`** (server via `WebSocket.route`, client via `connect`), **`WsMessage`** |
 
 See [TCP](../docs/std/net/tcp.md), [HTTP](../docs/std/net/http.md) and [WebSocket](../docs/std/net/websocket.md).

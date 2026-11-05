@@ -1,0 +1,128 @@
+// Math and Stats, the newer collection helpers, files and folders, time and dates,
+// logging and argument parsing.
+import "std"
+
+test "Math extras" {
+    assertEq(Math.logBase(8.0, 2.0), 3.0)
+    assertEq(Math.root(-8.0, 3), -2.0)
+    assertEq(Math.ipow(3, 4), 81 as long)
+    assertEq(Math.isqrt(99), 9 as long)
+    assertEq("${Math.floorDiv(-7, 2)} ${Math.floorMod(-7, 3)}", "-4 2")
+    assertEq(Math.lerp(0.0, 10.0, 0.25), 2.5)
+    assertEq(Math.mapRange(5.0, 0.0, 10.0, 100.0, 200.0), 150.0)
+    assertEq(Math.isClose(0.1 + 0.2, 0.3, 1e-9), true)
+    assertEq(Math.nextPowerOfTwo(100), 128 as long)
+    assertEq(Math.binomial(10, 3), 120 as long)
+    assertEq(Math.fib(50), 12586269025)
+    assertEq(str(Math.primeFactors(360)), "[2, 2, 2, 3, 3, 5]")
+    assertEq(Math.isNaN(Math.nan()), true)
+}
+
+test "Stats" {
+    let xs: Array<float> = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    assertEq("${Stats.mean(xs)} ${Stats.median(xs)} ${Stats.stddev(xs)}", "5 4.5 2")
+    assertEq(Stats.percentile(xs, 90.0), 7.6)
+    let ns: Array<int> = [3, 1, 4, 1, 5, 9, 2, 6]
+    assertEq("${Stats.sum(ns)} ${Stats.min(ns)} ${Stats.max(ns)} ${Stats.mode(ns)}", "31 1 9 1")
+    let a: Array<float> = [1.0, 2.0, 3.0]
+    let b: Array<float> = [2.0, 4.0, 6.0]
+    assertEq(Stats.correlation(a, b), 1.0)
+    let failed = false
+    try { Stats.mean(new Array<float>()) } catch (e: ValueError) { failed = true }
+    assertEq(failed, true)
+}
+
+test "Array, HashMap, Map and SortedMap helpers" {
+    let xs: Array<int> = [5, 1, 4, 1, 5, 9, 2, 6]
+    assertEq(str(xs.take(3)), "[5, 1, 4]")
+    assertEq(str(xs.drop(5)), "[9, 2, 6]")
+    assertEq(str(xs.takeWhile(fn(x) => x != 4)), "[5, 1]")
+    assertEq(str(chunked(xs, 3)), "[[5, 1, 4], [1, 5, 9], [2, 6]]")
+    assertEq(str(xs.distinct()), "[5, 1, 4, 9, 2, 6]")
+    assertEq(str(xs.sorted(fn(a, b) => a - b)), "[1, 1, 2, 4, 5, 5, 6, 9]")
+    assertEq(xs.first(), 5)
+    assertEq(xs.join("-"), "5-1-4-1-5-9-2-6")
+    assertEq(str(xs.flatMap(fn(x) -> Array<int> { return [x, x] }).take(4)), "[5, 5, 1, 1]")
+    let parts = xs.partition(fn(x) => x % 2 == 0)
+    assertEq(str(parts.first), "[4, 2, 6]")
+    let names: Array<string> = ["a", "b"]
+    assertEq(str(names.zip(xs)), "[(\"a\", 5), (\"b\", 1)]")
+    let m = {"a": 1, "b": 2}
+    m.putAll({"c": 3})
+    assertEq(m.entries().size(), 3)
+    assertEq(m.removeWhere(fn(k, v) => v > 1), 2)
+    let sm = new SortedMap<int, string>(fn(a, b) => a - b)
+    sm[2] = "two"
+    sm[1] = "one"
+    assertEq(str(sm.entries()), "[(1, \"one\"), (2, \"two\")]")
+}
+
+test "folders, FileReader and FileWriter" {
+    let root = Path.combine(Dir.temp(), "grav-unit-walk")
+    Dir.removeAll(root)
+    Dir.create(Path.combine(root, "a/b"))
+    new File(Path.combine(root, "top.txt")).write("1\n")
+    new File(Path.combine(root, "a/x.grav")).write("22\r\nsecond\n")
+    new File(Path.combine(root, "a/b/y.grav")).write("333")
+    assertEq(Dir.walk(root).size(), 3)
+    assertEq(Dir.find(root, "*.grav").size(), 2)
+    assertEq(Dir.size(root), 16 as long)
+    let r = new FileReader(Path.combine(root, "a/x.grav"))
+    assertEq(r.readLine(), "22")
+    assertEq(r.readLine(), "second")
+    assertEq(r.readLine() == null, true)
+    r.close()
+    let w = new FileWriter(Path.combine(root, "out.txt"))
+    w.writeLine("hello").write("world")
+    w.close()
+    assertEq(new File(Path.combine(root, "out.txt")).read(), "hello\nworld")
+    assertEq(Path.matches("app.grav", "*.gr?v"), true)
+    assertEq(Dir.removeAll(root), true)
+    assertEq(Dir.exists(root), false)
+}
+
+test "Duration and DateTime" {
+    assertEq(str(Duration.ofMinutes(90)), "1h30m")
+    assertEq(str(Duration.parse("2d 3h 250ms")), "2d3h250ms")
+    assertEq(Duration.parse("90s").minutes(), 1 as long)
+    assertEq(str(Duration.ofSeconds(5) + Duration.ofMillis(500)), "5s500ms")
+    assertEq(str(Duration.ofSeconds(-65)), "-1m5s")
+    let d = DateTime.parse("2024-01-31 09:30")
+    assertEq(d.iso(), "2024-01-31T09:30:00")
+    assertEq(str(d.addMonths(1)), "2024-02-29 09:30:00")
+    assertEq(DateTime.parse("2024-02-29").addYears(1).date(), "2025-02-28")
+    assertEq(str(DateTime.parse("15/03/2024 10:00", "%d/%m/%Y %H:%M")), "2024-03-15 10:00:00")
+    assertEq(d.plus(Duration.parse("1h30m")).time(), "11:00:00")
+    assertEq(str(d.until(DateTime.parse("2024-02-01 10:00"))), "1d30m")
+    let failed = false
+    try { DateTime.parse("tomorrow") } catch (e: ValueError) { failed = true }
+    assertEq(failed, true)
+}
+
+test "logging to a file" {
+    let p = Path.combine(Dir.temp(), "grav-unit-log.log")
+    new File(p).delete()
+    let log = Log.named("db").toFile(p).with("host", "local")
+    log.timestamps = false
+    log.level = LogLevel.Info
+    log.debug("hidden")
+    log.warn("slow query")
+    assertEq(new File(p).read(), "WARN  [db] slow query host=local\n")
+    assertEq(Log.parseLevel("WARNING", LogLevel.Info), LogLevel.Warn)
+    new File(p).delete()
+}
+
+test "command-line arguments" {
+    let cli = new Args("resize", "Resize images.")
+        .flag("verbose", "v", "print each file")
+        .flag("dry", "n", "change nothing")
+        .option("width", "w", "the new width", "800")
+    cli.parse(["-vn", "--width=640", "a.png", "--", "-b.png"])
+    assertEq(cli.has("verbose") && cli.has("dry"), true)
+    assertEq(cli.getInt("width"), 640)
+    assertEq(str(cli.rest()), "[\"a.png\", \"-b.png\"]")
+    let msg = ""
+    try { new Args("t", "").flag("x", "x", "").parse(["--y"]) } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg, "unknown option --y")
+    assertEq(Str.contains(cli.usage(), "-w, --width <value>   the new width (default: 800)"), true)
+}

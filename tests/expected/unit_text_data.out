@@ -1,0 +1,8 @@
+running 6 tests
+  ok    regex: find, groups, replace, split
+  ok    Str: splitting, cases, wrapping, distance
+  ok    string literals survive C trigraphs
+  ok    Base64, hex and UTF-8
+  ok    hashes and UUIDs
+  ok    CSV
+result: 6 passed, 0 failed
