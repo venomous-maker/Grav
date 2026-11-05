@@ -96,7 +96,7 @@ inside a lambda and `const` names cannot be assigned.
 
 | Operator | Meaning |
 |----------|---------|
-| `x as T`, `(T)x`, `int(x)`/`float(x)`/`bool(x)` | conversion; see [Types](types.md#conversions) |
+| `x as T`, `(T)x`, `T(x)` | conversion; see [Types](types.md#conversions) |
 | `x is T` | whether `x` is a `T`: a class or subclass, an interface it implements, a data-enum variant, or what an `any` holds |
 
 ## Conditional

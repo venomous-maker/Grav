@@ -303,6 +303,8 @@ fn main() {
     print(f as int)         // `as`
     print((int)f)           // C style
     print(float(7) / 2)
+    print(long(f * 1000))   // every built-in type name works this way
+    print(byte(300))        // too big for a byte: cut to its low 8 bits
     print(bool(0))
     print(str(42) + "!")    // any value to text
 }
@@ -315,13 +317,16 @@ Output:
 3
 3
 3.5
+3990
+44
 false
 42!
 ```
 
 Converting a float to an integer drops the fraction (toward zero). To round
 instead, use `Math.round` from the standard library. To turn text into a number,
-use `Format.toInt("42")` and friends ([Strings and text](03-strings-and-text.md#strings-and-numbers)).
+use `Format.toInt("42")` and friends, which throw a `ValueError` for text that is
+not a number ([Strings and text](03-strings-and-text.md#strings-and-numbers)).
 
 `as` also converts between related classes and to and from `any`; those come
 up in later chapters.

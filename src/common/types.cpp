@@ -59,6 +59,35 @@ std::string aTypeName(const TypeRef &t) {
     return (vowel ? "an " : "a ") + n;
 }
 
+// Maps a bare identifier to a built-in primitive type when used in type position.
+// Returns nullptr for ordinary names. These are intentionally NOT lexer keywords,
+// so the same words remain valid identifiers (variables, fields, members).
+const TypeRef *builtinTypeNamed(const std::string &name) {
+    static const std::unordered_map<std::string, TypeRef> table = {
+        {"long",    TypeRef::integer(64, false)},
+        {"int64",   TypeRef::integer(64, false)},
+        {"int32",   TypeRef::integer(32, false)},
+        {"int16",   TypeRef::integer(16, false)},
+        {"int8",    TypeRef::integer(8, false)},
+        {"signed",  TypeRef::integer(32, false)},
+        {"uint",    TypeRef::integer(32, true)},
+        {"unsigned",TypeRef::integer(32, true)},
+        {"uint64",  TypeRef::integer(64, true)},
+        {"ulong",   TypeRef::integer(64, true)},
+        {"uint32",  TypeRef::integer(32, true)},
+        {"uint16",  TypeRef::integer(16, true)},
+        {"uint8",   TypeRef::integer(8, true)},
+        {"byte",    TypeRef::integer(8, true)},
+        {"double",  TypeRef::floating(64)},
+        {"float64", TypeRef::floating(64)},
+        {"float32", TypeRef::floating(32)},
+        {"binary",  TypeRef::prim(TypeRef::Kind::Binary)},
+        {"any",     TypeRef::prim(TypeRef::Kind::Any)},
+    };
+    auto it = table.find(name);
+    return it == table.end() ? nullptr : &it->second;
+}
+
 std::string typeRefName(const TypeRef &t) {
     switch (t.kind) {
         case TypeRef::Kind::Int: {

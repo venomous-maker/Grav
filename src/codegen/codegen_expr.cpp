@@ -613,6 +613,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return displayC(emitExpr(*call.args[0]), t, false);
             }
             if (call.targetName == "__unwrap") return unwrapC(*call.args[0]);
+            if (call.targetName == "__cast") return emitExpr(*call.args[0]);   // long(x), byte(x), ...
             if (call.targetName == "__repr") return displayC(emitExpr(*call.args[0]), call.args[0]->type, true);
             if (call.targetName == "__fmt") {
                 auto *spec = static_cast<const StringLiteralExpr *>(call.args[1].get());

@@ -555,4 +555,28 @@ void TypeChecker::checkForIn(ForInStmt &s) {
     popScope();
 }
 
+// `long(x)`, `byte(x)`, `double(x)`: a conversion to a built-in type whose name is not a
+// keyword, unless a variable or function of that name is in scope. The call becomes the
+// builtin `__cast` around a CastExpr, so the conversion rules are those of `x as T`.
+std::optional<TypeRef> TypeChecker::checkTypeNameCast(CallExpr &e, NameExpr &name) {
+    if (e.targetName == "__cast") return checkExpr(*e.args[0]);
+    const TypeRef *bt = builtinTypeNamed(name.name);
+    if (!bt || bt->isAny() || e.args.size() != 1 || dynamic_cast<NamedArgExpr *>(e.args[0].get()) ||
+        lookupLocal(name.name) || !reg_->resolveFunc(name.name, currentNs_).empty() ||
+        !reg_->resolveGlobal(name.name, currentNs_).empty())
+        return std::nullopt;
+    if (program_)
+        for (const auto &cand : nameCandidates(name.name, currentNs_, program_->uses))
+            if (program_->generics.functions.count(cand)) return std::nullopt;
+    auto cast = std::make_unique<CastExpr>();
+    cast->line = e.line;
+    cast->col = e.col;
+    cast->target = *bt;
+    cast->operand = std::move(e.args[0]);
+    e.args[0] = std::move(cast);
+    e.kind = CallKind::Builtin;
+    e.targetName = "__cast";
+    return checkExpr(*e.args[0]);
+}
+
 } // namespace grav

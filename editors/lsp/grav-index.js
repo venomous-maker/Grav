@@ -152,20 +152,20 @@ const KEYWORD_DOCS = {
   free: ["Releases an object now (running destructors), a pointer, closure, or finished future.", "free(conn)"],
   auto: ["An inferred type or type argument.", "let xs = new Array<auto>()"],
   int: ["32-bit signed integer. Integer literals beyond its range are longs.", "let n: int = 42"],
-  long: ["64-bit signed integer (int64).", "let big: long = 9000000000"],
+  long: ["64-bit signed integer (int64).", "let big: long = 9000000000\nlet ms = long(seconds * 1000)   // a conversion"],
   uint: ["32-bit unsigned integer.", "let mask: uint = 0xFFFF"],
-  byte: ["8-bit unsigned integer (uint8); `s[i]` gives one.", "let b: byte = 255"],
+  byte: ["8-bit unsigned integer (uint8); `s[i]` gives one.", "let b: byte = 255\nlet low = byte(n)   // a conversion: the low 8 bits"],
   float: ["64-bit floating point (like double). Prints in the shortest exact form.", "let ratio = 0.5"],
   float32: ["32-bit floating point.", "let f: float32 = 1.5"],
-  double: ["64-bit floating point (same as float).", "let d: double = 3.14"],
+  double: ["64-bit floating point (same as float).", "let d: double = 3.14\nlet half = double(n) / 2   // a conversion"],
   bool: ["true or false; conditions must be bools.", "let ready: bool = false"],
   string: ["Immutable UTF-8 text: `+`, `==`, `<`, `s.length`, `s[i]`, `s[lo..hi]`, `${...}` interpolation.", "let s = \"sum=${a + b:.2f}\""],
   void: ["No value: the result of a function that returns nothing.", "fn log(msg: string) -> void { }"],
-  binary: ["Raw bytes with a length (may contain zeros).", "let data: binary = File.readBinary(path)"],
+  binary: ["Raw bytes with a length (may contain zeros).", "let data: binary = new File(path).readBinary()"],
   any: ["A value of any type with its runtime type; `is` tests and `as` takes it out.", "let v: any = 42"],
 };
 for (const t of ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"])
-  KEYWORD_DOCS[t] = [`${t.startsWith("u") ? "Unsigned" : "Signed"} ${t.replace(/\D/g, "")}-bit integer.`, `let v: ${t} = 1`];
+  KEYWORD_DOCS[t] = [`${t.startsWith("u") ? "Unsigned" : "Signed"} ${t.replace(/\D/g, "")}-bit integer.`, `let v: ${t} = 1\nlet w = ${t}(x)   // a conversion`];
 
 // Completion snippets (LSP snippet syntax): [label, description, body].
 const SNIPPETS = [

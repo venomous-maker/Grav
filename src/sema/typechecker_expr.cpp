@@ -1357,6 +1357,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             }
             return TypeRef::prim(TypeRef::Kind::String);
         }
+        if (auto t = checkTypeNameCast(e, *name)) return *t;
         std::string fnFq = reg_->resolveFunc(name->name, currentNs_);
         // A generic function called without (or with `auto`) type arguments.
         if (fnFq.empty() && program_)

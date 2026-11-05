@@ -130,6 +130,9 @@ struct TypeRef {
 
 // Human-readable name for diagnostics, e.g. "int", "string", "geometry.Circle".
 std::string typeRefName(const TypeRef &t);
+// The built-in type a non-keyword name stands for (`long`, `byte`, `double`, `binary`,
+// `any`, ...), or nullptr. These stay ordinary identifiers outside type positions.
+const TypeRef *builtinTypeNamed(const std::string &name);
 // The type's name after "a" or "an", for messages: "an int", "a string".
 std::string aTypeName(const TypeRef &t);
 

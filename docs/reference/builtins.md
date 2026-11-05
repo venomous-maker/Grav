@@ -19,7 +19,7 @@ is in the [standard library](../std/README.md).
 | [`assertEq(actual, expected[, message])`](#assert-and-asserteq) | | the same, when the values differ |
 | [`typename(value)`](#typename-and-isinstance) | `string` | the class name of an object, or the type held by an `any` |
 | [`isInstance(object, Type)`](#typename-and-isinstance) | `bool` | the same as `object is Type` |
-| [`int(x)`, `float(x)`, `bool(x)`](#conversions) | | conversions |
+| [`int(x)`, `long(x)`, `float(x)`, `byte(x)`, ...](#conversions) | | conversions |
 | [`sizeof(T)`](#sizeof) | `int` | a type's size in bytes |
 | [`free(x)`](#free) | | destroys an object now, or frees a pointer |
 
@@ -193,12 +193,31 @@ float
 ## Conversions
 
 ```text
-int(x)  float(x)  bool(x)
+int(x)  long(x)  uint(x)  byte(x)  int8(x) ... uint64(x)  float(x)  double(x)  float32(x)  bool(x)  binary(x)
 ```
 
-`int`, `float` and `bool` can be called like functions to convert. Every
-conversion, to any type, can be written `x as T` or `(T)x`: `x as long`,
-`(byte)n`. See [Types](types.md#conversions).
+Every built-in type name can be called like a function to convert, with the same
+rules as `x as T` and `(T)x`. When a function or variable of that name is in
+scope (say, your own `fn double(x: int)`), the name means yours. See
+[Types](types.md#conversions).
+
+```grav
+fn main() {
+    print(long(3.9))
+    print(byte(300))
+    print(double(7) / 2)
+    print(uint(-1))
+}
+```
+
+Output:
+
+```text
+3
+44
+3.5
+4294967295
+```
 
 ## sizeof
 

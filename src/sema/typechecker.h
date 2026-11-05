@@ -206,6 +206,7 @@ private:
     std::vector<std::string> keepUnassigned(std::vector<std::string> facts, const std::vector<Stmt *> &region);
     bool narrowAfterGuard(Stmt &s, Block &block, size_t index);
     TypeRef checkUnwrap(CallExpr &e);
+    std::optional<TypeRef> checkTypeNameCast(CallExpr &e, NameExpr &name);
     std::optional<TypeRef> nullableOf(const TypeRef &t) const;
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
     // a scalar/reference/enum (not a value-type struct or interface fat pointer).

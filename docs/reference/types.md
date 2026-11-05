@@ -84,8 +84,9 @@ Everything else needs an explicit conversion, or is an error.
 
 ## Conversions
 
-`x as T` and `(T)x` convert to any type; `int(x)`, `float(x)` and `bool(x)` are
-also available as functions:
+`T(x)`, `x as T` and `(T)x` all convert. `T(x)` works for every built-in type name
+(`int(x)`, `long(x)`, `byte(x)`, `double(x)`, ...), unless a function or variable
+with that name is in scope:
 
 | Conversion | Behaviour |
 |------------|-----------|
