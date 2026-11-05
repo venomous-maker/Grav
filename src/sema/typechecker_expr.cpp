@@ -1212,6 +1212,33 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         }
     }
 
+    // `p.m(args)` on a struct: its method is the function `S__m(self: S*, args)`.
+    if (objType.isNamed() && reg_->isStruct(objType.name)) {
+        const StructInfo *si = reg_->strct(objType.name);
+        auto it = si && si->decl ? si->decl->methodFns.find(mem->member) : std::map<std::string, std::string>::iterator();
+        if (si && si->decl && it != si->decl->methodFns.end()) {
+            auto *ix = dynamic_cast<IndexExpr *>(mem->object.get());
+            if (!isLvalue(*mem->object) || (ix && !ix->overloadClass.empty())) {
+                error(mem->line, mem->col, "call '" + mem->member + "' on a struct variable or field "
+                                           "(the method may change it): `let v = ...` then `v." + mem->member + "()`");
+                return TypeRef::prim(TypeRef::Kind::Error);
+            }
+            auto addr = std::make_unique<AddrOfExpr>();
+            addr->line = mem->object->line;
+            addr->col = mem->object->col;
+            addr->operand = std::move(mem->object);
+            auto callee = std::make_unique<NameExpr>();
+            callee->name = it->second;
+            callee->line = mem->line;
+            callee->col = mem->col;
+            e.callee = std::move(callee);
+            e.args.insert(e.args.begin(), std::move(addr));
+            return resolveFreeCall(e, it->second);
+        }
+        error(mem->line, mem->col, "struct '" + prettyNames(objType.name) + "' has no method '" + mem->member + "'");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+
     // Interface-typed receiver: dispatch through the interface's itable.
     if (objType.isNamed() && reg_->isInterface(objType.name)) {
         const MethodInfo *mi = reg_->findInterfaceMethod(objType.name, mem->member);

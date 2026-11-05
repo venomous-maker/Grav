@@ -139,7 +139,11 @@ void Parser::parseTopLevel(Program &program) {
             break;
         case TokenType::Interface:
         case TokenType::Trait: program.decls.push_back(parseInterface()); break;
-        case TokenType::Struct: program.decls.push_back(parseStruct()); break;
+        case TokenType::Struct:
+            program.decls.push_back(parseStruct());
+            for (auto &d : pendingDecls_) program.decls.push_back(std::move(d)); // its methods
+            pendingDecls_.clear();
+            break;
         case TokenType::Enum: parseEnum(program); break;
         case TokenType::Type: program.decls.push_back(parseTypeAlias()); break;
         case TokenType::Const:
@@ -462,11 +466,47 @@ DeclPtr Parser::parseStruct() {
     st->typeParams = parseTypeParams(&st->typeParamBounds); // optional <T, ...>
     expect(TokenType::LBrace, "to open the struct body");
     while (!check(TokenType::RBrace) && !atEnd()) {
-        // Structs hold plain data: `name: type` fields only (always public).
+        if (check(TokenType::Fn)) { parseStructMethod(*st); continue; }
+        // Fields are `name: type` (always public).
         st->fields.push_back(parseField(Access::Public, /*readonly=*/false));
     }
     expect(TokenType::RBrace, "to close the struct body");
+    for (const auto &f : st->fields)
+        if (st->methodFns.count(f.name)) fail(kw, "struct '" + st->name + "' has a field and a method named '" + f.name + "'");
     return st;
+}
+
+// `fn m(params) -> R { body }` in a struct: the function `S__m(self: S*, params)`.
+// In its body `self` is the struct the method was called on (`*self`), so
+// assigning a field changes the caller's value.
+void Parser::parseStructMethod(StructDecl &st) {
+    auto decl = parseFunction(false);
+    auto *fn = static_cast<FunctionDecl *>(decl.get());
+    if (!fn->typeParams.empty()) fail(previous(), "struct methods cannot have type parameters of their own");
+    std::string method = fn->name;
+    fn->name = st.name + "__" + method;
+    fn->fqName = qualify(fn->name);
+    fn->typeParams = st.typeParams;
+    fn->typeParamBounds = st.typeParamBounds;
+    Param self;
+    self.name = "self";
+    TypeRef selfT = TypeRef::named(st.name);
+    for (const auto &tp : st.typeParams) selfT.args.push_back(TypeRef::named(tp));
+    self.type = TypeRef::pointer(selfT);
+    fn->params.insert(fn->params.begin(), std::move(self));
+    for (auto &stmt : fn->body.statements)
+        rewriteStmtExprs(*stmt, [](ExprPtr &slot) {
+            if (!dynamic_cast<SelfExpr *>(slot.get())) return;
+            auto name = std::make_unique<NameExpr>();
+            name->name = "self";
+            name->line = slot->line; name->col = slot->col;
+            auto deref = std::make_unique<DerefExpr>();
+            deref->line = slot->line; deref->col = slot->col;
+            deref->operand = std::move(name);
+            slot = std::move(deref);
+        });
+    st.methodFns[method] = fn->fqName;
+    pendingDecls_.push_back(std::move(decl));
 }
 
 DeclPtr Parser::parseTypeAlias() {

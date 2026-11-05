@@ -183,7 +183,35 @@ Output:
 true
 ```
 
-Use a [class](06-classes.md) when you need methods, inheritance, or shared mutable state.
+A struct can have methods. Inside one, `self` is the struct the method was called
+on, so assigning its fields changes the caller's variable:
+
+```grav
+struct Vec2 {
+    x: float
+    y: float
+    fn length2() -> float { return self.x * self.x + self.y * self.y }
+    fn scale(k: float) { self.x *= k; self.y *= k }
+}
+
+fn main() {
+    let v = Vec2 { x: 3.0, y: 4.0 }
+    print(v.length2())
+    v.scale(2.0)
+    print(v)
+}
+```
+
+Output:
+
+```text
+25
+Vec2 { x: 6, y: 8 }
+```
+
+Methods are called on a variable, a field, or an array element (not on a temporary
+value). Use a [class](06-classes.md) when you need inheritance, interfaces, or
+shared mutable state.
 
 ## Tuples and destructuring
 

@@ -217,6 +217,11 @@ std::vector<std::string> nameCandidates(const std::string &name, const std::stri
     return out;
 }
 
+void rewriteStmtExprs(Stmt &stmt, const std::function<void(ExprPtr &)> &f) {
+    Rewriter v{f};
+    v.stmt(&stmt);
+}
+
 void rewriteExpr(ExprPtr &slot, const std::function<void(ExprPtr &)> &f) {
     Rewriter v{f};
     v.expr(slot);

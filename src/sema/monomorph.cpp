@@ -524,7 +524,12 @@ std::string Mono::instantiateStruct(const std::string &name, const std::vector<T
         rewriteType(nf.type, subst, f.line, f.col);
         out->fields.push_back(std::move(nf));
     }
+    StructDecl *made = out.get();
     instances_.push_back(std::move(out));
+    // Its methods, for the same type arguments.
+    for (const auto &[method, fn] : tpl->methodFns)
+        if (std::string fq = findTpl(fn, fnTpl_); !fq.empty())
+            made->methodFns[method] = instantiateFn(fq, args, line, col);
     return inst;
 }
 

@@ -540,6 +540,9 @@ struct StructDecl : Decl {
     std::vector<std::string> typeParams; // generic params, e.g. <T>
     std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     std::vector<FieldDecl> fields;
+    // Methods are free functions `S__m(self: S*, ...)` (the parser writes them):
+    // method name -> the function's fully-qualified name (per instance, if generic).
+    std::map<std::string, std::string> methodFns;
 };
 
 struct FunctionDecl : Decl {
@@ -681,6 +684,8 @@ void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f);
 // after `f` returns, the (possibly new) expression's children are visited.
 // `switch`/`match` case values are skipped (they may be patterns).
 void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f);
+// The same, over one statement.
+void rewriteStmtExprs(Stmt &stmt, const std::function<void(ExprPtr &)> &f);
 // The same, over one expression (its slot first, then its children).
 void rewriteExpr(ExprPtr &slot, const std::function<void(ExprPtr &)> &f);
 
