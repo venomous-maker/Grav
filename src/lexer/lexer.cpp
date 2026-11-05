@@ -511,6 +511,61 @@ std::string Lexer::dedent(std::string body) {
     return out;
 }
 
+// `'a'`, `'\n'`, `'é'`, `'\u{263A}'`: a character literal is an int, the
+// character's Unicode code point (so `s[i] == 'a'` compares a byte).
+Token Lexer::scanChar() {
+    int sLine = tokLine_, sCol = tokCol_;
+    advance(); // opening quote
+    if (atEnd() || peek() == '\'' || peek() == '\n')
+        throw GravError("lex", sLine, sCol, "a character literal needs one character, e.g. 'a'");
+    unsigned long cp = 0;
+    unsigned char c = static_cast<unsigned char>(advance());
+    if (c == '\\') {
+        if (atEnd()) throw GravError("lex", sLine, sCol, "unterminated character literal");
+        char e = advance();
+        switch (e) {
+            case 'n': cp = '\n'; break;
+            case 't': cp = '\t'; break;
+            case 'r': cp = '\r'; break;
+            case '0': cp = 0; break;
+            case '\\': cp = '\\'; break;
+            case '\'': cp = '\''; break;
+            case '"': cp = '"'; break;
+            case 'e': cp = 27; break;
+            case 'u': {
+                if (atEnd() || peek() != '{') throw GravError("lex", sLine, sCol, "'\\u' must be written \\u{XXXX}");
+                advance();
+                int digits = 0;
+                while (!atEnd() && std::isxdigit(static_cast<unsigned char>(peek())) && digits < 6) {
+                    char h = advance();
+                    cp = cp * 16 + (std::isdigit(static_cast<unsigned char>(h)) ? h - '0' : std::tolower(h) - 'a' + 10);
+                    ++digits;
+                }
+                if (atEnd() || peek() != '}' || digits == 0 || cp > 0x10FFFF)
+                    throw GravError("lex", sLine, sCol, "malformed \\u{...} escape");
+                advance();
+                break;
+            }
+            default:
+                throw GravError("lex", sLine, sCol, std::string("invalid escape '\\") + e + "' in a character literal");
+        }
+    } else if (c < 0x80) {
+        cp = c;
+    } else { // a UTF-8 sequence
+        int extra = (c >> 5) == 6 ? 1 : (c >> 4) == 14 ? 2 : (c >> 3) == 30 ? 3 : -1;
+        if (extra < 0) throw GravError("lex", sLine, sCol, "invalid UTF-8 in a character literal");
+        cp = c & (0x3F >> extra);
+        for (int k = 0; k < extra; ++k) {
+            if (atEnd()) throw GravError("lex", sLine, sCol, "invalid UTF-8 in a character literal");
+            cp = (cp << 6) | (static_cast<unsigned char>(advance()) & 0x3F);
+        }
+    }
+    if (atEnd() || peek() != '\'')
+        throw GravError("lex", sLine, sCol, "a character literal holds one character (use \"...\" for text)");
+    advance(); // closing quote
+    return Token{TokenType::IntLiteral, std::to_string(cp), sLine, sCol};
+}
+
 Token Lexer::scanCBlock() {
     advance(); advance(); // consume `%{`
     std::string raw;
@@ -564,6 +619,10 @@ std::vector<Token> Lexer::tokenize() {
         }
         if (c == '"') {
             scanStringInto(tokens);
+            continue;
+        }
+        if (c == '\'') {
+            tokens.push_back(scanChar());
             continue;
         }
         if (c == '%' && peekNext() == '{') {

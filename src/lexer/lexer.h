@@ -37,6 +37,7 @@ private:
     Token scanCBlock(); // `%{ ... %}` verbatim C
     void scanSpecialString(std::vector<Token> &out, bool raw); // """...""", r"..."
     static std::string dedent(std::string body);
+    Token scanChar(); // 'a' -> its code point
     // `${x:.2f}`: separates a trailing format spec from the expression.
     static void splitFormatSpec(std::string &expr, std::string &spec, int line, int col);
 
