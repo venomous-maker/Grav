@@ -37,6 +37,8 @@ std::string CodeGen::escapeC(const std::string &s) {
             case '\n': out += "\\n"; break;
             case '\t': out += "\\t"; break;
             case '\r': out += "\\r"; break;
+            // `??` followed by = ( / ) ' < ! > - is a C trigraph: escape the second `?`.
+            case '?': out += !out.empty() && out.back() == '?' ? "\\?" : "?"; break;
             default:
                 // Other control bytes (e.g. from `\0`/`\x01`) as fixed 3-digit octal,
                 // which cannot run into a following digit the way `\x` escapes do.
