@@ -726,21 +726,6 @@ static const char* grav_strdup(const char* s) {
     memcpy(r, s, n + 1);
     return r;
 }
-/* Compare, then release whichever operands were temporaries. */
-static bool grav_streq_tmp(const char* a, const char* b, int freeA, int freeB) {
-    /* no `a == b` shortcut: with it, GCC infers a fresh operand may be the other
-       side's literal and warns about freeing it */
-    bool r = strcmp(a, b) == 0;
-    if (freeA) grav_str_release(a);
-    if (freeB) grav_str_release(b);
-    return r;
-}
-static int grav_strcmp_tmp(const char* a, const char* b, int freeA, int freeB) {
-    int r = strcmp(a, b);
-    if (freeA) grav_str_release(a);
-    if (freeB) grav_str_release(b);
-    return r;
-}
 static const char* grav_str_concat(const char* a, const char* b) {
     size_t la = strlen(a), lb = strlen(b);
     char* r = grav_str_new(la + lb);

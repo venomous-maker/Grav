@@ -408,12 +408,11 @@ void CodeGen::collectTryAssignedStmt(const Stmt &s, int depth) {
     }
 }
 
-void CodeGen::beginBody(const Block &body, const std::vector<std::string> &outerNames) {
+void CodeGen::beginBody(const Block &body) {
     volatileNames_.clear();
     cleanups_.clear();
     curSrcLine_ = 0;
     collectTryAssigned(body, 0);
-    analyzeOwnedStrings(body, outerNames);
 }
 
 // ---------------------------------------------------------------------------

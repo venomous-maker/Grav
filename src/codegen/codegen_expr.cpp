@@ -285,20 +285,13 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             e->left->type.kind == TypeRef::Kind::String &&
             e->right->type.kind == TypeRef::Kind::String)
         {
-            // A freshly built operand (`a + b == c`) is compared, then released.
-            bool fl = isFreshString(*e->left), fr = isFreshString(*e->right);
             std::string neg = e->op == BinaryOp::Eq ? "" : "!";
-            if (fl || fr)
-                return neg + "grav_streq_tmp(" + l + ", " + r + ", " + (fl ? "1" : "0") + ", " +
-                       (fr ? "1" : "0") + ")";
             return neg + "grav_streq(" + l + ", " + r + ")";
         }
-        // String ordering compares bytes, releasing freshly built operands.
+        // String ordering compares bytes.
         if (isComparison(e->op) && e->left->type.kind == TypeRef::Kind::String &&
             e->right->type.kind == TypeRef::Kind::String) {
-            bool fl = isFreshString(*e->left), fr = isFreshString(*e->right);
-            return "(grav_strcmp_tmp(" + l + ", " + r + ", " + (fl ? "1" : "0") + ", " + (fr ? "1" : "0") +
-                   ") " + binaryOpSymbol(e->op) + " 0)";
+            return "(strcmp(" + l + ", " + r + ") " + binaryOpSymbol(e->op) + " 0)";
         }
         // Value equality for kinds C cannot compare with `==`.
         if ((e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) && e->left->type == e->right->type) {

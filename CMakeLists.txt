@@ -40,7 +40,7 @@ add_executable(gravc
         src/codegen/codegen_dispatch.cpp
         src/codegen/codegen_lambda.cpp
         src/codegen/codegen_null.cpp
-        src/codegen/codegen_owned.cpp
+        src/codegen/codegen_order.cpp
         src/codegen/codegen_arc.cpp
         src/codegen/codegen_func.cpp
         src/codegen/codegen_stmt.cpp

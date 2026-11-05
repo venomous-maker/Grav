@@ -58,8 +58,6 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     if (trace_ && stmtMayCall(stmt)) emitLineMark(stmt.line);
     if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
         auto temps = hoistTemps(s->init.get());
-        bool owned = emitOwnedLet(*s); // an owned string: freed when overwritten / out of scope
-        if (owned) { freeTemps(temps); return; }
         // Written inside a `try` and read after a longjmp: must be volatile.
         const TypeRef &t = s->resolvedType;
         bool vol = volatileNames_.count(s->name) && !t.isArray() &&
@@ -71,11 +69,11 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             bool reg = restOfBlockMayThrow(*s);
             if (reg) line(unwindPush(t, s->name));
             cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(t, s->name, reg)});
-            freeTemps(temps);
+            endTemps(temps);
             return;
         }
         line(cTy(t) + (vol ? " volatile " : " ") + s->name + " = " + emitAs(*s->init, t) + ";");
-        freeTemps(temps);
+        endTemps(temps);
         return;
     }
     if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
@@ -107,8 +105,8 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             }
         }
         auto temps = hoistTemps(s->value.get());
-        if (!emitOwnedAssign(*s)) line(emitAssign(*s) + ";");
-        freeTemps(temps);
+        line(emitAssign(*s) + ";");
+        endTemps(temps);
         if (!once.empty()) {
             for (const Expr *x : once) exprOverride_.erase(x);
             indent_--;
@@ -122,21 +120,8 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             if (c.kind == Cleanup::Try || c.kind == Cleanup::Finally || c.kind == Cleanup::Defer ||
                 c.kind == Cleanup::Code)
                 cleanups = true;
-        // Returning an owned local hands it to the caller (copied if it holds a
-        // borrowed value), so the function's result is always caller-owned.
-        if (auto *n = s->value ? dynamic_cast<const NameExpr *>(s->value.get()) : nullptr;
-            n && n->resolvedGlobal.empty() && ownedStrings_.count(n->name)) {
-            std::string rt = "__ret" + std::to_string(throwCounter_++);
-            line("const char* " + rt + " = " + n->name + "__own ? " + n->name + " : grav_strdup(" +
-                 n->name + ");");
-            line(n->name + "__own = 0;");
-            emitUnwind(false);
-            if (trace_) line("grav_leave();");
-            line("return " + rt + ";");
-            return;
-        }
         auto temps = s->value ? hoistTemps(s->value.get()) : std::vector<std::string>{};
-        if (!temps.empty()) cleanups = true; // force the value into a temp before freeing
+        if (!temps.empty()) cleanups = true; // evaluate into a temp while the hoisted ones are live
         if (s->value) {
             // Evaluate into a temp *before* unwinding/leaving the frame, so a throw
             // in the return expression still has this frame on the trace and
@@ -146,7 +131,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
                 std::string rt = "__ret" + std::to_string(throwCounter_++);
                 line(cTy(currentReturnType_) + " " + rt + " = " +
                      emitOwned(*s->value, currentReturnType_) + ";");
-                freeTemps(temps);
+                endTemps(temps);
                 emitUnwind(false);
                 if (trace_) line("grav_leave();");
                 line("return " + rt + ";");
@@ -162,13 +147,9 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const ExprStmt *>(&stmt)) {
-        // e.g. IO.print("a" + b): bind the temporary, call, free it after.
         auto temps = hoistTemps(s->expr.get());
-        if (isFreshString(*s->expr)) // a fresh result nobody uses
-            line("free((void*)" + emitExpr(*s->expr) + ");");
-        else
-            line(emitExpr(*s->expr) + ";");
-        freeTemps(temps);
+        line(emitExpr(*s->expr) + ";");
+        endTemps(temps);
         return;
     }
     if (auto *s = dynamic_cast<const BlockStmt *>(&stmt)) {

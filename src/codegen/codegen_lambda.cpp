@@ -88,7 +88,6 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
     if (lam.isArrow) {
         volatileNames_.clear();
         cleanups_.clear();
-        ownedStrings_.clear();
         emitEnter("<lambda>", lam.line);
         if (trace_) emitLineMark(lam.line);
         if (ret.isVoid()) {
@@ -102,10 +101,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
             line("return " + emitOwned(*lam.exprBody, ret) + ";");
         }
     } else {
-        std::vector<std::string> outer;
-        for (const auto &p : lam.params) outer.push_back(p.name);
-        for (const auto &c : lam.captures) outer.push_back(c.name);
-        beginBody(lam.body, outer);
+        beginBody(lam.body);
         emitEnter("<lambda>", lam.line);
         emitBlock(lam.body);
         if (trace_) line("grav_leave();");

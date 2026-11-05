@@ -125,7 +125,7 @@ private:
     void emitDestructor(const ClassDecl &cls);
     // Shared prologue for any function body: resets per-body state (volatile
     // analysis for setjmp safety) before emitting `body`.
-    void beginBody(const Block &body, const std::vector<std::string> &outerNames = {});
+    void beginBody(const Block &body);
     std::string paramList(const std::vector<Param> &params,
                           const std::string &selfStruct) const;
 
@@ -255,34 +255,18 @@ private:
     std::string enumNameFn(const std::string &enumFq) const;
     static std::string fmtEscape(const std::string &s); // C-escape + double '%'
 
-    // codegen_owned.cpp — automatic freeing of owned local strings.
-    std::set<std::string> ownedStrings_;
+    // codegen_order.cpp — evaluation order within a statement.
     mutable std::map<const Expr *, std::string> exprOverride_; // render expr as this C
-    // `returnsOwned`: a `return name` of an owned local does not count as an escape
-    // (used for functions whose every return hands back a fresh string).
-    std::set<std::string> ownedSet(const Block &body, const std::vector<std::string> &outerNames,
-                                   bool returnsOwned) const;
-    void analyzeOwnedStrings(const Block &body, const std::vector<std::string> &outerNames);
-    bool isFreshString(const Expr &e) const;
-    bool isFreshStringLegacy(const Expr &e) const; // does it allocate a new string?
-    bool emitOwnedLet(const LetStmt &s);
-    bool emitOwnedAssign(const AssignStmt &s);
-    // Interprocedural: functions/methods whose every return yields a fresh string
-    // ("F:fq#overload" / "M:Class.method"), and the owned sets chosen per body.
-    std::set<std::string> freshFns_;
-    std::map<const Block *, std::set<std::string>> ownedCache_;
-    void computeFreshFunctions();
-    // Statement-level temporaries: fresh strings used where nothing keeps them
-    // (pieces of an allocating `+` chain, `print` pieces, arguments to
-    // non-retaining calls) are bound to `grav_tmpN` before the statement and
-    // freed right after it. Returns the temp names (already declared).
+    // Subexpressions that must run first to keep Grav's left-to-right order are
+    // bound to `grav_tmpN` before the statement (hoistTemps returns the names,
+    // already declared); endTemps drops their overrides after it.
     std::vector<std::string> hoistTemps(const Expr *root);
     void collectHoists(const Expr *e, std::vector<const Expr *> &out) const;
-    void freeTemps(const std::vector<std::string> &temps);
-    // Hoisted only to fix left-to-right evaluation order (not freed afterwards).
+    void endTemps(const std::vector<std::string> &temps);
+    // Hoisted only to fix left-to-right evaluation order.
     mutable std::set<const Expr *> orderOnly_;
     // Chain pieces in source order; when 2+ can run code they are hoisted in order.
-    void orderChain(const Expr &chain, bool allocates, std::vector<const Expr *> &out) const;
+    void orderChain(const Expr &chain, std::vector<const Expr *> &out) const;
     std::string concatParts(const std::vector<FmtPart> &parts) const; // merged parts -> C
 
     // codegen_lambda.cpp — closures and function values.

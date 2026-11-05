@@ -152,9 +152,7 @@ void CodeGen::emitFunction(const FunctionDecl &fn) {
     cur_ = &defs_;
     indent_ = 1;
     currentReturnType_ = fn.returnType;
-    std::vector<std::string> pnames;
-    for (const auto &p : fn.params) pnames.push_back(p.name);
-    beginBody(fn.body, pnames);
+    beginBody(fn.body);
     emitEnter(fn.fqName, fn.line);
     ownAssignedParams(fn.body, fn.params);
     emitBlock(fn.body);
@@ -200,9 +198,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
         cur_ = &defs_;
         indent_ = 1;
         currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
-        std::vector<std::string> pnames;
-        for (const auto &p : params) pnames.push_back(p.name);
-        beginBody(ctor->body, pnames);
+        beginBody(ctor->body);
         emitEnter(cls.fqName + ".constructor", ctor->line);
         ownAssignedParams(ctor->body, params);
         emitBlock(ctor->body);
@@ -266,9 +262,7 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     cur_ = &defs_;
     indent_ = 1;
     currentReturnType_ = m.returnType;
-    std::vector<std::string> pnames;
-    for (const auto &p : m.params) pnames.push_back(p.name);
-    beginBody(m.body, pnames);
+    beginBody(m.body);
     emitEnter(cls.fqName + "." + m.name, m.line);
     ownAssignedParams(m.body, m.params);
     emitBlock(m.body);

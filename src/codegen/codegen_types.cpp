@@ -31,7 +31,6 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     emitTypeInfos();
     emitInterfaceTables();
     emitGlobals();
-    computeFreshFunctions(); // which string-returning functions hand back owned strings
     emitLambdas(); // lifted closures (their creation sites come later)
     emitDefinitions(program);
     emitFaultRaisers();

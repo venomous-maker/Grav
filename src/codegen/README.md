@@ -10,7 +10,7 @@ Translates a type-checked `Program` into a single self-contained C translation u
 | `codegen_types.cpp`    | Struct layouts, vtable & itable types/instances, RTTI, enums.  |
 | `codegen_flow.cpp`     | Blocks/`defer`, loops & `for … in`, try/catch/finally, the cleanup stack that `return`/`break`/`continue` unwind, `volatile` analysis, line-mark filtering. |
 | `codegen_lambda.cpp`   | Closures: lifted `grav_lambda_N` functions, `GravEnv_N` capture structs, `grav_mk_lambda_N` constructors, function references, and per-signature `grav_call_N` helpers. |
-| `codegen_owned.cpp`    | Ownership analysis that frees local strings automatically (flag-guarded frees on reassignment and scope exit; temporaries after non-retaining calls). |
+| `codegen_order.cpp`    | Left-to-right evaluation order: hoists call arguments and string-chain pieces into temporaries where C's order is unspecified. |
 | `codegen_dispatch.cpp` | Method calls (devirtualized direct calls, single-evaluation thunks), fused string building, `print`/`str`. |
 | `codegen_func.cpp`     | Prototypes, functions, methods, constructors, accessors, `main`.|
 | `codegen_stmt.cpp`     | Statement emission.                                            |
