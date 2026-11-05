@@ -68,8 +68,13 @@ static std::string arrayTag(const TypeRef &t) {
         case TypeRef::Kind::Array:
             return "arr" + std::to_string(t.arrayLen) + "_" +
                    (t.elem ? arrayTag(*t.elem) : "void");
+        case TypeRef::Kind::Nullable: return "opt_" + (t.elem ? arrayTag(*t.elem) : "void");
         default: return "x";
     }
+}
+
+std::string optStructName(const TypeRef &nullableType) {
+    return "GravOpt_" + (nullableType.elem ? arrayTag(*nullableType.elem) : "void");
 }
 
 std::string arrayStructName(const TypeRef &arrayType) {
@@ -100,6 +105,9 @@ std::string cType(const TypeRef &t) {
         case TypeRef::Kind::Pointer:
             return (t.elem ? cType(*t.elem) : "void") + "*";
         case TypeRef::Kind::Array: return arrayStructName(t);
+        case TypeRef::Kind::Nullable:
+            // A `string?` is a string that may be NULL; any other `T?` a { has, v } pair.
+            return t.elem && t.elem->kind == TypeRef::Kind::String ? cType(*t.elem) : optStructName(t);
         case TypeRef::Kind::Function: return "GravFn";
         case TypeRef::Kind::Any: return "GravAny";
         case TypeRef::Kind::Error: return "int /*error*/";

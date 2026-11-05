@@ -95,7 +95,7 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
             bool ok = true;
             pt = reg_->resolveCanonical(e.params[i].type, currentNs_, ok);
             if (!ok) {
-                error(e.line, e.col, "unknown type '" + typeRefName(e.params[i].type) + "'");
+                error(e.line, e.col, reg_->typeProblem(e.params[i].type, currentNs_));
                 pt = TypeRef::prim(TypeRef::Kind::Error);
             }
         } else if (haveExp) {

@@ -38,6 +38,7 @@ std::string typeMangle(const TypeRef &t) {
             return s;
         }
         case TypeRef::Kind::Future: return "fut_" + (t.elem ? typeMangle(*t.elem) : "void");
+        case TypeRef::Kind::Nullable: return (t.elem ? typeMangle(*t.elem) : "v") + "_opt";
         case TypeRef::Kind::Function: { // fn(int, string) -> bool  =>  fn_int_string_r_bool
             std::string s = "fn";
             for (const auto &p : t.fnParams) s += "_" + typeMangle(p);

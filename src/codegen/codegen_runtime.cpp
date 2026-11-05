@@ -650,6 +650,9 @@ static const char* grav_bytes_to_str(GravBytes b) {
 static inline bool grav_streq(const char* a, const char* b) {
     return a == b || strcmp(a, b) == 0;
 }
+static inline GRAV_UNUSED bool grav_streq_opt(const char* a, const char* b) { /* either may be NULL */
+    return a == b || (a && b && strcmp(a, b) == 0);
+}
 static const char* grav_strdup(const char* s) {
     size_t n = strlen(s);
     char* r = grav_str_new(n);

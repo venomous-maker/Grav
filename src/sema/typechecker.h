@@ -197,6 +197,16 @@ private:
     TypeRef inferReturnType(const std::vector<TypeRef> &types, int line, int col, const std::string &what);
     void unreachableDefault(SwitchStmt &s);
     bool lambdaMentions(LambdaExpr &lam, const std::string &name);
+    // Nullable values (typechecker_null.cpp).
+    void nullFacts(Expr &cond, bool whenTrue, std::vector<std::string> &out);
+    bool assignsName(Stmt &s, const std::string &name);
+    bool exprAssignsName(Expr &e, const std::string &name);
+    void pushNarrowing(const std::vector<std::string> &names);
+    void popNarrowing();
+    std::vector<std::string> keepUnassigned(std::vector<std::string> facts, const std::vector<Stmt *> &region);
+    bool narrowAfterGuard(Stmt &s, Block &block, size_t index);
+    TypeRef checkUnwrap(CallExpr &e);
+    std::optional<TypeRef> nullableOf(const TypeRef &t) const;
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
     // a scalar/reference/enum (not a value-type struct or interface fat pointer).
     void checkOptionalResult(int line, int col, const TypeRef &t, bool allowVoid);
@@ -204,6 +214,8 @@ private:
     // helpers
     void error(int line, int col, const std::string &msg);
     void warn(int line, int col, const std::string &msg);
+    std::string nullHint(const TypeRef &from, const TypeRef &to) const;
+    std::string maybeNullHint(const TypeRef &t) const;
     bool isAssignable(const TypeRef &from, const TypeRef &to) const;
     // Can a value of this type be stored in an `any`? (primitives, strings,
     // classes, interfaces, enums, functions, null — not structs/arrays/pointers)
@@ -231,6 +243,10 @@ public:
         bool used = false;
         bool isParam = false;
         bool isConst = false;
+        // A `T?` local seen as a T where a null check proved it holds a value;
+        // `narrowedFrom` is its declared type.
+        bool narrowed = false;
+        TypeRef narrowedFrom;
         int line = 0, col = 0;
         std::string name;
     };
@@ -242,6 +258,7 @@ private:
     std::vector<GravError> errors_;
     std::vector<GravError> warnings_;
     std::vector<std::unordered_map<std::string, LocalVar>> scopes_;
+    std::vector<size_t> narrowScopes_; // indices of scopes opened by pushNarrowing
 
     std::string currentClass_; // FQ, empty in a free function
     std::string currentNs_;    // namespace context

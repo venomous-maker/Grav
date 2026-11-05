@@ -33,6 +33,7 @@ CodeGen::RefKind CodeGen::refKind(const TypeRef &t) const {
     }
     if (t.isArray()) return valueHasRefs(t) ? RefKind::Value : RefKind::None;
     if (t.kind == TypeRef::Kind::String) return RefKind::Str;
+    if (t.isNullable() && t.elem->kind == TypeRef::Kind::String) return RefKind::Str; // may be NULL
     if (t.isFunction()) return RefKind::Fn;
     if (t.isAny()) return RefKind::Any;
     return RefKind::None;
@@ -225,6 +226,7 @@ bool CodeGen::isRefProducer(const Expr &e) const {
     if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
         if (c->kind == CallKind::Builtin) {
             if (c->targetName == "__retain") return true;
+            if (c->targetName == "__unwrap") return false; // the operand, borrowed
             // Builtins returning strings hand back fresh or permanent strings,
             // except str(), which emitToString already makes borrowed.
             return refKind(e.type) == RefKind::Str && c->targetName != "str";
@@ -434,6 +436,8 @@ bool CodeGen::isUnstableRef(const Expr &e) const {
     if (auto *m = dynamic_cast<const MemberExpr *>(&e); m && m->bound) return false;
     if (dynamic_cast<const MemberExpr *>(&e) || dynamic_cast<const DerefExpr *>(&e)) return true;
     if (auto *n = dynamic_cast<const NameExpr *>(&e)) return !n->resolvedGlobal.empty();
+    if (auto *c = dynamic_cast<const CallExpr *>(&e); c && c->kind == CallKind::Builtin && c->targetName == "__unwrap")
+        return isUnstableRef(*c->args[0]);
     return false;
 }
 

@@ -99,6 +99,7 @@ std::string typeRefName(const TypeRef &t) {
             if (t.elem && !t.elem->isVoid()) s += " -> " + typeRefName(*t.elem);
             return s;
         }
+        case TypeRef::Kind::Nullable: return (t.elem ? typeRefName(*t.elem) : "?") + "?";
         case TypeRef::Kind::Null: return "null";
         case TypeRef::Kind::Error: return "<error>";
     }

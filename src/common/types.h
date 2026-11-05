@@ -14,11 +14,11 @@ namespace grav {
 // wraps the eventual result type of an async call (see `elem`).
 struct TypeRef {
     enum class Kind { Int, Float, Bool, String, Void, Named, Future, Pointer, Array, Null, Binary,
-                      Function, Any, Error };
+                      Function, Any, Nullable, Error };
 
     Kind kind = Kind::Error;
     std::string name;              // populated only when kind == Named
-    std::shared_ptr<TypeRef> elem; // populated when kind == Future, Pointer, or Array
+    std::shared_ptr<TypeRef> elem; // populated when kind == Future, Pointer, Array, or Nullable
     int arrayLen = 0;              // populated when kind == Array (fixed length)
     // Numeric width/signedness hints. For Kind::Int: bits ∈ {8,16,32,64}. For
     // Kind::Float: bits ∈ {32,64}. bits == 0 means the canonical default (int = 32,
@@ -52,6 +52,14 @@ struct TypeRef {
     static TypeRef pointer(TypeRef e) {
         TypeRef t;
         t.kind = Kind::Pointer;
+        t.elem = std::make_shared<TypeRef>(std::move(e));
+        return t;
+    }
+    // `T?`: a T or null. Only for types that cannot already be null (numbers,
+    // bools, strings, enums, structs); `Dog?` is just `Dog` (see canonicalization).
+    static TypeRef nullable(TypeRef e) {
+        TypeRef t;
+        t.kind = Kind::Nullable;
         t.elem = std::make_shared<TypeRef>(std::move(e));
         return t;
     }
@@ -96,6 +104,7 @@ struct TypeRef {
     bool isArray() const { return kind == Kind::Array; }
     bool isFunction() const { return kind == Kind::Function; }
     bool isAny() const { return kind == Kind::Any; }
+    bool isNullable() const { return kind == Kind::Nullable; }
     const TypeRef &fnReturn() const { return *elem; }
     // A "slice": a runtime-length sequence (a variadic parameter), spelled in C as
     // a bare pointer plus a separate length. Marked by a negative array length.
@@ -110,7 +119,7 @@ struct TypeRef {
         if (kind == Kind::Named) return name == o.name && args == o.args;
         if (kind == Kind::Array)
             return arrayLen == o.arrayLen && elem && o.elem && *elem == *o.elem;
-        if (kind == Kind::Future || kind == Kind::Pointer)
+        if (kind == Kind::Future || kind == Kind::Pointer || kind == Kind::Nullable)
             return elem && o.elem && *elem == *o.elem;
         if (kind == Kind::Function)
             return fnParams == o.fnParams && elem && o.elem && *elem == *o.elem;

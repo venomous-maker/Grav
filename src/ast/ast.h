@@ -65,6 +65,9 @@ struct NameExpr : Expr {
     // `Stack<int>.of(3)`: the type arguments of a generic class named as a static
     // target (monomorphization replaces `name` with the instance and clears them).
     std::vector<TypeRef> typeArgs;
+    // Set by the checker inside `if (x != null)`: the name is a `T?` local known
+    // to hold a value here, so it reads as that value (`x.v` in C).
+    bool unwrapNullable = false;
 };
 
 // `self` (or `this`) inside a method body.
@@ -694,6 +697,11 @@ struct Program {
 void visitExprs(Program &program, const std::function<void(Expr &)> &f);
 // The same walk over one block.
 void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f);
+// The same walk over one statement, also calling `onStmt` on every statement.
+void visitStmt(Stmt &stmt, const std::function<void(Stmt &)> &onStmt,
+               const std::function<void(Expr &)> &f);
+// The same walk over one expression.
+void visitExpr(Expr &expr, const std::function<void(Expr &)> &f);
 
 // Calls `f` on every expression slot so it can replace the expression. Pre-order:
 // after `f` returns, the (possibly new) expression's children are visited.

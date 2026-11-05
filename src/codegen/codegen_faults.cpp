@@ -15,6 +15,7 @@ void CodeGen::emitFaultSupport() {
 static GRAV_COLD GRAV_NORETURN void grav_fault_index_of(const char* what, long long i, long long n);
 #define grav_fault_index(i, n) grav_fault_index_of("array", (i), (n))
 static GRAV_COLD GRAV_NORETURN void grav_fault_div(void);
+static GRAV_COLD GRAV_NORETURN void grav_fault_null(const char* msg);
 static GRAV_COLD GRAV_NORETURN void grav_fault_enum(long long v, long long n, const char* name);
 static GRAV_COLD GRAV_NORETURN void grav_fault_cast(const GravTypeInfo* from, const GravTypeInfo* to);
 /* `n as E`: the number must name one of E's members. */
@@ -165,6 +166,7 @@ void CodeGen::emitFaultRaisers() {
     std::string div = raise("std.core.ArithmeticError");
     std::string value = raise("std.core.ValueError");
     std::string type = raise("std.core.TypeError");
+    std::string state = raise("std.core.StateError");
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_index_of(const char* what, long long i, long long n) {\n"
              "    char msg[160];\n"
              "    snprintf(msg, sizeof msg, \"%s index %lld out of range (length %lld)\", what, i, n);\n" +
@@ -172,6 +174,8 @@ void CodeGen::emitFaultRaisers() {
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_div(void) {\n"
              "    const char* msg = \"integer division by zero\";\n" +
              (div.empty() ? "    grav_panic(msg);\n" : div) + "}\n";
+    defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_null(const char* msg) {\n" +
+             (state.empty() ? "    grav_panic(msg);\n" : state) + "}\n";
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_enum(long long v, long long n, const char* name) {\n"
              "    char msg[200];\n"
              "    if (n < 0) snprintf(msg, sizeof msg, \"%lld is not a %s value\", v, name);\n"

@@ -324,11 +324,32 @@ TypeRef Parser::parseType(const char *context) {
             if (len <= 0) fail(n, "array length must be a positive integer");
             expect(TokenType::RBracket, "to close the array length");
             base = TypeRef::array(base, static_cast<int>(len));
+        } else if (check(TokenType::Question) && nullableMarkAhead()) {
+            advance(); // `T?`
+            base = TypeRef::nullable(base);
         } else {
             break;
         }
     }
     return base;
+}
+
+// At `?` after a type: is it `T?` rather than a conditional `cond ? a : b`
+// (as in `x as int ? 1 : 2`)? Only a type after `as`/`is` can be followed by a
+// conditional; there a nullable mark is followed by what can end a type.
+bool Parser::nullableMarkAhead() const {
+    if (!typeAfterOperator_ || pos_ + 1 >= tokens_.size()) return true;
+    const Token &n = tokens_[pos_ + 1];
+    if (n.line != tokens_[pos_].line) return true;
+    switch (n.type) {
+        case TokenType::Assign: case TokenType::RParen: case TokenType::Comma: case TokenType::Greater:
+        case TokenType::ShiftRight: case TokenType::LBrace: case TokenType::RBrace: case TokenType::RBracket:
+        case TokenType::Semicolon: case TokenType::EndOfFile: case TokenType::Star: case TokenType::LBracket:
+        case TokenType::Question:
+            return true;
+        default:
+            return false;
+    }
 }
 
 // Closes a `<...>` list. A `>` closes directly; a `>>`/`>=` token is split so the

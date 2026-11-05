@@ -53,7 +53,7 @@ void TypeChecker::checkArgs(const std::vector<ExprPtr> &args,
             error(args[i]->line, args[i]->col,
                   "argument " + std::to_string(i + 1) + " to " + what +
                       " expects " + typeRefName(params[i]) + ", but got " +
-                      typeRefName(argTypes[i]));
+                      typeRefName(argTypes[i]) + nullHint(argTypes[i], params[i]));
         }
     }
 }
@@ -73,7 +73,7 @@ void TypeChecker::checkVariadicArgs(const std::vector<ExprPtr> &args,
         if (!isAssignable(at, want))
             error(args[i]->line, args[i]->col,
                   "argument " + std::to_string(i + 1) + " to " + what + " expects " +
-                      typeRefName(want) + ", but got " + typeRefName(at));
+                      typeRefName(want) + ", but got " + typeRefName(at) + nullHint(at, want));
     }
 }
 
@@ -123,7 +123,9 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         if (local) {
             local->used = true;
             t = local->type;
-            if (!lambdaStack_.empty()) noteCapture(e->name, t, scopeIdx);
+            // A narrowed `T?` reads its value; a closure copies the whole `T?`.
+            e->unwrapNullable = local->narrowed && local->narrowedFrom.elem->kind != TypeRef::Kind::String;
+            if (!lambdaStack_.empty()) noteCapture(e->name, local->narrowed ? local->narrowedFrom : t, scopeIdx);
         } else if (std::string gfq = reg_->resolveGlobal(e->name, currentNs_); !gfq.empty()) {
             const GlobalInfo *gi = reg_->global(gfq);
             e->resolvedGlobal = gi->cName;
@@ -187,7 +189,13 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
 
 TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
     TypeRef lt = checkExpr(*e.left);
+    // `x != null && x > 0`: the right side sees x as a value (and `x == null || ...`).
+    std::vector<std::string> facts;
+    if (e.op == BinaryOp::And || e.op == BinaryOp::Or) nullFacts(*e.left, e.op == BinaryOp::And, facts);
+    std::erase_if(facts, [&](const std::string &n) { return exprAssignsName(*e.right, n); });
+    pushNarrowing(facts);
     TypeRef rt = checkExpr(*e.right);
+    popNarrowing();
     if (lt.isError() || rt.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     // A class operator method (`fn operator+(o: T)`) takes over the operator.
     if (auto ov = tryOperatorOverload(e, lt, rt)) return *ov;
@@ -204,7 +212,7 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
     if ((e.op == BinaryOp::Eq || e.op == BinaryOp::NotEq) &&
         (lt.kind == TypeRef::Kind::Null || rt.kind == TypeRef::Kind::Null)) {
         auto refOrNull = [&](const TypeRef &x) {
-            return x.kind == TypeRef::Kind::Null || x.isPointer() || x.isFunction() || x.isAny() ||
+            return x.kind == TypeRef::Kind::Null || x.isPointer() || x.isFunction() || x.isAny() || x.isNullable() ||
                    (x.isNamed() && (reg_->isClass(x.name) || reg_->isInterface(x.name)));
         };
         if (refOrNull(lt) && refOrNull(rt))
@@ -212,8 +220,27 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
         const TypeRef &value = refOrNull(lt) ? rt : lt;
         error(e.line, e.col,
               aTypeName(value) + " is never null: only objects, interfaces, functions, "
-              "pointers and any values can be compared with null");
+              "pointers, any values and nullable (T?) values can be compared with null");
         return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    // A `T?` compares (==, !=) with a T or another T?; it has no order or arithmetic.
+    if (lt.isNullable() || rt.isNullable()) {
+        const TypeRef &a = lt.isNullable() ? *lt.elem : lt;
+        const TypeRef &b = rt.isNullable() ? *rt.elem : rt;
+        bool eq = e.op == BinaryOp::Eq || e.op == BinaryOp::NotEq;
+        if (!eq) {
+            error(e.line, e.col, std::string("operator '") + sym + "' cannot use " +
+                                     typeRefName(lt.isNullable() ? lt : rt) +
+                                     ", which may be null: use 'x!', 'x ?" "? fallback', or check 'x != null' first");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        bool fits = a == b || (a.isNumeric() && b.isNumeric() && !(lt.isNullable() && rt.isNullable()));
+        if (!fits) {
+            error(e.line, e.col, std::string("operator '") + sym + "' requires matching types, but got " +
+                                     typeRefName(lt) + " and " + typeRefName(rt));
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        return TypeRef::prim(TypeRef::Kind::Bool);
     }
     if (!isComparison(e.op)) {
         // string + string -> concatenation
@@ -311,11 +338,19 @@ TypeRef TypeChecker::checkCoalesce(CoalesceExpr &e) {
     if (l.isError() || r.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     // `null ?? b` -> b's type. Otherwise the left must be a nullable reference.
     if (l.kind == TypeRef::Kind::Null) return r;
+    // `x ?? fallback` on a `T?`: a T when the fallback is one, else still a T?.
+    if (l.isNullable()) {
+        if (isAssignable(r, *l.elem)) return *l.elem;
+        if (r == l) return l;
+        error(e.line, e.col, "the fallback of '?" "?' must be " + aTypeName(*l.elem) + " or " +
+                                 typeRefName(l) + ", but got " + typeRefName(r));
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     bool leftNullable = l.isPointer() ||
                         (l.isNamed() && (reg_->isClass(l.name) || reg_->isInterface(l.name)));
     if (!leftNullable) {
-        error(e.line, e.col, "the left of '?" "?' must be a nullable reference "
-                             "(class, interface, or pointer), but got " + typeRefName(l));
+        error(e.line, e.col, "the left of '?" "?' must be a nullable value "
+                             "(T?, class, interface, or pointer), but got " + typeRefName(l));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     if (isAssignable(r, l)) return l;
@@ -352,9 +387,24 @@ TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
     TypeRef want = outer ? *outer : TypeRef::prim(TypeRef::Kind::Error);
     expected_ = nullptr;
     requireBool(*e.cond, "a ternary condition");
-    TypeRef a = outer ? checkExprExpect(*e.thenExpr, want) : checkExpr(*e.thenExpr);
-    TypeRef b = outer ? checkExprExpect(*e.elseExpr, want) : checkExpr(*e.elseExpr);
+    // `x != null ? x + 1 : 0`: each branch sees what the condition proves.
+    auto branch = [&](Expr &x, bool whenTrue) {
+        std::vector<std::string> facts;
+        nullFacts(*e.cond, whenTrue, facts);
+        std::erase_if(facts, [&](const std::string &n) { return exprAssignsName(x, n); });
+        pushNarrowing(facts);
+        TypeRef t = outer ? checkExprExpect(x, want) : checkExpr(x);
+        popNarrowing();
+        return t;
+    };
+    TypeRef a = branch(*e.thenExpr, true);
+    TypeRef b = branch(*e.elseExpr, false);
     if (a.isError() || b.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // `ok ? 5 : null` is an int?.
+    if (a.kind == TypeRef::Kind::Null && b.kind != TypeRef::Kind::Null)
+        if (auto n = nullableOf(b); n && n->isNullable()) return *n;
+    if (b.kind == TypeRef::Kind::Null && a.kind != TypeRef::Kind::Null)
+        if (auto n = nullableOf(a); n && n->isNullable()) return *n;
     // Pick the common type of the two branches (handles `cond ? obj : null`).
     if (a == b) return a;
     if (isAssignable(b, a)) return a;
@@ -386,7 +436,7 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
         TypeRef c = reg_->resolveCanonical(e.target, currentNs_, ok);
         if (!ok) {
             checkExpr(*e.operand);
-            error(e.line, e.col, "unknown type '" + typeRefName(e.target) + "' in cast");
+            error(e.line, e.col, reg_->typeProblem(e.target, currentNs_) + " in cast");
             return TypeRef::prim(TypeRef::Kind::Error);
         }
         e.target = c;
@@ -892,7 +942,7 @@ void TypeChecker::validateArgTypes(const std::vector<ExprPtr> &args,
             if (!isAssignable(argTypes[i], want))
                 error(args[i]->line, args[i]->col, "argument " + std::to_string(i + 1) +
                           " to " + what + " expects " + typeRefName(want) + ", but got " +
-                          typeRefName(argTypes[i]));
+                          typeRefName(argTypes[i]) + nullHint(argTypes[i], want));
         }
         return;
     }
@@ -904,7 +954,7 @@ void TypeChecker::validateArgTypes(const std::vector<ExprPtr> &args,
         if (!isAssignable(argTypes[i], params[i]))
             error(args[i]->line, args[i]->col, "argument " + std::to_string(i + 1) + " to " +
                       what + " expects " + typeRefName(params[i]) + ", but got " +
-                      typeRefName(argTypes[i]));
+                      typeRefName(argTypes[i]) + nullHint(argTypes[i], params[i]));
 }
 
 // Chooses the best overload for the given argument types: an exact-match wins;
@@ -1141,6 +1191,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 error(e.args[0]->line, e.args[0]->col, "format 'd' needs an integer, but got " + aTypeName(t));
             return TypeRef::prim(TypeRef::Kind::String);
         }
+        if (name->name == "__unwrap" && e.args.size() == 1) return checkUnwrap(e);
         if (name->name == "__repr" && e.args.size() == 1) {
             // Internal (collection toString): a value as text, strings quoted.
             e.kind = CallKind::Builtin;
@@ -1443,7 +1494,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
 
     if (!objType.isNamed() || !reg_->isClass(objType.name)) {
         error(mem->line, mem->col, "cannot call method '" + mem->member +
-                                       "' on a value of type " + typeRefName(objType));
+                                       "' on a value of type " + typeRefName(objType) + maybeNullHint(objType));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     std::vector<const MethodInfo *> cands;
@@ -1616,7 +1667,7 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
     }
     if (!objType.isNamed() || !reg_->isClass(objType.name)) {
         error(e.line, e.col, "cannot access member '" + e.member +
-                                 "' of a value of type " + typeRefName(objType));
+                                 "' of a value of type " + typeRefName(objType) + maybeNullHint(objType));
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     const FieldInfo *f = reg_->findField(objType.name, e.member);

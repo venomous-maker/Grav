@@ -209,13 +209,17 @@ ExprPtr Parser::parseAsIs() {
             const Token &kw = advance();
             auto e = at<AsExpr>(kw);
             e->operand = std::move(left);
+            typeAfterOperator_ = true;
             e->target = parseType("after 'as'");
+            typeAfterOperator_ = false;
             left = std::move(e);
         } else if (check(TokenType::Is)) {
             const Token &kw = advance();
             auto e = at<IsExpr>(kw);
             e->operand = std::move(left);
+            typeAfterOperator_ = true;
             e->target = parseType("after 'is'");
+            typeAfterOperator_ = false;
             if (e->target.isNamed()) e->typeName = e->target.name;
             left = std::move(e);
         } else {
@@ -421,6 +425,15 @@ ExprPtr Parser::parsePostfix() {
             while (!idx->isSlice && matchToken(TokenType::Comma)) idx->more.push_back(parseExpression()); // m[r, c]
             expect(TokenType::RBracket, "to close the index");
             expr = std::move(idx);
+        } else if (check(TokenType::Bang) && !onNewLine()) {
+            // `x!` — the value of a nullable `x` (a fault when it is null).
+            const Token &bang = advance();
+            auto call = at<CallExpr>(bang);
+            auto callee = at<NameExpr>(bang);
+            callee->name = "__unwrap";
+            call->callee = std::move(callee);
+            call->args.push_back(std::move(expr));
+            expr = std::move(call);
         } else if ((check(TokenType::PlusPlus) || check(TokenType::MinusMinus)) && !onNewLine()) {
             // A line-leading `++x` starts a new statement; it is not `prev++`.
             const Token &opTok = advance();

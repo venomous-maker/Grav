@@ -83,6 +83,9 @@ void CodeGen::emitGlobals() {
 
 std::string CodeGen::equalExpr(const TypeRef &t, const std::string &a, const std::string &b) const {
     if (t.kind == TypeRef::Kind::String) return "grav_streq(" + a + ", " + b + ")";
+    if (t.isNullable())
+        return t.elem->kind == TypeRef::Kind::String ? "grav_streq_opt(" + a + ", " + b + ")"
+                                                     : optStructName(t) + "__eq(" + a + ", " + b + ")";
     if (t.isBinary()) return "grav_bytes_eq(" + a + ", " + b + ")";
     if (t.isFunction()) return "grav_fn_eq(" + a + ", " + b + ")";
     if (t.isNamed() && reg_->isInterface(t.name)) return "grav_iface_eq(" + a + ", " + b + ")";
@@ -108,6 +111,7 @@ std::string CodeGen::cTy(const TypeRef &t) const {
     // A slice (variadic) is a bare pointer; a fixed-length array is a value struct.
     if (t.isSlice()) return cTy(t.elem ? *t.elem : TypeRef::prim(TypeRef::Kind::Void)) + "*";
     if (t.isArray()) return arrayStructName(t);
+    if (t.isNullable() && t.elem->kind != TypeRef::Kind::String) return optStructName(t);
     return cType(t);
 }
 
@@ -130,6 +134,9 @@ void CodeGen::collectType(const TypeRef &t) {
     } else if (t.isArray()) {
         arrayTypes_[arrayStructName(t)] = t;
         if (t.elem) collectType(*t.elem); // nested arrays / element structs-of-arrays
+    } else if (t.isNullable() && t.elem) {
+        if (t.elem->kind != TypeRef::Kind::String) optTypes_[optStructName(t)] = t;
+        collectType(*t.elem);
     } else if ((t.isPointer() || t.isFuture()) && t.elem) {
         collectType(*t.elem);
     } else if (t.isFunction()) {
@@ -399,15 +406,30 @@ void CodeGen::emitValueStructs() {
                     std::to_string(t.arrayLen) + "];\n} " + key + ";\n\n";
         if (refKind(t) == RefKind::Value) structs_ += emitValueArc(key, t);
     };
+    // `T?` of a value type: { has, v }, with `==` against another T? (__eq) or a T (__eqv).
+    std::function<void(const TypeRef &)> emitOpt = [&](const TypeRef &t) {
+        std::string key = optStructName(t);
+        if (done.count(key)) return;
+        done.insert(key);
+        ensure(*t.elem);
+        std::string v = cTy(*t.elem);
+        structs_ += "typedef struct " + key + " { bool has; " + v + " v; } " + key + ";\n";
+        structs_ += "static inline GRAV_UNUSED bool " + key + "__eq(" + key + " a, " + key +
+                    " b) { return a.has == b.has && (!a.has || " + equalExpr(*t.elem, "a.v", "b.v") + "); }\n";
+        structs_ += "static inline GRAV_UNUSED bool " + key + "__eqv(" + key + " a, " + v +
+                    " b) { return a.has && " + equalExpr(*t.elem, "a.v", "b") + "; }\n\n";
+    };
     ensure = [&](const TypeRef &t) {
         // Only by-value containment forces an ordering: value structs and arrays.
         // Pointers/classes/interfaces only need the (already-emitted) forward typedef.
         if (t.isArray()) emitArray(t);
+        else if (t.isNullable() && t.elem->kind != TypeRef::Kind::String) emitOpt(t);
         else if (t.isNamed() && reg_->isStruct(t.name)) emitStructFq(t.name);
     };
     for (const auto &declPtr : program_->decls)
         if (auto *st = dynamic_cast<const StructDecl *>(declPtr.get())) emitStructFq(st->fqName);
     for (const auto &[key, t] : arrayTypes_) emitArray(t);
+    for (const auto &[key, t] : optTypes_) emitOpt(t);
 }
 
 void CodeGen::emitStruct(const std::string &classFq) {

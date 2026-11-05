@@ -71,9 +71,11 @@ const char *accessName(Access a) {
 namespace {
 struct Visitor {
     const std::function<void(Expr &)> &f;
+    const std::function<void(Stmt &)> *onStmt = nullptr;
     void block(Block &b) { for (auto &s : b.statements) stmt(s.get()); }
     void stmt(Stmt *s) {
         if (!s) return;
+        if (onStmt) (*onStmt)(*s);
         if (auto *x = dynamic_cast<LetStmt *>(s)) expr(x->init.get());
         else if (auto *x = dynamic_cast<AssignStmt *>(s)) { expr(x->target.get()); expr(x->value.get()); }
         else if (auto *x = dynamic_cast<ReturnStmt *>(s)) expr(x->value.get());
@@ -247,6 +249,17 @@ void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f) {
 void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f) {
     Visitor v{f};
     v.block(block);
+}
+
+void visitStmt(Stmt &stmt, const std::function<void(Stmt &)> &onStmt,
+               const std::function<void(Expr &)> &f) {
+    Visitor v{f, &onStmt};
+    v.stmt(&stmt);
+}
+
+void visitExpr(Expr &expr, const std::function<void(Expr &)> &f) {
+    Visitor v{f};
+    v.expr(&expr);
 }
 
 void visitExprs(Program &program, const std::function<void(Expr &)> &f) {

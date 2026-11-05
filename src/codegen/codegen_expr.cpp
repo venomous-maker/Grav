@@ -53,9 +53,14 @@ std::string CodeGen::escapeC(const std::string &s) {
     return out;
 }
 
-std::string CodeGen::boxAny(const Expr &e) const {
-    const TypeRef &t = e.type;
-    std::string v = emitExpr(e);
+std::string CodeGen::boxAny(const Expr &e) const { return boxAnyC(emitExpr(e), e.type); }
+
+std::string CodeGen::boxAnyC(const std::string &v, const TypeRef &t) const {
+    if (t.isNullable()) { // null or the boxed value
+        bool str = t.elem->kind == TypeRef::Kind::String;
+        return "({ " + cTy(t) + " grav_bx_ = " + v + "; " + (str ? "grav_bx_" : "grav_bx_.has") + " ? " +
+               boxAnyC(str ? "grav_bx_" : "grav_bx_.v", *t.elem) + " : grav_any_null(); })";
+    }
     switch (t.kind) {
         case TypeRef::Kind::Any: return v;
         case TypeRef::Kind::Null: return "grav_any_null()";
@@ -119,6 +124,11 @@ std::string CodeGen::isAnyTest(const std::string &c, const TypeRef &t) const {
 std::string CodeGen::emitAs(const Expr &expr, const TypeRef &target) const {
     // Values flowing into an `any` slot are boxed.
     if (target.isAny() && !expr.type.isAny()) return boxAny(expr);
+    // A T (or null) flowing into a `T?` slot of a value type is wrapped.
+    if (target.isNullable() && !expr.type.isNullable() && target.elem->kind != TypeRef::Kind::String) {
+        if (expr.type.kind == TypeRef::Kind::Null) return "((" + cTy(target) + "){ 0 })";
+        return "((" + cTy(target) + "){ .has = 1, .v = " + emitAs(expr, *target.elem) + " })";
+    }
     std::string e = emitExpr(expr);
     // A null function value.
     if (target.isFunction() && expr.type.kind == TypeRef::Kind::Null)
@@ -213,6 +223,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
     if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return hoistIncludes(e->code);
     if (auto *e = dynamic_cast<const NameExpr *>(&expr)) {
         if (!e->fnRef.empty()) return emitFnRef(*e);
+        if (e->unwrapNullable) return "(" + e->name + ").v"; // a narrowed `T?` local
         return e->resolvedGlobal.empty() ? e->name : e->resolvedGlobal;
     }
     if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) return emitLambdaValue(*e);
@@ -222,6 +233,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
     if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
         // Comparing an interface value against null tests its object pointer.
         if (e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) {
+            if (e->left->type.isNullable() || e->right->type.isNullable()) return nullableEq(*e);
             auto isIface = [&](const Expr &x) {
                 return x.type.isNamed() && reg_->isInterface(x.type.name);
             };
@@ -383,6 +395,13 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
     if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
         // `a ?? b` -> "is a null? then b else a", evaluating `a` once.
         std::string l = emitExpr(*e->left);
+        if (e->left->type.isNullable()) {
+            const TypeRef &lt = e->left->type;
+            bool str = lt.elem->kind == TypeRef::Kind::String;
+            std::string val = str || e->type.isNullable() ? "grav_co_" : "grav_co_.v";
+            return "({ " + cTy(lt) + " grav_co_ = " + l + "; " + (str ? "grav_co_ != 0" : "grav_co_.has") + " ? " +
+                   val + " : " + emitAs(*e->right, e->type) + "; })";
+        }
         if (e->left->type == e->type) {
             bool iface = e->type.isNamed() && reg_->isInterface(e->type.name);
             return "({ " + cTy(e->type) + " grav_co_ = " + l + "; " + (iface ? "grav_co_.obj" : "grav_co_") +
@@ -593,6 +612,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 if (boxable) return "grav_any_to_string(" + boxAny(*call.args[0]) + ")";
                 return displayC(emitExpr(*call.args[0]), t, false);
             }
+            if (call.targetName == "__unwrap") return unwrapC(*call.args[0]);
             if (call.targetName == "__repr") return displayC(emitExpr(*call.args[0]), call.args[0]->type, true);
             if (call.targetName == "__fmt") {
                 auto *spec = static_cast<const StringLiteralExpr *>(call.args[1].get());

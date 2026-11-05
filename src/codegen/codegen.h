@@ -289,6 +289,9 @@ private:
     std::string emitExpr(const Expr &expr) const;
     // `any` boxing / unboxing / type tests.
     std::string boxAny(const Expr &e) const;
+    std::string boxAnyC(const std::string &v, const TypeRef &t) const;
+    std::string nullableEq(const BinaryExpr &e) const;
+    std::string unwrapC(const Expr &x) const;
     std::string unboxAny(const std::string &c, const TypeRef &target) const;
     std::string isAnyTest(const std::string &c, const TypeRef &target) const;
     std::string emitCall(const CallExpr &call) const;
@@ -318,6 +321,7 @@ private:
 
     // Fixed-length array types in use, keyed by their C struct name (deduped).
     std::map<std::string, TypeRef> arrayTypes_;
+    std::map<std::string, TypeRef> optTypes_; // nullable value types (`int?`) by C struct name
 
     // Output sections, concatenated in order by generate().
     std::string typedefs_;

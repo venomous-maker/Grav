@@ -30,6 +30,8 @@ std::string enumConst(const std::string &enumFq, const std::string &member); // 
 // Grav arrays are boxed in a struct so they keep value semantics in C (assignable,
 // passable, returnable).
 std::string arrayStructName(const TypeRef &arrayType);
+// The C struct of a nullable value type (`int?` -> GravOpt_int).
+std::string optStructName(const TypeRef &nullableType);
 
 // C type spelling for a resolved Grav type. Named types become pointers.
 std::string cType(const TypeRef &t);

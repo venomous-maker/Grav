@@ -25,6 +25,7 @@ add_executable(gravc
         src/sema/typechecker_expr.cpp
         src/sema/typechecker_ops.cpp
         src/sema/typechecker_lambda.cpp
+        src/sema/typechecker_null.cpp
         src/sema/typechecker_infer.cpp
         src/sema/typechecker_args.cpp
         src/sema/sanitize.cpp
@@ -38,6 +39,7 @@ add_executable(gravc
         src/codegen/codegen_flow.cpp
         src/codegen/codegen_dispatch.cpp
         src/codegen/codegen_lambda.cpp
+        src/codegen/codegen_null.cpp
         src/codegen/codegen_owned.cpp
         src/codegen/codegen_arc.cpp
         src/codegen/codegen_func.cpp

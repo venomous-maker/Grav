@@ -19,7 +19,7 @@ void TypeChecker::pushScope() { scopes_.emplace_back(); }
 
 void TypeChecker::popScope() {
     for (auto &[name, v] : scopes_.back()) {
-        if (!v.used && !v.isParam) {
+        if (!v.used && !v.isParam && !v.narrowed) {
             warn(v.line, v.col, "unused variable '" + name + "'");
         }
     }
@@ -32,6 +32,11 @@ void TypeChecker::declareLocal(const std::string &name, const TypeRef &type,
     // share a scope with the top of its body, so a local there cannot reuse one.
     const LocalVar *prev = nullptr;
     if (auto it = scopes_.back().find(name); it != scopes_.back().end()) prev = &it->second;
+    // A narrowing scope (after `if (x == null) { return }`) is part of its block.
+    for (size_t i = scopes_.size() - 1; !prev && i > 0 && !narrowScopes_.empty() &&
+                                        std::find(narrowScopes_.begin(), narrowScopes_.end(), i) != narrowScopes_.end();
+         --i)
+        if (auto it = scopes_[i - 1].find(name); it != scopes_[i - 1].end() && !it->second.narrowed) prev = &it->second;
     if (!prev && !isParam && scopes_.size() >= 2) {
         const auto &outer = scopes_[scopes_.size() - 2];
         if (auto it = outer.find(name); it != outer.end() && it->second.isParam) prev = &it->second;
@@ -76,6 +81,8 @@ bool TypeChecker::isBoxable(const TypeRef &t) const {
             return true;
         case TypeRef::Kind::Named:
             return reg_->isClass(t.name) || reg_->isInterface(t.name) || reg_->isEnum(t.name);
+        case TypeRef::Kind::Nullable:
+            return isBoxable(*t.elem);
         default:
             return false;
     }
@@ -86,6 +93,10 @@ bool TypeChecker::isAssignable(const TypeRef &from, const TypeRef &to) const {
     if (from == to) return true;
     // Anything boxable flows into `any`; getting it back out needs `as`.
     if (to.isAny()) return isBoxable(from);
+    // `T?` takes null and plain T values; a `U?` only when U is exactly T.
+    if (to.isNullable())
+        return from.kind == TypeRef::Kind::Null || (!from.isNullable() && isAssignable(from, *to.elem));
+    if (from.isNullable()) return false; // needs `!`, `??` or a null check
     // Numeric conversions follow C-like rules: any integer flows into any integer
     // or float (widening); float -> integer is narrowing and needs an explicit cast.
     if (from.isNumeric() && to.isNumeric()) {
@@ -106,6 +117,18 @@ bool TypeChecker::isAssignable(const TypeRef &from, const TypeRef &to) const {
             return true;
     }
     return false;
+}
+
+// Why a `T?` value does not fit where a T is wanted, appended to a mismatch error.
+std::string TypeChecker::nullHint(const TypeRef &from, const TypeRef &to) const {
+    if (!from.isNullable() || to.isNullable() || !isAssignable(*from.elem, to)) return "";
+    return " (it may be null: use 'x!', 'x ?" "? fallback', or check 'x != null' first)";
+}
+
+// For a member used on a `T?`.
+std::string TypeChecker::maybeNullHint(const TypeRef &t) const {
+    if (!t.isNullable()) return "";
+    return " (it may be null: use 'x!', 'x ?" "? fallback', or check 'x != null' first)";
 }
 
 bool TypeChecker::checkAccess(Access a, const std::string &definingClass) const {
@@ -251,7 +274,9 @@ void TypeChecker::checkClass(ClassDecl &cls) {
 
 void TypeChecker::checkBlock(Block &block) {
     pushScope();
-    for (auto &s : block.statements) {
+    int narrowings = 0;
+    for (size_t si = 0; si < block.statements.size(); ++si) {
+        auto &s = block.statements[si];
         // `a[i]++` as a statement is `a[i] += 1`, which also works through
         // operator[] / operator[]= and on fields of an element.
         if (auto *es = dynamic_cast<ExprStmt *>(s.get()))
@@ -277,7 +302,9 @@ void TypeChecker::checkBlock(Block &block) {
         stmtAtBlockLevel_ = true;
         checkStmt(*s);
         if (matchReplacement_) s = std::move(matchReplacement_);
+        if (narrowAfterGuard(*s, block, si)) narrowings++;
     }
+    while (narrowings-- > 0) popNarrowing();
     popScope();
 }
 
@@ -323,11 +350,6 @@ void TypeChecker::requireBool(Expr &cond, const char *ctx) {
               std::string(ctx) + " must be a bool, but got " + typeRefName(t));
 }
 
-void TypeChecker::checkIf(IfStmt &s) {
-    requireBool(*s.cond, "an 'if' condition");
-    checkBlock(s.thenBlock);
-    if (s.elseStmt) checkStmt(*s.elseStmt);
-}
 
 // Loops nest with their labels; a label may not repeat an enclosing one.
 void TypeChecker::enterLoop(const std::string &label, int line, int col) {
@@ -484,7 +506,7 @@ void TypeChecker::checkLet(LetStmt &s) {
         bool ok = true;
         TypeRef c = reg_->resolveCanonical(s.declaredType, currentNs_, ok);
         if (!ok) {
-            error(s.line, s.col, "unknown type '" + typeRefName(s.declaredType) + "'");
+            error(s.line, s.col, reg_->typeProblem(s.declaredType, currentNs_));
             s.declaredType = TypeRef::prim(TypeRef::Kind::Error);
         } else {
             s.declaredType = c;
@@ -503,7 +525,7 @@ void TypeChecker::checkLet(LetStmt &s) {
             error(s.init->line, s.init->col,
                   "cannot initialize '" + s.name + "' of type " +
                       typeRefName(s.declaredType) + " with a value of type " +
-                      typeRefName(initType));
+                      typeRefName(initType) + nullHint(initType, s.declaredType));
         }
         s.resolvedType = s.declaredType;
     } else {
@@ -629,7 +651,8 @@ void TypeChecker::checkAssign(AssignStmt &s) {
         } else if (!isAssignable(valueType, local->type)) {
             error(s.value->line, s.value->col,
                   "cannot assign a value of type " + typeRefName(valueType) +
-                      " to '" + name->name + "' of type " + typeRefName(local->type));
+                      " to '" + name->name + "' of type " + typeRefName(local->type) +
+                      nullHint(valueType, local->type));
         }
         return;
     }
@@ -712,7 +735,8 @@ void TypeChecker::checkAssign(AssignStmt &s) {
         } else if (!isAssignable(valueType, f->type)) {
             error(s.value->line, s.value->col,
                   "cannot assign a value of type " + typeRefName(valueType) +
-                      " to field '" + mem->member + "' of type " + typeRefName(f->type));
+                      " to field '" + mem->member + "' of type " + typeRefName(f->type) +
+                      nullHint(valueType, f->type));
         }
         return;
     }
@@ -758,7 +782,7 @@ void TypeChecker::checkReturn(ReturnStmt &s) {
         } else if (!isAssignable(vt, currentReturn_)) {
             error(s.value->line, s.value->col, "return type mismatch: expected " +
                                                    typeRefName(currentReturn_) +
-                                                   ", got " + typeRefName(vt));
+                                                   ", got " + typeRefName(vt) + nullHint(vt, currentReturn_));
         }
     } else if (!currentReturn_.isVoid()) {
         error(s.line, s.col, "expected a return value of type " +

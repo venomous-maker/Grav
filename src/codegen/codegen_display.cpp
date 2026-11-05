@@ -19,6 +19,10 @@ static const char* grav_ptr_str(const void* p) {
     if (!p) return "null";
     char b[32]; snprintf(b, sizeof b, "%p", p); return grav_strdup(b);
 }
+/* A `string?`: the text (or quoted, inside a collection), or null. */
+static const char* grav_str_quote(const char* s);
+static inline const char* grav_optstr_show(const char* s) { return s ? grav_str_retain(s) : "null"; }
+static inline const char* grav_optstr_repr(const char* s) { return s ? grav_str_quote(s) : "null"; }
 /* A string in double quotes, with quotes, backslashes and control characters escaped. */
 static const char* grav_str_quote(const char* s) {
     size_t n = 2;
@@ -146,6 +150,11 @@ static const char* grav_fmt_text(const char* text, const char* spec) {
 
 // A C expression for the text of `c` (of type `t`) that the caller owns.
 std::string CodeGen::displayC(const std::string &c, const TypeRef &t, bool nested) const {
+    if (t.isNullable()) {
+        if (t.elem->kind == TypeRef::Kind::String)
+            return std::string(nested ? "grav_optstr_repr(" : "grav_optstr_show(") + c + ")";
+        return displayFn(t) + "(" + c + ")";
+    }
     switch (t.kind) {
         case TypeRef::Kind::String:
             return nested ? "grav_str_quote(" + c + ")" : "grav_str_retain(" + c + ")";
@@ -197,12 +206,17 @@ std::string CodeGen::formatC(const std::string &c, const TypeRef &t, const std::
 
 // The display function for a struct or fixed-array type, generated on first use.
 std::string CodeGen::displayFn(const TypeRef &t) const {
-    std::string key = t.isArray() ? arrayStructName(t) : structName(t.name);
+    std::string key = t.isArray() ? arrayStructName(t) : t.isNullable() ? optStructName(t) : structName(t.name);
     std::string fn = key + "__display";
     if (displayDone_.count(fn)) return fn;
     displayDone_.insert(fn);
     std::string ty = cTy(t);
     displayProtos_ += "static const char* " + fn + "(" + ty + " v);\n";
+    if (t.isNullable()) {
+        displayDefs_ += "static const char* " + fn + "(" + ty + " v) { return v.has ? " +
+                        displayC("v.v", *t.elem, true) + " : \"null\"; }\n";
+        return fn;
+    }
     std::string body = "static const char* " + fn + "(" + ty + " v) {\n    GravText t = {0, 0, 0};\n";
     if (t.isArray()) {
         body += "    grav_text_add(&t, \"[\");\n";

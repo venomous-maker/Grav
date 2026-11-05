@@ -661,6 +661,21 @@ TypeRef Registry::resolveCanonical(const TypeRef &t, const std::string &nsContex
         return TypeRef::array(resolveCanonical(*t.elem, nsContext, ok), t.arrayLen);
     if (t.isFuture())
         return TypeRef::future(resolveCanonical(*t.elem, nsContext, ok));
+    if (t.isNullable()) {
+        // References can already be null: `Dog?` is `Dog`. A struct holding
+        // references cannot be made nullable (yet).
+        TypeRef e = resolveCanonical(*t.elem, nsContext, ok);
+        if (e.isError() || e.isNullable() || e.isPointer() || e.isFunction() || e.isAny() ||
+            (e.isNamed() && (isClass(e.name) || isInterface(e.name))))
+            return e;
+        bool fine = e.isNumeric() || e.kind == TypeRef::Kind::Bool || e.kind == TypeRef::Kind::String ||
+                    (e.isNamed() && (isEnum(e.name) || (isStruct(e.name) && !structHoldsRefs(e.name))));
+        if (!fine) {
+            ok = false;
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        return TypeRef::nullable(std::move(e));
+    }
     if (t.isFunction()) {
         std::vector<TypeRef> ps;
         for (const auto &p : t.fnParams) ps.push_back(resolveCanonical(p, nsContext, ok));
@@ -678,6 +693,40 @@ TypeRef Registry::resolveCanonical(const TypeRef &t, const std::string &nsContex
     auto it = aliases_.find(fq);
     if (it != aliases_.end()) return it->second.target; // already canonical
     return TypeRef::named(fq);
+}
+
+// Why a written type does not resolve: an unknown name, or a `T?` that cannot be.
+std::string Registry::typeProblem(const TypeRef &t, const std::string &nsContext) const {
+    bool ok = true;
+    if (t.isNullable() && t.elem) {
+        TypeRef e = resolveCanonical(*t.elem, nsContext, ok);
+        if (ok)
+            return "'" + typeRefName(t) + "' cannot be nullable: only numbers, bools, strings, enums and "
+                   "structs without strings or objects inside can (classes can already be null)";
+    }
+    for (const TypeRef *x = &t; x; x = x->elem ? x->elem.get() : nullptr) {
+        ok = true;
+        if (x->isNamed() && resolveCanonical(*x, nsContext, ok).isError()) return "unknown type '" + typeRefName(*x) + "'";
+    }
+    return "unknown type '" + typeRefName(t) + "'";
+}
+
+// Does a struct (directly or in nested structs/arrays) hold strings, objects,
+// closures or `any` values? Such a struct cannot be nullable.
+bool Registry::structHoldsRefs(const std::string &fq) const {
+    const StructInfo *si = strct(fq);
+    if (!si) return false;
+    std::function<bool(const TypeRef &)> refs = [&](const TypeRef &t) -> bool {
+        if (t.kind == TypeRef::Kind::String || t.isFunction() || t.isAny() || t.isNullable()) return true;
+        if (t.isArray() && t.elem) return refs(*t.elem);
+        if (t.isNamed()) {
+            if (isClass(t.name) || isInterface(t.name)) return true;
+            if (isStruct(t.name)) return structHoldsRefs(t.name);
+        }
+        return false;
+    };
+    for (const auto &f : si->fields) if (refs(f.type)) return true;
+    return false;
 }
 
 // Expands one alias to its fully-canonical target, resolving nested aliases and
@@ -724,7 +773,7 @@ TypeRef Registry::canonType(const TypeRef &t, const std::string &nsContext,
                             int line, int col) {
     bool ok = true;
     TypeRef r = resolveCanonical(t, nsContext, ok);
-    if (!ok) error(line, col, "unknown type '" + typeRefName(t) + "'");
+    if (!ok) error(line, col, typeProblem(t, nsContext));
     return r;
 }
 

@@ -161,6 +161,8 @@ public:
     // their FQ form and fully expands type aliases (recursing through pointers and
     // arrays). Sets ok=false (and returns Error) if any named part is unknown.
     TypeRef resolveCanonical(const TypeRef &t, const std::string &nsContext, bool &ok) const;
+    bool structHoldsRefs(const std::string &fq) const;
+    std::string typeProblem(const TypeRef &t, const std::string &nsContext) const;
     // Resolve a free function name. Returns "" if not found.
     std::string resolveFunc(const std::string &name, const std::string &nsContext) const;
     // Is `name` (in nsContext) a known namespace prefix?

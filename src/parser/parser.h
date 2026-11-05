@@ -117,6 +117,8 @@ private:
     bool looksLikeTypeArg() const;
     bool looksLikeStructLiteral() const;
     bool looksLikeGenericStatic() const;
+    bool nullableMarkAhead() const;
+    bool typeAfterOperator_ = false; // parsing the type of `x as T` / `x is T`
     bool looksLikeCast() const; // C-style `(Type)value` at the current '('
     std::vector<ExprPtr> parseArguments();
 
