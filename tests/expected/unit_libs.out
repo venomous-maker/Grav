@@ -1,8 +1,9 @@
-running 11 tests
+running 12 tests
   ok    number literals
   ok    json parse and query
   ok    json build, print, round trip
   ok    json errors
+  ok    files: reading a missing file throws
   ok    bytes
   ok    threads and wait groups
   ok    command
@@ -10,4 +11,4 @@ running 11 tests
   ok    http server and client
   ok    websocket echo
   ok    url helpers
-result: 11 passed, 0 failed
+result: 12 passed, 0 failed

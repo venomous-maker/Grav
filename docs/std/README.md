@@ -123,7 +123,7 @@ Across the library:
 - **Misuse throws an exception** from [`exception`](core/exception.md):
   `IndexError` for bad positions, `StateError` for taking from something empty,
   `NotFound` for missing keys in strict lookups, `ValueError` for bad arguments,
-  `IOError` for the outside world. File helpers instead return `false` or `""`.
+  `IOError` for the outside world (file writes instead return `false` when they fail).
 - **Methods that build a collection return a new one** (`keys()`, `toArray()`,
   `filter`, `map`), so changing the result never changes the source.
 - **Most builder-style methods return the object**, so calls chain:

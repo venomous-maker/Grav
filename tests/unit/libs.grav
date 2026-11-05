@@ -37,6 +37,20 @@ test "json errors" {
     assert(Json.tryParse("[1,") == null)
 }
 
+test "files: reading a missing file throws" {
+    let path = Path.combine(Dir.temp(), "grav-unit-missing.txt")
+    let f = new File(path)
+    f.delete()
+    let msg = ""
+    try { f.read() } catch (e: IOError) { msg = e.message() }
+    assertEq(Str.startsWith(msg, "cannot read '"), true)
+    assertEq(f.readOr("fallback"), "fallback")
+    f.write("a\nb\n")
+    assertEq(str(f.readLines()), "[\"a\", \"b\"]")
+    assertEq(f.readBinary().length, 4)
+    f.delete()
+}
+
 test "bytes" {
     let b = new Bytes()
     b.appendByte(0x81).appendString("hi").appendUint(258, 2)

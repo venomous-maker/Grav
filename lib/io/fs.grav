@@ -6,9 +6,11 @@
 //   for (name in Dir.list(".")) { print(name) }
 //
 // A File is bound to a path; the OS file is opened per operation, so there's no
-// handle to close. Writes report success as a bool. Text helpers work on
+// handle to close. Reads throw IOError when the file cannot be read (readOr gives a
+// fallback instead); writes report success as a bool. Text helpers work on
 // `string`; readBinary/writeBinary move raw `binary` blobs (NUL-safe).
 
+import "../core/exception.grav"
 import "../text/string.grav"
 import "../collections/array.grav"
 
@@ -32,11 +34,12 @@ namespace std.io {
             if (n < cap) break;
             cap *= 2; b = (unsigned char*)realloc(b, cap + 1);
         }
+        if (ferror(f)) { int e = errno; fclose(f); free(b); errno = e; return out; }   /* e.g. a directory */
         fclose(f); b[n] = 0; out.data = b; out.len = (long long)n; return out;
     }
-    static const char* grav_file_read(const char* path) {
+    static const char* grav_file_read(const char* path, bool* ok) {
         GravBytes b = grav_file_read_bytes(path);
-        if (!b.data) return "";
+        if (!b.data) { *ok = 0; return ""; }
         char* r = grav_str_new((size_t)b.len);      /* a counted copy: freed with its last reference */
         memcpy(r, b.data, (size_t)b.len + 1);
         free(b.data);
@@ -97,8 +100,23 @@ namespace std.io {
         // Last modification time (unix seconds), or -1.
         public fn modified() -> long { return %{ grav_file_mtime(self->path) %} as long; }
 
-        // Text I/O. read() returns "" when the file cannot be read.
-        public fn read() -> string { return %{ grav_file_read(self->path) %} as string; }
+        // The whole file as text; IOError when it cannot be read (missing, a directory, no permission).
+        public fn read() -> string {
+            let ok = true
+            let text = %{ grav_file_read(self->path, &ok) %} as string
+            if (!ok) { self.readFailed() }
+            return text
+        }
+        // The whole file as text, or `fallback` when it cannot be read.
+        public fn readOr(fallback: string) -> string {
+            let ok = true
+            let text = %{ grav_file_read(self->path, &ok) %} as string
+            return ok ? text : fallback
+        }
+        private fn readFailed() {
+            let why = %{ strerror(errno) %} as string
+            throw new IOError("cannot read '${self.path}': ${why}")
+        }
         // Replaces the file's contents with `data`; whether it worked.
         public fn write(data: string) -> bool {
             return %{ grav_file_write_bytes(self->path, (const unsigned char*)data, (long long)strlen(data), "wb") %} as bool;
@@ -111,7 +129,7 @@ namespace std.io {
         public fn writeLine(line: string) -> bool { return self.append(line + "\n"); }
         // Adds a line (with "\n") at the end of the file; whether it worked.
         public fn appendLine(line: string) -> bool { return self.append(line + "\n"); }
-        // Lines of the file (handles \n and \r\n).
+        // Lines of the file (handles \n and \r\n); IOError when it cannot be read.
         public fn readLines() -> Array<string> { return Str.lines(self.read()); }
         // Replaces the contents with the lines joined by "\n"; whether it worked.
         public fn writeLines(lines: Array<string>) -> bool {
@@ -119,8 +137,12 @@ namespace std.io {
             return self.write(lines.isEmpty() ? body : body + "\n");
         }
 
-        // Whole-file binary I/O (NUL-safe).
-        public fn readBinary() -> binary { return %{ grav_file_read_bytes(self->path) %} as binary; }
+        // The whole file as raw bytes (NUL-safe); IOError when it cannot be read.
+        public fn readBinary() -> binary {
+            let data = %{ grav_file_read_bytes(self->path) %} as binary
+            if (%{ data.data == 0 %} as bool) { self.readFailed() }
+            return data
+        }
         // Replaces the file's contents with raw bytes; whether it worked.
         public fn writeBinary(data: binary) -> bool {
             return %{ grav_file_write_bytes(self->path, data.data, data.len, "wb") %} as bool;

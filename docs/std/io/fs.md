@@ -3,10 +3,10 @@
 `import "std/io"` (included in `import "std"`) · namespace `std.io`
 
 `File` reads and writes files; `Dir` creates, lists and removes directories.
-Both report failure through their return values rather than exceptions:
-writing methods return `false` when they fail, `read()` returns `""` when the
-file cannot be read, and `size()` returns -1 for a missing file. Check `exists()`
-first when the difference between "empty" and "missing" matters.
+Reading a file that cannot be read (it is missing, a directory, or not
+permitted) throws an `IOError` that says why; `readOr(fallback)` returns the
+fallback instead. Writing methods return `false` when they fail, and `size()`
+returns -1 for a missing file.
 
 ```grav
 import "std"
@@ -31,7 +31,12 @@ fn main() {
     new File(copy).delete()
     f.delete()
     print(Dir.remove(dir))
-    print(new File(copy).read() == "")
+    print(new File(copy).readOr("(gone)"))
+    try {
+        new File(copy).read()
+    } catch (e: IOError) {
+        print("read failed: ${Str.contains(e.message(), "No such file")}")
+    }
 }
 ```
 
@@ -45,7 +50,8 @@ first
 second
 ["copy.txt", "notes.txt"]
 true
-true
+(gone)
+read failed: true
 ```
 
 - `read`/`write`/`append` work with text; `readBinary`/`writeBinary` with raw
@@ -73,14 +79,15 @@ true
 - `fn exists() -> bool` — Whether a regular file exists at the path.
 - `fn size() -> long` — Size in bytes (-1 if it does not exist); 64-bit, so large files are fine.
 - `fn modified() -> long` — Last modification time (unix seconds), or -1.
-- `fn read() -> string` — Text I/O. read() returns "" when the file cannot be read.
+- `fn read() -> string` — The whole file as text; IOError when it cannot be read (missing, a directory, no permission).
+- `fn readOr(fallback: string) -> string` — The whole file as text, or `fallback` when it cannot be read.
 - `fn write(data: string) -> bool` — Replaces the file's contents with `data`; whether it worked.
 - `fn append(data: string) -> bool` — Adds `data` at the end of the file (creating it); whether it worked.
 - `fn writeLine(line: string) -> bool` — Adds a line (with "\n") at the end of the file; whether it worked.
 - `fn appendLine(line: string) -> bool` — Adds a line (with "\n") at the end of the file; whether it worked.
-- `fn readLines() -> Array<string>` — Lines of the file (handles \n and \r\n).
+- `fn readLines() -> Array<string>` — Lines of the file (handles \n and \r\n); IOError when it cannot be read.
 - `fn writeLines(lines: Array<string>) -> bool` — Replaces the contents with the lines joined by "\n"; whether it worked.
-- `fn readBinary() -> binary` — Whole-file binary I/O (NUL-safe).
+- `fn readBinary() -> binary` — The whole file as raw bytes (NUL-safe); IOError when it cannot be read.
 - `fn writeBinary(data: binary) -> bool` — Replaces the file's contents with raw bytes; whether it worked.
 - `fn appendBinary(data: binary) -> bool` — Adds raw bytes at the end of the file; whether it worked.
 - `fn delete() -> bool` — Deletes the file; whether it worked.
