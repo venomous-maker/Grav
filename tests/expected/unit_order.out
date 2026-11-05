@@ -1,0 +1,8 @@
+running 6 tests
+  ok    operators and calls
+  ok    constructors, literals and indexing
+  ok    assignment targets come before values
+  ok    conditions, switch, throw and for-in
+  ok    parts that run only sometimes
+  ok    ?? evaluates its left side once
+result: 6 passed, 0 failed

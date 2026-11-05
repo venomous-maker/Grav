@@ -1,0 +1,110 @@
+// Evaluation order: operands and arguments run left to right everywhere, also
+// where C leaves the order open (and whichever C compiler builds the program).
+import "std"
+
+class Trace { static s: string = "" }
+
+// Records `tag`, then gives back `v`.
+fn at(tag: string, v: int) -> int { Trace.s = Trace.s + tag; return v }
+fn diff(x: int, y: int) -> int { return x - y }
+fn pair(a: int, b: int) -> Array<int> { let r = new Array<int>(); r.push(a); r.push(b); return r }
+
+// The order recorded since the last call.
+fn taken() -> string { let s = Trace.s; Trace.s = ""; return s }
+
+interface Shape { fn area() -> int }
+class Square implements Shape {
+    public side: int
+    public items: Array<int>
+    constructor(side: int) { self.side = side; self.items = new Array<int>() }
+    public fn area() -> int { return self.side * self.side }
+    public fn add(x: int, y: int) -> int { return x + y }
+    public fn traced() -> Square { Trace.s = Trace.s + "r"; return self }
+}
+class Made { static count: int = 0 }
+fn made(n: int) -> Square { Made.count += 1; return n == 0 ? null : new Square(n) }
+class Failure extends Exception { constructor(m: string, code: int) { super(m) } }
+struct Point { x: int  y: int }
+
+test "operators and calls" {
+    let r = at("a", 1) + at("b", 2) * at("c", 3)
+    assertEq(taken(), "abc")
+    r = -at("a", 1) + at("b", 2)
+    assertEq(taken(), "ab")
+    r = at("a", 1) + diff(at("b", 1), at("c", 2))
+    assertEq(taken(), "abc")
+    r = diff(at("a", 1) + at("b", 2), at("c", 3))
+    assertEq(taken(), "abc")
+    let s = new Square(1)
+    r = s.traced().add(at("a", 1), at("b", 2))
+    assertEq(taken(), "rab")
+    assertEq(r, 3)
+}
+
+test "constructors, literals and indexing" {
+    let s = new Square(at("a", 1) + at("b", 2))
+    assertEq(taken(), "ab")
+    let xs = [at("a", 1), at("b", 2), at("c", 3)]
+    assertEq(taken(), "abc")
+    let p = Point { x: at("a", 1), y: at("b", 2) }
+    assertEq(taken(), "ab")
+    let r = xs[at("a", 0)] + xs[at("b", 1)]
+    assertEq(taken(), "ab")
+    assertEq(r + p.x + s.side, 7)
+}
+
+test "assignment targets come before values" {
+    let fixed: int[2] = [0, 0]
+    fixed[at("a", 0)] = at("b", 5)
+    assertEq(taken(), "ab")
+    let s = new Square(1)
+    s.items.push(0)
+    s.items[at("a", 0)] = at("b", 7)
+    assertEq(taken(), "ab")
+    assertEq(fixed[0] + s.items[0], 12)
+}
+
+test "conditions, switch, throw and for-in" {
+    if (diff(at("a", 1), at("b", 2)) < 0) { at("c", 0) }
+    assertEq(taken(), "abc")
+    let n = 0
+    while (n < 2 && diff(at("a", 1), at("b", 2)) < 0) { n += 1 }
+    assertEq(taken(), "abab")
+    switch (diff(at("a", 1), at("b", 2))) { case -1: n = 1 default: n = 2 }
+    assertEq(taken(), "ab")
+    try { throw new Failure("x", diff(at("a", 1), at("b", 2))) } catch (e: Failure) {}
+    assertEq(taken(), "ab")
+    for (x in pair(at("a", 1), at("b", 2))) { n += x }
+    assertEq(taken(), "ab")
+    assertEq(n, 4)
+}
+
+test "parts that run only sometimes" {
+    let s = new Square(1)
+    let none: Square = null
+    let r = s?.add(at("a", 1), at("b", 2))
+    assertEq(taken(), "ab")
+    r = s.traced()?.add(at("a", 1), at("b", 2))
+    assertEq(taken(), "rab")
+    r = none?.add(at("a", 1), at("b", 2))
+    assertEq(taken(), "")
+    r = r > 100 ? 0 : diff(at("a", 1), at("b", 2))
+    assertEq(taken(), "ab")
+    let ok = r < 100 && diff(at("a", 1), at("b", 2)) < 0
+    assertEq(taken(), "ab")
+    let other = none ?? new Square(diff(at("a", 3), at("b", 1)))
+    assertEq(taken(), "ab")
+    let f = fn(z: int) => diff(at("a", z), at("b", z))
+    assertEq(f(1), 0)
+    assertEq(taken(), "ab")
+    assert(ok)
+    assertEq(other.side, 2)
+}
+
+test "?? evaluates its left side once" {
+    let fallback: Shape = new Square(1)
+    let a: Shape = made(3) ?? fallback
+    let b: Shape = made(0) ?? fallback
+    assertEq(a.area() + b.area(), 10)
+    assertEq(Made.count, 2)
+}
