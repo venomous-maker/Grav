@@ -1,6 +1,9 @@
 // lib/core/math.grav — math functions and constants (C <math.h>; libm is linked
 // automatically). Float functions take and return `float` (64-bit); min/max/
 // abs/clamp/sign also have integer overloads, so `Math.max(3, 7)` stays an int.
+// Stats computes summaries (mean, median, standard deviation, ...) of arrays.
+import "exception.grav"
+import "../collections/array.grav"
 
 namespace std.core {
 
@@ -10,6 +13,10 @@ namespace std.core {
         static readonly PI: float = 3.141592653589793
         static readonly E: float = 2.718281828459045
         static readonly TAU: float = 6.283185307179586
+        static readonly SQRT2: float = 1.4142135623730951
+        static readonly LN2: float = 0.6931471805599453
+        static readonly LN10: float = 2.302585092994046
+        static readonly PHI: float = 1.618033988749895
         // π (3.14159...).
         static fn pi() -> float { return Math.PI; }
         // Euler's number e (2.71828...).
@@ -134,6 +141,208 @@ namespace std.core {
             for (i in 2..=n) { r *= i; }
             return r;
         }
+
+        // ── more ───────────────────────────────────────────────────────────────
+        // Positive infinity.
+        static fn infinity() -> float { return %{ (double)INFINITY %} as float; }
+        // A NaN ("not a number") value.
+        static fn nan() -> float { return %{ (double)NAN %} as float; }
+        // The logarithm of x in the given base: Math.logBase(8.0, 2.0) == 3.
+        static fn logBase(x: float, base: float) -> float { return %{ log(x) / log(base) %} as float; }
+        // The n-th root of x: Math.root(27.0, 3) == 3.
+        static fn root(x: float, n: int) -> float {
+            if (x < 0.0 && n % 2 == 1) { return -Math.pow(-x, 1.0 / n); }
+            return Math.pow(x, 1.0 / n);
+        }
+        // The remainder of x / y with the sign of x (C fmod).
+        static fn fmod(x: float, y: float) -> float { return %{ fmod(x, y) %} as float; }
+        // `base` to a whole power, exactly: Math.ipow(3, 4) == 81 (overflow is not checked).
+        static fn ipow(base: long, exp: int) -> long {
+            if (exp < 0) { throw new ValueError("Math.ipow: negative exponent ${exp}"); }
+            let r: long = 1;
+            let b = base;
+            let e = exp;
+            while (e > 0) { if (e % 2 == 1) { r *= b; } b *= b; e /= 2; }
+            return r;
+        }
+        // The integer square root: the largest r with r*r <= n (ValueError for negative n).
+        static fn isqrt(n: long) -> long {
+            if (n < 0) { throw new ValueError("Math.isqrt of a negative number"); }
+            let r = %{ (long long)sqrt((double)n) %} as long;
+            while (r * r > n) { r -= 1; }
+            while ((r + 1) * (r + 1) <= n) { r += 1; }
+            return r;
+        }
+        // Division rounding toward negative infinity: Math.floorDiv(-7, 2) == -4.
+        static fn floorDiv(a: long, b: long) -> long {
+            let q = a / b;
+            if ((a % b != 0) && ((a < 0) != (b < 0))) { q -= 1; }
+            return q;
+        }
+        // The remainder with the sign of b, so it is never negative for positive b:
+        // Math.floorMod(-7, 3) == 2 (unlike -7 % 3 == -1).
+        static fn floorMod(a: long, b: long) -> long { return a - Math.floorDiv(a, b) * b; }
+        // The point a fraction t of the way from a to b: lerp(0, 10, 0.25) == 2.5.
+        static fn lerp(a: float, b: float, t: float) -> float { return a + (b - a) * t; }
+        // x scaled from the range inLo..inHi to outLo..outHi.
+        static fn mapRange(x: float, inLo: float, inHi: float, outLo: float, outHi: float) -> float {
+            return outLo + (x - inLo) * (outHi - outLo) / (inHi - inLo);
+        }
+        // Whether a and b differ by at most `tolerance` (for comparing computed floats).
+        static fn isClose(a: float, b: float, tolerance: float) -> bool {
+            let d = a - b;
+            return (d < 0.0 ? -d : d) <= tolerance;
+        }
+        // Whether n is a power of two (1, 2, 4, 8, ...).
+        static fn isPowerOfTwo(n: long) -> bool { return n > 0 && (n & (n - 1)) == 0; }
+        // The smallest power of two >= n (1 for n <= 1).
+        static fn nextPowerOfTwo(n: long) -> long {
+            let p: long = 1;
+            while (p < n) { p *= 2; }
+            return p;
+        }
+        // The number of ways to choose k items from n ("n choose k"); 0 when k is out of range.
+        static fn binomial(n: int, k: int) -> long {
+            if (k < 0 || k > n) { return 0; }
+            let kk = k > n - k ? n - k : k;
+            let r: long = 1;
+            for (i in 1..=kk) { r = r * (n - kk + i) / i; }
+            return r;
+        }
+        // The n-th Fibonacci number (fib(0) == 0, fib(1) == 1; overflows past fib(92)).
+        static fn fib(n: int) -> long {
+            let a: long = 0;
+            let b: long = 1;
+            for (i in 0..n) { let t = a + b; a = b; b = t; }
+            return a;
+        }
+        // The prime factors of n in increasing order, with repeats: factors(12) == [2, 2, 3].
+        static fn primeFactors(n: long) -> Array<long> {
+            let out = new Array<long>();
+            let m = n < 0 ? -n : n;
+            let d: long = 2;
+            while (d * d <= m) {
+                while (m % d == 0) { out.push(d); m /= d; }
+                d += d == 2 ? 1 : 2;
+            }
+            if (m > 1) { out.push(m); }
+            return out;
+        }
     }
 
+
+    // Summaries of a list of numbers. Every function takes an Array<float> or an
+    // Array<int>; an empty array throws ValueError (except sum, which is 0).
+    class Stats {
+        // The total.
+        static fn sum(xs: Array<float>) -> float { let t = 0.0; for (x in xs) { t += x; } return t; }
+        // The total.
+        static fn sum(xs: Array<int>) -> long { let t: long = 0; for (x in xs) { t += x; } return t; }
+        // The arithmetic mean (average).
+        static fn mean(xs: Array<float>) -> float { Stats.need(xs.size()); return Stats.sum(xs) / xs.size(); }
+        // The arithmetic mean (average).
+        static fn mean(xs: Array<int>) -> float { return Stats.mean(Stats.floats(xs)); }
+        // The middle value of the sorted numbers (the mean of the two middle ones for an even count).
+        static fn median(xs: Array<float>) -> float { return Stats.percentile(xs, 50.0); }
+        // The middle value of the sorted numbers.
+        static fn median(xs: Array<int>) -> float { return Stats.median(Stats.floats(xs)); }
+        // The smallest value.
+        static fn min(xs: Array<float>) -> float {
+            Stats.need(xs.size());
+            let m = xs[0];
+            for (x in xs) { if (x < m) { m = x; } }
+            return m;
+        }
+        // The smallest value.
+        static fn min(xs: Array<int>) -> int {
+            Stats.need(xs.size());
+            let m = xs[0];
+            for (x in xs) { if (x < m) { m = x; } }
+            return m;
+        }
+        // The largest value.
+        static fn max(xs: Array<float>) -> float {
+            Stats.need(xs.size());
+            let m = xs[0];
+            for (x in xs) { if (x > m) { m = x; } }
+            return m;
+        }
+        // The largest value.
+        static fn max(xs: Array<int>) -> int {
+            Stats.need(xs.size());
+            let m = xs[0];
+            for (x in xs) { if (x > m) { m = x; } }
+            return m;
+        }
+        // The population variance: the mean of the squared distances from the mean.
+        static fn variance(xs: Array<float>) -> float {
+            let m = Stats.mean(xs);
+            let t = 0.0;
+            for (x in xs) { t += (x - m) * (x - m); }
+            return t / xs.size();
+        }
+        // The population variance.
+        static fn variance(xs: Array<int>) -> float { return Stats.variance(Stats.floats(xs)); }
+        // The sample variance (dividing by n - 1), for estimating from a sample; needs 2 values.
+        static fn sampleVariance(xs: Array<float>) -> float {
+            if (xs.size() < 2) { throw new ValueError("Stats.sampleVariance needs at least 2 values"); }
+            return Stats.variance(xs) * xs.size() / (xs.size() - 1);
+        }
+        // The population standard deviation (the square root of the variance).
+        static fn stddev(xs: Array<float>) -> float { return Math.sqrt(Stats.variance(xs)); }
+        // The population standard deviation.
+        static fn stddev(xs: Array<int>) -> float { return Math.sqrt(Stats.variance(xs)); }
+        // The p-th percentile (0..100), interpolating between neighbours: percentile(xs, 90.0).
+        static fn percentile(xs: Array<float>, p: float) -> float {
+            Stats.need(xs.size());
+            if (p < 0.0 || p > 100.0) { throw new ValueError("Stats.percentile: p must be in 0..100, got ${p}"); }
+            let s = xs.copy();
+            s.sortBy(fn(a, b) => a < b ? -1 : (a > b ? 1 : 0));
+            let pos = p / 100.0 * (s.size() - 1);
+            let lo = pos as int;
+            if (lo + 1 >= s.size()) { return s[lo]; }
+            return s[lo] + (s[lo + 1] - s[lo]) * (pos - lo);
+        }
+        // The p-th percentile (0..100).
+        static fn percentile(xs: Array<int>, p: float) -> float { return Stats.percentile(Stats.floats(xs), p); }
+        // The most common value (the smallest one on a tie).
+        static fn mode(xs: Array<int>) -> int {
+            Stats.need(xs.size());
+            let s = xs.copy();
+            s.sortBy(fn(a, b) => a - b);
+            let best = s[0];
+            let bestRun = 0;
+            let i = 0;
+            while (i < s.size()) {
+                let j = i;
+                while (j < s.size() && s[j] == s[i]) { j += 1; }
+                if (j - i > bestRun) { bestRun = j - i; best = s[i]; }
+                i = j;
+            }
+            return best;
+        }
+        // The Pearson correlation of two equally long lists (-1..1).
+        static fn correlation(xs: Array<float>, ys: Array<float>) -> float {
+            if (xs.size() != ys.size() || xs.size() < 2) {
+                throw new ValueError("Stats.correlation needs two lists of the same length, at least 2");
+            }
+            let mx = Stats.mean(xs);
+            let my = Stats.mean(ys);
+            let sxy = 0.0;
+            let sxx = 0.0;
+            let syy = 0.0;
+            for (i in 0..xs.size()) {
+                sxy += (xs[i] - mx) * (ys[i] - my);
+                sxx += (xs[i] - mx) * (xs[i] - mx);
+                syy += (ys[i] - my) * (ys[i] - my);
+            }
+            return sxy / Math.sqrt(sxx * syy);
+        }
+        private static fn need(n: int) { if (n == 0) { throw new ValueError("Stats: the list is empty"); } }
+        private static fn floats(xs: Array<int>) -> Array<float> {
+            let out = new Array<float>();
+            for (x in xs) { out.push(x); }
+            return out;
+        }
+    }
 }
