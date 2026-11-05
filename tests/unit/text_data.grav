@@ -99,3 +99,59 @@ test "CSV" {
     try { Csv.parse("\"open") } catch (e: ValueError) { failed = true }
     assertEq(failed, true)
 }
+
+test "big strings keep the string allocator working" {
+    let sb = new StringBuilder()
+    for (i in 0..1000000) { sb.append("word ") }
+    let text = sb.toString()
+    let back = Base64.decode(Base64.encode(text))
+    let fresh = text[0..100]
+    assertEq(%{ grav_shdr(back) != 0 && grav_shdr(fresh) != 0 %} as bool, true)
+    assertEq(back.length, 5000000)
+}
+
+test "string length and indexing stay correct" {
+    let s = "héllo" + " world"
+    assertEq(s.length, 12)
+    assertEq(s[11], 'd')
+    let msg = ""
+    try { print(s[12]) } catch (e: IndexError) { msg = e.message() }
+    assertEq(msg, "string index 12 out of range (length 12)")
+    let chars = new Array<string>()
+    for (ch in "a\xffé") { chars.push(ch) }
+    assertEq(chars.size(), 3)
+    assertEq(chars[2], "é")
+}
+
+test "large inputs stay linear" {
+    let sb = new StringBuilder()
+    for (i in 0..300000) { sb.append("w").appendInt(i % 10).append(i % 7 == 0 ? "\n" : " ") }
+    let text = sb.toString()
+    let sw = new Stopwatch()
+    assertEq(Str.split(text, " ").size() > 250000, true)
+    assertEq(Str.words(text).size(), 300000)
+    assertEq(Str.lines(text).size(), 42858)
+    assertEq(new Regex("w[0-9]").count(text), 300000)
+    assertEq(Utf8.count(text), text.length)
+    let n = 0
+    for (i in 0..text.length) { if (text[i] == '\n') { n += 1 } }
+    assertEq(n, 42858)
+    assertEq(Csv.parse(Str.repeat("a,\"b, c\",d\n", 30000)).size(), 30000)
+    assertEq(sw.elapsedMs() < 5000, true, "took ${sw.elapsedMs()} ms")
+}
+
+test "sorting numbers and strings" {
+    let xs: Array<int> = [5, -1, 3, 3, 0]
+    Sort.sort(xs)
+    assertEq(str(xs), "[-1, 0, 3, 3, 5]")
+    Sort.sortDescending(xs)
+    assertEq(str(xs), "[5, 3, 3, 0, -1]")
+    let fs: Array<float> = [2.5, -1.0, 0.5]
+    Sort.sort(fs)
+    assertEq(str(fs), "[-1, 0.5, 2.5]")
+    let ss: Array<string> = ["pear", "Apple", "fig"]
+    Sort.sort(ss)
+    assertEq(str(ss), "[\"Apple\", \"fig\", \"pear\"]")
+    Sort.sortDescending(ss)
+    assertEq(ss.first(), "pear")
+}
