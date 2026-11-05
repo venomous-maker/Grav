@@ -18,6 +18,8 @@
 import "../collections/array.grav"
 import "../core/panic.grav"
 import "../io/io.grav"
+import "../io/fs.grav"
+import "../io/path.grav"
 import "../collections/hashmap.grav"
 import "../text/string.grav"
 import "../text/convert.grav"
@@ -80,6 +82,14 @@ namespace std.net {
         // Decode %XX escapes and '+' (as a space).
         static fn decode(s: string) -> string { return %{ grav_url_decode(s) %} as string; }
         // "a=1&b=two" -> {a: "1", b: "two"} (decoded).
+        // "a=1&b=x%20y": the fields URL-encoded and joined with &, in key order.
+        static fn buildQuery(fields: HashMap<string, string>) -> string {
+            let keys = fields.keys();
+            keys.sortBy(fn(a, b) => Str.compare(a, b));
+            let parts = new Array<string>();
+            for (k in keys) { parts.push(Url.encode(k) + "=" + Url.encode(fields[k])); }
+            return Str.join(parts, "&");
+        }
         static fn parseQuery(q: string) -> HashMap<string, string> {
             let out = new HashMap<string, string>();
             if (q == "") { return out; }
@@ -221,6 +231,17 @@ namespace std.net {
         }
         // Form fields of an application/x-www-form-urlencoded body.
         public fn form() -> HashMap<string, string> { return Url.parseQuery(self.body()); }
+        // The cookies the client sent (from the Cookie header).
+        public fn cookies() -> HashMap<string, string> {
+            let out = new HashMap<string, string>();
+            for (part in Str.split(self.header("Cookie"), ";")) {
+                let eq = Str.indexOf(part, "=");
+                if (eq > 0) { out[Str.trim(part[..eq])] = Str.trim(part[eq + 1..]); }
+            }
+            return out;
+        }
+        // The value of cookie `name` ("" when the client did not send it).
+        public fn cookie(name: string) -> string { return self.cookies().getOr(name, ""); }
         // The client wants the connection kept open after this request.
         public fn keepAlive() -> bool {
             let c = Str.lower(self.headers.get("Connection"));
@@ -272,8 +293,36 @@ namespace std.net {
             r.headers.set("Location", location);
             return r;
         }
+        // A 201 Created response with a JSON body.
+        static fn created(value: JsonValue) -> HttpResponse { return HttpResponse.json(value).withStatus(201); }
+        // A 204 No Content response (no body).
+        static fn noContent() -> HttpResponse { return new HttpResponse(204); }
+        // A 200 response with raw bytes and the given Content-Type.
+        static fn bytes(contentType: string, data: Bytes) -> HttpResponse {
+            let r = new HttpResponse(200);
+            r.headers.set("Content-Type", contentType);
+            r.bodyBytes.append(data);
+            return r;
+        }
+        // A 200 response with the file at `path` (Content-Type from its extension),
+        // or 404 when it cannot be read.
+        static fn file(path: string) -> HttpResponse {
+            if (!new File(path).exists()) { return HttpResponse.notFound(); }
+            let data = Bytes.fromBinary(new File(path).readBinary());
+            return HttpResponse.bytes(Http.contentType(path), data);
+        }
         // Chainable tweaks.
         public fn header(name: string, value: string) -> HttpResponse { self.headers.set(name, value); return self; }
+        // Adds a Set-Cookie header (Path=/, HttpOnly, SameSite=Lax) for a session cookie.
+        public fn setCookie(name: string, value: string) -> HttpResponse {
+            self.headers.add("Set-Cookie", "${name}=${value}; Path=/; HttpOnly; SameSite=Lax");
+            return self;
+        }
+        // Adds a cookie that lasts `maxAgeSeconds` (0 deletes it in the browser).
+        public fn setCookie(name: string, value: string, maxAgeSeconds: int) -> HttpResponse {
+            self.headers.add("Set-Cookie", "${name}=${value}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; SameSite=Lax");
+            return self;
+        }
         // Changes the status code; returns this response.
         public fn withStatus(code: int) -> HttpResponse { self.status = code; return self; }
 
@@ -323,6 +372,27 @@ namespace std.net {
 
     // Reading and writing HTTP messages on a TcpStream (shared by server and client).
     class Http {
+        // The Content-Type for a file name, from its extension ("application/octet-stream"
+        // when unknown).
+        static fn contentType(path: string) -> string {
+            let ext = Str.lower(Path.extension(path));
+            if (ext == ".html" || ext == ".htm") { return "text/html; charset=utf-8"; }
+            if (ext == ".css") { return "text/css; charset=utf-8"; }
+            if (ext == ".js" || ext == ".mjs") { return "text/javascript; charset=utf-8"; }
+            if (ext == ".json") { return "application/json"; }
+            if (ext == ".txt" || ext == ".md" || ext == ".grav") { return "text/plain; charset=utf-8"; }
+            if (ext == ".svg") { return "image/svg+xml"; }
+            if (ext == ".png") { return "image/png"; }
+            if (ext == ".jpg" || ext == ".jpeg") { return "image/jpeg"; }
+            if (ext == ".gif") { return "image/gif"; }
+            if (ext == ".webp") { return "image/webp"; }
+            if (ext == ".ico") { return "image/x-icon"; }
+            if (ext == ".wasm") { return "application/wasm"; }
+            if (ext == ".pdf") { return "application/pdf"; }
+            if (ext == ".xml") { return "application/xml"; }
+            if (ext == ".csv") { return "text/csv; charset=utf-8"; }
+            return "application/octet-stream";
+        }
         // Headers up to the blank line. Throws NetError on malformed input.
         static fn readHeaders(conn: TcpStream, into: Headers) {
             let count = 0;
@@ -499,6 +569,19 @@ namespace std.net {
         }
         // Runs before routing; return a response to answer immediately, or null to continue.
         public fn use(f: fn(HttpRequest) -> HttpResponse) -> HttpServer { self.middleware.push(f); return self; }
+        // Serves the files under `dir` at URLs starting with `prefix` ("/static" maps
+        // /static/css/site.css to dir/css/site.css; a folder serves its index.html).
+        // Paths that try to leave `dir` (with "..") get 404.
+        public fn serveDir(prefix: string, dir: string) -> HttpServer {
+            let base = Str.endsWith(prefix, "/") ? prefix : prefix + "/";
+            return self.get(base + "*", fn(req: HttpRequest) -> HttpResponse {
+                let rest = req.param("*");
+                for (seg in Str.split(rest, "/")) { if (seg == "..") { return HttpResponse.notFound(); } }
+                let path = rest == "" ? dir : Path.combine(dir, rest);
+                if (Dir.exists(path)) { path = Path.combine(path, "index.html"); }
+                return HttpResponse.file(path);
+            });
+        }
         // Print one line per request ("GET /path -> 200").
         public fn logRequests(on: bool) -> HttpServer { self.log = on; return self; }
         // Whether a panic in a handler is answered with a 500 instead of stopping the server (on by default).
@@ -673,6 +756,12 @@ namespace std.net {
 
         // Sends a GET request.
         public fn get(url: string) -> HttpResponse { return self.request("GET", url, "", ""); }
+        // Sends a GET request and parses the body as JSON; NetError for a non-2xx status.
+        public fn getJson(url: string) -> JsonValue {
+            let r = self.get(url);
+            if (!r.ok()) { throw new NetError("GET ${url}: ${r.status} ${HttpResponse.reason(r.status)}"); }
+            return r.json();
+        }
         // Sends a DELETE request.
         public fn delete(url: string) -> HttpResponse { return self.request("DELETE", url, "", ""); }
         // Sends a POST request with a body of the given Content-Type.
