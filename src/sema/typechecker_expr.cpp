@@ -604,6 +604,67 @@ TypeRef TypeChecker::checkSizeof(SizeofExpr &e) {
     return TypeRef::prim(TypeRef::Kind::Int);
 }
 
+// `[a, b]` where a collection class is expected (`let s: HashSet<int> = [1, 2]`):
+// `(fn() -> C { let c = new C()  c.add(a)  c.add(b)  return c })()`, with the
+// class's add / push / enqueue / pushBack method.
+TypeRef TypeChecker::buildCollection(ArrayLiteralExpr &e, const TypeRef &type) {
+    const MethodInfo *adder = nullptr;
+    for (const char *name : {"add", "push", "enqueue", "pushBack"}) {
+        for (const MethodInfo *m : reg_->findMethodsBySource(type.name, name))
+            if (!m->isStatic && m->paramTypes.size() == 1) { adder = m; break; }
+        if (adder) break;
+    }
+    const ClassInfo *ci = reg_->cls(type.name);
+    bool plainNew = ci && (ci->ctors.empty() || std::any_of(ci->ctors.begin(), ci->ctors.end(),
+                                                             [](const ConstructorDecl *c) { return c->params.empty(); }));
+    if (!adder || !plainNew) {
+        error(e.line, e.col, "a [...] literal can build " + prettyNames(type.name) +
+                                 " only if it has a constructor without parameters and add/push");
+        for (auto &el : e.elements) checkExpr(*el);
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    int line = e.line, col = e.col;
+    std::string var = "collection__" + std::to_string(matchCounter_++);
+    auto name = [&] { auto n = std::make_unique<NameExpr>(); n->name = var; n->line = line; n->col = col; return n; };
+    auto lam = std::make_unique<LambdaExpr>();
+    lam->line = line; lam->col = col;
+    lam->hasReturnType = true;
+    lam->returnType = type;
+    auto let = std::make_unique<LetStmt>();
+    let->line = line; let->col = col;
+    let->name = var;
+    let->isConst = true;
+    auto made = std::make_unique<NewExpr>();
+    made->line = line; made->col = col;
+    made->className = type.name;
+    let->init = std::move(made);
+    lam->body.statements.push_back(std::move(let));
+    for (auto &el : e.elements) {
+        auto callee = std::make_unique<MemberExpr>();
+        callee->line = el->line; callee->col = el->col;
+        callee->object = name();
+        callee->member = adder->sourceName.empty() ? adder->name : adder->sourceName;
+        auto call = std::make_unique<CallExpr>();
+        call->line = el->line; call->col = el->col;
+        call->callee = std::move(callee);
+        call->args.push_back(std::move(el));
+        auto st = std::make_unique<ExprStmt>();
+        st->line = line; st->col = col;
+        st->expr = std::move(call);
+        lam->body.statements.push_back(std::move(st));
+    }
+    e.elements.clear();
+    auto ret = std::make_unique<ReturnStmt>();
+    ret->line = line; ret->col = col;
+    ret->value = name();
+    lam->body.statements.push_back(std::move(ret));
+    auto call = std::make_unique<CallExpr>();
+    call->line = line; call->col = col;
+    call->callee = std::move(lam);
+    e.built = std::move(call);
+    return checkExpr(*e.built);
+}
+
 // The nearest class both `a` and `b` are (or derive from), if they share one.
 std::optional<TypeRef> TypeChecker::commonBase(const TypeRef &a, const TypeRef &b) const {
     if (!a.isNamed() || !b.isNamed() || !reg_->isClass(a.name) || !reg_->isClass(b.name)) return std::nullopt;
@@ -620,6 +681,7 @@ TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
     // element converts to T: `let shapes: Shape[2] = [new Square(1), new Circle(2)]`.
     const TypeRef *exp = expected_;
     expected_ = nullptr;
+    if (exp && exp->isNamed() && reg_->isClass(exp->name)) return buildCollection(e, *exp);
     if (exp && exp->isArray() && !exp->isSlice() && exp->elem &&
         exp->arrayLen == static_cast<int>(e.elements.size()) && !e.elements.empty()) {
         const TypeRef &want = *exp->elem;

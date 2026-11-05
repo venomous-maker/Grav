@@ -117,7 +117,7 @@ struct Visitor {
         else if (auto *x = dynamic_cast<IncDecExpr *>(e)) expr(x->target.get());
         else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand.get());
         else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el.get()); }
+        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el.get()); expr(x->built.get()); }
         else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
             expr(x->base.get()); expr(x->index.get());
             for (auto &m : x->more) expr(m.get());
@@ -177,7 +177,7 @@ struct Rewriter {
         else if (auto *x = dynamic_cast<IncDecExpr *>(e)) expr(x->target);
         else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand);
         else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el); }
+        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el); expr(x->built); }
         else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
             expr(x->base); expr(x->index);
             for (auto &m : x->more) expr(m);

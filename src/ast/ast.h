@@ -189,6 +189,9 @@ struct SizeofExpr : Expr {
 // inferred from the elements (length == elements.size()).
 struct ArrayLiteralExpr : Expr {
     std::vector<ExprPtr> elements;
+    // `let xs: Array<int> = [1, 2]`: where a collection class is expected, the
+    // checker's code that builds it (the elements move into it).
+    ExprPtr built;
 };
 
 // `base[index]` — element access on an array (or pointer). An lvalue.

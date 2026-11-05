@@ -83,7 +83,7 @@ void walkExpr(Expr *e) {
     else if (auto *x = dynamic_cast<IncDecExpr *>(e)) walkExpr(x->target.get());
     else if (auto *x = dynamic_cast<CastExpr *>(e)) walkExpr(x->operand.get());
     else if (auto *x = dynamic_cast<SizeofExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) walkExpr(el.get()); }
+    else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) walkExpr(el.get()); walkExpr(x->built.get()); }
     else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
         walkExpr(x->base.get()); walkExpr(x->index.get());
         for (auto &m : x->more) walkExpr(m.get());

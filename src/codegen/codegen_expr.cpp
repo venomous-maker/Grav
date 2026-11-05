@@ -408,6 +408,13 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         return "sizeof(" + emitExpr(*e->operand) + ")";
     }
     if (auto *e = dynamic_cast<const ArrayLiteralExpr *>(&expr)) {
+        if (e->built) { // a collection literal: the code that builds it, owned by this expression's user
+            const Expr *saved = ownedRoot_;
+            ownedRoot_ = e->built.get();
+            std::string out = emitExpr(*e->built);
+            ownedRoot_ = saved;
+            return out;
+        }
         // `[a, b, c]` -> a compound literal of the backing array struct.
         std::string out = "(" + cTy(e->type) + "){ { ";
         const TypeRef elem = e->type.elem ? *e->type.elem : TypeRef::prim(TypeRef::Kind::Int);

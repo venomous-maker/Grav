@@ -221,6 +221,7 @@ bool CodeGen::isRefProducer(const Expr &e) const {
         return true;
     if (auto *l = dynamic_cast<const LambdaExpr *>(&e)) return !l->captures.empty();
     if (auto *m = dynamic_cast<const MemberExpr *>(&e); m && m->bound) return isRefProducer(*m->bound);
+    if (auto *a = dynamic_cast<const ArrayLiteralExpr *>(&e); a && a->built) return isRefProducer(*a->built);
     if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
         if (c->kind == CallKind::Builtin) {
             if (c->targetName == "__retain") return true;

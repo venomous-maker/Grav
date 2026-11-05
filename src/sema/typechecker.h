@@ -191,6 +191,7 @@ private:
     void checkArgValues(std::vector<ExprPtr> &args);
     std::optional<TypeRef> commonBase(const TypeRef &a, const TypeRef &b) const;
     TypeRef checkSlice(IndexExpr &e, const TypeRef &base);
+    TypeRef buildCollection(ArrayLiteralExpr &e, const TypeRef &type);
     TypeRef spreadElement(Expr &arg);
     TypeRef bindMethod(MemberExpr &e, const TypeRef &objType, const TypeRef *want);
     TypeRef inferReturnType(const std::vector<TypeRef> &types, int line, int col, const std::string &what);
