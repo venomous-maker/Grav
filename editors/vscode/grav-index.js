@@ -256,6 +256,13 @@ function docAbove(lines, i) {
     if (/^[─━-]{3,}|^──/.test(body)) break; // section dividers end a doc comment
     doc.unshift(body);
   }
+  if (!doc.length) { // a comment at the end of the declaration's own line
+    const line = lines[i] || "";
+    for (let k = line.indexOf("//"); k > 0; k = line.indexOf("//", k + 2)) {
+      const before = line.slice(0, k);
+      if ((before.match(/"/g) || []).length % 2 === 0 && /\s$/.test(before)) return line.slice(k).replace(/^\/\/+\s?/, "").trim();
+    }
+  }
   return doc.join("\n").trim();
 }
 
