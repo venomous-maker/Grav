@@ -1,0 +1,214 @@
+// lib/sys/args.grav — command-line argument parsing.
+//
+//   let cli = new Args("resize", "Resize images.")
+//       .flag("verbose", "v", "print each file")
+//       .option("width", "w", "the new width", "800")
+//       .positional("files", "the images to resize")
+//   cli.parseOrExit()                          // the program's own arguments
+//   if (cli.has("verbose")) { ... }
+//   let width = cli.getInt("width")
+//   for (f in cli.rest()) { ... }
+//
+// Accepted forms: --name, --name=value, --name value, -n, -n value, -abc (several
+// one-letter flags), and -- to end the options. --help and -h print the usage.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../text/strbuf.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+
+namespace std.sys {
+
+    // One option or flag known to an Args parser.
+    class ArgSpec {
+        readonly name: string
+        readonly short: string
+        readonly help: string
+        readonly takesValue: bool
+        readonly fallback: string
+        readonly required: bool
+        constructor(name: string, short: string, help: string, takesValue: bool, fallback: string, required: bool) {
+            self.name = name; self.short = short; self.help = help
+            self.takesValue = takesValue; self.fallback = fallback; self.required = required
+        }
+    }
+
+    // A command-line parser: declare the flags, options and positional arguments, then parse.
+    class Args {
+        // The program name used in the usage text.
+        readonly program: string
+        // A one-line description shown in the usage text.
+        readonly description: string
+        private specs: Array<ArgSpec>
+        private positionalNames: Array<string>
+        private positionalHelp: Array<string>
+        private values: HashMap<string, string>
+        private seen: HashMap<string, bool>
+        private extra: Array<string>
+
+        constructor(program: string, description: string) {
+            self.program = program
+            self.description = description
+            self.specs = new Array<ArgSpec>()
+            self.positionalNames = new Array<string>()
+            self.positionalHelp = new Array<string>()
+            self.values = new HashMap<string, string>()
+            self.seen = new HashMap<string, bool>()
+            self.extra = new Array<string>()
+        }
+
+        // Declares a flag (no value): `--name` or `-short` ("" for no short form).
+        public fn flag(name: string, short: string, help: string) -> Args {
+            self.specs.push(new ArgSpec(name, short, help, false, "", false))
+            return self
+        }
+        // Declares an option with a value and a default used when it is not given.
+        public fn option(name: string, short: string, help: string, fallback: string) -> Args {
+            self.specs.push(new ArgSpec(name, short, help, true, fallback, false))
+            return self
+        }
+        // Declares an option that must be given.
+        public fn required(name: string, short: string, help: string) -> Args {
+            self.specs.push(new ArgSpec(name, short, help, true, "", true))
+            return self
+        }
+        // Names a positional argument for the usage text (they are all collected by rest()).
+        public fn positional(name: string, help: string) -> Args {
+            self.positionalNames.push(name)
+            self.positionalHelp.push(help)
+            return self
+        }
+
+        // Parses `argv` (without the program name). ValueError for an unknown option,
+        // a missing value, or a missing required option.
+        public fn parse(argv: Array<string>) -> Args {
+            let i = 0
+            let optionsDone = false
+            while (i < argv.size()) {
+                let a = argv[i]
+                i += 1
+                if (optionsDone || a == "-" || !Str.startsWith(a, "-")) { self.extra.push(a); continue }
+                if (a == "--") { optionsDone = true; continue }
+                if (Str.startsWith(a, "--")) {
+                    let body = a[2..]
+                    let eq = Str.indexOf(body, "=")
+                    let name = eq < 0 ? body : body[..eq]
+                    let spec = self.spec(name, "--" + name)
+                    if (!spec.takesValue) {
+                        if (eq >= 0) { throw new ValueError("--${name} does not take a value") }
+                        self.seen[name] = true
+                    } else if (eq >= 0) {
+                        self.set(spec, body[eq + 1..])
+                    } else {
+                        if (i >= argv.size()) { throw new ValueError("--${name} needs a value") }
+                        self.set(spec, argv[i])
+                        i += 1
+                    }
+                    continue
+                }
+                // -abc: one-letter flags; the last may take a value (-o file, -ofile).
+                let k = 1
+                while (k < a.length) {
+                    let letter = a[k..k + 1]
+                    let spec = self.short(letter)
+                    k += 1
+                    if (!spec.takesValue) { self.seen[spec.name] = true; continue }
+                    if (k < a.length) { self.set(spec, a[k..]) }
+                    else {
+                        if (i >= argv.size()) { throw new ValueError("-${letter} needs a value") }
+                        self.set(spec, argv[i])
+                        i += 1
+                    }
+                    break
+                }
+            }
+            for (s in self.specs) {
+                if (s.required && !self.seen.containsKey(s.name)) {
+                    throw new ValueError("--${s.name} is required")
+                }
+            }
+            return self
+        }
+        // Parses the program's own command-line arguments.
+        public fn parseCommandLine() -> Args {
+            let argv = new Array<string>()
+            for (i in 1..argc()) { argv.push(argv(i)) }
+            return self.parse(argv)
+        }
+        // Parses the program's arguments; on --help prints the usage and exits with 0,
+        // and on a mistake prints it with the usage to standard error and exits with 2.
+        public fn parseOrExit() -> Args {
+            for (i in 1..argc()) {
+                if (argv(i) == "--") { break }
+                if (argv(i) == "--help" || argv(i) == "-h") { print(self.usage()); exit(0) }
+            }
+            try {
+                return self.parseCommandLine()
+            } catch (e: ValueError) {
+                let msg = "${self.program}: ${e.message()}\n\n${self.usage()}"
+                %{ fflush(stdout); fprintf(stderr, "%s\n", msg); %};
+                exit(2)
+            }
+            return self
+        }
+
+        private fn spec(name: string, shown: string) -> ArgSpec {
+            for (s in self.specs) { if (s.name == name) { return s } }
+            throw new ValueError("unknown option ${shown}")
+        }
+        private fn short(letter: string) -> ArgSpec {
+            for (s in self.specs) { if (s.short == letter) { return s } }
+            throw new ValueError("unknown option -${letter}")
+        }
+        private fn set(s: ArgSpec, v: string) { self.values[s.name] = v; self.seen[s.name] = true }
+
+        // Whether a flag or option was given.
+        public fn has(name: string) -> bool { return self.seen.containsKey(name) }
+        // An option's value, or its default when it was not given.
+        public fn get(name: string) -> string {
+            if (self.values.containsKey(name)) { return self.values[name] }
+            for (s in self.specs) { if (s.name == name) { return s.fallback } }
+            throw new ValueError("Args: no option named '${name}' was declared")
+        }
+        // An option's value as an int; ValueError when it is not a whole number.
+        public fn getInt(name: string) -> int {
+            let v = self.get(name)
+            if (!Format.isInt(v)) { throw new ValueError("--${name} must be a whole number, got '${v}'") }
+            return Format.toInt(v)
+        }
+        // An option's value as a float; ValueError when it is not a number.
+        public fn getFloat(name: string) -> float {
+            let v = self.get(name)
+            if (!Format.isNumber(v)) { throw new ValueError("--${name} must be a number, got '${v}'") }
+            return Format.toFloat(v)
+        }
+        // The arguments that are not options, in order.
+        public fn rest() -> Array<string> { return self.extra.copy() }
+
+        // The usage text: synopsis, description, options and positional arguments.
+        public fn usage() -> string {
+            let sb = new StringBuilder()
+            sb.append("usage: ").append(self.program).append(" [options]")
+            for (p in self.positionalNames) { sb.append(" ").append(p).append("...") }
+            sb.append("\n")
+            if (self.description != "") { sb.append("\n").append(self.description).append("\n") }
+            if (!self.positionalNames.isEmpty()) {
+                sb.append("\narguments:\n")
+                for (i, p in self.positionalNames) {
+                    sb.append("  ").append(Str.padRight(p, 22, " ")).append(self.positionalHelp[i]).append("\n")
+                }
+            }
+            sb.append("\noptions:\n")
+            for (s in self.specs) {
+                let left = (s.short != "" ? "-" + s.short + ", " : "    ") + "--" + s.name + (s.takesValue ? " <value>" : "")
+                sb.append("  ").append(Str.padRight(left, 22, " ")).append(s.help)
+                if (s.required) { sb.append(" (required)") }
+                else if (s.takesValue && s.fallback != "") { sb.append(" (default: ").append(s.fallback).append(")") }
+                sb.append("\n")
+            }
+            sb.append("  ").append(Str.padRight("-h, --help", 22, " ")).append("show this help\n")
+            return sb.toString()
+        }
+    }
+}

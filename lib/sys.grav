@@ -1,6 +1,8 @@
-// lib/sys.grav — `import "std/sys"`: OS, Process, Command, Time, DateTime.
+// lib/sys.grav — `import "std/sys"`: OS, Process, Command, Time, Duration, DateTime, Log, Args.
 import "sys/os.grav"
 import "sys/process.grav"
 import "sys/command.grav"
 import "sys/time.grav"
 import "sys/datetime.grav"
+import "sys/log.grav"
+import "sys/args.grav"
