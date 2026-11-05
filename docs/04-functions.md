@@ -92,6 +92,34 @@ Output:
 2432902008176640000
 ```
 
+## Functions inside functions
+
+A `fn` declared inside a block is a local function: it can call itself, and it
+sees the block's variables declared before it (copied in, like a closure's
+captures — see [Closures](10-lambdas.md#closures)). It cannot have type parameters
+or default values.
+
+```grav
+fn main() {
+    let indent = "  "
+    fn show(depth: int, label: string) {
+        let pad = ""
+        for (i in 0..depth) { pad += indent }
+        print(pad + label)
+    }
+    fn countdown(n: int) -> string { return n == 0 ? "go" : str(n) + " " + countdown(n - 1) }
+    show(0, "root")
+    show(2, countdown(3))
+}
+```
+
+Output:
+
+```text
+root
+    3 2 1 go
+```
+
 ## Overloading
 
 Several functions may share a name if their parameter types differ. The call picks

@@ -201,6 +201,61 @@ Escape sequences:
 The `Str` class in the standard library adds searching, slicing, splitting, and
 more — see [Standard library](14-standard-library.md#strings).
 
+### Raw and multi-line strings
+
+`r"..."` is a raw string: backslashes and `${` are kept as written, which suits
+paths and regular expressions. `"""..."""` spans lines; the indentation its lines
+share is removed and a line break right after the opening `"""` is dropped. When
+the closing `"""` sits on its own line, its indentation is what is removed and the
+last line break is dropped too. Quotes need no escape inside, and `${...}` still
+interpolates (`r"""..."""` is a raw multi-line string).
+
+```grav
+fn main() {
+    print(r"C:\temp\new ${not interpolated}")
+    let who = "world"
+    let page = """
+        <p class="greeting">
+          hello ${who}
+        </p>
+        """
+    print(page)
+}
+```
+
+Output:
+
+```text
+C:\temp\new ${not interpolated}
+<p class="greeting">
+  hello world
+</p>
+```
+
+### Character literals
+
+`'a'` is a character literal: the Unicode code point of one character, as an
+`int`. It takes the same escapes as strings (`'\n'`, `'\''`, `'\u{1F600}'`), and
+compares directly with a string's bytes.
+
+```grav
+fn main() {
+    let word = "grav"
+    let n = 0
+    for (i in 0..word.length) { if (word[i] == 'a') { n++ } }
+    print(n)
+    print('A' + 2)
+    print('é')
+}
+```
+
+Output:
+
+```text
+1
+67
+233
+```
 
 ### Formatting
 

@@ -126,6 +126,28 @@ Output:
 42
 ```
 
+### Lambdas that call themselves
+
+Captures are copies, so a lambda normally cannot see the variable it is being
+stored in. A lambda assigned to a name it uses (`let f = fn(...) -> R { ... f(...) }`)
+is the exception: inside its body that name is the lambda itself. It needs a
+written result type, since its own calls depend on it. A `fn` declared inside a
+block (see [Functions inside functions](04-functions.md#functions-inside-functions))
+works the same way.
+
+```grav
+fn main() {
+    let fact = fn(n: int) -> long { return n <= 1 ? 1 as long : n * fact(n - 1) }
+    print(fact(20))
+}
+```
+
+Output:
+
+```text
+2432902008176640000
+```
+
 ## Callbacks in fields and collections
 
 ```grav

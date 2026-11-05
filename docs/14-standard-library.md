@@ -111,6 +111,39 @@ most urgent: 9
 next: first
 ```
 
+### Collection literals
+
+A `[...]` literal where a collection is expected (a declared variable, a
+parameter, a field, a return value) builds that collection: any class with a
+constructor that takes no arguments and an `add`, `push`, `enqueue` or `pushBack`
+method. Without such a type it stays a fixed-length array. `{key: value, ...}`
+builds a `HashMap` (through `mapOf`).
+
+```grav
+import "../lib/std.grav"
+
+fn total(xs: Array<int>) -> int { return xs.reduce(0, fn(a, b) => a + b) }
+
+fn main() {
+    let primes: Array<int> = [2, 3, 5, 7]
+    let seen: HashSet<string> = ["a", "b", "a"]
+    let ages = {"ann": 31, "bob": 27}
+    print(total(primes))
+    print(seen.size())
+    print(ages["bob"])
+    print(total([10, 20]))
+}
+```
+
+Output:
+
+```text
+17
+2
+27
+30
+```
+
 ## Strings
 
 `Str` holds static string functions (`lib/string.grav`); every transforming

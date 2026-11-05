@@ -335,7 +335,8 @@ but a statement that *starts* with `*`, `&`, or `-` needs the previous one termi
 
 ## null, ?? and ?.
 
-`null` is a valid value for class, interface, pointer, and function types. `a ?? b`
+`null` is a valid value for class, interface, pointer, and function types (and
+[nullable values](#nullable-values-t)). `a ?? b`
 gives `a` unless it is null; `a?.member` yields a zero value (`0`, `false`, `""`, or
 `null`) instead of crashing when `a` is null.
 
@@ -364,6 +365,60 @@ true
 first
 true
 second
+```
+
+## Nullable values: T?
+
+Numbers, bools, strings, enums and structs are never null. Add `?` to the type
+for a value that may be missing: an `int?` holds an `int` or `null`. A plain value
+flows into a `T?`, but getting one back out takes one of:
+
+- `x!`: the value; throws `StateError` when `x` is null.
+- `x ?? fallback`: the value, or `fallback` when `x` is null.
+- a null check: inside `if (x != null) { ... }` a local `x` is the plain value,
+  as long as nothing there assigns it. The same goes for the `else` of
+  `if (x == null)`, the rest of a block after `if (x == null) { return }`, the
+  right side of `x != null && ...`, and the branches of `x != null ? a : b`.
+
+A `T?` compares with `==` against `null`, a `T`, or another `T?`, and prints as
+its value or `null`. Classes, interfaces, functions and pointers can already be
+null, so `Dog?` is just `Dog`. A struct holding strings or objects cannot be
+nullable.
+
+```grav
+import "std"
+
+struct Point { x: int  y: int }
+
+fn find(xs: Array<string>, want: string) -> int? {
+    for (i in 0..xs.size()) { if (xs.get(i) == want) { return i } }
+    return null
+}
+
+fn main() {
+    let names: Array<string> = ["ann", "bob"]
+    let i = find(names, "bob")
+    let j = find(names, "cy")
+    print("${i} ${j}")
+    print(j ?? -1)
+    if (i != null) { print(i + 1) }
+    let nick: string? = null
+    print(nick ?? "no nickname")
+    let p: Point? = Point { x: 1, y: 2 }
+    print(p!.x)
+    try { print(j!) } catch (e: StateError) { print(e.message()) }
+}
+```
+
+Output:
+
+```text
+1 null
+-1
+2
+no nickname
+1
+'!' found a null int?
 ```
 
 ## sizeof

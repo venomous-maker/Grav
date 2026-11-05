@@ -42,7 +42,7 @@ From loosest to tightest binding:
 | 12 | `**` | right |
 | 13 | `as`, `is` (`x is T` also tests what an `any` holds) | left |
 | 14 | unary `- ! ~ ++ -- await`, `&` `*` (address/deref), `(T)x` casts | right |
-| 15 | calls `f()`, `f(...xs)`, `::<T>()`, indexing `a[i]`, slices `a[lo..hi]`, members `.` `?.` `->`, postfix `++ --` | left |
+| 15 | calls `f()`, `f(...xs)`, `::<T>()`, indexing `a[i]`, slices `a[lo..hi]`, members `.` `?.` `->`, postfix `++ --`, unwrap `x!` | left |
 
 Assignment (`=`, `+=`, …) is a statement, not an expression. Operands and arguments
 are evaluated left to right; `&&`, `||`, `??`, `?:`, and `?.` short-circuit.
@@ -55,7 +55,10 @@ are evaluated left to right; `&&`, `||`, `??`, `?:`, and `?.` short-circuit.
 | floats | `3.14`, `0.5`, `2.0` |
 | booleans | `true`, `false` |
 | strings | `"text"`, `"tab\t"`, `"sum=${a + b}"`, `"${x:.2f}"`, `"\u{263A}"` |
-| arrays | `[1, 2, 3]`, `[[1, 2], [3, 4]]` |
+| raw / multi-line strings | `r"C:\dir"`, `"""` ... `"""` (indentation removed), `r"""` ... `"""` |
+| characters | `'a'`, `'\n'`, `'\u{1F600}'` (the code point, an `int`) |
+| arrays | `[1, 2, 3]`, `[[1, 2], [3, 4]]`; where a collection is expected, `[...]` builds it |
+| maps | `{"a": 1, "b": 2}` (a `HashMap`) |
 | structs | `Point { x: 1, y: 2 }`, `Pair<int, string> { first: 1, second: "a" }` |
 | lambdas | `fn(x) => x * 2`, `fn(a: int, b: int) -> int { return a + b }` |
 | tuples | `(1, "one")`, type `(int, string)` (the standard library's `Pair`/`Triple`) |
@@ -71,6 +74,7 @@ Name                       class, interface, struct, enum, or alias
 Name<T, U>                 generic instance
 T[N]                       fixed-length array
 T*                         pointer
+T?                         nullable: a T or null (x!, x ?? y, if (x != null))
 fn(A, B) -> R              function value
 Future<T>                  handle to a running async call (await it for the T)
 ```
@@ -112,6 +116,7 @@ for (x in xs) { } / for (i, x in xs) { }
 switch (v) { case a, b: { } case lo..hi: { } case x if cond: { } default: { } }   (match is a synonym)
 let r = match (v) { case a: e1 default: e2 }          (match as an expression)
 let (a, b) = pair / let [x, y] = arr / let {x, y} = point   (destructuring; also in for)
+fn name(p: T) -> R { ... }                            (inside a block: a local function; it can call itself)
 break [label] / continue [label] / return [e]
 f(x, name: value)                                     (named arguments)
 defer stmt / defer { }
