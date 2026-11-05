@@ -9,6 +9,22 @@
 
 namespace grav {
 
+// Every one-byte string, back to back with their terminators ("\0\0", "\1\0", ...):
+// `for (ch in s)` hands these out for ASCII characters instead of allocating.
+static std::string byteStringTable() {
+    std::string out = "static const char grav_byte_strs[513] =";
+    for (int row = 0; row < 16; ++row) {
+        out += "\n    \"";
+        for (int c = row * 16; c < row * 16 + 16; ++c) {
+            char buf[16];
+            snprintf(buf, sizeof buf, "\\%03o\\000", c);
+            out += buf;
+        }
+        out += "\"";
+    }
+    return out + ";\n";
+}
+
 void CodeGen::emitFaultSupport() {
     typedefs_ += R"C(#include <signal.h>
 #include <sys/resource.h>
@@ -65,7 +81,7 @@ static const char* grav_str_range(const char* s, long long lo, long long hi) {
     r[hi - lo] = 0;
     return r;
 }
-/* `for (ch in s)`: the byte length of the UTF-8 character at p, and a copy of it. */
+)C" + byteStringTable() + R"C(/* `for (ch in s)`: the byte length of the UTF-8 character at p, and a copy of it. */
 static inline int grav_utf8_len(const char* p) {
     unsigned char c = (unsigned char)p[0];
     int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
@@ -73,6 +89,7 @@ static inline int grav_utf8_len(const char* p) {
     return n;
 }
 static inline const char* grav_str_slice(const char* p, int n) {
+    if (n == 1) return grav_byte_strs + 2 * (unsigned char)p[0];   /* one byte: a permanent string, no allocation */
     char* r = grav_str_new((size_t)n);
     memcpy(r, p, (size_t)n);
     r[n] = 0;
