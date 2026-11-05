@@ -1,5 +1,6 @@
 #include "lexer/lexer.h"
 
+#include <algorithm>
 #include <cctype>
 #include <unordered_map>
 
@@ -413,6 +414,103 @@ void Lexer::splitFormatSpec(std::string &expr, std::string &spec, int line, int 
     expr = expr.substr(0, colon);
 }
 
+// `"""..."""` (multi-line: the first newline and the common indentation are
+// removed; a closing `"""` on its own line sets that indentation) and raw
+// `r"..."` / `r"""..."""` (no escapes, no `${}`). The text is turned into an
+// ordinary string literal and lexed as one, so escapes and interpolation behave
+// exactly as in `"..."`.
+void Lexer::scanSpecialString(std::vector<Token> &out, bool raw) {
+    int sLine = tokLine_, sCol = tokCol_;
+    if (raw) advance(); // 'r'
+    auto tripleAt = [&](size_t p) {
+        return p + 2 < source_.size() && source_[p] == '"' && source_[p + 1] == '"' && source_[p + 2] == '"';
+    };
+    bool triple = tripleAt(pos_);
+    for (int k = 0; k < (triple ? 3 : 1); ++k) advance();
+    std::string body;
+    int depth = 0; // inside ${ ... }
+    for (;;) {
+        if (atEnd()) throw GravError("lex", sLine, sCol, "unterminated string literal");
+        char c = peek();
+        if (depth == 0) {
+            if (triple ? tripleAt(pos_) : c == '"') break;
+            if (!triple && c == '\n')
+                throw GravError("lex", sLine, sCol, "unterminated string literal (use \"\"\" for several lines)");
+            if (!raw && c == '\\') { body += advance(); if (!atEnd()) body += advance(); continue; }
+            if (!raw && c == '$' && peekNext() == '{') { body += advance(); body += advance(); depth = 1; continue; }
+        } else if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+        }
+        body += advance();
+    }
+    for (int k = 0; k < (triple ? 3 : 1); ++k) advance();
+
+    if (triple) body = dedent(body);
+
+    // As an ordinary literal: quotes and line breaks escaped (and, when raw,
+    // backslashes and `$` too); the text inside ${ ... } copied as it is.
+    std::string lit = "\"";
+    depth = 0;
+    for (size_t i = 0; i < body.size(); ++i) {
+        char c = body[i];
+        if (depth > 0) {
+            if (c == '{') ++depth;
+            else if (c == '}') --depth;
+            lit += c;
+            continue;
+        }
+        if (!raw && c == '\\' && i + 1 < body.size()) { lit += c; lit += body[++i]; continue; }
+        if (!raw && c == '$' && i + 1 < body.size() && body[i + 1] == '{') { lit += "${"; ++i; depth = 1; continue; }
+        if (c == '"') lit += "\\\"";
+        else if (c == '\n') lit += "\\n";
+        else if (c == '\r') lit += "\\r";
+        else if (raw && c == '\\') lit += "\\\\";
+        else if (raw && c == '$') lit += "\\$";
+        else lit += c;
+    }
+    lit += "\"";
+    Lexer sub(lit);
+    for (auto &tk : sub.tokenize()) {
+        if (tk.type == TokenType::EndOfFile) continue;
+        tk.line = sLine;
+        tk.col = sCol;
+        out.push_back(tk);
+    }
+}
+
+// The body of a `"""` string without its first line break and without the
+// indentation its lines share (or the indentation of the closing `"""`).
+std::string Lexer::dedent(std::string body) {
+    if (!body.empty() && body[0] == '\r') body.erase(0, 1);
+    if (!body.empty() && body[0] == '\n') body.erase(0, 1);
+    std::vector<std::string> lines;
+    size_t start = 0;
+    for (size_t i = 0; i <= body.size(); ++i)
+        if (i == body.size() || body[i] == '\n') { lines.push_back(body.substr(start, i - start)); start = i + 1; }
+    auto blank = [](const std::string &l) { return l.find_first_not_of(" \t\r") == std::string::npos; };
+    size_t indent = std::string::npos;
+    bool closingLine = lines.size() > 1 && blank(lines.back());
+    if (closingLine) {
+        indent = lines.back().size();
+        lines.pop_back();
+    } else {
+        for (const auto &l : lines)
+            if (!blank(l)) indent = std::min(indent, l.find_first_not_of(" \t"));
+    }
+    if (indent == std::string::npos) indent = 0;
+    std::string out;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const std::string &l = lines[i];
+        size_t cut = 0;
+        while (cut < indent && cut < l.size() && (l[cut] == ' ' || l[cut] == '\t')) ++cut;
+        out += l.substr(cut);
+        if (i + 1 < lines.size()) out += '\n';
+    }
+    return out;
+}
+
 Token Lexer::scanCBlock() {
     advance(); advance(); // consume `%{`
     std::string raw;
@@ -451,6 +549,13 @@ std::vector<Token> Lexer::tokenize() {
         char c = peek();
         if (std::isdigit(static_cast<unsigned char>(c))) {
             tokens.push_back(scanNumber());
+            continue;
+        }
+        // r"raw", r"""raw lines""", """lines""": rewritten into a plain literal.
+        bool raw = c == 'r' && peekNext() == '"';
+        bool triple = c == '"' && peekNext() == '"' && pos_ + 2 < source_.size() && source_[pos_ + 2] == '"';
+        if (raw || triple) {
+            scanSpecialString(tokens, raw);
             continue;
         }
         if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
