@@ -873,8 +873,53 @@ const FunctionInfo *TypeChecker::pickOverload(const std::vector<FunctionInfo> &c
 }
 
 // Resolves a call to a free function, choosing among overloads of the name.
+// The element type a spread argument `...xs` provides: a fixed array, a variadic
+// parameter, or an Array (a class holding `data: T*` and `len: int`) named by a
+// variable. Error type when it cannot be spread.
+TypeRef TypeChecker::spreadElement(Expr &arg) {
+    TypeRef t = checkExpr(arg);
+    if (t.isError()) return t;
+    if (t.isArray() && t.elem) return *t.elem;
+    if (t.isNamed() && reg_->isClass(t.name)) {
+        const FieldInfo *data = reg_->findField(t.name, "data");
+        const FieldInfo *len = reg_->findField(t.name, "len");
+        if (data && len && data->type.isPointer() && data->type.elem && len->type.kind == TypeRef::Kind::Int) {
+            if (dynamic_cast<NameExpr *>(&arg)) return *data->type.elem;
+            error(arg.line, arg.col, "spread an Array through a variable: `let xs = ...` then `f(...xs)`");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+    }
+    error(arg.line, arg.col, "cannot spread " + aTypeName(t) + " (arrays, Array<T> and variadic parameters can be)");
+    return TypeRef::prim(TypeRef::Kind::Error);
+}
+
 TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
     const std::vector<FunctionInfo> &cands = reg_->funcOverloads(fnFq);
+    if (e.spreadLast) { // `f(a, ...xs)`
+        const FunctionInfo *fi = nullptr;
+        for (const auto &c : cands)
+            if (c.isVariadic && c.paramTypes.size() == e.args.size()) fi = &c;
+        if (!fi) {
+            error(e.line, e.col, "'...' spreads into a variadic parameter, and '" + fnFq +
+                                     "' has none in that position");
+            checkArgValues(e.args);
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        for (size_t i = 0; i + 1 < e.args.size(); ++i) {
+            TypeRef at = checkExprExpect(*e.args[i], fi->paramTypes[i]);
+            if (!isAssignable(at, fi->paramTypes[i]))
+                error(e.args[i]->line, e.args[i]->col, "argument " + std::to_string(i + 1) + " expects " +
+                                                           typeRefName(fi->paramTypes[i]) + ", but got " + typeRefName(at));
+        }
+        TypeRef el = spreadElement(*e.args.back());
+        if (!el.isError() && el != fi->paramTypes.back())
+            error(e.args.back()->line, e.args.back()->col, "the spread elements are " + typeRefName(el) +
+                                                               ", but '" + fnFq + "' takes " + typeRefName(fi->paramTypes.back()));
+        e.kind = CallKind::FreeFunction;
+        e.targetName = fnFq;
+        e.resolvedOverload = fi->overloadIndex;
+        return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
+    }
     {
         std::vector<ParamList> pls;
         for (const auto &c : cands)

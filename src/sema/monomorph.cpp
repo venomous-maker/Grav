@@ -178,7 +178,7 @@ ExprPtr cloneExpr(const Expr *e) {
         return n;
     }
     if (auto *x = dynamic_cast<const CallExpr *>(e)) {
-        auto n = mkE<CallExpr>(e); n->typeArgs = x->typeArgs; n->kind = x->kind;
+        auto n = mkE<CallExpr>(e); n->typeArgs = x->typeArgs; n->kind = x->kind; n->spreadLast = x->spreadLast;
         n->targetName = x->targetName; n->methodName = x->methodName;
         n->ownerClass = x->ownerClass; n->slotOwner = x->slotOwner; n->ifaceDispatch = x->ifaceDispatch;
         n->callee = cloneExpr(x->callee.get());

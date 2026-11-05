@@ -153,6 +153,9 @@ Output:
 colors: red green (2)
 ```
 
+To pass the elements of an array (a fixed array, an `Array<T>` variable, or another
+variadic parameter), spread it with `...`: `sum(...scores)`.
+
 ## Generic functions
 
 Type parameters go in angle brackets after the name. Call sites can pass the types

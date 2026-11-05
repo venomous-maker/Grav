@@ -191,6 +191,7 @@ private:
     void checkArgValues(std::vector<ExprPtr> &args);
     std::optional<TypeRef> commonBase(const TypeRef &a, const TypeRef &b) const;
     TypeRef checkSlice(IndexExpr &e, const TypeRef &base);
+    TypeRef spreadElement(Expr &arg);
     TypeRef inferReturnType(const std::vector<TypeRef> &types, int line, int col, const std::string &what);
     void unreachableDefault(SwitchStmt &s);
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be

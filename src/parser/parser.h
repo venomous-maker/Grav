@@ -84,6 +84,7 @@ private:
     int destructureCounter_ = 0;
     void parseStructMethod(StructDecl &st);
     std::vector<DeclPtr> pendingDecls_; // declarations made alongside the last one (struct methods)
+    bool lastArgsSpread_ = false; // the last parseArguments() ended with `...xs`
     Block parseCaseBody();
     StmtPtr parseTry();
     StmtPtr parseThrow();

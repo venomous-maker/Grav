@@ -330,9 +330,17 @@ ExprPtr Parser::parseUnary() {
 
 std::vector<ExprPtr> Parser::parseArguments() {
     std::vector<ExprPtr> args;
+    lastArgsSpread_ = false;
     expect(TokenType::LParen, "to begin the argument list");
     if (!check(TokenType::RParen)) {
         do {
+            // `...xs` — spread an array into the variadic parameter (last argument only).
+            if (matchToken(TokenType::Ellipsis)) {
+                args.push_back(parseExpression());
+                lastArgsSpread_ = true;
+                if (check(TokenType::Comma)) fail(peek(), "a spread argument '...' must be the last argument");
+                continue;
+            }
             // `name: value` — a named argument.
             if (check(TokenType::Identifier) && pos_ + 1 < tokens_.size() &&
                 tokens_[pos_ + 1].type == TokenType::Colon) {
@@ -388,12 +396,14 @@ ExprPtr Parser::parsePostfix() {
             auto call = at<CallExpr>(lp);
             call->typeArgs = std::move(targs);
             call->args = parseArguments();
+            call->spreadLast = lastArgsSpread_;
             call->callee = std::move(expr);
             expr = std::move(call);
         } else if (check(TokenType::LParen)) {
             const Token &lp = peek();
             auto call = at<CallExpr>(lp);
             call->args = parseArguments();
+            call->spreadLast = lastArgsSpread_;
             call->callee = std::move(expr);
             expr = std::move(call);
         } else if (check(TokenType::LBracket) && !onNewLine()) {

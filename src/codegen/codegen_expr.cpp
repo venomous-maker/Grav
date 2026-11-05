@@ -166,6 +166,14 @@ void CodeGen::emitVariadicArgs(std::string &out, const CallExpr &call,
         out += emitStable(*call.args[i], params[i]);
     }
     if (fixed) out += ", ";
+    if (call.spreadLast) { // `...xs`: its length and its elements
+        const Expr &xs = *call.args.back();
+        std::string v = emitExpr(xs);
+        if (xs.type.isSlice()) out += v + "__n, " + v;
+        else if (xs.type.isArray()) out += std::to_string(xs.type.arrayLen) + ", (" + v + ").data";
+        else out += "(" + v + ")->len, (" + v + ")->data";
+        return;
+    }
     size_t count = call.args.size() - fixed;
     out += std::to_string(count) + ", ";
     if (count == 0) {

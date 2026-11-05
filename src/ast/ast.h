@@ -260,6 +260,7 @@ struct CallExpr : Expr {
     ExprPtr callee;
     std::vector<TypeRef> typeArgs; // turbofish generic args: `id::<int>(x)`
     std::vector<ExprPtr> args;
+    bool spreadLast = false;       // `f(a, ...xs)`: the last argument's elements fill the variadic parameter
 
     CallKind kind = CallKind::Unresolved;
     std::string targetName;  // FQ free function / static method / builtin name
