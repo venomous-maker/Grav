@@ -88,8 +88,8 @@ async fn name(...) -> T { ... }                      (runs on the worker pool; n
     fn operator+(o: T) -> R { ... }   (also - * / % == != < <= > >= [] []=)
 interface Name<T> { fn m(...) -> T }
 trait Name { fn m(o: Self) -> T  fn withDefault() -> T { ... } }
-struct Name<T> { a: T  b: int }
-enum Name { A, B, C }
+struct Name<T> { a: T  b: int  fn m() -> T { ... } }   (methods: `self` is the struct)
+enum Name { A, B = 5, C }                            (members may have values)
 type Alias<T> = T[3]                  (typedef is a synonym)
 let name: T = value / const NAME: T = value          (module-level globals)
 namespace a { namespace b { ... } }

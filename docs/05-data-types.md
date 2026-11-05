@@ -26,6 +26,25 @@ Blue
 true
 ```
 
+Members can be given values, for example to match a protocol's numbers; a member
+without one takes the next value after the previous member:
+
+```grav
+enum Http { Ok = 200, Created, NotFound = 404 }
+
+fn main() {
+    print(int(Http.Created))
+    print(404 as Http)
+}
+```
+
+Output:
+
+```text
+201
+NotFound
+```
+
 ## Data enums and pattern matching
 
 When variants carry data, an enum is a *data enum* (a tagged union, like Rust's

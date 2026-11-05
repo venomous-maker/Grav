@@ -325,6 +325,9 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         if (e->target.isNamed() && reg_->isEnum(e->target.name)) {
             if (e->operand->type == e->target) return emitExpr(*e->operand);
             const EnumInfo *ei = reg_->en(e->target.name);
+            if (ei && ei->decl && ei->decl->customValues)
+                return "((" + cTy(e->target) + ")" + structName(e->target.name) + "__check((long long)(" +
+                       emitExpr(*e->operand) + ")))";
             return "((" + cTy(e->target) + ")grav_enum_check((long long)(" + emitExpr(*e->operand) + "), " +
                    std::to_string(ei ? ei->members.size() : 0) + ", \"" + escapeC(e->target.name) + "\"))";
         }

@@ -34,6 +34,8 @@ struct Variant {
     std::vector<std::string> fieldNames;
     std::vector<std::string> fieldTypes; // source text of each payload type
     int line = 0, col = 0;
+    bool hasValue = false; // `A = 5` (plain enums only)
+    long long value = 0;
 };
 
 } // namespace
@@ -88,7 +90,12 @@ void Parser::parseEnum(Program &program) {
         v.col = vt.col;
         for (const auto &o : variants)
             if (o.name == v.name) fail(vt, "duplicate enum variant '" + v.name + "'");
-        if (matchToken(TokenType::LParen)) {
+        if (matchToken(TokenType::Assign)) { // `A = 5` / `B = -1`
+            bool neg = matchToken(TokenType::Minus);
+            const Token &num = expect(TokenType::IntLiteral, "as the enum member's value");
+            v.hasValue = true;
+            v.value = std::stoll(num.lexeme) * (neg ? -1 : 1);
+        } else if (matchToken(TokenType::LParen)) {
             hasPayload = true;
             std::vector<bool> named;
             while (!check(TokenType::RParen)) {
@@ -133,10 +140,21 @@ void Parser::parseEnum(Program &program) {
         en->col = kw.col;
         en->name = nameTok.lexeme;
         en->fqName = qualify(en->name);
-        for (const auto &v : variants) en->members.push_back(EnumMember{v.name, v.line, v.col});
+        long long next = 0;
+        for (const auto &v : variants) {
+            long long value = v.hasValue ? v.value : next;
+            for (const auto &m : en->members)
+                if (m.value == value)
+                    fail(kw, "enum members '" + m.name + "' and '" + v.name + "' have the same value " + std::to_string(value));
+            en->members.push_back(EnumMember{v.name, v.line, v.col, value});
+            en->customValues = en->customValues || value != static_cast<long long>(en->members.size() - 1);
+            next = value + 1;
+        }
         program.decls.push_back(std::move(en));
         return;
     }
+    for (const auto &v : variants)
+        if (v.hasValue) fail(kw, "only enums without data or methods can give members values ('" + v.name + " = ...')");
 
     // ---- data enum: generate the classes as Grav source ----
     const std::string &E = nameTok.lexeme;

@@ -570,10 +570,12 @@ struct GlobalVarDecl : Decl {
 struct EnumMember {
     std::string name;
     int line = 0, col = 0;
+    long long value = 0; // `A = 5`; otherwise one more than the previous member (from 0)
 };
 struct EnumDecl : Decl {
     std::string name;
     std::vector<EnumMember> members;
+    bool customValues = false; // some member has an explicit `= value`
 };
 
 // `type Name = T;` — a transparent alias for an existing type. Aliases are fully

@@ -150,7 +150,8 @@ void CodeGen::emitFaultRaisers() {
              (div.empty() ? "    grav_panic(msg);\n" : div) + "}\n";
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_enum(long long v, long long n, const char* name) {\n"
              "    char msg[200];\n"
-             "    snprintf(msg, sizeof msg, \"%lld is not a %s (its values are 0 to %lld)\", v, name, n - 1);\n" +
+             "    if (n < 0) snprintf(msg, sizeof msg, \"%lld is not a %s value\", v, name);\n"
+             "    else snprintf(msg, sizeof msg, \"%lld is not a %s (its values are 0 to %lld)\", v, name, n - 1);\n" +
              (value.empty() ? "    grav_panic(msg);\n" : value) + "}\n";
     defs_ += "static GRAV_COLD GRAV_NORETURN void grav_fault_iface(const void* o, const char* name) {\n"
              "    char msg[300];\n"

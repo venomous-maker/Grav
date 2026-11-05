@@ -291,16 +291,28 @@ void CodeGen::emitEnums() {
             typedefs_ += "    " + s + "__empty /* empty enum */\n";
         for (size_t i = 0; i < en->members.size(); ++i) {
             typedefs_ += "    " + enumConst(en->fqName, en->members[i].name);
+            if (en->customValues) typedefs_ += " = " + std::to_string(en->members[i].value);
             typedefs_ += i + 1 < en->members.size() ? ",\n" : "\n";
         }
         typedefs_ += "} " + s + ";\n";
         // Member-name lookup for print/str/interpolation of enum values.
         typedefs_ += "static inline const char* " + enumNameFn(en->fqName) + "(" + s + " v) {\n";
-        typedefs_ += "    static const char* const names[] = { ";
-        for (size_t i = 0; i < en->members.size(); ++i)
-            typedefs_ += (i ? ", \"" : "\"") + en->members[i].name + "\"";
-        if (en->members.empty()) typedefs_ += "\"?\"";
-        typedefs_ += " };\n    return (unsigned)v < sizeof names / sizeof names[0] ? names[v] : \"?\";\n}\n";
+        if (en->customValues) {
+            typedefs_ += "    switch ((long long)v) {\n";
+            for (const auto &m : en->members)
+                typedefs_ += "        case " + std::to_string(m.value) + "LL: return \"" + m.name + "\";\n";
+            typedefs_ += "        default: return \"?\";\n    }\n}\n";
+            // `n as E`: the number must be one of the members' values.
+            typedefs_ += "static inline long long " + structName(en->fqName) + "__check(long long v) {\n    switch (v) {\n";
+            for (const auto &m : en->members) typedefs_ += "        case " + std::to_string(m.value) + "LL:\n";
+            typedefs_ += "            return v;\n        default: grav_fault_enum(v, -1, \"" + en->fqName + "\");\n    }\n}\n";
+        } else {
+            typedefs_ += "    static const char* const names[] = { ";
+            for (size_t i = 0; i < en->members.size(); ++i)
+                typedefs_ += (i ? ", \"" : "\"") + en->members[i].name + "\"";
+            if (en->members.empty()) typedefs_ += "\"?\"";
+            typedefs_ += " };\n    return (unsigned)v < sizeof names / sizeof names[0] ? names[v] : \"?\";\n}\n";
+        }
         // Same lookup with the signature an `any` box stores.
         typedefs_ += "static inline GRAV_UNUSED const char* " + enumNameFn(en->fqName) + "_any(long long v) { return " +
                      enumNameFn(en->fqName) + "((" + s + ")v); }\n";
