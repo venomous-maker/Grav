@@ -123,7 +123,7 @@ fail and receivers drain what is left; hasNext() reports whether more will come.
 - `fn send(v: T) -> bool` — Blocks while the channel is full. Returns false if it has been closed.
 - `fn hasNext() -> bool` — Blocks until a value is available or the channel is closed and empty.
 - `fn receiveOr(fallback: T) -> T` — Takes the next value, or returns `fallback` once closed and drained.
-- `fn receive() -> T` — Takes the next value; panics if the channel is closed and empty.
+- `fn receive() -> T` — Takes the next value; StateError once the channel is closed and empty.
 - `fn close()` — No more sends; wakes every waiting sender and receiver.
 - `fn size() -> int` — The number of values waiting in the channel.
 

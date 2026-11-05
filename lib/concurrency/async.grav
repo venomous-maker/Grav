@@ -151,7 +151,7 @@ namespace std.concurrency {
             return v;
         }
 
-        // Takes the next value; panics if the channel is closed and empty.
+        // Takes the next value; StateError once the channel is closed and empty.
         public fn receive() -> T {
             %{ GravSync* s = (GravSync*)self->h; pthread_mutex_lock(&s->mu);
                while (self->count == 0 && !self->closed) pthread_cond_wait(&s->notEmpty, &s->mu); %};
