@@ -336,6 +336,7 @@ private:
     struct GenericMethod { ClassDecl *owner; MethodDecl tpl; Subst classSubst; std::string ns; };
     std::vector<GenericMethod> genericMethods_;
     std::vector<std::pair<std::string, std::vector<TypeRef>>> methodRequests_;
+    int instanceDepth(const std::string &cls, int guard) const;
     std::unordered_map<std::string, bool> methodReqSeen_, methodDone_;
     void extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from, const Subst &classSubst);
     // Namespace-aware type arguments: `Array<Shape>` written inside namespace
@@ -377,8 +378,9 @@ private:
     void instantiateGenericMethods();
     // The template `name` (as written in the current namespace) refers to,
     // following namespaces and `use` declarations; "" when it is not one.
+    // The current namespace's own templates come first, global ones last, so library
+    // code keeps its own Pair even when the program declares a Pair of its own.
     template <typename M> std::string findTpl(const std::string &name, const M &map) const {
-        if (map.count(name)) return name;
         for (const auto &c : nameCandidates(name, currentNs_, program_.uses))
             if (map.count(c)) return c;
         return "";
@@ -1069,6 +1071,23 @@ void Mono::extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from,
     from = std::move(keep);
 }
 
+// How deeply generic instances nest inside class instance `cls`: Array<int> is 1,
+// Array<Pair<string, int>> is 2.
+int Mono::instanceDepth(const std::string &cls, int guard) const {
+    auto it = program_.generics.instances.find(cls);
+    if (it == program_.generics.instances.end() || guard > 32) return 0;
+    std::function<int(const TypeRef &)> depth = [&](const TypeRef &t) -> int {
+        int d = t.isNamed() ? instanceDepth(t.name, guard + 1) : 0;
+        for (const auto &a : t.args) d = std::max(d, depth(a));
+        for (const auto &a : t.fnParams) d = std::max(d, depth(a));
+        if (t.elem) d = std::max(d, depth(*t.elem));
+        return d;
+    };
+    int d = 0;
+    for (const auto &a : it->second.second) d = std::max(d, depth(a));
+    return 1 + d;
+}
+
 void Mono::instantiateGenericMethods() {
     for (bool progress = true; progress;) {
         progress = false;
@@ -1082,6 +1101,11 @@ void Mono::instantiateGenericMethods() {
                     genericMethods_[gi].tpl.typeParams.size() != args.size())
                     continue;
                 ClassDecl *owner = genericMethods_[gi].owner;
+                // A request names a method, not its receiver's class, so it reaches every
+                // class with a generic method of that name. When the instance creates a
+                // deeper class (Array<T>.zip<U> makes Array<Pair<T, U>>), that class gets the
+                // request too, without end. Real code never nests generic instances this deep.
+                if (instanceDepth(owner->name, 0) > 6) continue;
                 NsScope nsScope(currentNs_, genericMethods_[gi].ns);
                 std::string inst = instName(name, args);
                 std::string key = owner->name + "." + inst;
