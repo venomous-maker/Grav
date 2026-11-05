@@ -27,7 +27,7 @@ names (`std.collections.HashMap`) always work. The old flat paths (`lib/array.gr
 `prelude.grav` is loaded automatically before the first library module; its `use`
 lines let library code in one category refer to the others.
 
-Full documentation with examples: [docs/14-standard-library.md](../docs/14-standard-library.md).
+Full documentation with examples: [docs/std/](../docs/std/README.md), one page per module.
 
 ## Collections
 
@@ -75,7 +75,7 @@ All collections share `size()` (`length()` too), `isEmpty()`, `clear()`,
 | `sys/time` | **`Time`**, **`Stopwatch`** |
 | `sys/datetime` | **`DateTime`** — `of(y, m, d, …)`, fields, `weekday`, `format`, `toString`, `add…`, `daysUntil`, comparisons, `isLeapYear`, `daysInMonth` |
 | `io/term` | **`Term`** — ANSI styles and colours (256 and RGB), cursor control, `width`/`height` |
-| `concurrency/async` | **`Async`**, **`Mutex`**, **`AtomicInt`**, **`Channel<T>`**, `awaitAll` — see [docs/16-concurrency.md](../docs/16-concurrency.md) |
+| `concurrency/async` | **`Async`**, **`Mutex`**, **`AtomicInt`**, **`Channel<T>`**, `awaitAll` — see [Concurrency](../docs/learn/18-concurrency.md) |
 
 Every module is exercised by [`tests/lib/stdlib.grav`](../tests/lib/stdlib.grav),
 whose output `tests/run.sh` checks against a golden file.
@@ -93,4 +93,4 @@ whose output `tests/run.sh` checks against a golden file.
 | `net/http` | **`HttpServer`** (routes with `:params`, middleware, keep-alive), **`HttpClient`**, **`HttpRequest`**, **`HttpResponse`**, **`Url`**, **`Headers`** |
 | `net/websocket` | **`WebSocket`** (server via `WebSocket.route`, client via `connect`), **`WsMessage`** |
 
-See [docs/18-networking.md](../docs/18-networking.md).
+See [TCP](../docs/std/net/tcp.md), [HTTP](../docs/std/net/http.md) and [WebSocket](../docs/std/net/websocket.md).

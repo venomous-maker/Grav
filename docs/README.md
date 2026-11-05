@@ -1,12 +1,12 @@
-# The Grav Language
+# Grav documentation
 
-Grav is a statically typed, object-oriented language that compiles to C. It
-reads like TypeScript, builds to a native binary through your system C compiler,
-and gives you classes, interfaces, generics, lambdas, exceptions, and a
-standard library — with C's speed and an escape hatch straight into C.
+Grav is a statically typed language that compiles to C. It reads like TypeScript
+or Kotlin, checks your whole program before it runs, and builds a native
+executable through your system's C compiler: no virtual machine, no garbage
+collector pauses, and C libraries one `%{ ... %}` away.
 
 ```grav
-import "../lib/std.grav"
+import "std"
 
 class Greeter {
     private name: string
@@ -19,8 +19,7 @@ class Greeter {
 }
 
 fn main() {
-    let names = new Array<string>()
-    for (n in ["Ada", "Grace"]) { names.push(n) }
+    let names: Array<string> = ["Ada", "Grace"]
     names.forEach(fn(n) => print(new Greeter(n).greet(1)))
 }
 ```
@@ -32,31 +31,46 @@ Hello, Ada!
 Hello, Grace! 
 ```
 
-## Chapters
+## What Grav gives you
 
-| # | Chapter | What you'll learn |
-|---|---------|-------------------|
-| 1 | [Getting started](01-getting-started.md) | building `gravc`, compiling and running programs, compiler flags |
-| 2 | [Basics](02-basics.md) | types, variables, operators, casts, strings and interpolation |
-| 3 | [Control flow](03-control-flow.md) | `if`, loops, ranges, for-each, `switch`/`match`, `defer` |
-| 4 | [Functions](04-functions.md) | parameters, overloading, variadics, recursion, globals, `async` basics |
-| 5 | [Data types](05-data-types.md) | enums, data enums & pattern matching, `Result`/`Option`, structs, aliases, arrays, pointers, `null`, `binary` |
-| 6 | [Classes](06-classes.md) | fields, methods, access control, statics, constructors, destructors |
-| 7 | [Inheritance & interfaces](07-inheritance.md) | subclasses, abstract classes, interfaces, traits, composition, RTTI |
-| 8 | [Overloading & operators](08-overloading.md) | method/constructor overloading, operator methods, `toString` |
-| 9 | [Generics](09-generics.md) | generic types, functions, methods, constraints |
-| 10 | [Lambdas & closures](10-lambdas.md) | function types, closures, callbacks, higher-order collections |
-| 11 | [Exceptions](11-exceptions.md) | `throw`, `try`/`catch`/`finally`, custom error hierarchies |
-| 12 | [Memory](12-memory.md) | automatic reference counting, the cycle collector and `weak` fields, `free`, structs, strings, `defer` |
-| 13 | [Modules, namespaces & C interop](13-modules.md) | `import` forms, library categories, `use`, `grav.toml`, packages (`grav add`), `namespace`, macros, inline C |
-| 14 | [Standard library](14-standard-library.md) | conventions, 16 collection types, strings, formatting, math, random, files, processes, dates, terminal |
-| 15 | [How Grav compiles](15-how-it-compiles.md) | the pipeline, the generated C, performance, diagnostics |
-| 16 | [Concurrency](16-concurrency.md) | async tasks on a worker pool, `GRAV_MAXPROCS`, mutexes, atomics, channels, `--race` |
-| 17 | [Testing](17-testing.md) | `test` blocks, `assertEq`, `grav test`, filtering |
-| 18 | [Networking, JSON, threads & processes](18-networking.md) | `Json`, `Thread`/`WaitGroup`/`Semaphore`, `Command`, TCP, `HttpServer`/`HttpClient`, WebSockets |
-| — | [Writing operators](operators.md) | every overloadable operator, indexing with several keys, compound assignment, derived comparisons |
-| — | [Reference](reference.md) | keywords, operator precedence, built-ins, grammar summary |
+- **Static types with inference**: mistakes are caught at compile time, but you
+  rarely have to write a type down.
+- **Classes, interfaces, traits and generics**, with virtual dispatch only where
+  it is needed and generics specialised per type.
+- **Data enums and pattern matching**, checked for exhaustiveness.
+- **Null safety**: `int`, `string` and structs are never null; `T?`, `??`, `?.`,
+  `x!` and narrowing handle values that may be missing.
+- **Lambdas and closures**, with `map`, `filter` and `reduce` on collections.
+- **Exceptions**, `Result`, and panics with recovery for servers and threads.
+- **Automatic reference counting** with a cycle collector: memory is freed at a
+  predictable moment, with no pauses.
+- **Concurrency**: `async`/`await` on a worker pool, threads, mutexes, atomics and channels.
+- **C interop**: inline C, pointers and C types, for any C library.
+- **A standard library** with collections, text, JSON, files, processes, dates,
+  TCP, HTTP and WebSockets.
+- **Tools**: tests built into the language, a formatter, a package manager, and
+  editor support for VS Code, Neovim and JetBrains.
 
-Runnable programs for every chapter live in [`../examples/`](../examples/README.md).
-Every complete snippet in these docs (anything with a `fn main`) is compiled and run
-by [`tests/docs.sh`](../tests/docs.sh), so the examples here stay correct.
+## How these docs are organised
+
+| Section | Read it when |
+|---------|--------------|
+| [**Learn Grav**](learn/README.md) | you want to learn the language, from your first program to concurrency, one chapter at a time, with exercises |
+| [**Language reference**](reference/README.md) | you need the precise rules: syntax, keywords, types, operators, statements, built-in functions, the command line |
+| [**Standard library**](std/README.md) | you want to know what a module offers: one page per module, with examples and its full API |
+| [**Tools**](tools/editors.md) | you are setting up an editor, or the [MCP server](tools/mcp.md) for AI assistants |
+
+New to Grav? Start with [Getting started](learn/01-getting-started.md).
+
+## Quick links
+
+- [Install and run your first program](learn/01-getting-started.md)
+- [Every built-in function](reference/builtins.md)
+- [Every `grav` command and option](reference/cli.md)
+- [Operator precedence](reference/operators.md#precedence)
+- [Strings](std/text/string.md), [Array](std/collections/array.md), [HashMap](std/collections/hashmap.md), [JSON](std/data/json.md), [Files](std/io/fs.md), [HTTP](std/net/http.md)
+- [Longer example programs](../examples/README.md)
+
+Every complete program in these pages (anything with a `fn main`) is compiled
+and run by [`tests/docs.sh`](../tests/docs.sh), and its output is checked against
+the page, so the examples stay correct.

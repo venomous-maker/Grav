@@ -12,11 +12,16 @@ binary). The compiler — `gravc` — is written in C++20.
 
 ## Documentation
 
-The full language guide lives in [`docs/`](docs/README.md): sixteen chapters from
-[getting started](docs/01-getting-started.md) to
-[how Grav compiles](docs/15-how-it-compiles.md), plus a [reference](docs/reference.md)
-of keywords, operator precedence, and built-ins. Every runnable snippet in the docs
-is compiled and checked by `tests/docs.sh`.
+The documentation lives in [`docs/`](docs/README.md):
+
+- [**Learn Grav**](docs/learn/README.md): twenty chapters, from
+  [getting started](docs/learn/01-getting-started.md) to
+  [how Grav compiles](docs/learn/20-how-it-compiles.md), each with examples and exercises;
+- the [**language reference**](docs/reference/README.md): syntax, keywords, types,
+  operators, statements, built-in functions, the `grav` command;
+- the [**standard library reference**](docs/std/README.md): a page for every module.
+
+Every runnable snippet in the docs is compiled and checked by `tests/docs.sh`.
 
 ## Table of contents
 
@@ -580,7 +585,7 @@ fn main() {
 Share data between tasks through `Mutex`, `AtomicInt`, and `Channel<T>`
 (`lib/async.grav`); the runtime itself (exceptions, stack traces, library buffers) is
 thread-safe, and `--race` builds the program with ThreadSanitizer to catch unsafe
-sharing in your code. See [docs/16-concurrency.md](docs/16-concurrency.md) and
+sharing in your code. See [Concurrency](docs/learn/18-concurrency.md) and
 [16_async.grav](examples/16_async.grav).
 
 ### Structs
@@ -1095,7 +1100,7 @@ See [`src/codegen/README.md`](src/codegen/README.md) for the gory details.
 ├── CMakeLists.txt
 ├── examples/                # per-section programs, project/ (multi-file), apps/
 ├── lib/                     # standard library (collections, strings, math, fs, datetime, …)
-├── docs/                    # the language guide (chapters + reference)
+├── docs/                    # the guide (learn/), reference/, std/ (one page per module), tools/
 ├── tests/run.sh             # build + run every example against tests/expected/*.out
 ├── tests/docs.sh            # compile + run every snippet in docs/ and check its output
 ├── editors/                 # Neovim, VS Code, and JetBrains/CLion integrations
