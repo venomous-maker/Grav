@@ -64,15 +64,17 @@ namespace std.text {
     // Parses strings into primitive values.
     class Format {
         // ---- string -> value ----
-        // The integer parsers read leading digits ("12a" is 12, "x" is 0) and throw
-        // ValueError when the number does not fit the result type.
+        // The integer parsers take a whole number (spaces around it are allowed) and
+        // throw ValueError for anything else ("12a", "x", "") or a number that does not
+        // fit the result type. toIntOr / isInt avoid the exception.
         static fn toInt(s: string) -> int {
             let v = Format.toLong(s)
             if (v < -2147483648 || v > 2147483647) { throw new ValueError("'${s}' is out of range for int") }
             return v
         }
-        // Parses a whole number (leading digits; "x" is 0); ValueError when it does not fit in a long.
+        // Parses a whole number; ValueError when the text is not one or it does not fit in a long.
         static fn toLong(s: string) -> long {
+            if (!Format.isInt(s)) { throw new ValueError("'${s}' is not an integer") }
             let range = 0
             let v = %{ grav_parse_ll(s, &range) %} as long
             if (range != 0) { throw new ValueError("'${s}' is out of range for long") }
@@ -90,10 +92,13 @@ namespace std.text {
             if (v < 0 || v > 255) { throw new ValueError("'${s}' is out of range for byte") }
             return v
         }
-        // Parses a decimal number ("x" is 0.0).
-        static fn toFloat(s: string) -> float { return %{ atof(s) %} as float; }
-        // Parses a decimal number ("x" is 0.0).
-        static fn toDouble(s: string) -> double { return %{ atof(s) %} as double; }
+        // Parses a decimal number; ValueError when the text is not one.
+        static fn toFloat(s: string) -> float {
+            if (!Format.isNumber(s)) { throw new ValueError("'${s}' is not a number") }
+            return %{ atof(s) %} as float;
+        }
+        // Parses a decimal number; ValueError when the text is not one.
+        static fn toDouble(s: string) -> double { return Format.toFloat(s); }
         // true for "true", "1", "yes", "y", "on" (any case); false otherwise.
         static fn toBool(s: string) -> bool {
             return %{ (strcasecmp(s, "true") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "yes") == 0 ||
@@ -116,7 +121,7 @@ namespace std.text {
         }
         // Parses a float, or returns `fallback` unless the text is a valid number.
         static fn toFloatOr(s: string, fallback: float) -> float {
-            return Format.isNumber(s) ? Format.toFloat(s) : fallback;
+            return Format.isNumber(s) ? %{ atof(s) %} as float : fallback;
         }
         // Parse in another base: Format.parseInt("ff", 16) == 255 (fallback if invalid).
         static fn parseInt(s: string, base: int, fallback: long) -> long {

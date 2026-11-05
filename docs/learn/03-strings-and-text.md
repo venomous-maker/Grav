@@ -430,9 +430,9 @@ not a number: forty-two
 -1
 ```
 
-`Format.toInt` reads the leading digits and ignores the rest (`"12a"` is 12, and
-text with no digits is 0), so do not use it alone on input you do not trust.
-See [`Format`](../std/text/convert.md).
+`Format.toInt` throws a `ValueError` when the text is not a whole number
+(`"12a"`, `"forty-two"`, `""`), so either check first with `isInt`, use `toIntOr`,
+or catch the exception. See [`Format`](../std/text/convert.md).
 
 ## Summary
 

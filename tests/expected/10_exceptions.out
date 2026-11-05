@@ -20,4 +20,4 @@ inner saw: not a positive number: '-3'; re-throwing
 inner finally
 outer caught: ValueError: not a positive number: '-3'
 --- state survives into catch ---
-stopped after 2 values: not a positive number: 'x'
+stopped after 2 values: 'x' is not an integer

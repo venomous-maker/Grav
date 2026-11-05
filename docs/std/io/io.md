@@ -35,8 +35,8 @@ no line break, 42
 | `IO.flush()` | sends buffered output now |
 | `IO.readLine()`, `readLine()`, `input()` | one line, without its line break; `""` at the end |
 | `IO.prompt(msg)`, `prompt(msg)` | writes `msg`, then reads a line |
-| `IO.readInt()`, `readFloat()`, `readBool()` ... | reads a line and converts it ([`Format`](../text/convert.md) rules) |
-| `IO.promptInt(msg)` | prompts until the answer is an integer |
+| `IO.readInt()`, `readFloat()`, `readBool()` ... | reads a line and converts it; `ValueError` when it is not a number ([`Format`](../text/convert.md)) |
+| `IO.promptInt(msg)`, `IO.promptFloat(msg)` | writes `msg`, then reads the answer as a number |
 | `IO.readAll()`, `IO.readLines()` | everything left on standard input |
 
 Standard output is buffered when it is not a terminal; it is flushed before
@@ -60,9 +60,9 @@ anything is written to standard error and when the program ends.
 - `static fn input() -> string` — Reading (each read takes one line; "" at end of input).
 - `static fn readLine() -> string` — One line of standard input ("" at the end).
 - `static fn prompt(message: string) -> string` — Writes `message` (no newline) and reads the answer line.
-- `static fn readInt() -> int` — Reads a line as an int (see Format.toInt).
+- `static fn readInt() -> int` — Reads a line as an int (ValueError when it is not one; see Format.toInt).
 - `static fn readLong() -> long` — Reads a line as a long.
-- `static fn readFloat() -> float` — Reads a line as a float.
+- `static fn readFloat() -> float` — Reads a line as a float (ValueError when it is not a number).
 - `static fn readDouble() -> double` — Reads a line as a double.
 - `static fn readBool() -> bool` — Reads a line as a bool ("true", "1", "yes", "y", "on").
 - `static fn promptInt(message: string) -> int` — Writes `message` and reads the answer as an int.
@@ -74,8 +74,8 @@ anything is written to standard error and when the program ends.
 
 - `fn readLine() -> string` — One line of standard input ("" at the end).
 - `fn prompt(message: string) -> string` — Writes `message` (no newline) and reads the answer line.
-- `fn readInt() -> int` — Reads a line as an int.
-- `fn readFloat() -> float` — Reads a line as a float.
+- `fn readInt() -> int` — Reads a line as an int (ValueError when it is not one).
+- `fn readFloat() -> float` — Reads a line as a float (ValueError when it is not a number).
 - `fn readBool() -> bool` — Reads a line as a bool.
 - `fn promptInt(message: string) -> int` — Writes `message` and reads the answer as an int.
 - `fn eprint(message: string)` — Print to standard error (diagnostics) instead of stdout.

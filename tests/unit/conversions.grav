@@ -43,6 +43,32 @@ test "text to integers checks the range" {
     assertEq(failed, true)
 }
 
+test "text that is not a number is rejected" {
+    assertEq(Format.toInt(" 42 "), 42)
+    assertEq(Format.toFloat("2.5e1"), 25.0)
+    let bad = new Array<string>()
+    for (s in ["12a", "x", "", "4 2"]) {
+        try { Format.toInt(s) } catch (e: ValueError) { bad.push(s) }
+    }
+    assertEq(bad.size(), 4)
+    let msg = ""
+    try { Format.toFloat("abc") } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg, "'abc' is not a number")
+    assertEq(Format.toFloatOr("abc", 1.5), 1.5)
+}
+
+fn double(x: int) -> int { return x * 2 }
+
+test "built-in type names convert like int(x)" {
+    assertEq(long(3.9), 3 as long)
+    assertEq(byte(300), 44)
+    assertEq(uint(-1), 4294967295)
+    assertEq(int64(2.5), 2 as long)
+    assertEq(float32(1.5) * 2, 3.0)
+    assertEq(binary("hi").length, 2)
+    assertEq(double(21), 42)                 // a function of that name wins
+}
+
 test "numbers into enums must name a member" {
     assertEq(2 as Color, Color.Blue)
     let n = 7

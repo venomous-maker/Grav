@@ -45,11 +45,13 @@ false
 
 Parsing rules to know:
 
-- `toInt` and `toLong` read the leading digits and ignore the rest: `"12a"` is 12
-  and `"x"` is 0. They throw `ValueError` only when the number does not fit.
-  Check with `isInt` / `isNumber` first, or use `toIntOr(s, fallback)`, when the
-  text comes from outside.
-- `toFloat` reads a leading number the same way (`"x"` is 0.0).
+- `toInt`, `toLong`, `toUInt` and `toByte` accept a whole number, with spaces
+  around it allowed, and throw `ValueError` for anything else (`"12a"`, `"x"`,
+  `""`) or for a number that does not fit the type.
+- `toFloat` and `toDouble` accept any decimal number (`"2.5"`, `"1e3"`) and throw
+  `ValueError` otherwise.
+- To avoid the exception, check with `isInt` / `isNumber` first, or use
+  `toIntOr(s, fallback)`, `toLongOr` and `toFloatOr`.
 - `toBool` is `true` for `"true"`, `"1"`, `"yes"`, `"y"` and `"on"` in any case.
 
 ## API
@@ -62,12 +64,12 @@ Parses strings into primitive values.
 
 **Static members**
 
-- `static fn toInt(s: string) -> int` — The integer parsers read leading digits ("12a" is 12, "x" is 0) and throw ValueError when the number does not fit the result type.
-- `static fn toLong(s: string) -> long` — Parses a whole number (leading digits; "x" is 0); ValueError when it does not fit in a long.
+- `static fn toInt(s: string) -> int` — The integer parsers take a whole number (spaces around it are allowed) and throw ValueError for anything else ("12a", "x", "") or a number that does not fit the result type. toIntOr / isInt avoid the exception.
+- `static fn toLong(s: string) -> long` — Parses a whole number; ValueError when the text is not one or it does not fit in a long.
 - `static fn toUInt(s: string) -> uint` — Parses a whole number into a uint; ValueError when it is negative or too big.
 - `static fn toByte(s: string) -> byte` — Parses a whole number into a byte; ValueError outside 0..255.
-- `static fn toFloat(s: string) -> float` — Parses a decimal number ("x" is 0.0).
-- `static fn toDouble(s: string) -> double` — Parses a decimal number ("x" is 0.0).
+- `static fn toFloat(s: string) -> float` — Parses a decimal number; ValueError when the text is not one.
+- `static fn toDouble(s: string) -> double` — Parses a decimal number; ValueError when the text is not one.
 - `static fn toBool(s: string) -> bool` — true for "true", "1", "yes", "y", "on" (any case); false otherwise.
 - `static fn isInt(s: string) -> bool` — Whether the text (spaces around allowed) is exactly one integer.
 - `static fn isNumber(s: string) -> bool` — Whether the text (spaces around allowed) is exactly one number.
