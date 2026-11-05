@@ -1,4 +1,4 @@
-running 17 tests
+running 19 tests
   ok    locals and temporaries are freed at once
   ok    reassignment frees the old object
   ok    a long chain is freed without deep recursion
@@ -16,4 +16,6 @@ running 17 tests
   ok    loop variables and early exits keep unwinding balanced
   ok    a constructor that throws frees its half-built object
   ok    finally and rethrow free the frames they leave
-result: 17 passed, 0 failed
+  ok    faults free the locals of the frames they leave
+  ok    a recovered panic frees the locals of the frames it leaves
+result: 19 passed, 0 failed

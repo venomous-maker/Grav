@@ -266,3 +266,50 @@ test "finally and rethrow free the frames they leave" {
     assertEq(Live.count, base)
     assertEq(unwindDepth(), depth)
 }
+
+// Faults raise too: a scope with no calls left but an index, a division or a
+// field read through a reference still frees its locals when they fire.
+fn pick(i: int) -> int {
+    let held = new Tracked(1)
+    let label = "pick ${i}"
+    let xs: int[3] = [1, 2, 3]
+    return xs[i] + held.n + label.length
+}
+fn share(total: int, parts: int) -> int {
+    let held = new Tracked(2)
+    return total / parts + held.n
+}
+fn second(t: Tracked) -> int {
+    let held = new Tracked(3)
+    return t.next.n + held.n
+}
+fn viaClosure(i: int) -> int {
+    let k = new Tracked(4)
+    let add = fn(x: int) -> int { return x + k.n }
+    let xs: int[2] = [add(1), 2]
+    return xs[i]
+}
+
+test "faults free the locals of the frames they leave" {
+    let base = Live.count
+    let depth = unwindDepth()
+    for (i in 0..20) {
+        try { pick(9) } catch (e: IndexError) {}
+        try { share(10, 0) } catch (e: ArithmeticError) {}
+        try { viaClosure(3) } catch (e: IndexError) {}
+    }
+    assertEq(pick(1), 2 + 1 + 6)
+    assertEq(Live.count, base)
+    assertEq(unwindDepth(), depth)
+}
+
+test "a recovered panic frees the locals of the frames it leaves" {
+    let base = Live.count
+    let depth = unwindDepth()
+    for (i in 0..20) {
+        let failure = Panic.recover(fn() { print(second(new Tracked(0))) })
+        assert(Str.contains(failure, "null reference"))
+    }
+    assertEq(Live.count, base)
+    assertEq(unwindDepth(), depth)
+}
