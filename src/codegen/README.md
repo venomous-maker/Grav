@@ -52,7 +52,8 @@ declarations always precede use.
   unwind to the innermost loop.
 - **Unwinding through frames**: an exception is a `longjmp`, which skips the
   releases of every frame between the throw and its handler. So an owned local
-  whose scope can still make a call registers its address and a release
+  whose scope can still throw (a call, or a fault such as an index out of
+  range or a null access) registers its address and a release
   function (`grav_uw_push`; popped with `grav_uw_top--` where its scope ends).
   Each handler (`grav_try_push`, recovery points, the test runner) records the
   registry height, and `grav_throw`/`grav_rethrow` release the entries above it

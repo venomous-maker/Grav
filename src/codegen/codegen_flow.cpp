@@ -185,7 +185,7 @@ void CodeGen::emitTry(const TryStmt &s) {
         // The handler owns the caught object, released when the handler ends.
         line(ct + "* " + c.var + " = (" + ct + "*)grav_exc_take();");
         line("(void)" + c.var + ";");
-        bool reg = blockMayCall(c.block);
+        bool reg = blockMayThrow(c.block);
         if (reg) line("grav_uw_push((void*)&" + c.var + ", grav_uw_obj);");
         std::string varRelease = std::string(reg ? "grav_uw_top--; " : "") + "grav_release((void*)" + c.var + ");";
         cleanups_.push_back({Cleanup::Code, "", nullptr, varRelease});
@@ -307,7 +307,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         case ForInKind::Chars:
             // The string is held for the loop; each character is a fresh string.
             line("const char* " + src + " = " + emitOwned(*s.lo, s.lo->type) + ";");
-            srcReg = blockMayCall(s.body);
+            srcReg = blockMayThrow(s.body);
             if (srcReg) line(unwindPush(s.lo->type, src));
             cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(s.lo->type, src, srcReg)});
             ownedSrc = true;
@@ -343,7 +343,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     bool ownedVar = (s.iterKind == ForInKind::Object || s.iterKind == ForInKind::Chars) &&
                     refKind(s.varType) != RefKind::None;
     line(vty + " " + s.var + " = " + elem + ";");
-    bool varReg = ownedVar && blockMayCall(s.body);
+    bool varReg = ownedVar && blockMayThrow(s.body);
     if (varReg) line(unwindPush(s.varType, s.var));
     indent_--;
     if (ownedVar) loopVarRelease_ = ownedRelease(s.varType, s.var, varReg);
@@ -480,38 +480,88 @@ bool CodeGen::stmtMayCall(const Stmt &s) const {
     return false; // blocks, try, break/continue: their inner statements mark themselves
 }
 
-// Like stmtMayCall, but also looking inside nested blocks: whether running `s`
-// can reach a call (and so an exception that unwinds this frame).
-bool CodeGen::stmtMayCallDeep(const Stmt &s) const {
-    if (stmtMayCall(s)) return true;
-    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return blockMayCall(x->block);
+// Whether evaluating `e` can raise: a call (which may throw) or a run-time
+// fault (an index out of range, a division by zero, a null access, a failed
+// `as`), which throws IndexError/ArithmeticError or panics.
+bool CodeGen::exprMayThrow(const Expr *e) const {
+    if (!e) return false;
+    if (exprMayCall(e)) return true; // also true for any node it does not know
+    // What is left is literals, names and built-in operators.
+    if (dynamic_cast<const IndexExpr *>(e) || dynamic_cast<const DerefExpr *>(e) ||
+        dynamic_cast<const AsExpr *>(e) || dynamic_cast<const CastExpr *>(e))
+        return true;
+    if (auto *x = dynamic_cast<const BinaryExpr *>(e))
+        return x->op == BinaryOp::Div || x->op == BinaryOp::Mod || exprMayThrow(x->left.get()) ||
+               exprMayThrow(x->right.get());
+    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) return exprMayThrow(x->operand.get());
+    if (auto *x = dynamic_cast<const TernaryExpr *>(e))
+        return exprMayThrow(x->cond.get()) || exprMayThrow(x->thenExpr.get()) ||
+               exprMayThrow(x->elseExpr.get());
+    if (auto *x = dynamic_cast<const IsExpr *>(e)) return exprMayThrow(x->operand.get());
+    if (auto *x = dynamic_cast<const AddrOfExpr *>(e)) return exprMayThrow(x->operand.get());
+    if (auto *x = dynamic_cast<const IncDecExpr *>(e)) return exprMayThrow(x->target.get());
+    if (auto *x = dynamic_cast<const MemberExpr *>(e)) {
+        // Through a reference that may be null (`?.` checks first; a string or a
+        // value struct is never null).
+        const TypeRef &ot = x->object->type;
+        RefKind k = refKind(ot);
+        if (!x->optional && (ot.isPointer() || k == RefKind::Obj || k == RefKind::Iface || k == RefKind::Any))
+            return true;
+        return exprMayThrow(x->object.get());
+    }
+    if (auto *x = dynamic_cast<const ArrayLiteralExpr *>(e)) {
+        for (const auto &el : x->elements) if (exprMayThrow(el.get())) return true;
+        return false;
+    }
+    if (auto *x = dynamic_cast<const StructLiteralExpr *>(e)) {
+        for (const auto &f : x->fields) if (exprMayThrow(f.value.get())) return true;
+        return false;
+    }
+    return false;
+}
+
+// Whether running `s`, including its nested blocks, can raise an exception or a
+// panic that unwinds this frame.
+bool CodeGen::stmtMayThrow(const Stmt &s) const {
+    if (auto *x = dynamic_cast<const LetStmt *>(&s)) return exprMayThrow(x->init.get());
+    if (auto *x = dynamic_cast<const AssignStmt *>(&s))
+        return exprMayThrow(x->target.get()) || exprMayThrow(x->value.get());
+    if (auto *x = dynamic_cast<const ReturnStmt *>(&s)) return exprMayThrow(x->value.get());
+    if (auto *x = dynamic_cast<const ExprStmt *>(&s)) return exprMayThrow(x->expr.get());
+    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return blockMayThrow(x->block);
     if (auto *x = dynamic_cast<const IfStmt *>(&s))
-        return blockMayCall(x->thenBlock) || (x->elseStmt && stmtMayCallDeep(*x->elseStmt));
-    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return blockMayCall(x->body);
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return blockMayCall(x->body);
-    if (auto *x = dynamic_cast<const ForStmt *>(&s)) return blockMayCall(x->body);
-    if (auto *x = dynamic_cast<const ForInStmt *>(&s)) return blockMayCall(x->body);
-    if (auto *x = dynamic_cast<const DeferStmt *>(&s)) return blockMayCall(x->body);
+        return exprMayThrow(x->cond.get()) || blockMayThrow(x->thenBlock) ||
+               (x->elseStmt && stmtMayThrow(*x->elseStmt));
+    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exprMayThrow(x->cond.get()) || blockMayThrow(x->body);
+    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exprMayThrow(x->cond.get()) || blockMayThrow(x->body);
+    if (auto *x = dynamic_cast<const ForStmt *>(&s))
+        return (x->init && stmtMayThrow(*x->init)) || exprMayThrow(x->cond.get()) ||
+               (x->update && stmtMayThrow(*x->update)) || blockMayThrow(x->body);
+    if (auto *x = dynamic_cast<const ForInStmt *>(&s))
+        return x->iterKind == ForInKind::Object || exprMayThrow(x->lo.get()) || exprMayThrow(x->hi.get()) ||
+               exprMayThrow(x->step.get()) || blockMayThrow(x->body);
+    if (auto *x = dynamic_cast<const DeferStmt *>(&s)) return blockMayThrow(x->body);
     if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+        if (exprMayThrow(x->subject.get())) return true;
         for (const auto &c : x->cases) {
-            if (exprMayCall(c.guard.get()) || blockMayCall(c.body)) return true;
-            for (const auto &v : c.values) if (exprMayCall(v.get())) return true;
+            if (exprMayThrow(c.guard.get()) || blockMayThrow(c.body)) return true;
+            for (const auto &v : c.values) if (exprMayThrow(v.get())) return true;
+            for (const auto &v : c.rangeHi) if (exprMayThrow(v.get())) return true;
         }
-        return blockMayCall(x->defaultBody);
+        return blockMayThrow(x->defaultBody);
     }
     if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
-        if (blockMayCall(x->tryBlock) || blockMayCall(x->finallyBlock)) return true;
-        for (const auto &c : x->catches) if (blockMayCall(c.block)) return true;
+        if (blockMayThrow(x->tryBlock) || blockMayThrow(x->finallyBlock)) return true;
+        for (const auto &c : x->catches) if (blockMayThrow(c.block)) return true;
         return false;
     }
     if (dynamic_cast<const BreakStmt *>(&s) || dynamic_cast<const ContinueStmt *>(&s)) return false;
-    return !dynamic_cast<const LetStmt *>(&s) && !dynamic_cast<const AssignStmt *>(&s) &&
-           !dynamic_cast<const ReturnStmt *>(&s) && !dynamic_cast<const ExprStmt *>(&s);
+    return true; // throw, and anything unknown
 }
 
-bool CodeGen::blockMayCall(const Block &b, size_t from) const {
+bool CodeGen::blockMayThrow(const Block &b, size_t from) const {
     for (size_t i = from; i < b.statements.size(); i++)
-        if (stmtMayCallDeep(*b.statements[i])) return true;
+        if (stmtMayThrow(*b.statements[i])) return true;
     return false;
 }
 

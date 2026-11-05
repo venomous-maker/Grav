@@ -214,14 +214,14 @@ std::string CodeGen::ownedRelease(const TypeRef &t, const std::string &var, bool
     return rel.empty() || !registered ? rel : "grav_uw_top--; " + rel;
 }
 
-// Whether a call can happen after `s` while its scope lasts: the statements
+// Whether a throw or fault can happen after `s` while its scope lasts: the statements
 // after it in its block (a statement nested elsewhere, like a `for` header's
 // `let`, is assumed to).
-bool CodeGen::restOfBlockMayCall(const Stmt &s) const {
+bool CodeGen::restOfBlockMayThrow(const Stmt &s) const {
     if (!curBlock_ || curStmt_ >= curBlock_->statements.size() ||
         curBlock_->statements[curStmt_].get() != &s)
         return true;
-    return blockMayCall(*curBlock_, curStmt_ + 1);
+    return blockMayThrow(*curBlock_, curStmt_ + 1);
 }
 
 std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const {
@@ -442,7 +442,7 @@ void CodeGen::ownAssignedParams(const Block &body, const std::vector<Param> &par
         if (!assigned.count(p.name) || refKind(p.type) == RefKind::None || p.variadic) continue;
         const std::string &n = p.name;
         line(n + " = " + retainOf(p.type, n) + ";");
-        bool reg = blockMayCall(body);
+        bool reg = blockMayThrow(body);
         if (reg) line(unwindPush(p.type, n));
         cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(p.type, n, reg)});
     }
