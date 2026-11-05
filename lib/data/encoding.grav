@@ -211,9 +211,7 @@ namespace std.data {
     class Utf8 {
         // The number of characters (code points); "héllo" has 5 (and 6 bytes).
         static fn count(s: string) -> int {
-            let n = 0
-            for (ch in s) { n += 1 }
-            return n
+            return %{ ({ long long grav_n = 0; for (const unsigned char* grav_p = (const unsigned char*)s; *grav_p; grav_p += grav_utf8_len((const char*)grav_p)) grav_n++; grav_n; }) %} as int
         }
         // The characters, each as a one-character string.
         static fn chars(s: string) -> Array<string> {
