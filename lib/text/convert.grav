@@ -7,6 +7,8 @@
 // built-in `str(x)`, which works for every printable type, so no second class is
 // needed. Numeric casts `int(x)` / `float(x)` / `bool(x)` are also built in.
 
+import "../core/exception.grav"
+
 namespace std.text {
 
     %{

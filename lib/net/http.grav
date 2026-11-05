@@ -16,6 +16,8 @@
 // with keep-alive; a handler that throws produces a 500 response. Query string
 // values are available as req.query("name").
 import "../collections/array.grav"
+import "../core/panic.grav"
+import "../io/io.grav"
 import "../collections/hashmap.grav"
 import "../text/string.grav"
 import "../text/convert.grav"

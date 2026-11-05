@@ -16,6 +16,7 @@
 // Share data between threads only through these types, lib/async.grav's Mutex,
 // AtomicInt and Channel, or values nobody mutates.
 import "../core/exception.grav"
+import "../core/panic.grav"
 import "async.grav"
 
 namespace std.concurrency {

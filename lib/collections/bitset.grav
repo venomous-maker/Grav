@@ -6,6 +6,7 @@
 //   print(flags.get(3))          // true
 
 import "../core/exception.grav"
+import "array.grav"
 namespace std.collections {
 
     %{
