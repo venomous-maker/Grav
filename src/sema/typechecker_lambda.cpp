@@ -39,7 +39,7 @@ TypeRef TypeChecker::checkExprExpect(Expr &e, const TypeRef &expected) {
     expected_ = dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<NameExpr *>(&e) ||
                         dynamic_cast<NewExpr *>(&e) || dynamic_cast<CallExpr *>(&e) ||
                         dynamic_cast<TernaryExpr *>(&e) || dynamic_cast<ArrayLiteralExpr *>(&e) ||
-                        dynamic_cast<DefaultArgExpr *>(&e)
+                        dynamic_cast<DefaultArgExpr *>(&e) || dynamic_cast<MemberExpr *>(&e)
                     ? &expected
                     : nullptr;
     TypeRef t = checkExpr(e);

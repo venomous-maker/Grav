@@ -1,0 +1,8 @@
+running 6 tests
+  ok    slices
+  ok    spreading into a variadic parameter
+  ok    format specs in interpolation
+  ok    methods on structs
+  ok    enum members with values
+  ok    methods as values
+result: 6 passed, 0 failed

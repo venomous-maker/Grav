@@ -1,0 +1,22 @@
+gravc: tests/errors/values.grav:8:16: type error: a slice of a fixed-length array needs constant bounds (use Array<T> for others)
+        print(fixed[i..2])
+                   ^
+gravc: tests/errors/values.grav:9:16: type error: the slice [0..9) does not fit in int[3]
+        print(fixed[0..9])
+                   ^
+gravc: tests/errors/values.grav:11:12: type error: format 'x' needs an integer, but got a float
+        print("${pi:x}")
+               ^
+gravc: tests/errors/values.grav:12:17: type error: to use 'm' as a value, put the object in a variable first
+        print(make().m)
+                    ^
+gravc: tests/errors/values.grav:14:12: type error: method 'o' is overloaded; give the variable a function type to pick one
+        print(c.o)
+               ^
+gravc: tests/errors/values.grav:16:18: type error: the spread elements are string, but 'sum' takes int
+        print(sum(...names))
+                     ^
+gravc: tests/errors/values.grav:17:21: type error: call 'get' on a struct variable or field (the method may change it): `let v = ...` then `v.get()`
+        print(P { x: 1 }.get())
+                        ^
+gravc: 7 error(s); aborting

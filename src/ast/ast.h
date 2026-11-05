@@ -222,6 +222,9 @@ struct MemberExpr : Expr {
     std::string ownerClass;
     // For StaticTarget / NamespaceTarget: the resolved qualified prefix.
     std::string qualified;
+    // `obj.method` used as a value: the checker's `fn(args) => obj.method(args)`,
+    // which stands in for this expression from then on.
+    ExprPtr bound;
 };
 
 // `new ClassName(args)`.

@@ -95,7 +95,7 @@ void walkExpr(Expr *e) {
         if (x->kind == CallKind::FnValue || !dynamic_cast<NameExpr *>(x->callee.get()))
             walkExpr(x->callee.get());
         for (auto &a : x->args) walkExpr(a.get());
-    } else if (auto *x = dynamic_cast<MemberExpr *>(e)) walkExpr(x->object.get());
+    } else if (auto *x = dynamic_cast<MemberExpr *>(e)) { walkExpr(x->object.get()); walkExpr(x->bound.get()); }
     else if (auto *x = dynamic_cast<LambdaExpr *>(e)) {
         for (auto &p : x->params) fix(p.name);
         for (auto &c : x->captures) fix(c.name);

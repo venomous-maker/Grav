@@ -1,0 +1,18 @@
+struct P { x: int  fn get() -> int { return self.x } }
+class C { fn m() -> int { return 1 }  fn o(x: int) -> int { return x }  fn o(x: string) -> int { return 0 } }
+fn make() -> C { return new C() }
+fn sum(...xs: int) -> int { return 0 }
+fn main() {
+    let fixed = [1, 2, 3]
+    let i = 1
+    print(fixed[i..2])
+    print(fixed[0..9])
+    let pi = 3.0
+    print("${pi:x}")
+    print(make().m)
+    let c = new C()
+    print(c.o)
+    let names = ["a", "b"]
+    print(sum(...names))
+    print(P { x: 1 }.get())
+}

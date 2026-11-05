@@ -1,0 +1,99 @@
+// Slices, spreading into variadics, format specs, struct methods, enum values
+// and methods used as values.
+import "std"
+
+enum Http { Ok = 200, Created, NotFound = 404 }
+enum Sign { Neg = -1, Zero, Pos }
+struct Point {
+    x: int
+    y: int
+    fn sum() -> int { return self.x + self.y }
+    fn moveBy(dx: int, dy: int) { self.x += dx; self.y += dy }
+    fn scaled(k: int) -> Point { return Point { x: self.x * k, y: self.y * k } }
+}
+struct Cell<T> { v: T  fn get() -> T { return self.v }  fn set(v: T) { self.v = v } }
+class Counter {
+    public n: int
+    constructor() { self.n = 0 }
+    fn add(k: int) -> int { self.n += k; return self.n }
+    fn label(x: int) -> string { return "int ${x}" }
+    fn label(x: string) -> string { return "str ${x}" }
+}
+
+fn sum(...xs: int) -> int { let t = 0  for (x in xs) { t += x }  return t }
+fn tagged(prefix: string, ...xs: int) -> string { return prefix + str(sum(...xs)) }
+fn apply(f: fn(int) -> int, v: int) -> int { return f(v) }
+
+test "slices" {
+    let s = "hello world"
+    assertEq(s[0..5], "hello")
+    assertEq(s[6..], "world")
+    assertEq(s[..=4], "hello")
+    assertEq(s[3..100], "lo world")
+    let xs = new Array<int>()
+    for (n in [5, 6, 7, 8]) { xs.push(n) }
+    assertEq(str(xs[1..3]), "[6, 7]")
+    assertEq(str(xs[2..]), "[7, 8]")
+    let fixed = [1, 2, 3, 4, 5]
+    let mid = fixed[1..4]
+    assertEq(mid.length, 3)
+    assertEq(str(fixed[..=1]), "[1, 2]")
+}
+
+test "spreading into a variadic parameter" {
+    let arr = [1, 2, 3]
+    assertEq(sum(...arr), 6)
+    let list = new Array<int>()
+    list.push(10)
+    list.push(20)
+    assertEq(sum(...list), 30)
+    assertEq(tagged("total ", ...arr), "total 6")
+}
+
+test "format specs in interpolation" {
+    let pi = 3.14159265
+    assertEq("${pi:.2f}|${pi:8.3f}|${0.256:.1%}", "3.14|   3.142|25.6%")
+    let n = 42
+    assertEq("${n:5}|${n:<5}|${n:^6}|${n:05}|${-n:05}|${n:+}", "   42|42   |  42  |00042|-0042|+42")
+    assertEq("${n:x}|${255:X}|${n:b}|${n:o}", "2a|FF|101010|52")
+    assertEq("${"hi":5}|${"hi":>5}|${"hello":.3}", "hi   |   hi|hel")
+    let flag = true
+    assertEq("${flag ? "yes" : "no"}", "yes")
+}
+
+test "methods on structs" {
+    let p = Point { x: 1, y: 2 }
+    assertEq(p.sum(), 3)
+    p.moveBy(10, 20)
+    assertEq(p.sum(), 33)
+    assertEq(str(p.scaled(2)), "Point { x: 22, y: 44 }")
+    let c = Cell<string> { v: "a" }
+    c.set("b")
+    assertEq(c.get(), "b")
+    let points = [Point { x: 1, y: 1 }, Point { x: 2, y: 2 }]
+    points[1].moveBy(1, 1)
+    assertEq(points[1].sum(), 6)
+}
+
+test "enum members with values" {
+    assertEq(int(Http.Created), 201)
+    assertEq(404 as Http, Http.NotFound)
+    assertEq(str(Http.Created), "Created")
+    assertEq(int(Sign.Neg) + int(Sign.Pos), 0)
+    let msg = ""
+    try { print(405 as Http) } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg, "405 is not a Http value")
+}
+
+test "methods as values" {
+    let c = new Counter()
+    let add = c.add
+    add(5)
+    assertEq(apply(c.add, 2), 7)
+    let f: fn(string) -> string = c.label
+    assertEq(f("x"), "str x")
+    let xs = new Array<int>()
+    for (n in [1, 2, 3]) { xs.push(n) }
+    xs.forEach(fn(v) { c.add(v) })
+    assertEq(c.n, 13)
+}

@@ -42,7 +42,7 @@ From loosest to tightest binding:
 | 12 | `**` | right |
 | 13 | `as`, `is` (`x is T` also tests what an `any` holds) | left |
 | 14 | unary `- ! ~ ++ -- await`, `&` `*` (address/deref), `(T)x` casts | right |
-| 15 | calls `f()`, `::<T>()`, indexing `a[i]`, members `.` `?.` `->`, postfix `++ --` | left |
+| 15 | calls `f()`, `f(...xs)`, `::<T>()`, indexing `a[i]`, slices `a[lo..hi]`, members `.` `?.` `->`, postfix `++ --` | left |
 
 Assignment (`=`, `+=`, …) is a statement, not an expression. Operands and arguments
 are evaluated left to right; `&&`, `||`, `??`, `?:`, and `?.` short-circuit.

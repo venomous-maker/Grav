@@ -178,6 +178,7 @@ void CodeGen::collectInExpr(const Expr &expr) {
         if (e->callee) collectInExpr(*e->callee);
         for (const auto &a : e->args) collectInExpr(*a);
     } else if (auto *e = dynamic_cast<const MemberExpr *>(&expr)) {
+        if (e->bound) { collectInExpr(*e->bound); return; } // a method used as a value
         if (e->object) collectInExpr(*e->object);
     } else if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) {
         // Inner lambdas first, so each is lifted before the code that creates it.

@@ -220,6 +220,7 @@ bool CodeGen::isRefProducer(const Expr &e) const {
         (dynamic_cast<const StructLiteralExpr *>(&e) || dynamic_cast<const ArrayLiteralExpr *>(&e)))
         return true;
     if (auto *l = dynamic_cast<const LambdaExpr *>(&e)) return !l->captures.empty();
+    if (auto *m = dynamic_cast<const MemberExpr *>(&e); m && m->bound) return isRefProducer(*m->bound);
     if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
         if (c->kind == CallKind::Builtin) {
             if (c->targetName == "__retain") return true;
@@ -429,6 +430,7 @@ bool CodeGen::isWeakField(const MemberExpr &m) const {
 bool CodeGen::isUnstableRef(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
     if (auto *ix = dynamic_cast<const IndexExpr *>(&e)) return ix->overloadClass.empty() && !ix->isSlice; // operator[] results and slices are fresh
+    if (auto *m = dynamic_cast<const MemberExpr *>(&e); m && m->bound) return false;
     if (dynamic_cast<const MemberExpr *>(&e) || dynamic_cast<const DerefExpr *>(&e)) return true;
     if (auto *n = dynamic_cast<const NameExpr *>(&e)) return !n->resolvedGlobal.empty();
     return false;

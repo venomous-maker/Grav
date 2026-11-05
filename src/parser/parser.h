@@ -80,10 +80,10 @@ private:
     Block parseArmValue();
     StmtPtr parseDestructure(const Token &kw);
     bool destructureAhead() const;
-    std::vector<StmtPtr> pendingStmts_; // more statements from the last one (destructuring)
-    int destructureCounter_ = 0;
     void parseStructMethod(StructDecl &st);
     std::vector<DeclPtr> pendingDecls_; // declarations made alongside the last one (struct methods)
+    std::vector<StmtPtr> pendingStmts_; // more statements from the last one (destructuring)
+    int destructureCounter_ = 0;
     bool lastArgsSpread_ = false; // the last parseArguments() ended with `...xs`
     Block parseCaseBody();
     StmtPtr parseTry();

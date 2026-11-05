@@ -155,8 +155,8 @@ objects like class instances.
 
 ## Structs
 
-A struct is a plain value type: named fields, no methods, copied on assignment.
-Create one with a literal that names every field.
+A struct is a plain value type: named fields, copied on assignment. Create one with
+a literal that names every field.
 
 ```grav
 struct Point { x: int  y: int }

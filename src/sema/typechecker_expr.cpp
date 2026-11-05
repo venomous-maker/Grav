@@ -1,6 +1,8 @@
 #include "sema/typechecker.h"
+#include "sema/monomorph.h"
 
 #include <algorithm>
+#include <functional>
 
 namespace grav {
 
@@ -1457,7 +1459,63 @@ std::optional<TypeRef> TypeChecker::tryStaticField(MemberExpr &e) {
     return gi->type;
 }
 
+// `obj.method` as a value: `fn(a, b) => obj.method(a, b)`. The object is read
+// when the function is called, so it must be a variable, `self`, or fields of
+// those. An overloaded method needs the expected function type to pick one.
+TypeRef TypeChecker::bindMethod(MemberExpr &e, const TypeRef &objType, const TypeRef *want) {
+    std::function<bool(const Expr *)> pure = [&](const Expr *x) {
+        if (dynamic_cast<const NameExpr *>(x) || dynamic_cast<const SelfExpr *>(x)) return true;
+        if (auto *m = dynamic_cast<const MemberExpr *>(x)) return pure(m->object.get());
+        return false;
+    };
+    if (!pure(e.object.get())) {
+        error(e.line, e.col, "to use '" + e.member + "' as a value, put the object in a variable first");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    std::vector<const MethodInfo *> cands;
+    for (const MethodInfo *m : reg_->findMethodsBySource(objType.name, e.member))
+        if (!m->isStatic) cands.push_back(m);
+    const MethodInfo *mi = cands.size() == 1 ? cands[0] : nullptr;
+    if (!mi && want && want->isFunction())
+        for (const MethodInfo *m : cands)
+            if (m->paramTypes == want->fnParams) mi = m;
+    if (!mi) {
+        error(e.line, e.col, "method '" + e.member + "' is overloaded; give the variable a function type to pick one");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    auto lam = std::make_unique<LambdaExpr>();
+    lam->line = e.line;
+    lam->col = e.col;
+    lam->isArrow = true;
+    auto call = std::make_unique<CallExpr>();
+    call->line = e.line;
+    call->col = e.col;
+    auto callee = std::make_unique<MemberExpr>();
+    callee->line = e.line;
+    callee->col = e.col;
+    callee->object = cloneExpression(e.object.get());
+    callee->member = e.member;
+    call->callee = std::move(callee);
+    for (size_t i = 0; i < mi->paramTypes.size(); ++i) {
+        Param p;
+        p.name = "arg__" + std::to_string(i);
+        p.type = mi->paramTypes[i];
+        lam->params.push_back(p);
+        lam->paramTyped.push_back(true);
+        auto n = std::make_unique<NameExpr>();
+        n->name = p.name;
+        n->line = e.line;
+        n->col = e.col;
+        call->args.push_back(std::move(n));
+    }
+    lam->exprBody = std::move(call);
+    e.bound = std::move(lam);
+    return checkExpr(*e.bound);
+}
+
 TypeRef TypeChecker::checkMember(MemberExpr &e) {
+    const TypeRef *expMember = expected_; // a function type picks an overloaded method value
+    expected_ = nullptr;
     // `EnumType.Member` is a constant, not a field access on a value.
     if (auto enumTy = tryEnumValue(e)) return *enumTy;
     if (auto sf = tryStaticField(e)) return *sf;
@@ -1502,7 +1560,7 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
     const FieldInfo *f = reg_->findField(objType.name, e.member);
     if (!f) {
         if (reg_->findMethod(objType.name, e.member))
-            error(e.line, e.col, "method '" + e.member + "' must be called");
+            return bindMethod(e, objType, expMember);
         else
             error(e.line, e.col, "type '" + objType.name + "' has no field '" +
                                      e.member + "'");

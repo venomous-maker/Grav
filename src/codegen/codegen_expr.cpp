@@ -478,6 +478,13 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         // `EnumType.Member` lowers to the C enum constant.
         if (e->kind == MemberKind::EnumValue)
             return enumConst(e->qualified, e->member);
+        if (e->bound) { // a method used as a value: its lambda, which this expression's user owns
+            const Expr *saved = ownedRoot_;
+            ownedRoot_ = e->bound.get();
+            std::string out = emitExpr(*e->bound);
+            ownedRoot_ = saved;
+            return out;
+        }
         // `Class.staticField` lowers to the static global's C name.
         if (e->kind == MemberKind::StaticField)
             return e->qualified;

@@ -126,7 +126,7 @@ struct Visitor {
         else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a.get()); }
         else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value.get()); }
         else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee.get()); for (auto &a : x->args) expr(a.get()); }
-        else if (auto *x = dynamic_cast<MemberExpr *>(e)) expr(x->object.get());
+        else if (auto *x = dynamic_cast<MemberExpr *>(e)) { expr(x->object.get()); expr(x->bound.get()); }
         else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody.get()); block(x->body); }
         else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value.get());
         else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value.get());
@@ -186,7 +186,7 @@ struct Rewriter {
         else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a); }
         else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value); }
         else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee); for (auto &a : x->args) expr(a); }
-        else if (auto *x = dynamic_cast<MemberExpr *>(e)) expr(x->object);
+        else if (auto *x = dynamic_cast<MemberExpr *>(e)) { expr(x->object); expr(x->bound); }
         else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody); block(x->body); }
         else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value);
         else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value);

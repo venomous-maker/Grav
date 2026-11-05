@@ -73,6 +73,10 @@ Output:
 hey!
 ```
 
+A method of an object is a value too: `let f = counter.add` is a function that
+calls `add` on that object (named by a variable, `self`, or a field). An overloaded
+method needs the function type to pick one: `let f: fn(string) -> string = x.label`.
+
 ## Closures
 
 A lambda can use variables from the surrounding scope. They are **captured by
