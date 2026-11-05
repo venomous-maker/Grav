@@ -155,3 +155,32 @@ test "sorting numbers and strings" {
     Sort.sortDescending(ss)
     assertEq(ss.first(), "pear")
 }
+
+test "JSON storage: replace, remove, large objects, shared children" {
+    let doc = Json.parse("{\"n\": 42, \"f\": 2.5, \"big\": 9007199254740993, \"z\": null, \"arr\": [1, [2, {\"k\": \"v\"}], false, -0.5e2]}")
+    assertEq(doc.toJson(), "{\"n\":42,\"f\":2.5,\"big\":9007199254740993,\"z\":null,\"arr\":[1,[2,{\"k\":\"v\"}],false,-50]}")
+    assertEq(doc.getLong("big", 0), 9007199254740993)
+    assertEq(doc.getFloat("n", 0.0), 42.0)
+    assertEq(doc.path("arr.1.1.k").asString(), "v")
+    doc.set("n", "replaced")
+    assertEq(doc.remove("f"), true)
+    assertEq(doc.remove("missing"), false)
+    assertEq(str(doc.keys()), "[\"n\", \"big\", \"z\", \"arr\"]")
+    let big = Json.object()
+    for (i in 0..20) { big.set("k${i}", i as long) }
+    big.set("k3", "three")
+    big.remove("k0")
+    assertEq("${big.size()} ${big["k3"].asString()} ${big["k19"].asInt()} ${big.has("k0")}", "19 three 19 false")
+    let o = Json.object()
+    o["x"] = Json.object().set("y", 1 as long)
+    o["x"].set("y", 2 as long)
+    assertEq(o.toJson(), "{\"x\":{\"y\":2}}")
+    assertEq(Json.parse("{\"a\":1,\"b\":[true]}") == Json.parse("{\"b\":[true],\"a\":1}"), true)
+    let loop = Json.array()
+    loop.push(loop)
+    assertEq(loop.size(), 1)
+    assertEq(Json.parse("\"top\"").asString(), "top")
+    let a = doc["arr"].asArray()
+    a.push(Json.of(9 as long))
+    assertEq(doc["arr"].size(), 4)
+}

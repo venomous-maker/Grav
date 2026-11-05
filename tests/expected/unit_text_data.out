@@ -1,4 +1,4 @@
-running 10 tests
+running 11 tests
   ok    regex: find, groups, replace, split
   ok    Str: splitting, cases, wrapping, distance
   ok    string literals survive C trigraphs
@@ -9,4 +9,5 @@ running 10 tests
   ok    string length and indexing stay correct
   ok    large inputs stay linear
   ok    sorting numbers and strings
-result: 10 passed, 0 failed
+  ok    JSON storage: replace, remove, large objects, shared children
+result: 11 passed, 0 failed
