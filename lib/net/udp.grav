@@ -1,0 +1,180 @@
+// lib/net/udp.grav — UDP datagrams (IPv4 and IPv6).
+//
+//   let server = UdpSocket.bind("127.0.0.1", 0)       // port 0: any free port
+//   let client = UdpSocket.open()
+//   client.sendTo("127.0.0.1", server.port(), "ping")
+//   let p = server.receive()                           // waits for a datagram
+//   server.sendTo(p.host(), p.port(), "pong: " + p.text())
+//
+// UDP sends separate messages (datagrams) without a connection: each may be lost,
+// duplicated or reordered, and is at most about 64 KB. Failures throw NetError; a
+// receive that waits longer than setTimeoutMs() throws TimeoutError.
+import "../core/exception.grav"
+import "../data/bytes.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "tcp.grav"
+
+namespace std.net {
+
+    %{
+    /* Opens a datagram socket bound to host:port (host "" or "*": every interface).
+       Returns the fd, or -1 with *err set. */
+    static int grav_udp_bind(const char* host, int port, const char** err) {
+        grav_net_init();
+        struct addrinfo hints, *res = 0, *ai;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_PASSIVE;
+        char ps[16]; snprintf(ps, sizeof ps, "%d", port);
+        const char* h = (host[0] == 0 || strcmp(host, "*") == 0) ? 0 : host;
+        int rc = getaddrinfo(h, ps, &hints, &res);
+        if (rc != 0) { *err = grav_net_err("cannot resolve", gai_strerror(rc)); return -1; }
+        int fd = -1, e = 0;
+        for (ai = res; ai; ai = ai->ai_next) {
+            fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (fd < 0) { e = errno; continue; }
+            int one = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+            if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+            e = errno; close(fd); fd = -1;
+        }
+        freeaddrinfo(res);
+        if (fd < 0) *err = grav_net_err("cannot bind", strerror(e));
+        return fd;
+    }
+    static int grav_udp_port(int fd) {
+        struct sockaddr_storage ss; socklen_t n = sizeof ss;
+        if (getsockname(fd, (struct sockaddr*)&ss, &n) != 0) return -1;
+        if (ss.ss_family == AF_INET) return ntohs(((struct sockaddr_in*)&ss)->sin_port);
+        return ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
+    }
+    static int grav_udp_family(int fd) {
+        struct sockaddr_storage ss; socklen_t n = sizeof ss;
+        if (getsockname(fd, (struct sockaddr*)&ss, &n) != 0) return AF_INET;
+        return ss.ss_family;
+    }
+    /* Sends n bytes to host:port; returns NULL, or the error text. */
+    static const char* grav_udp_send(int fd, const char* host, int port, const unsigned char* p, long long n) {
+        struct addrinfo hints, *res = 0;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = grav_udp_family(fd);
+        hints.ai_socktype = SOCK_DGRAM;
+        if (hints.ai_family == AF_INET6) hints.ai_flags = AI_V4MAPPED;
+        char ps[16]; snprintf(ps, sizeof ps, "%d", port);
+        int rc = getaddrinfo(host, ps, &hints, &res);
+        if (rc != 0) return grav_net_err("cannot resolve", gai_strerror(rc));
+        ssize_t sent = sendto(fd, p, (size_t)n, 0, res->ai_addr, res->ai_addrlen);
+        int e = errno;
+        freeaddrinfo(res);
+        if (sent < 0) return grav_net_err("send failed", strerror(e));
+        return 0;
+    }
+    /* Waits for one datagram. *state: 0 ok, 1 timed out, 2 error (errno in *e). */
+    static GravBytes grav_udp_recv(int fd, const char** from, int* state, int* e) {
+        GravBytes b; b.data = 0; b.len = 0;
+        unsigned char* buf = (unsigned char*)malloc(65536);
+        struct sockaddr_storage ss; socklen_t sl = sizeof ss;
+        ssize_t got = recvfrom(fd, buf, 65536, 0, (struct sockaddr*)&ss, &sl);
+        if (got < 0) {
+            *e = errno; free(buf);
+            *state = (*e == EAGAIN || *e == EWOULDBLOCK) ? 1 : 2;
+            return b;
+        }
+        *state = 0;
+        *from = grav_addr_text((struct sockaddr*)&ss);
+        b.data = buf; b.len = got;
+        return b;
+    }
+    static void grav_udp_timeout(int fd, int ms) {
+        struct timeval tv; tv.tv_sec = ms > 0 ? ms / 1000 : 0; tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    }
+    %}
+
+    // One received datagram: its contents and who sent it.
+    class UdpPacket {
+        // The bytes received.
+        readonly data: Bytes
+        // The sender as "host:port" ("[host]:port" for IPv6).
+        readonly from: string
+        constructor(data: Bytes, from: string) { self.data = data; self.from = from }
+        // The contents as text.
+        public fn text() -> string { return self.data.toString() }
+        // The sender's address, without the port.
+        public fn host() -> string {
+            let i = Str.lastIndexOf(self.from, ":")
+            let h = i < 0 ? self.from : self.from[..i]
+            return Str.startsWith(h, "[") ? h[1..h.length - 1] : h
+        }
+        // The sender's port.
+        public fn port() -> int {
+            let i = Str.lastIndexOf(self.from, ":")
+            return i < 0 ? 0 : Format.toIntOr(self.from[i + 1..], 0)
+        }
+        // As text: "from: contents".
+        public fn toString() -> string { return self.from + ": " + self.text() }
+    }
+
+    // A UDP socket: send datagrams to any address, receive them on its port.
+    class UdpSocket {
+        private fd: int
+
+        constructor(fd: int) { self.fd = fd }
+        destructor() { self.close() }
+
+        // A socket bound to host:port ("" or "*" for every interface; port 0 picks a free one).
+        static fn bind(host: string, port: int) -> UdpSocket {
+            let err = ""
+            let fd = %{ grav_udp_bind(host, port, &err) %} as int
+            if (fd < 0) { throw new NetError("${host}:${port}: ${err}") }
+            return new UdpSocket(fd)
+        }
+        // A socket on every interface at `port`.
+        static fn bind(port: int) -> UdpSocket { return UdpSocket.bind("*", port) }
+        // A socket for sending (bound to a free port, so replies can come back).
+        static fn open() -> UdpSocket { return UdpSocket.bind("0.0.0.0", 0) }
+
+        // The local port.
+        public fn port() -> int { return %{ grav_udp_port(self->fd) %} as int }
+        // Sends `text` as one datagram to host:port.
+        public fn sendTo(host: string, port: int, text: string) {
+            let err = %{ grav_udp_send(self->fd, host, port, (const unsigned char*)text, (long long)strlen(text)) %} as string?
+            if (err != null) { throw new NetError("${host}:${port}: ${err}") }
+        }
+        // Sends raw bytes as one datagram to host:port.
+        public fn sendBytesTo(host: string, port: int, data: Bytes) {
+            let p = data.rawData()
+            let n = data.size()
+            let err = %{ grav_udp_send(self->fd, host, port, p, n) %} as string?
+            if (err != null) { throw new NetError("${host}:${port}: ${err}") }
+        }
+        // Waits for the next datagram (TimeoutError after setTimeoutMs, NetError on failure).
+        public fn receive() -> UdpPacket {
+            let from = ""
+            let state = 0
+            let e = 0
+            let bin = %{ grav_udp_recv(self->fd, &from, &state, &e) %} as binary
+            if (state == 1) { throw new TimeoutError("UDP receive timed out") }
+            if (state == 2) {
+                let why = %{ strerror(e) %} as string
+                throw new NetError("UDP receive failed: ${why}")
+            }
+            let data = Bytes.fromBinary(bin)
+            %{ free((void*)bin.data); %};
+            return new UdpPacket(data, from)
+        }
+        // Makes receive() give up after `ms` milliseconds (0: wait forever).
+        public fn setTimeoutMs(ms: int) { %{ grav_udp_timeout(self->fd, ms); %}; }
+        // Allows sending to broadcast addresses such as 255.255.255.255.
+        public fn setBroadcast(on: bool) {
+            %{ int grav_v = on ? 1 : 0; setsockopt(self->fd, SOL_SOCKET, SO_BROADCAST, &grav_v, sizeof grav_v); %};
+        }
+        // Closes the socket (safe to call twice).
+        public fn close() {
+            if (self.fd >= 0) { %{ close(self->fd); %}; self.fd = -1 }
+        }
+        // Whether close() has been called.
+        public fn isClosed() -> bool { return self.fd < 0 }
+    }
+}
