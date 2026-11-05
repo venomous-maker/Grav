@@ -688,6 +688,27 @@ ExprPtr Parser::parsePrimary() {
             e->args = parseArguments();
             return e;
         }
+        case TokenType::LBrace: {
+            // `{"a": 1, "b": 2}` — a map literal: the standard library's
+            // mapOf((k, v), ...), a HashMap (`{}` takes its type from context).
+            advance();
+            auto call = at<CallExpr>(t);
+            auto callee = at<NameExpr>(t);
+            callee->name = "mapOf";
+            call->callee = std::move(callee);
+            while (!check(TokenType::RBrace)) {
+                const Token &kt = peek();
+                auto pair = at<NewExpr>(kt);
+                pair->className = "Pair";
+                pair->args.push_back(parseExpression());
+                expect(TokenType::Colon, "after a map literal's key");
+                pair->args.push_back(parseExpression());
+                call->args.push_back(std::move(pair));
+                if (!matchToken(TokenType::Comma)) break;
+            }
+            expect(TokenType::RBrace, "to close the map literal");
+            return call;
+        }
         case TokenType::LParen: {
             advance();
             ExprPtr inner = parseExpression();
