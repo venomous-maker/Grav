@@ -90,6 +90,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
         cleanups_.clear();
         emitEnter("<lambda>", lam.line);
         if (trace_) emitLineMark(lam.line);
+        auto temps = hoistTemps(lam.exprBody.get());
         if (ret.isVoid()) {
             line(emitExpr(*lam.exprBody) + ";");
             if (trace_) line("grav_leave();");
@@ -100,6 +101,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
         } else {
             line("return " + emitOwned(*lam.exprBody, ret) + ";");
         }
+        endTemps(temps);
     } else {
         beginBody(lam.body);
         emitEnter("<lambda>", lam.line);

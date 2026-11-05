@@ -294,9 +294,11 @@ bool CodeGen::exprMayAutorelease(const Expr *e) const {
     struct Walk {
         const CodeGen *g;
         bool &found;
+        bool unstable = false; // a field/element/global reference read: held when ordered before a call
         void expr(const Expr *x) {
             if (!x || found) return;
             if (g->isRefProducer(*x)) { found = true; return; }
+            if (g->isUnstableRef(*x)) unstable = true;
             if (auto *b = dynamic_cast<const BinaryExpr *>(x)) { expr(b->left.get()); expr(b->right.get()); }
             else if (auto *u = dynamic_cast<const UnaryExpr *>(x)) expr(u->operand.get());
             else if (auto *t = dynamic_cast<const TernaryExpr *>(x)) { expr(t->cond.get()); expr(t->thenExpr.get()); expr(t->elseExpr.get()); }
@@ -330,7 +332,7 @@ bool CodeGen::exprMayAutorelease(const Expr *e) const {
         }
     } w{this, found};
     w.expr(e);
-    return found;
+    return found || (w.unstable && exprMayCall(e));
 }
 
 // Whether a statement's own expressions (not nested blocks, which drain their

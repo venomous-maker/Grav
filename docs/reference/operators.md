@@ -25,8 +25,13 @@ group in the direction shown.
 
 Assignment (`=`, `+=`, ...) is a statement, not an expression.
 
-Operands and arguments are evaluated **left to right**. `&&`, `||`, `??`,
-`? :` and `?.` evaluate their right side only when needed.
+Operands and arguments are evaluated **left to right**: a receiver before
+its method's arguments, both sides of an operator, array and struct literal
+elements, `new` arguments, and conditions alike. In an assignment the target's
+object and indices come before the value (`a[i()] = v()` calls `i` first).
+`&&`, `||`, `??`, `? :` and `?.` evaluate their right side only when needed,
+and then in the same left-to-right order. Each operand runs once, `??`'s left
+side included.
 
 ## Arithmetic
 

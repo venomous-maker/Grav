@@ -279,7 +279,9 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         // `+` chains on strings fuse into one allocation (see emitStringExpr).
         if (e->stringConcat) return emitStringExpr(*e);
         std::string l = emitExpr(*e->left);
-        std::string r = emitExpr(*e->right);
+        // The right side of && and || runs only sometimes, so it is ordered on its own.
+        bool shortCircuit = e->op == BinaryOp::And || e->op == BinaryOp::Or;
+        std::string r = shortCircuit ? emitOrdered(*e->right) : emitExpr(*e->right);
         // String ==/!= compares contents (not pointers).
         if ((e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) &&
             e->left->type.kind == TypeRef::Kind::String &&
@@ -324,9 +326,10 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         return std::string("(") + op + emitExpr(*e->operand) + ")";
     }
     if (auto *e = dynamic_cast<const TernaryExpr *>(&expr)) {
+        // Each branch runs only sometimes, so each is ordered on its own.
         return "(" + emitExpr(*e->cond) + " ? " +
-               emitAs(*e->thenExpr, e->type) + " : " +
-               emitAs(*e->elseExpr, e->type) + ")";
+               emitOrdered(*e->thenExpr, [&] { return emitAs(*e->thenExpr, e->type); }) + " : " +
+               emitOrdered(*e->elseExpr, [&] { return emitAs(*e->elseExpr, e->type); }) + ")";
     }
     if (auto *e = dynamic_cast<const AsExpr *>(&expr)) {
         // Into / out of `any`: box, or a checked unbox (panics on the wrong type).
@@ -388,25 +391,29 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         return "(*" + emitExpr(*e->operand) + ")";
     }
     if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
-        // `a ?? b` -> "is a null? then b else a", evaluating `a` once.
+        // `a ?? b` -> "is a null? then b else a", evaluating `a` once and `b`
+        // (in its own left-to-right order) only when needed.
         std::string l = emitExpr(*e->left);
-        if (e->left->type.isNullable()) {
-            const TypeRef &lt = e->left->type;
+        std::string r = emitOrdered(*e->right, [&] { return emitAs(*e->right, e->type); });
+        const TypeRef &lt = e->left->type;
+        if (lt.isNullable()) {
             bool str = lt.elem->kind == TypeRef::Kind::String;
             std::string val = str || e->type.isNullable() ? "grav_co_" : "grav_co_.v";
             return "({ " + cTy(lt) + " grav_co_ = " + l + "; " + (str ? "grav_co_ != 0" : "grav_co_.has") + " ? " +
-                   val + " : " + emitAs(*e->right, e->type) + "; })";
+                   val + " : " + r + "; })";
         }
-        if (e->left->type == e->type) {
-            bool iface = e->type.isNamed() && reg_->isInterface(e->type.name);
-            return "({ " + cTy(e->type) + " grav_co_ = " + l + "; " + (iface ? "grav_co_.obj" : "grav_co_") +
-                   " != 0 ? grav_co_ : " + emitAs(*e->right, e->type) + "; })";
-        }
-        std::string guard = (e->left->type.isNamed() && reg_->isInterface(e->left->type.name))
-                                ? "(" + l + ").obj != 0"
-                                : l + " != 0";
-        return "(" + guard + " ? " + emitAs(*e->left, e->type) + " : " +
-               emitAs(*e->right, e->type) + ")";
+        bool iface = lt.isNamed() && reg_->isInterface(lt.name);
+        std::string guard = iface ? "grav_co_.obj != 0" : "grav_co_ != 0";
+        if (lt == e->type)
+            return "({ " + cTy(lt) + " grav_co_ = " + l + "; " + guard + " ? grav_co_ : " + r + "; })";
+        // A different result type: convert the bound value, not `a` again.
+        auto prev = exprOverride_.find(e->left.get());
+        std::string saved = prev != exprOverride_.end() ? prev->second : "";
+        exprOverride_[e->left.get()] = "grav_co_";
+        std::string conv = emitAs(*e->left, e->type);
+        if (saved.empty()) exprOverride_.erase(e->left.get());
+        else exprOverride_[e->left.get()] = saved;
+        return "({ " + cTy(lt) + " grav_co_ = " + l + "; " + guard + " ? " + conv + " : " + r + "; })";
     }
     if (auto *e = dynamic_cast<const IncDecExpr *>(&expr)) {
         std::string op = e->isIncrement ? "++" : "--";
@@ -685,10 +692,22 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             // null-checking thunk so the receiver is evaluated once.
             bool simple = dynamic_cast<const NameExpr *>(mem->object.get()) ||
                           dynamic_cast<const SelfExpr *>(mem->object.get());
-            if (!simple) return methodCall(obj, recv, call.methodName, args, /*nullSafe=*/true);
+            // Receiver and arguments in left-to-right order (the arguments of the
+            // inline form run only for a non-null receiver).
+            std::vector<const Expr *> ops, hs;
+            if (!simple) ops.push_back(mem->object.get());
+            for (const auto &a : call.args) ops.push_back(a.get());
+            orderOperands(ops, hs);
+            auto render = [&](bool nullSafe) {
+                return withHoists(hs, [&] {
+                    std::string o = nullSafe ? emitExpr(*mem->object) : obj;
+                    return methodCall(o, recv, call.methodName, methodArgs(call.args, params), nullSafe);
+                });
+            };
+            if (!simple) return render(/*nullSafe=*/true);
             bool iface = reg_->isInterface(recv.name);
             std::string guard = iface ? "(" + obj + ").obj != 0" : obj + " != 0";
-            std::string out = methodCall(obj, recv, call.methodName, args);
+            std::string out = render(/*nullSafe=*/false);
             if (call.type.isVoid()) return "(" + guard + " ? (" + out + ", 0) : 0)";
             std::string nul = call.type.kind == TypeRef::Kind::String ? "\"\"" : "0";
             return "(" + guard + " ? " + out + " : " + nul + ")";

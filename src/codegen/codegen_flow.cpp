@@ -276,6 +276,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     std::string elem, count;
     line("{");
     indent_++;
+    auto srcTemps = hoistTemps(s.lo.get());
     switch (s.iterKind) {
         case ForInKind::Array: {
             // Iterate in place through a pointer when the array is addressable,
@@ -327,6 +328,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             elem = methodCall(src, s.lo->type, s.getMethod, idx);
             break;
     }
+    endTemps(srcTemps);
     if (s.iterKind == ForInKind::Chars) {
         std::string pos = src + "_p", len = src + "_l";
         line("for (int " + idx + " = 0, " + pos + " = 0, " + len + " = 0; " + src + "[" + pos + "]; " + idx +

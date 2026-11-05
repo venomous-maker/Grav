@@ -104,7 +104,8 @@ void CodeGen::emitStmt(const Stmt &stmt) {
                 once.push_back(r);
             }
         }
-        auto temps = hoistTemps(s->value.get());
+        // (a compound assignment's target parts are already fixed above)
+        auto temps = pairs.empty() ? hoistAssignTemps(*s->target, s->value.get()) : hoistTemps(s->value.get());
         line(emitAssign(*s) + ";");
         endTemps(temps);
         if (!once.empty()) {
@@ -171,7 +172,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()));
         std::string id = pushLoopLabel(s->label);
-        line("while (" + emitExpr(*s->cond) + ") {");
+        line("while (" + emitOrdered(*s->cond) + ") {");
         emitLoopBody(s->body, s->label);
         line("}");
         popLoopLabel(id);
@@ -183,7 +184,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         std::string id = pushLoopLabel(s->label);
         line("do {");
         emitLoopBody(s->body, s->label);
-        line("} while (" + emitExpr(*s->cond) + ");");
+        line("} while (" + emitOrdered(*s->cond) + ");");
         popLoopLabel(id);
         loopMarks_.pop_back();
         return;
@@ -191,7 +192,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     if (auto *s = dynamic_cast<const ForStmt *>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()) || (s->update && stmtNeedsDrain(*s->update)));
         std::string init = inlineSimple(s->init.get());
-        std::string cond = s->cond ? emitExpr(*s->cond) : "";
+        std::string cond = s->cond ? emitOrdered(*s->cond) : "";
         std::string upd = inlineSimple(s->update.get());
         std::string id = pushLoopLabel(s->label);
         line("for (" + init + "; " + cond + "; " + upd + ") {");
@@ -206,7 +207,9 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         bool isStr = s->subject->type.kind == TypeRef::Kind::String;
         line("{");
         indent_++;
+        auto subjectTemps = hoistTemps(s->subject.get());
         line(cTy(s->subject->type) + " " + tmp + " = " + emitExpr(*s->subject) + ";");
+        endTemps(subjectTemps);
         bool first = true;
         for (const auto &c : s->cases) {
             std::string cond;
@@ -224,7 +227,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
                 cond += isStr ? ("grav_streq(" + tmp + ", " + v + ")")
                               : ("(" + tmp + " == " + v + ")");
             }
-            if (c.guard) cond = "(" + cond + ") && (" + emitExpr(*c.guard) + ")";
+            if (c.guard) cond = "(" + cond + ") && (" + emitOrdered(*c.guard) + ")";
             line((first ? "if (" : "} else if (") + cond + ") {");
             first = false;
             indent_++; emitBlock(c.body); indent_--;
@@ -250,7 +253,9 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         // Hoist the value into a temp so describe() isn't evaluated twice.
         std::string tmp = "__exc" + std::to_string(throwCounter_++);
         // The in-flight exception owns the object (and keeps it: handlers borrow it).
+        auto temps = hoistTemps(s->value.get());
         line(cTy(vt) + " " + tmp + " = " + emitOwned(*s->value, vt) + ";");
+        endTemps(temps);
         std::string msg = emitDescribe(tmp, vt);
         std::string mt = "__excm" + std::to_string(throwCounter_++);
         line("const char* " + mt + " = " + (msg.empty() ? "0" : msg) + ";");
@@ -293,14 +298,14 @@ void CodeGen::emitStmt(const Stmt &stmt) {
 }
 
 void CodeGen::emitIf(const IfStmt &s) {
-    line("if (" + emitExpr(*s.cond) + ") {");
+    line("if (" + emitOrdered(*s.cond) + ") {");
     indent_++; emitBlock(s.thenBlock); indent_--;
     // Walk the else-chain so that `else if` flattens to a single C clause and a
     // block `else` is emitted directly (no redundant inner braces).
     const Stmt *e = s.elseStmt.get();
     while (e) {
         if (auto *elif = dynamic_cast<const IfStmt *>(e)) {
-            line("} else if (" + emitExpr(*elif->cond) + ") {");
+            line("} else if (" + emitOrdered(*elif->cond) + ") {");
             indent_++; emitBlock(elif->thenBlock); indent_--;
             e = elif->elseStmt.get();
         } else if (auto *blk = dynamic_cast<const BlockStmt *>(e)) {

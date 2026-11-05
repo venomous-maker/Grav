@@ -1,6 +1,7 @@
 #ifndef GRAV_CODEGEN_H
 #define GRAV_CODEGEN_H
 
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -261,12 +262,19 @@ private:
     // bound to `grav_tmpN` before the statement (hoistTemps returns the names,
     // already declared); endTemps drops their overrides after it.
     std::vector<std::string> hoistTemps(const Expr *root);
+    std::vector<std::string> hoistAssignTemps(const Expr &target, const Expr *value);
+    std::vector<std::string> emitHoists(const std::vector<const Expr *> &hs);
     void collectHoists(const Expr *e, std::vector<const Expr *> &out) const;
     void endTemps(const std::vector<std::string> &temps);
-    // Hoisted only to fix left-to-right evaluation order.
-    mutable std::set<const Expr *> orderOnly_;
+    void orderOperands(const std::vector<const Expr *> &ops, std::vector<const Expr *> &out,
+                       bool hoistLast = true) const;
+    std::string hoistValue(const Expr &h) const;
     // Chain pieces in source order; when 2+ can run code they are hoisted in order.
     void orderChain(const Expr &chain, std::vector<const Expr *> &out) const;
+    // Inside an expression: the hoists wrapped in a statement expression.
+    std::string withHoists(const std::vector<const Expr *> &hs, const std::function<std::string()> &render) const;
+    std::string emitOrdered(const Expr &e, const std::function<std::string()> &render = nullptr) const;
+    mutable int orderCounter_ = 0;
     std::string concatParts(const std::vector<FmtPart> &parts) const; // merged parts -> C
 
     // codegen_lambda.cpp — closures and function values.
