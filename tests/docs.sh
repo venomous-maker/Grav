@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compiles and runs every complete Grav snippet in docs/*.md (a ```grav block that
+# Compiles and runs every complete Grav snippet in docs/**/*.md (a ```grav block that
 # contains `fn main` and does not start with a `// file:` header). When the block is followed by an "Output:" line and a
 # ```text block, the program's stdout must match it exactly.
 #
@@ -14,7 +14,7 @@ import os, re, subprocess, sys, tempfile, glob
 grav, only = sys.argv[1], sys.argv[2]
 passed = failed = 0
 tmp = tempfile.mkdtemp()
-for md in sorted(glob.glob("docs/*.md")):
+for md in sorted(glob.glob("docs/**/*.md", recursive=True)):
     if only and only not in md:
         continue
     text = open(md).read()
@@ -26,8 +26,8 @@ for md in sorted(glob.glob("docs/*.md")):
         line = text[:m.start()].count("\n") + 1
         rest = text[m.end():]
         exp = re.match(r"\s*\n(?:\s*\n)*Output:\s*\n\s*\n?```text\n(.*?)```", rest, re.S)
-        # Snippets live next to the chapters so `import "../lib/..."` resolves.
-        src = f"docs/.snippet_{os.getpid()}.grav"
+        # Snippets live next to their page so relative imports resolve from there.
+        src = os.path.join(os.path.dirname(md), f".snippet_{os.getpid()}.grav")
         open(src, "w").write(code)
         exe = os.path.join(tmp, "snip")
         where = f"{md}:{line}"
