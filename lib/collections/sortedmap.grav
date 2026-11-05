@@ -5,6 +5,7 @@
 //   let ages = new SortedMap<string, int>(fn(a, b) => Str.compare(a, b))
 import "../core/exception.grav"
 import "array.grav"
+import "tuple.grav"
 
 namespace std.collections {
 
@@ -103,6 +104,12 @@ namespace std.collections {
         }
         // Calls f with each key and value, in key order.
         public fn forEach(f: fn(K, V)) { for (i in 0..self.ks.size()) { f(self.ks[i], self.vs[i]); } }
+        // Every key with its value, as pairs, in key order.
+        public fn entries() -> Array<Pair<K, V>> {
+            let out = new Array<Pair<K, V>>();
+            for (i in 0..self.ks.size()) { out.push(new Pair<K, V>(self.ks[i], self.vs[i])); }
+            return out;
+        }
     }
 
 }

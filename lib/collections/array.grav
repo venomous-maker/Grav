@@ -15,6 +15,7 @@
 
 import "../core/exception.grav"
 import "../core/timsort.grav"
+import "tuple.grav"
 
 namespace std.collections {
 
@@ -308,11 +309,101 @@ namespace std.collections {
             if (self.len < 2) { return; }
             new TimSorter<T>(self.data, self.len, cmp).sort();
         }
+
+        // ── more ways to slice and reshape ─────────────────────────────────────
+        // The first `n` elements (all of them when there are fewer), as a new array.
+        public fn take(n: int) -> Array<T> { return self.slice(0, n < 0 ? 0 : n); }
+        // Everything after the first `n` elements, as a new array.
+        public fn drop(n: int) -> Array<T> { return self.slice(n < 0 ? 0 : n, self.len); }
+        // The elements from the start for as long as `keep` holds.
+        public fn takeWhile(keep: fn(T) -> bool) -> Array<T> {
+            let out = new Array<T>();
+            for (i in 0..self.len) { if (!keep(self.data[i])) { break; } out.push(self.data[i]); }
+            return out;
+        }
+        // The elements after the leading run for which `skip` holds.
+        public fn dropWhile(skip: fn(T) -> bool) -> Array<T> {
+            let i = 0;
+            while (i < self.len && skip(self.data[i])) { i += 1; }
+            return self.slice(i, self.len);
+        }
+        // Each element once, in first-seen order (compared with ==; O(n²), fine for small arrays).
+        public fn distinct() -> Array<T> {
+            let out = new Array<T>();
+            for (i in 0..self.len) { if (!out.contains(self.data[i])) { out.push(self.data[i]); } }
+            return out;
+        }
+        // A new array in reverse order (reverse() reverses this one in place).
+        public fn reversed() -> Array<T> {
+            let out = self.copy();
+            out.reverse();
+            return out;
+        }
+        // A sorted copy (sortBy sorts this one in place).
+        public fn sorted(cmp: fn(T, T) -> int) -> Array<T> {
+            let out = self.copy();
+            out.sortBy(cmp);
+            return out;
+        }
+        // f applied to every element, with the resulting arrays joined into one.
+        public fn flatMap<U>(f: fn(T) -> Array<U>) -> Array<U> {
+            let out = new Array<U>();
+            for (i in 0..self.len) { out.addAll(f(self.data[i])); }
+            return out;
+        }
+        // The elements as text joined by `sep`: [1, 2, 3].join(", ") == "1, 2, 3".
+        public fn join(sep: string) -> string {
+            let out = "";
+            for (i in 0..self.len) {
+                if (i > 0) { out += sep; }
+                out += str(self.data[i]);
+            }
+            return out;
+        }
+        // The sum of f(x) over the elements.
+        public fn sumBy(f: fn(T) -> float) -> float {
+            let t = 0.0;
+            for (i in 0..self.len) { t += f(self.data[i]); }
+            return t;
+        }
+        // The elements for which `keep` holds, and those for which it does not.
+        public fn partition(keep: fn(T) -> bool) -> Pair<Array<T>, Array<T>> {
+            let yes = new Array<T>();
+            let no = new Array<T>();
+            for (i in 0..self.len) { if (keep(self.data[i])) { yes.push(self.data[i]); } else { no.push(self.data[i]); } }
+            return new Pair<Array<T>, Array<T>>(yes, no);
+        }
+        // Pairs of elements at the same position, as long as the shorter array.
+        public fn zip<U>(other: Array<U>) -> Array<Pair<T, U>> {
+            let n = self.len < other.size() ? self.len : other.size();
+            let out = new Array<Pair<T, U>>(n);
+            for (i in 0..n) { out.push(new Pair<T, U>(self.data[i], other.get(i))); }
+            return out;
+        }
+        // Whether no element passes `pred`.
+        public fn none(pred: fn(T) -> bool) -> bool { return !self.any(pred); }
+        // The positions 0..size() as an array.
+        public fn indices() -> Array<int> {
+            let out = new Array<int>(self.len);
+            for (i in 0..self.len) { out.push(i); }
+            return out;
+        }
     }
 
     // Free-function forms (kept for compatibility; prefer xs.mapTo(f) / xs.fold(init, f)).
     fn mapTo<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U> { return xs.mapTo::<U>(f); }
     // Folds an array into a value of another type: f(f(init, x0), x1)...
     fn fold<T, A>(xs: Array<T>, init: A, f: fn(A, T) -> A) -> A { return xs.fold::<A>(init, f); }
+    // The elements in groups of `size` (the last group may be shorter): chunked([1,2,3,4,5], 2)
+    // is [[1, 2], [3, 4], [5]]. ValueError when size < 1. (A function rather than a method,
+    // because an Array<T> method returning Array<Array<T>> would make every array type
+    // need the next one up.)
+    fn chunked<T>(xs: Array<T>, size: int) -> Array<Array<T>> {
+        if (size < 1) { throw new ValueError("chunked: size must be at least 1, got ${size}"); }
+        let out = new Array<Array<T>>();
+        let i = 0;
+        while (i < xs.size()) { out.push(xs.slice(i, i + size)); i += size; }
+        return out;
+    }
 
 }

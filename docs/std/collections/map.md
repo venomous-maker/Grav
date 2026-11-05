@@ -63,5 +63,7 @@ and `getOr` do not.
 - `fn values() -> Array<V>` — The values in insertion order (a copy).
 - `fn forEach(f: fn(K, V))` — Calls f with each key and value, in insertion order.
 - `fn getOrPut(key: K, fallback: V) -> V` — The value for `key`, inserting `fallback` first when absent.
+- `fn entries() -> Array<Pair<K, V>>` — Every key with its value, as pairs, in insertion order.
+- `fn putAll(other: Map<K, V>)` — Copies every entry of `other` into this map.
 
 <!-- api:end -->

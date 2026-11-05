@@ -221,6 +221,27 @@ namespace std.collections {
             for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.vs[i]); } }
             return out;
         }
+        // Every key with its value, as pairs (in no particular order).
+        public fn entries() -> Array<Pair<K, V>> {
+            let out = new Array<Pair<K, V>>();
+            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(new Pair<K, V>(self.ks[i], self.vs[i])); } }
+            return out;
+        }
+        // Copies every entry of `other` into this map (replacing values of shared keys).
+        public fn putAll(other: HashMap<K, V>) { other.forEach(fn(k, v) { self.put(k, v) }) }
+        // Removes the entries for which f(key, value) holds; returns how many.
+        public fn removeWhere(f: fn(K, V) -> bool) -> int {
+            let gone = new Array<K>();
+            for (i in 0..self.cap) { if (self.used[i] != 0 && f(self.ks[i], self.vs[i])) { gone.push(self.ks[i]); } }
+            for (k in gone) { self.remove(k); }
+            return gone.size();
+        }
+        // A new map with the entries for which f(key, value) holds.
+        public fn filter(f: fn(K, V) -> bool) -> HashMap<K, V> {
+            let out = new HashMap<K, V>();
+            for (i in 0..self.cap) { if (self.used[i] != 0 && f(self.ks[i], self.vs[i])) { out.put(self.ks[i], self.vs[i]); } }
+            return out;
+        }
     }
 
     // A HashMap holding the pairs: what a map literal `{"a": 1, "b": 2}` builds.

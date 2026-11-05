@@ -72,5 +72,6 @@ map throw `IndexError`.
 - `fn values() -> Array<V>` — The values in key order (a copy).
 - `fn keysBetween(lo: K, hi: K) -> Array<K>` — Keys k with lo <= k < hi, in order.
 - `fn forEach(f: fn(K, V))` — Calls f with each key and value, in key order.
+- `fn entries() -> Array<Pair<K, V>>` — Every key with its value, as pairs, in key order.
 
 <!-- api:end -->
