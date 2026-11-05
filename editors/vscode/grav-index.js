@@ -42,7 +42,7 @@ const KEYWORDS = [
   "static", "readonly", "weak", "public", "private", "protected", "if", "else", "while", "for",
   "do", "switch", "case", "default", "match", "break", "continue", "in", "step", "try",
   "catch", "finally", "throw", "as", "is", "sizeof", "defer", "operator", "test",
-  "self", "super", "true", "false", "null", "free", "auto",
+  "self", "this", "super", "true", "false", "null", "free", "auto", "typedef",
 ];
 const TYPES = [
   "int", "long", "uint", "byte", "float", "float32", "double", "bool", "string", "void",
@@ -65,6 +65,25 @@ const BUILTINS = [
   ["env", "env(name) -> string", "An environment variable (\"\" when unset)."],
   ["cwd", "cwd() -> string", "The working directory."],
   ["isInstance", "isInstance(object, Type) -> bool", "Is the object a Type (or a subclass)?"],
+  ["int", "int(value) -> int", "Convert a number, bool or enum to an int (floats are truncated)."],
+  ["float", "float(value) -> float", "Convert a number or bool to a float."],
+  ["bool", "bool(value) -> bool", "Convert a number to a bool (nonzero is true)."],
+];
+// Library-internal builtins (names starting with `__`): explained on hover, and
+// offered by completion only once `__` is typed.
+const INTERNAL_BUILTINS = [
+  ["__retain", "__retain(value) -> value",
+   "Library-internal: the value with one more reference. Containers call it when a reference-counted value (object, string, closure, any) goes into a raw buffer they manage. Does nothing for plain values, so it works in generic code."],
+  ["__release", "__release(value)",
+   "Library-internal: drop one reference (freeing the value when it was the last). Containers call it when a value leaves a raw buffer, and in their destructor for every element. Does nothing for plain values."],
+  ["__visit", "__visit(value)",
+   "Library-internal: report a value held in a raw buffer to the cycle collector, from a container's private `__visitRefs()` method, so cycles through containers can be collected."],
+  ["__repr", "__repr(value) -> string",
+   "Library-internal: the text of any value as it appears inside a collection — like `str(value)`, but strings are quoted (\"a\"). Used by the collections' `toString()`."],
+  ["__show", "__show(value) -> string",
+   "Compiler-internal: the text of a data-enum variant's field, used by the generated `toString()` (`Circle(1.5)`)."],
+  ["__fmt", "__fmt(value, spec) -> string",
+   "Compiler-internal: what `\"${value:spec}\"` becomes — the value formatted by a spec such as `.2f`, `05`, `x` or `>8`."],
 ];
 // Hover explanations for keywords and built-in types: [summary, example].
 const KEYWORD_DOCS = {
@@ -124,6 +143,7 @@ const KEYWORD_DOCS = {
   operator: ["Defines an operator for a class: + - * / % == < [] []= ...", "fn operator+(o: Vec) -> Vec { ... }"],
   test: ["A test block, run by `grav test`.", "test \"adds\" { assertEq(1 + 1, 2) }"],
   self: ["The object (or struct) a method was called on. `this` is a synonym.", "self.count += 1"],
+  this: ["A synonym of `self`: the object a method was called on.", "this.count += 1"],
   super: ["The parent class: `super(...)` runs its constructor, `super.m()` its method.", "super(name)"],
   true: ["The boolean true.", "let ok = true"],
   false: ["The boolean false.", "let done = false"],
@@ -906,7 +926,7 @@ class Workspace {
       const d = KEYWORD_DOCS[w.word];
       return d ? { markdown: `**${w.word}** — ${d[0]}\n\n\`\`\`grav\n${d[1]}\n\`\`\``, range: w.range } : null;
     }
-    const b = BUILTINS.find((x) => x[0] === w.word);
+    const b = BUILTINS.find((x) => x[0] === w.word) || INTERNAL_BUILTINS.find((x) => x[0] === w.word);
     const defs = this.definition(file, pos);
     for (const d of defs) {
       const info = this.info(d.file);
@@ -1015,6 +1035,7 @@ class Workspace {
         items.push({ label, kind: 15, detail: desc, documentation: "```grav\n" + body.replace(/\$\{\d+:?([^}]*)\}|\$\d/g, "$1") + "\n```",
                      insertText: body, snippet: true, sortText: "~" + label });
     for (const b of BUILTINS) push(b[0], 3, b[1], b[2]);
+    if (/(^|[^\w])__\w*$/.test(lineText)) for (const b of INTERNAL_BUILTINS) push(b[0], 3, b[1], b[2]);
     return items;
   }
 
@@ -1172,6 +1193,6 @@ class Workspace {
 }
 
 module.exports = {
-  KIND, COMPLETION_KIND, KEYWORDS, TYPES, BUILTINS, KEYWORD_DOCS, SNIPPETS, splitLines, mask, parseFile, wordAtPosition,
+  KIND, COMPLETION_KIND, KEYWORDS, TYPES, BUILTINS, INTERNAL_BUILTINS, KEYWORD_DOCS, SNIPPETS, splitLines, mask, parseFile, wordAtPosition,
   Workspace, inferType,
 };
