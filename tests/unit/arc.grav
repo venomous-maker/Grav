@@ -174,3 +174,95 @@ test "the cycle collector frees unreachable cycles" {
     assertEq(Live.count, 2)
     assertEq(keep.next.n, 5)
 }
+
+// Exceptions free the locals of every frame they leave, not only the frame
+// with the `try`. unwindDepth is the runtime's count of registered locals.
+fn unwindDepth() -> int { return %{ grav_uw_top %} as int }
+
+fn descend(n: int) -> int {
+    let mine = new Tracked(n)
+    let label = "frame ${n}"
+    if (n == 0) { throw new Oops("bottom") }
+    return descend(n - 1) + mine.n + label.length
+}
+
+fn scan(items: Array<Tracked>, stop: int) -> int {
+    let total = 0
+    for (it in items) {
+        let extra = new Tracked(-1)
+        if (it.n == stop) { throw new Oops("stop") }
+        if (it.n % 2 == 0) { continue }
+        total += it.n + extra.n
+    }
+    return total
+}
+
+class HalfBuilt {
+    public part: Tracked
+    constructor(fail: bool) {
+        self.part = new Tracked(0)
+        if (fail) { throw new Oops("half") }
+    }
+    destructor() { HalfBuilt.destroyed += 1 }
+    static destroyed: int = 0
+}
+
+test "an exception frees the locals of every frame it leaves" {
+    let base = Live.count
+    let depth = unwindDepth()
+    for (i in 0..50) {
+        try { descend(6) } catch (e: Oops) {}
+    }
+    assertEq(Live.count, base)
+    assertEq(unwindDepth(), depth)
+}
+
+test "loop variables and early exits keep unwinding balanced" {
+    let base = Live.count
+    let items = new Array<Tracked>()
+    for (i in 0..6) { items.push(new Tracked(i)) }
+    let depth = unwindDepth()             // items itself is registered
+    for (round in 0..20) {
+        try { scan(items, 4) } catch (e: Oops) {}
+        assertEq(scan(items, 99), 1 + 3 + 5 - 3)
+        for (it in items) {
+            let probe = new Tracked(it.n)
+            if (probe.n == 1) { continue }
+            try {
+                if (it.n == 3) { throw new Oops("caught in loop") }
+            } catch (e: Oops) { continue }
+            if (it.n == 5) { break }
+        }
+    }
+    assertEq(Live.count, base + 6)
+    assertEq(unwindDepth(), depth)
+}
+
+test "a constructor that throws frees its half-built object" {
+    let base = Live.count
+    for (i in 0..10) {
+        try { let h = new HalfBuilt(true); print(h.part.n) } catch (e: Oops) {}
+    }
+    assertEq(Live.count, base)
+    assertEq(HalfBuilt.destroyed, 0)      // the destructor of an unbuilt object never runs
+    if (true) { let ok = new HalfBuilt(false); assertEq(ok.part.n, 0) }
+    assertEq(HalfBuilt.destroyed, 1)
+}
+
+test "finally and rethrow free the frames they leave" {
+    let base = Live.count
+    let depth = unwindDepth()
+    for (i in 0..20) {
+        try {
+            let outer = new Tracked(1)
+            try { descend(3) } finally { let during = new Tracked(2); assertEq(during.n, 2) }
+            print(outer.n)
+        } catch (e: Oops) {}
+    }
+    if (true) {
+        let failure = Panic.recover(fn() { let held = new Tracked(7); descend(held.n - 5) })
+        assert(Str.contains(failure, "bottom"))
+    }
+    assertEq(Live.count, base)
+    assertEq(unwindDepth(), depth)
+}

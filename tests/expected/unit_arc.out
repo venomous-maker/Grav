@@ -1,4 +1,4 @@
-running 13 tests
+running 17 tests
   ok    locals and temporaries are freed at once
   ok    reassignment frees the old object
   ok    a long chain is freed without deep recursion
@@ -12,4 +12,8 @@ running 13 tests
   ok    finally keeps the pending exception
   ok    value structs and fixed arrays own their references
   ok    the cycle collector frees unreachable cycles
-result: 13 passed, 0 failed
+  ok    an exception frees the locals of every frame it leaves
+  ok    loop variables and early exits keep unwinding balanced
+  ok    a constructor that throws frees its half-built object
+  ok    finally and rethrow free the frames they leave
+result: 17 passed, 0 failed
