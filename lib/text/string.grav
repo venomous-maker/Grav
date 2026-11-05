@@ -294,6 +294,156 @@ namespace std.text {
             free(ptrs);
             return out;
         }
+
+        // ── more ───────────────────────────────────────────────────────────────
+        // `s` with only the first occurrence of `old` replaced.
+        static fn replaceFirst(s: string, old: string, repl: string) -> string {
+            let i = Str.indexOf(s, old);
+            if (i < 0 || old.length == 0) { return s; }
+            return s[..i] + repl + s[i + old.length..];
+        }
+        // Split at `delim` into at most `limit` pieces (the last keeps the rest):
+        // splitN("a=b=c", "=", 2) == ["a", "b=c"].
+        static fn splitN(s: string, delim: string, limit: int) -> Array<string> {
+            let out = new Array<string>();
+            let start = 0;
+            while (delim.length > 0 && (limit <= 0 || out.size() < limit - 1)) {
+                let i = Str.indexFrom(s, delim, start);
+                if (i < 0) { break; }
+                out.push(s[start..i]);
+                start = i + delim.length;
+            }
+            out.push(s[start..]);
+            return out;
+        }
+        // The text before the first `sep`, or all of `s` when it does not contain one.
+        static fn before(s: string, sep: string) -> string {
+            let i = Str.indexOf(s, sep);
+            return i < 0 ? s : s[..i];
+        }
+        // The text after the first `sep`, or "" when it does not contain one.
+        static fn after(s: string, sep: string) -> string {
+            let i = Str.indexOf(s, sep);
+            return i < 0 ? "" : s[i + sep.length..];
+        }
+        // At most `max` characters, ending in "…" when it was cut.
+        static fn truncate(s: string, max: int) -> string {
+            let n = 0;
+            for (ch in s) { n += 1; }
+            if (n <= max) { return s; }
+            if (max <= 0) { return ""; }
+            let out = "";
+            let k = 0;
+            for (ch in s) {
+                if (k >= max - 1) { break; }
+                out += ch;
+                k += 1;
+            }
+            return out + "…";
+        }
+        // The words of `s` re-flowed into lines of at most `width` characters
+        // (a longer word gets a line of its own).
+        static fn wrap(s: string, width: int) -> Array<string> {
+            let lines = new Array<string>();
+            let line = "";
+            for (w in Str.words(s)) {
+                if (line == "") { line = w; }
+                else if (line.length + 1 + w.length <= width) { line += " " + w; }
+                else { lines.push(line); line = w; }
+            }
+            if (line != "") { lines.push(line); }
+            return lines;
+        }
+        // Each line of `s` prefixed with `prefix`.
+        static fn indent(s: string, prefix: string) -> string {
+            let lines = Str.lines(s);
+            for (i in 0..lines.size()) { lines[i] = prefix + lines[i]; }
+            return Str.join(lines, "\n");
+        }
+        // The words of an identifier or phrase: "parseHTTPRequest", "parse_http request"
+        // and "parse-http" all split into lowercase words.
+        static fn identifierWords(s: string) -> Array<string> {
+            let out = new Array<string>();
+            let cur = "";
+            let n = s.length;
+            for (i in 0..n) {
+                let c = s[i];
+                let upper = c >= 'A' && c <= 'Z';
+                let alnum = upper || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+                if (!alnum) { if (cur != "") { out.push(cur); cur = ""; } continue; }
+                // a new word starts at an uppercase letter after a lowercase one, or before
+                // a lowercase one inside a run of capitals (HTTPRequest -> http, request)
+                let prevLower = i > 0 && s[i - 1] >= 'a' && s[i - 1] <= 'z';
+                let nextLower = i + 1 < n && s[i + 1] >= 'a' && s[i + 1] <= 'z';
+                let prevUpper = i > 0 && s[i - 1] >= 'A' && s[i - 1] <= 'Z';
+                if (upper && cur != "" && (prevLower || (prevUpper && nextLower))) { out.push(cur); cur = ""; }
+                cur += Str.lower(s[i..i + 1]);
+            }
+            if (cur != "") { out.push(cur); }
+            return out;
+        }
+        // snake_case: "parseHttpRequest" -> "parse_http_request".
+        static fn toSnakeCase(s: string) -> string { return Str.join(Str.identifierWords(s), "_"); }
+        // kebab-case: "parseHttpRequest" -> "parse-http-request".
+        static fn toKebabCase(s: string) -> string { return Str.join(Str.identifierWords(s), "-"); }
+        // camelCase: "parse_http_request" -> "parseHttpRequest".
+        static fn toCamelCase(s: string) -> string {
+            let out = "";
+            for (i, w in Str.identifierWords(s)) { out += i == 0 ? w : Str.capitalize(w); }
+            return out;
+        }
+        // PascalCase: "parse_http_request" -> "ParseHttpRequest".
+        static fn toPascalCase(s: string) -> string {
+            let out = "";
+            for (w in Str.identifierWords(s)) { out += Str.capitalize(w); }
+            return out;
+        }
+        // Every word capitalized: "the grav book" -> "The Grav Book".
+        static fn titleCase(s: string) -> string {
+            let out = "";
+            let start = true;
+            for (ch in s) {
+                out += start ? Str.upper(ch) : ch;
+                start = ch == " " || ch == "\t" || ch == "\n";
+            }
+            return out;
+        }
+        // The number of single-character edits (insert, delete, replace) that turn a
+        // into b, counted in bytes: levenshtein("kitten", "sitting") == 3.
+        static fn levenshtein(a: string, b: string) -> int {
+            let m = a.length;
+            let n = b.length;
+            let prev = new Array<int>(n + 1);
+            let cur = new Array<int>(n + 1);
+            for (j in 0..=n) { prev.push(j); cur.push(0); }
+            for (i in 1..=m) {
+                cur[0] = i;
+                for (j in 1..=n) {
+                    let cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    let best = prev[j] + 1;
+                    if (cur[j - 1] + 1 < best) { best = cur[j - 1] + 1; }
+                    if (prev[j - 1] + cost < best) { best = prev[j - 1] + cost; }
+                    cur[j] = best;
+                }
+                let t = prev; prev = cur; cur = t;
+            }
+            return prev[n];
+        }
+        // The longest start that a and b share.
+        static fn commonPrefix(a: string, b: string) -> string {
+            let n = a.length < b.length ? a.length : b.length;
+            let i = 0;
+            while (i < n && a[i] == b[i]) { i += 1; }
+            return a[..i];
+        }
+        // Whether `s` starts with `prefix`, ignoring case.
+        static fn startsWithIgnoreCase(s: string, prefix: string) -> bool {
+            return Str.startsWith(Str.lower(s), Str.lower(prefix));
+        }
+        // Whether `s` contains `sub`, ignoring case.
+        static fn containsIgnoreCase(s: string, sub: string) -> bool {
+            return Str.contains(Str.lower(s), Str.lower(sub));
+        }
     }
 
 }

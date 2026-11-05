@@ -371,6 +371,33 @@ There are around fifty of them: searching (`indexOf`, `contains`, `startsWith`,
 checking contents (`isDigits`, `isBlank`) and more. See the full list in
 [`Str`](../std/text/string.md).
 
+### Regular expressions
+
+For patterns that `Str` cannot express, such as "four digits, a dash, two digits",
+use a regular expression:
+
+```grav
+import "std"
+
+fn main() {
+    let date = new Regex("([0-9]{4})-([0-9]{2})")
+    let m = date.find("released 2024-03, patched 2024-05")
+    print(m.group(1))
+    print(date.findAllText("released 2024-03, patched 2024-05"))
+    print(date.replaceAll("2024-03", "$2/$1"))
+}
+```
+
+Output:
+
+```text
+2024
+["2024-03", "2024-05"]
+03/2024
+```
+
+See [`Regex`](../std/text/regex.md) for the pattern syntax.
+
 ## Building long strings
 
 Each `+` creates a new string. When you build text in a loop, a
