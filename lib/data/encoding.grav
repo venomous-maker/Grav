@@ -1,0 +1,264 @@
+// lib/data/encoding.grav — Base64, hex, and UTF-8 helpers.
+//
+//   Base64.encode("hello")           // "aGVsbG8="
+//   Base64.decode("aGVsbG8=")        // "hello"
+//   Hex.encode("Hi")                 // "4869"
+//   Utf8.count("héllo")              // 5 characters (6 bytes)
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../text/strbuf.grav"
+import "bytes.grav"
+
+namespace std.data {
+
+    %{
+    #include <string.h>
+    static const char grav_b64_std[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static const char grav_b64_url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    static const char* grav_b64_encode(const unsigned char* p, long long n, int url) {
+        const char* t = url ? grav_b64_url : grav_b64_std;
+        long long cap = (n + 2) / 3 * 4;
+        char* out = grav_str_new((size_t)cap);
+        long long o = 0, i = 0;
+        for (; i + 2 < n; i += 3) {
+            unsigned v = (unsigned)p[i] << 16 | (unsigned)p[i + 1] << 8 | p[i + 2];
+            out[o++] = t[v >> 18]; out[o++] = t[(v >> 12) & 63]; out[o++] = t[(v >> 6) & 63]; out[o++] = t[v & 63];
+        }
+        if (i < n) {
+            unsigned v = (unsigned)p[i] << 16 | (i + 1 < n ? (unsigned)p[i + 1] << 8 : 0);
+            out[o++] = t[v >> 18]; out[o++] = t[(v >> 12) & 63];
+            if (i + 1 < n) out[o++] = t[(v >> 6) & 63]; else if (!url) out[o++] = '=';
+            if (!url) out[o++] = '=';
+        }
+        out[o] = 0;
+        return out;
+    }
+    static int grav_b64_val(int c) {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+' || c == '-') return 62;
+        if (c == '/' || c == '_') return 63;
+        return -1;
+    }
+    /* Decodes standard or URL-safe Base64 (padding optional, whitespace ignored) into
+       a malloc'd buffer; returns its length, or -1 when the text is not Base64. */
+    static long long grav_b64_decode(const char* s, unsigned char** outp) {
+        size_t n = strlen(s);
+        unsigned char* out = (unsigned char*)malloc(n / 4 * 3 + 4);
+        unsigned acc = 0; int bits = 0; long long o = 0; int pad = 0;
+        for (size_t i = 0; i < n; i++) {
+            int c = (unsigned char)s[i];
+            if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
+            if (c == '=') { pad++; continue; }
+            int v = grav_b64_val(c);
+            if (v < 0 || pad) { free(out); return -1; }
+            acc = acc << 6 | (unsigned)v; bits += 6;
+            if (bits >= 8) { bits -= 8; out[o++] = (unsigned char)(acc >> bits); }
+        }
+        if (bits >= 6 || pad > 2) { free(out); return -1; }
+        *outp = out;
+        return o;
+    }
+    /* Decoded data as a `binary` (data = 0 when the text was not valid). */
+    static GravBytes grav_b64_decode_bin(const char* s) {
+        GravBytes b; b.data = 0; b.len = 0;
+        unsigned char* d = 0; long long n = grav_b64_decode(s, &d);
+        if (n >= 0) { b.data = d; b.len = n; }
+        return b;
+    }
+    static const char* grav_mem_to_str(const unsigned char* p, long long n) {
+        char* r = grav_str_new((size_t)n); memcpy(r, p, (size_t)n); r[n] = 0; return r;
+    }
+    static const char* grav_hex_encode(const unsigned char* p, long long n, int upper) {
+        const char* d = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+        char* r = grav_str_new((size_t)(n * 2));
+        for (long long i = 0; i < n; i++) { r[2 * i] = d[p[i] >> 4]; r[2 * i + 1] = d[p[i] & 15]; }
+        r[2 * n] = 0; return r;
+    }
+    static int grav_hex_val(int c) {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+    static long long grav_hex_decode(const char* s, unsigned char** outp) {
+        size_t n = strlen(s);
+        if (n % 2) return -1;
+        unsigned char* out = (unsigned char*)malloc(n / 2 + 1);
+        for (size_t i = 0; i < n; i += 2) {
+            int a = grav_hex_val((unsigned char)s[i]), b = grav_hex_val((unsigned char)s[i + 1]);
+            if (a < 0 || b < 0) { free(out); return -1; }
+            out[i / 2] = (unsigned char)(a << 4 | b);
+        }
+        *outp = out;
+        return (long long)(n / 2);
+    }
+    static GravBytes grav_hex_decode_bin(const char* s) {
+        GravBytes b; b.data = 0; b.len = 0;
+        unsigned char* d = 0; long long n = grav_hex_decode(s, &d);
+        if (n >= 0) { b.data = d; b.len = n; }
+        return b;
+    }
+    /* UTF-8: the length of the sequence starting with byte c (1 for a stray byte). */
+    static int grav_u8_len(unsigned char c) {
+        if (c < 0x80) return 1;
+        if ((c & 0xE0) == 0xC0) return 2;
+        if ((c & 0xF0) == 0xE0) return 3;
+        if ((c & 0xF8) == 0xF0) return 4;
+        return 1;
+    }
+    /* Decodes the code point at s[*i] and advances *i; -1 for an invalid sequence. */
+    static int grav_u8_next(const char* s, long long n, long long* i) {
+        const unsigned char* p = (const unsigned char*)s + *i;
+        int len = grav_u8_len(p[0]);
+        if (*i + len > n) { *i += 1; return -1; }
+        int cp = len == 1 ? p[0] : len == 2 ? p[0] & 0x1F : len == 3 ? p[0] & 0x0F : p[0] & 0x07;
+        if (len == 1 && p[0] >= 0x80) { *i += 1; return -1; }
+        for (int k = 1; k < len; k++) {
+            if ((p[k] & 0xC0) != 0x80) { *i += 1; return -1; }
+            cp = cp << 6 | (p[k] & 0x3F);
+        }
+        *i += len;
+        return cp;
+    }
+    static const char* grav_u8_encode(int cp) {
+        char b[5]; int n = 0;
+        if (cp < 0 || cp > 0x10FFFF) cp = 0xFFFD;
+        if (cp < 0x80) b[n++] = (char)cp;
+        else if (cp < 0x800) { b[n++] = (char)(0xC0 | cp >> 6); b[n++] = (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { b[n++] = (char)(0xE0 | cp >> 12); b[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); b[n++] = (char)(0x80 | (cp & 0x3F)); }
+        else { b[n++] = (char)(0xF0 | cp >> 18); b[n++] = (char)(0x80 | ((cp >> 12) & 0x3F)); b[n++] = (char)(0x80 | ((cp >> 6) & 0x3F)); b[n++] = (char)(0x80 | (cp & 0x3F)); }
+        char* r = grav_str_new((size_t)n); memcpy(r, b, (size_t)n); r[n] = 0; return r;
+    }
+    %}
+
+    // Base64: binary data as text (RFC 4648), standard or URL-safe.
+    class Base64 {
+        // The Base64 text of a string's bytes, with = padding.
+        static fn encode(s: string) -> string {
+            return %{ grav_b64_encode((const unsigned char*)s, (long long)strlen(s), 0) %} as string
+        }
+        // The Base64 text of raw bytes, with = padding.
+        static fn encodeBytes(b: Bytes) -> string {
+            let p = b.rawData()
+            let n = b.size()
+            return %{ grav_b64_encode(p, n, 0) %} as string
+        }
+        // URL- and filename-safe Base64 (- and _ instead of + and /, no padding).
+        static fn encodeUrl(s: string) -> string {
+            return %{ grav_b64_encode((const unsigned char*)s, (long long)strlen(s), 1) %} as string
+        }
+        // The text that Base64 `s` encodes (standard or URL-safe; padding and whitespace
+        // optional); ValueError when `s` is not Base64. Use decodeBytes for binary data.
+        static fn decode(s: string) -> string {
+            let b = Base64.decodeBytes(s)
+            let p = b.rawData()
+            let n = b.size()
+            return %{ grav_mem_to_str(p, n) %} as string
+        }
+        // The bytes that Base64 `s` encodes; ValueError when `s` is not Base64.
+        static fn decodeBytes(s: string) -> Bytes {
+            let bin = %{ grav_b64_decode_bin(s) %} as binary
+            if (%{ bin.data == 0 %} as bool) { throw new ValueError("not Base64: '${s}'") }
+            let out = Bytes.fromBinary(bin)
+            %{ free((void*)bin.data); %};
+            return out
+        }
+        // Whether `s` is valid Base64.
+        static fn isValid(s: string) -> bool {
+            let bin = %{ grav_b64_decode_bin(s) %} as binary
+            let ok = %{ bin.data != 0 %} as bool
+            %{ free((void*)bin.data); %};
+            return ok
+        }
+    }
+
+    // Hexadecimal: each byte as two hex digits.
+    class Hex {
+        // The hex digits of a string's bytes, lowercase: Hex.encode("Hi") == "4869".
+        static fn encode(s: string) -> string {
+            return %{ grav_hex_encode((const unsigned char*)s, (long long)strlen(s), 0) %} as string
+        }
+        // The same in uppercase.
+        static fn encodeUpper(s: string) -> string {
+            return %{ grav_hex_encode((const unsigned char*)s, (long long)strlen(s), 1) %} as string
+        }
+        // The hex digits of raw bytes, lowercase.
+        static fn encodeBytes(b: Bytes) -> string {
+            let p = b.rawData()
+            let n = b.size()
+            return %{ grav_hex_encode(p, n, 0) %} as string
+        }
+        // The text the hex digits encode; ValueError for an odd length or a non-hex digit.
+        static fn decode(s: string) -> string {
+            let b = Hex.decodeBytes(s)
+            let p = b.rawData()
+            let n = b.size()
+            return %{ grav_mem_to_str(p, n) %} as string
+        }
+        // The bytes the hex digits encode; ValueError for an odd length or a non-hex digit.
+        static fn decodeBytes(s: string) -> Bytes {
+            let bin = %{ grav_hex_decode_bin(s) %} as binary
+            if (%{ bin.data == 0 %} as bool) { throw new ValueError("not hex: '${s}'") }
+            let out = Bytes.fromBinary(bin)
+            %{ free((void*)bin.data); %};
+            return out
+        }
+    }
+
+    // UTF-8 text by character (code point) rather than by byte.
+    class Utf8 {
+        // The number of characters (code points); "héllo" has 5 (and 6 bytes).
+        static fn count(s: string) -> int {
+            let n = 0
+            for (ch in s) { n += 1 }
+            return n
+        }
+        // The characters, each as a one-character string.
+        static fn chars(s: string) -> Array<string> {
+            let out = new Array<string>()
+            for (ch in s) { out.push(ch) }
+            return out
+        }
+        // The Unicode code point of each character (-1 for an invalid byte sequence).
+        static fn codePoints(s: string) -> Array<int> {
+            let out = new Array<int>()
+            let i: long = 0
+            let n: long = s.length
+            while (i < n) { out.push(%{ grav_u8_next(s, n, &i) %} as int) }
+            return out
+        }
+        // The one-character string for a code point (U+FFFD for an invalid one).
+        static fn fromCodePoint(cp: int) -> string { return %{ grav_u8_encode(cp) %} as string }
+        // The string made of these code points.
+        static fn fromCodePoints(cps: Array<int>) -> string {
+            let sb = new StringBuilder()
+            for (cp in cps) { sb.append(Utf8.fromCodePoint(cp)) }
+            return sb.toString()
+        }
+        // Whether `s` is well-formed UTF-8.
+        static fn isValid(s: string) -> bool {
+            for (cp in Utf8.codePoints(s)) { if (cp < 0) { return false } }
+            return true
+        }
+        // The characters from index `start` up to (not including) `end`, counted in characters.
+        static fn slice(s: string, start: int, end: int) -> string {
+            let sb = new StringBuilder()
+            let i = 0
+            for (ch in s) {
+                if (i >= start && i < end) { sb.append(ch) }
+                i += 1
+            }
+            return sb.toString()
+        }
+        // The characters in reverse order (unlike Str.reverse, which reverses bytes).
+        static fn reverse(s: string) -> string {
+            let cs = Utf8.chars(s)
+            cs.reverse()
+            let sb = new StringBuilder()
+            for (c in cs) { sb.append(c) }
+            return sb.toString()
+        }
+    }
+}
