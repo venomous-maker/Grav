@@ -303,7 +303,7 @@ def grav_docs(query: str) -> str:
     """Search the Grav language documentation; return the best matching sections."""
     q = query.lower()
     sections = []
-    for f in sorted(DOCS_DIR.glob("*.md")):
+    for f in sorted(DOCS_DIR.rglob("*.md")):
         title, buf = f.stem, []
         for line in f.read_text().splitlines() + ["## "]:
             if line.startswith("## ") or line.startswith("# "):
@@ -311,7 +311,7 @@ def grav_docs(query: str) -> str:
                     text = "\n".join(buf)
                     score = (5 if q in title.lower() else 0) + text.lower().count(q)
                     if score:
-                        sections.append((-score, f.name, title, text))
+                        sections.append((-score, str(f.relative_to(DOCS_DIR)), title, text))
                 title, buf = line.lstrip("# ").strip(), [line]
             else:
                 buf.append(line)
@@ -415,7 +415,7 @@ TOOLS = {
     ),
     "grav_docs": (
         grav_docs,
-        "Search the Grav language documentation (docs/*.md) and return the best matching "
+        "Search the Grav documentation (docs/: the guide, the reference, and a page per standard-library module) and return the best matching "
         "sections, e.g. 'pattern matching', 'grav.toml', 'closures'.",
         _schema({"query": {"type": "string"}}, ["query"]),
     ),

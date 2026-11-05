@@ -19,7 +19,7 @@ speaking the MCP stdio transport (newline-delimited JSON-RPC 2.0). No
 | `grav_test`       | Run the `test` blocks of a program or project (optional `filter`).           |
 | `grav_lib_search` | Find standard-library classes, functions, and methods by name or doc text.   |
 | `grav_lib_module` | Show a module's documentation and declarations (`std/net/http`, `json`, …).  |
-| `grav_docs`       | Search the language documentation (`docs/*.md`) by topic.                    |
+| `grav_docs`       | Search the documentation (`docs/`: guide, reference, std pages) by topic.    |
 | `grav_packages`   | `list` / `add` / `install` / `update` / `remove` packages, or `new` project. |
 
 `grav_check`, `grav_run` and `grav_test` take either `source` (Grav text) or
