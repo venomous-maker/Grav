@@ -351,6 +351,7 @@ static char* grav_str_new(size_t n) {
                 if (end > grav_scommit) {          /* commit in 4 MiB steps (or the whole block) */
                     size_t step = (size_t)(end - grav_scommit);
                     if (step < ((size_t)4 << 20)) step = (size_t)4 << 20;
+                    step = (step + 4095) & ~(size_t)4095;     /* whole pages: mprotect needs an aligned start next time */
                     if ((size_t)(grav_slimit - grav_scommit) < step) step = (size_t)(grav_slimit - grav_scommit);
                     if (mprotect(grav_scommit, step, PROT_READ | PROT_WRITE) == 0) grav_scommit += step;
                 }
