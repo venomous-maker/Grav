@@ -402,8 +402,13 @@ ExprPtr Parser::parsePostfix() {
             const Token &lb = advance();
             auto idx = at<IndexExpr>(lb);
             idx->base = std::move(expr);
-            idx->index = parseExpression();
-            while (matchToken(TokenType::Comma)) idx->more.push_back(parseExpression()); // m[r, c]
+            if (!check(TokenType::DotDot) && !check(TokenType::DotDotEq)) idx->index = parseExpression();
+            if (check(TokenType::DotDot) || check(TokenType::DotDotEq)) { // `a[lo..hi]`
+                idx->isSlice = true;
+                idx->sliceInclusive = advance().type == TokenType::DotDotEq;
+                if (!check(TokenType::RBracket)) idx->sliceHi = parseExpression();
+            }
+            while (!idx->isSlice && matchToken(TokenType::Comma)) idx->more.push_back(parseExpression()); // m[r, c]
             expect(TokenType::RBracket, "to close the index");
             expr = std::move(idx);
         } else if ((check(TokenType::PlusPlus) || check(TokenType::MinusMinus)) && !onNewLine()) {

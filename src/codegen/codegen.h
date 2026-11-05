@@ -62,6 +62,7 @@ private:
     std::string ifaceCast(const std::string &obj, const std::string &iface) const;
     void emitFaultRaisers();
     std::string checkedIndex(const std::string &idx, int length) const;
+    std::string emitSlice(const IndexExpr &e) const;
     std::string checkedDivision(BinaryOp op, const TypeRef &type, const std::string &l,
                                 const std::string &r, const Expr &divisor) const;
     std::string checkedDivisionAssign(BinaryOp op, const TypeRef &type, const std::string &target,

@@ -299,7 +299,8 @@ Output:
 ```
 
 Indexing is bounds-checked: an index outside `0..length` throws `IndexError` (a
-panic without the standard library). For growable lists use `Array<T>` from the
+panic without the standard library). A slice with constant bounds, `squares[1..3]`, is a
+shorter fixed array (copied). For growable lists use `Array<T>` from the
 [standard library](14-standard-library.md#collections).
 
 ## Pointers

@@ -121,6 +121,7 @@ struct Visitor {
         else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
             expr(x->base.get()); expr(x->index.get());
             for (auto &m : x->more) expr(m.get());
+            expr(x->sliceHi.get());
         }
         else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a.get()); }
         else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value.get()); }
@@ -180,6 +181,7 @@ struct Rewriter {
         else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
             expr(x->base); expr(x->index);
             for (auto &m : x->more) expr(m);
+            expr(x->sliceHi);
         }
         else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a); }
         else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value); }

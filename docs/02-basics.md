@@ -142,7 +142,9 @@ Strings are immutable UTF-8 text. `+` concatenates, `==` and `<` compare content
 and `${expr}` interpolates any value (see [Printing values](#printing-values)).
 `s.length` is the length in bytes, `s[i]` is the byte at index `i` (a `byte`;
 an index past the end throws `IndexError`), and `for (ch in s)` visits each
-character as a one-character string. The `Str` class in the
+character as a one-character string. `s[lo..hi]` is the bytes from `lo` up to
+`hi` (`..=` includes `hi`; leave out an end for the start or the end, and bounds past
+the string are clamped). The `Str` class in the
 [standard library](14-standard-library.md#strings) has the rest.
 
 ```grav

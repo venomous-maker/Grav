@@ -652,8 +652,83 @@ TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
     return TypeRef::array(elem, static_cast<int>(e.elements.size()));
 }
 
+// `a[lo..hi]` (`..=` includes hi; a missing end means the start / the end):
+// on a string, the bytes in that range; on a collection, its slice(lo, hi); on a
+// fixed array, with constant bounds, a shorter fixed array. Bounds are clamped,
+// like the collections' slice methods.
+TypeRef TypeChecker::checkSlice(IndexExpr &e, const TypeRef &base) {
+    auto lit = [&](long long v) {
+        auto n = std::make_unique<IntLiteralExpr>();
+        n->value = v;
+        n->raw = std::to_string(v);
+        n->line = e.line;
+        n->col = e.col;
+        return n;
+    };
+    bool openEnd = !e.sliceHi;
+    if (!e.index) e.index = lit(0);
+    if (!e.sliceHi) e.sliceHi = lit(2147483647);
+    else if (e.sliceInclusive) { // hi + 1
+        auto plus = std::make_unique<BinaryExpr>();
+        plus->op = BinaryOp::Add;
+        plus->line = e.sliceHi->line;
+        plus->col = e.sliceHi->col;
+        plus->left = std::move(e.sliceHi);
+        plus->right = lit(1);
+        e.sliceHi = std::move(plus);
+    }
+    e.more.clear();
+    e.more.push_back(std::move(e.sliceHi));
+    for (Expr *b : {e.index.get(), e.more[0].get()}) {
+        TypeRef t = checkExpr(*b);
+        if (!t.isError() && t.kind != TypeRef::Kind::Int)
+            error(b->line, b->col, "a slice bound must be an int, but got " + typeRefName(t));
+    }
+    if (base.isError()) return base;
+    if (base.kind == TypeRef::Kind::String) return base;
+    if (base.isArray() && !base.isSlice()) {
+        auto *lo = dynamic_cast<IntLiteralExpr *>(e.index.get());
+        long long hiV = 0;
+        auto *hiLit = dynamic_cast<IntLiteralExpr *>(e.more[0].get());
+        auto *hiSum = dynamic_cast<BinaryExpr *>(e.more[0].get());
+        if (hiLit) hiV = openEnd ? base.arrayLen : hiLit->value;
+        else if (hiSum && dynamic_cast<IntLiteralExpr *>(hiSum->left.get()))
+            hiV = static_cast<IntLiteralExpr *>(hiSum->left.get())->value + 1;
+        if (!lo || (!hiLit && !(hiSum && dynamic_cast<IntLiteralExpr *>(hiSum->left.get())))) {
+            error(e.line, e.col, "a slice of a fixed-length array needs constant bounds (use Array<T> for others)");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        if (lo->value < 0 || hiV > base.arrayLen || lo->value >= hiV) {
+            error(e.line, e.col, "the slice [" + std::to_string(lo->value) + ".." + std::to_string(hiV) +
+                                     ") does not fit in " + typeRefName(base));
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        const TypeRef &el = *base.elem;
+        if (!el.isNumeric() && el.kind != TypeRef::Kind::Bool && !(el.isNamed() && reg_->isEnum(el.name))) {
+            error(e.line, e.col, "a fixed-length array slice copies numbers, booleans or enums; for " +
+                                     typeRefName(el) + " elements use Array<T>.slice");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
+        e.more[0] = lit(hiV);
+        return TypeRef::array(el, static_cast<int>(hiV - lo->value));
+    }
+    if (base.isNamed() && reg_->isClass(base.name)) {
+        for (const MethodInfo *m : reg_->findMethodsBySource(base.name, "slice"))
+            if (!m->isStatic && m->paramTypes.size() == 2 && m->paramTypes[0].kind == TypeRef::Kind::Int &&
+                m->paramTypes[1].kind == TypeRef::Kind::Int) {
+                e.overloadClass = base.name;
+                e.overloadMethod = m->name;
+                return m->returnType;
+            }
+    }
+    error(e.line, e.col, "cannot slice " + aTypeName(base) + " (strings, fixed arrays and classes with "
+                                                            "slice(start, end) can be sliced)");
+    return TypeRef::prim(TypeRef::Kind::Error);
+}
+
 TypeRef TypeChecker::checkIndex(IndexExpr &e) {
     TypeRef base = checkExpr(*e.base);
+    if (e.isSlice) return checkSlice(e, base);
     if (auto ov = tryIndexOverload(e, base)) return *ov;
     if (!e.more.empty()) {
         error(e.more[0]->line, e.more[0]->col,

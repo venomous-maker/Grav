@@ -155,6 +155,7 @@ ExprPtr cloneExpr(const Expr *e) {
     if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
         auto n = mkE<IndexExpr>(e); n->base = cloneExpr(x->base.get());
         n->index = cloneExpr(x->index.get());
+        n->isSlice = x->isSlice; n->sliceInclusive = x->sliceInclusive; n->sliceHi = cloneExpr(x->sliceHi.get());
         for (const auto &m : x->more) n->more.push_back(cloneExpr(m.get()));
         return n;
     }
@@ -860,6 +861,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
     } else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
         walkExpr(x->base.get(), subst); walkExpr(x->index.get(), subst);
         for (auto &m : x->more) walkExpr(m.get(), subst);
+        walkExpr(x->sliceHi.get(), subst);
     } else if (auto *x = dynamic_cast<MemberExpr *>(e)) {
         walkExpr(x->object.get(), subst);
     } else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) {

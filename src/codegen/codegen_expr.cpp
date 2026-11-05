@@ -422,6 +422,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
                 args += (i ? ", " : "") + (i < params.size() ? emitStable(*keys[i], params[i]) : emitExpr(*keys[i]));
             return methodCall(emitStable(*e->base, e->base->type), e->base->type, e->overloadMethod, args);
         }
+        if (e->isSlice) return emitSlice(*e);
         std::string base = emitExpr(*e->base);
         std::string idx = emitExpr(*e->index);
         // Fixed arrays index through their `.data` member; slices and pointers

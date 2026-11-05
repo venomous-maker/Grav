@@ -200,6 +200,11 @@ struct IndexExpr : Expr {
     ExprPtr base;
     ExprPtr index;
     std::vector<ExprPtr> more;  // `m[r, c]`: the indices after the first (operator[] only)
+    // `a[lo..hi]` / `a[lo..=hi]` (either end may be left out): a slice. The checker
+    // fills in missing ends and moves `hi` to more[0].
+    bool isSlice = false;
+    bool sliceInclusive = false;
+    ExprPtr sliceHi;
 };
 
 // `object.member`. Used both as a value (field read) and as the callee of a

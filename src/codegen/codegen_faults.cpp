@@ -53,6 +53,17 @@ static inline unsigned char grav_str_byte(const char* s, long long i) {
     if (GRAV_UNLIKELY(i < 0 || strnlen(s, (size_t)i + 1) <= (size_t)i)) grav_fault_index_of("string", i, (long long)strlen(s));
     return (unsigned char)s[i];
 }
+/* `s[lo..hi]`: the bytes in [lo, hi), clamped to the string (a fresh string). */
+static const char* grav_str_range(const char* s, long long lo, long long hi) {
+    long long n = (long long)strlen(s);
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+    if (hi < lo) hi = lo;
+    char* r = grav_str_new((size_t)(hi - lo));
+    memcpy(r, s + lo, (size_t)(hi - lo));
+    r[hi - lo] = 0;
+    return r;
+}
 /* `for (ch in s)`: the byte length of the UTF-8 character at p, and a copy of it. */
 static inline int grav_utf8_len(const char* p) {
     unsigned char c = (unsigned char)p[0];
@@ -101,6 +112,19 @@ bool safeDivisor(const Expr &e) {
     return lit && lit->value != 0 && lit->value != -1;
 }
 } // namespace
+
+// A slice (checked and normalized by the checker: bounds in index and more[0]).
+std::string CodeGen::emitSlice(const IndexExpr &e) const {
+    std::string lo = emitExpr(*e.index), hi = emitExpr(*e.more[0]);
+    if (e.base->type.kind == TypeRef::Kind::String)
+        return "grav_str_range(" + emitExpr(*e.base) + ", " + lo + ", " + hi + ")";
+    // A fixed array with constant bounds: copy the elements into the shorter array.
+    std::string items;
+    for (int i = 0; i < e.type.arrayLen; ++i)
+        items += (i ? ", " : "") + std::string("grav_sl_.data[") + lo + " + " + std::to_string(i) + "]";
+    return "({ " + cTy(e.base->type) + " grav_sl_ = " + emitExpr(*e.base) + "; (" + cTy(e.type) + "){ { " + items +
+           " } }; })";
+}
 
 std::string CodeGen::checkedIndex(const std::string &idx, int length) const {
     return "grav_idx(" + idx + ", " + std::to_string(length) + ")";
