@@ -68,52 +68,82 @@
     "strings": {
       "patterns": [
         {
+          "comment": "r\"\"\"...\"\"\"  and r\"...\": raw, nothing inside is special",
+          "name": "string.quoted.raw.triple.grav",
+          "begin": "\\br\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.raw.grav",
+          "begin": "\\br\"",
+          "end": "\""
+        },
+        {
+          "comment": "\"\"\"...\"\"\": multi-line, with escapes and ${...}",
+          "name": "string.quoted.triple.grav",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            {
+              "include": "#string-content"
+            }
+          ]
+        },
+        {
           "name": "string.quoted.double.grav",
           "begin": "\"",
           "end": "\"",
           "patterns": [
             {
-              "match": "\\\\(?:[ntr0\\\\\\\"'$]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})",
-              "name": "constant.character.escape.grav"
-            },
-            {
-              "name": "meta.interpolation.grav",
-              "begin": "\\$\\{",
-              "end": "\\}",
-              "beginCaptures": {
-                "0": {
-                  "name": "punctuation.section.interpolation.begin.grav"
-                }
-              },
-              "endCaptures": {
-                "0": {
-                  "name": "punctuation.section.interpolation.end.grav"
-                }
-              },
-              "contentName": "source.grav.embedded",
-              "patterns": [
-                {
-                  "comment": "${x:.2f} \u2014 a format spec after the last ':'",
-                  "match": "(?<!:)(:)([<>^]?\\+?0?\\d*(?:\\.\\d+)?[dfexXobs%]?)(?=\\})",
-                  "captures": {
-                    "1": {
-                      "name": "punctuation.separator.format.grav"
-                    },
-                    "2": {
-                      "name": "constant.other.format-spec.grav"
-                    }
-                  }
-                },
-                {
-                  "include": "#expression"
-                }
-              ]
+              "include": "#string-content"
             }
           ]
         },
         {
-          "name": "string.quoted.single.grav",
-          "match": "'(?:\\\\.|[^'\\\\])'"
+          "comment": "'a', '\\n', '\\u{1F600}': a character's code point",
+          "name": "constant.character.grav",
+          "match": "'(?:\\\\(?:[ntr0\\\\\\\"'$e]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})|[^'\\\\])'"
+        }
+      ]
+    },
+    "string-content": {
+      "patterns": [
+        {
+          "match": "\\\\(?:[ntr0\\\\\\\"'$e]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})",
+          "name": "constant.character.escape.grav"
+        },
+        {
+          "name": "meta.interpolation.grav",
+          "begin": "\\$\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.grav"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.grav"
+            }
+          },
+          "contentName": "source.grav.embedded",
+          "patterns": [
+            {
+              "comment": "${x:.2f} \u2014 a format spec after the last ':'",
+              "match": "(?<!:)(:)([<>^]?\\+?0?\\d*(?:\\.\\d+)?[dfexXobs%]?)(?=\\})",
+              "captures": {
+                "1": {
+                  "name": "punctuation.separator.format.grav"
+                },
+                "2": {
+                  "name": "constant.other.format-spec.grav"
+                }
+              }
+            },
+            {
+              "include": "#expression"
+            }
+          ]
         }
       ]
     },
@@ -916,6 +946,11 @@
         {
           "match": "\\?\\?|\\?\\.",
           "name": "keyword.operator.null.grav"
+        },
+        {
+          "comment": "x!: the value of a nullable x",
+          "match": "(?<=[\\w)\\]])!(?!=)",
+          "name": "keyword.operator.unwrap.grav"
         },
         {
           "match": "\\.\\.\\.",

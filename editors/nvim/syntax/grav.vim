@@ -53,7 +53,14 @@ syn cluster gravInterpInner contains=gravNumber,gravFloat,gravBoolean,gravConsta
 syn match  gravFormatSpec ":\%([<>^]\=+\=0\=\d*\%(\.\d\+\)\=[dfexXobs%]\=\)\ze}" contained   " ${x:.2f}
 syn region gravInterp matchgroup=gravInterpDelim start="\${" end="}" contained contains=@gravInterpInner,gravFormatSpec
 syn region gravString start=+"+ skip=+\\"+ end=+"+ contains=gravInterp,gravEscape
-syn match  gravEscape "\\[ntr\\\"$]" contained
+" """...""" (multi-line) and r"..." / r"""...""" (raw: nothing inside is special).
+" Of regions starting at one spot the last defined wins, so the longer openers come later.
+syn region gravString start=+"""+ end=+"""+ contains=gravInterp,gravEscape
+syn region gravString start=+\<r"+ end=+"+
+syn region gravString start=+\<r"""+ end=+"""+
+syn match  gravEscape "\\\%([ntr0e\\\"'$]\|x\x\x\|u{\x\+}\)" contained
+" 'a', '\n': a character literal (its code point).
+syn match  gravChar "'\%(\\\%([ntr0e\\\"'$]\|x\x\x\|u{\x\+}\)\|[^'\\]\)'"
 
 " Inline C escape hatch: %{ ... %} — highlight the body with the real C syntax.
 syn include @gravCSyntax syntax/c.vim
@@ -110,6 +117,7 @@ hi def link gravBuiltin       Function
 hi def link gravNumber        Number
 hi def link gravFloat         Float
 hi def link gravString        String
+hi def link gravChar          Character
 hi def link gravEscape        SpecialChar
 hi def link gravInterp        Special
 hi def link gravInterpDelim   SpecialChar

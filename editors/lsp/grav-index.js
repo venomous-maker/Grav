@@ -77,6 +77,8 @@ const INTERNAL_BUILTINS = [
    "Library-internal: drop one reference (freeing the value when it was the last). Containers call it when a value leaves a raw buffer, and in their destructor for every element. Does nothing for plain values."],
   ["__visit", "__visit(value)",
    "Library-internal: report a value held in a raw buffer to the cycle collector, from a container's private `__visitRefs()` method, so cycles through containers can be collected."],
+  ["__unwrap", "__unwrap(value) -> T",
+   "Compiler-internal: what `x!` becomes. The value of a nullable `x` (an `int?` gives an `int`), or a `StateError` when it is null."],
   ["__repr", "__repr(value) -> string",
    "Library-internal: the text of any value as it appears inside a collection — like `str(value)`, but strings are quoted (\"a\"). Used by the collections' `toString()`."],
   ["__show", "__show(value) -> string",
@@ -146,7 +148,7 @@ const KEYWORD_DOCS = {
   super: ["The parent class: `super(...)` runs its constructor, `super.m()` its method.", "super(name)"],
   true: ["The boolean true.", "let ok = true"],
   false: ["The boolean false.", "let done = false"],
-  null: ["No object: valid for classes, interfaces, functions and pointers.", "let next: Node = null"],
+  null: ["No value: valid for classes, interfaces, functions, pointers and nullable `T?` values.", "let next: Node = null\nlet port: int? = null"],
   free: ["Releases an object now (running destructors), a pointer, closure, or finished future.", "free(conn)"],
   auto: ["An inferred type or type argument.", "let xs = new Array<auto>()"],
   int: ["32-bit signed integer. Integer literals beyond its range are longs.", "let n: int = 42"],
@@ -187,6 +189,10 @@ const SNIPPETS = [
   ["defer", "defer block", "defer { $0 }"],
   ["label", "labeled loop", "${1:outer}: for (${2:x} in ${3:xs}) {\n\t$0\n}"],
   ["letd", "destructuring let", "let (${1:a}, ${2:b}) = ${0}"],
+  ["fnlocal", "function inside a block", "fn ${1:name}(${2:n}: ${3:int}) -> ${4:int} {\n\t$0\n}"],
+  ["ifnull", "use a nullable value", "if (${1:x} != null) {\n\t$0\n}"],
+  ["text", "multi-line string", "\"\"\"\n${1:text}\n\"\"\""],
+  ["map", "map literal", "{${1:\"key\"}: ${2:value}}"],
   ["fmt", "formatted interpolation", "\"\\${${1:value}:${2:.2f}}\""],
   ["async", "async function", "async fn ${1:name}(${2}) -> ${3:int} {\n\t$0\n}"],
   ["extends", "subclass", "class ${1:Name} extends ${2:Base} {\n\tconstructor(${3}) { super(${4}) }\n\t$0\n}"],
@@ -233,8 +239,40 @@ function mask(text) {
     blank(start, j);
     return j;
   }
+  // """...""" spans lines (its ${...} stay, like a string's); r"..." and
+  // r"""...""" are raw: blanked whole, a backslash escapes nothing.
+  function skipTriple(start, raw) {
+    let j = start + 3;
+    while (j < n && text.substr(j, 3) !== '"""') {
+      if (!raw && text[j] === "\\") { j += 2; continue; }
+      if (!raw && text[j] === "$" && text[j + 1] === "{") {
+        blank(start, j + 2);
+        let depth = 1;
+        j += 2;
+        while (j < n && depth > 0) {
+          if (text[j] === '"') { j = skipString(j); continue; }
+          if (text[j] === "{") depth++;
+          else if (text[j] === "}") depth--;
+          j++;
+        }
+        start = j - 1;
+        continue;
+      }
+      j++;
+    }
+    const end = Math.min(n, j + 3);
+    blank(start, end);
+    return end;
+  }
   while (i < n) {
     const c = text[i];
+    if (c === "r" && text[i + 1] === '"' && !/[\w$]/.test(text[i - 1] || "")) {
+      if (text.substr(i + 1, 3) === '"""') { blank(i, i + 1); i = skipTriple(i + 1, true); continue; }
+      let j = i + 2;
+      while (j < n && text[j] !== '"' && text[j] !== "\n") j++;
+      blank(i, j + 1); i = j + 1; continue;
+    }
+    if (c === '"' && text.substr(i, 3) === '"""') { i = skipTriple(i, false); continue; }
     if (c === "/" && text[i + 1] === "/") { const e = text.indexOf("\n", i); const end = e < 0 ? n : e; blank(i, end); i = end; continue; }
     if (c === "/" && text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); const end = e < 0 ? n : e + 2; blank(i, end); i = end; continue; }
     if (c === "%" && text[i + 1] === "{") { const e = text.indexOf("%}", i + 2); const end = e < 0 ? n : e + 2; blank(i, end); out[i] = "C"; i = end; continue; }

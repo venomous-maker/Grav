@@ -35,9 +35,19 @@ repo = {
         "patterns": [{"include": "source.c"}],
     },
     "strings": {"patterns": [
+        {"comment": "r\"\"\"...\"\"\"  and r\"...\": raw, nothing inside is special",
+         "name": "string.quoted.raw.triple.grav", "begin": r'\br"""', "end": r'"""'},
+        {"name": "string.quoted.raw.grav", "begin": r'\br"', "end": r'"'},
+        {"comment": "\"\"\"...\"\"\": multi-line, with escapes and ${...}",
+         "name": "string.quoted.triple.grav", "begin": r'"""', "end": r'"""',
+         "patterns": [{"include": "#string-content"}]},
         {"name": "string.quoted.double.grav", "begin": r'"', "end": r'"',
-         "patterns": [
-             {"match": r"\\(?:[ntr0\\\"'$]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\})", "name": "constant.character.escape.grav"},
+         "patterns": [{"include": "#string-content"}]},
+        {"comment": "'a', '\\n', '\\u{1F600}': a character's code point",
+         "name": "constant.character.grav", "match": r"'(?:\\(?:[ntr0\\\"'$e]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\})|[^'\\])'"},
+    ]},
+    "string-content": {"patterns": [
+             {"match": r"\\(?:[ntr0\\\"'$e]|x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f]+\})", "name": "constant.character.escape.grav"},
              {"name": "meta.interpolation.grav", "begin": r"\$\{", "end": r"\}",
               "beginCaptures": {"0": {"name": "punctuation.section.interpolation.begin.grav"}},
               "endCaptures": {"0": {"name": "punctuation.section.interpolation.end.grav"}},
@@ -47,8 +57,6 @@ repo = {
                    "captures": {"1": {"name": "punctuation.separator.format.grav"},
                                 "2": {"name": "constant.other.format-spec.grav"}}},
                   {"include": "#expression"}]},
-         ]},
-        {"name": "string.quoted.single.grav", "match": r"'(?:\\.|[^'\\])'"},
     ]},
     "imports": {"patterns": [
         {"comment": "import { A, B as C } from \"path\"",
@@ -197,6 +205,7 @@ repo = {
     "operators": {"patterns": [
         {"match": r"=>|->", "name": "keyword.operator.arrow.grav"},
         {"match": r"\?\?|\?\.", "name": "keyword.operator.null.grav"},
+        {"comment": "x!: the value of a nullable x", "match": r"(?<=[\w)\]])!(?!=)", "name": "keyword.operator.unwrap.grav"},
         {"match": r"\.\.\.", "name": "keyword.operator.spread.grav"},
         {"match": r"\.\.=?", "name": "keyword.operator.range.grav"},
         {"match": r"==|!=|<=|>=|<|>", "name": "keyword.operator.comparison.grav"},
