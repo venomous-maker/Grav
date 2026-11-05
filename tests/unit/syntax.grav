@@ -1,0 +1,74 @@
+// Literal and declaration syntax: raw and multi-line strings, character
+// literals, collection literals, local functions and lambdas that call themselves.
+import "std"
+
+class Bag {
+    public items: Array<int>
+    constructor() { self.items = new Array<int>() }
+    fn add(x: int) { self.items.push(x * 10) }
+}
+
+test "raw strings keep backslashes and dollar signs" {
+    assertEq(r"C:\temp\new", "C:\\temp\\new")
+    assertEq(r"${x}", "\${x}")
+    assertEq(r"a\nb".length, 4)
+}
+
+test "multi-line strings drop the shared indentation" {
+    let name = "grav"
+    let text = """
+        hello ${name}
+          indented
+        "quotes" stay
+        """
+    assertEq(text, "hello grav\n  indented\n\"quotes\" stay")
+    let one = """inline "q" ok"""
+    assertEq(one, "inline \"q\" ok")
+    let raw = r"""
+        \d+ ${not}
+        """
+    assertEq(raw, "\\d+ \${not}")
+}
+
+test "character literals are their code points" {
+    assertEq('a', 97)
+    assertEq('\n', 10)
+    assertEq('\'', 39)
+    assertEq('é', 233)
+    assertEq('\u{1F600}', 128512)
+    let s = "cab"
+    assertEq(s[0] == 'c', true)
+    let n = 0
+    for (i in 0..s.length) { if (s[i] >= 'a' && s[i] <= 'b') { n += 1 } }
+    assertEq(n, 2)
+}
+
+test "collection literals build the expected type" {
+    let xs: Array<int> = [3, 1, 2]
+    assertEq(str(xs), "[3, 1, 2]")
+    let names: HashSet<string> = ["a", "b", "a"]
+    assertEq(names.size(), 2)
+    let bag: Bag = [1, 2]
+    assertEq(str(bag.items), "[10, 20]")
+    let ages = {"ann": 31, "bob": 27}
+    assertEq(ages.get("bob"), 27)
+    assertEq(ages.size(), 2)
+}
+
+test "functions declared inside a block" {
+    let base = 100
+    fn add(a: int, b: int) -> int { return a + b + base }
+    assertEq(add(1, 2), 103)
+    fn fib(n: int) -> int { return n < 2 ? n : fib(n - 1) + fib(n - 2) }
+    assertEq(fib(20), 6765)
+    fn shout(s: string) { print(s + "!") }
+    shout("local")
+}
+
+test "lambdas that call themselves" {
+    let fact = fn(n: int) -> long { return n <= 1 ? 1 as long : n * fact(n - 1) }
+    assertEq(fact(20), 2432902008176640000 as long)
+    let walk: fn(int) -> int = null
+    walk = fn(n: int) -> int { return n == 0 ? 0 : 1 + walk(n - 1) }
+    assertEq(walk(5), 5)
+}

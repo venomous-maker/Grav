@@ -1,0 +1,17 @@
+class Dog { }
+struct Named { s: string }
+fn take(n: int) -> int { return n }
+fn main() {
+    let a: int? = 1
+    let b: int = a
+    print(a + 1)
+    print(take(a))
+    print(a < 3)
+    let k: Named? = null
+    let five = 5
+    print(five!)
+    print(five == null)
+    let s: string? = null
+    print(s.length)
+    print(a ?? "zero")
+}

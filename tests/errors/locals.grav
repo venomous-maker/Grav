@@ -1,0 +1,6 @@
+class Box { constructor(n: int) { } }
+fn main() {
+    let loop = fn(n: int) { return loop(n - 1) }
+    let b: Box = [1, 2]
+    print(b)
+}

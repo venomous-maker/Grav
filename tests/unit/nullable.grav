@@ -1,0 +1,108 @@
+// Nullable values: `T?` holds a T or null; `!`, `??` and null checks get the T out.
+import "std"
+
+struct Pt { x: int  y: int }
+struct Cfg { port: int?  debug: bool? }
+enum Color { Red, Green }
+class User {
+    public name: string
+    public nick: string?
+    public age: int?
+    constructor(name: string) { self.name = name; self.nick = null; self.age = null }
+    fn label() -> string { return self.nick ?? self.name }
+}
+
+fn find(xs: Array<int>, want: int) -> int? {
+    for (i in 0..xs.size()) { if (xs.get(i) == want) { return i } }
+    return null
+}
+fn word(n: int) -> string? { return n == 1 ? "one" : null }
+fn greet(who: string?, times: int? = null) -> string {
+    let out = ""
+    for (i in 0..(times ?? 1)) { out += "hi ${who ?? "you"} " }
+    return out
+}
+fn position(xs: Array<int>, want: int) -> int {
+    let i = find(xs, want)
+    if (i == null) { return -1 }
+    return i * 10 // i is an int after the guard
+}
+
+test "values, null, text and equality" {
+    let a: int? = 5
+    let b: int? = null
+    assertEq("${a} ${b}", "5 null")
+    assertEq(a == 5, true)
+    assertEq(b == null, true)
+    assertEq(a == b, false)
+    assertEq(a != null, true)
+    let p: Pt? = Pt { x: 1, y: 2 }
+    assertEq(str(p), "Pt { x: 1, y: 2 }")
+    let c: Color? = Color.Green
+    assertEq(c == Color.Green, true)
+    assertEq(str(Cfg { port: 80, debug: null }), "Cfg { port: 80, debug: null }")
+    let ys = new Array<int?>()
+    ys.push(1)
+    ys.push(null)
+    assertEq(str(ys), "[1, null]")
+    let boxed: any = b
+    assertEq(str(boxed), "null")
+}
+
+test "getting the value out: !, ?? and null checks" {
+    let a: int? = 5
+    let b: int? = null
+    assertEq(a! + 1, 6)
+    assertEq(a ?? 0, 5)
+    assertEq(b ?? -1, -1)
+    let doubled = 0
+    if (a != null) { doubled = a * 2 }
+    assertEq(doubled, 10)
+    let other = 0
+    if (b == null) { other = 1 } else { other = b + 1 }
+    assertEq(other, 1)
+    assertEq(a != null && a > 3, true)
+    assertEq(b != null ? b : 42, 42)
+    let xs = new Array<int>()
+    xs.push(3)
+    xs.push(7)
+    assertEq(position(xs, 7), 10)
+    assertEq(position(xs, 9), -1)
+    let ok = true
+    let q = ok ? 9 : null
+    assertEq(str(q), "9")
+    if (a != null) {
+        let f = fn() -> int { return a + 1 } // a closure copies the value
+        assertEq(f(), 6)
+    }
+}
+
+test "nullable strings, fields and parameters" {
+    assertEq(word(1) ?? "?", "one")
+    assertEq(word(2) ?? "?", "?")
+    assertEq(word(1) == "one", true)
+    assertEq(word(2) == null, true)
+    let s = word(1)
+    if (s != null) { assertEq(s.length, 3) }
+    let u = new User("ann")
+    assertEq(u.label(), "ann")
+    u.nick = "an" + "nie"
+    assertEq(u.label(), "annie")
+    u.age = 30
+    assertEq(u.age! + 1, 31)
+    u.nick = null
+    assertEq(u.label(), "ann")
+    assertEq(greet(null), "hi you ")
+    assertEq(greet("bob", 2), "hi bob hi bob ")
+    let x: int? = null
+    x = 4
+    x = x! * 2
+    assertEq(x, 8)
+}
+
+test "unwrapping null throws a StateError" {
+    let b: int? = null
+    let msg = ""
+    try { print(b!) } catch (e: StateError) { msg = e.message() }
+    assertEq(msg, "'!' found a null int?")
+}

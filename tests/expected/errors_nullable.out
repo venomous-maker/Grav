@@ -1,0 +1,34 @@
+gravc: tests/errors/nullable.grav:6:5: warning: unused variable 'b'
+        let b: int = a
+        ^
+gravc: tests/errors/nullable.grav:10:5: warning: unused variable 'k'
+        let k: Named? = null
+        ^
+gravc: tests/errors/nullable.grav:6:18: type error: cannot initialize 'b' of type int with a value of type int? (it may be null: use 'x!', 'x ?? fallback', or check 'x != null' first)
+        let b: int = a
+                     ^
+gravc: tests/errors/nullable.grav:7:13: type error: operator '+' cannot use int?, which may be null: use 'x!', 'x ?? fallback', or check 'x != null' first
+        print(a + 1)
+                ^
+gravc: tests/errors/nullable.grav:8:16: type error: argument 1 to function 'take(n: int) -> int' expects int, but got int? (it may be null: use 'x!', 'x ?? fallback', or check 'x != null' first)
+        print(take(a))
+                   ^
+gravc: tests/errors/nullable.grav:9:13: type error: operator '<' cannot use int?, which may be null: use 'x!', 'x ?? fallback', or check 'x != null' first
+        print(a < 3)
+                ^
+gravc: tests/errors/nullable.grav:10:5: type error: 'Named?' cannot be nullable: only numbers, bools, strings, enums and structs without strings or objects inside can (classes can already be null)
+        let k: Named? = null
+        ^
+gravc: tests/errors/nullable.grav:12:15: type error: '!' needs a value that may be null, but an int never is
+        print(five!)
+                  ^
+gravc: tests/errors/nullable.grav:13:16: type error: an int is never null: only objects, interfaces, functions, pointers, any values and nullable (T?) values can be compared with null
+        print(five == null)
+                   ^
+gravc: tests/errors/nullable.grav:15:12: type error: cannot access member 'length' of a value of type string? (it may be null: use 'x!', 'x ?? fallback', or check 'x != null' first)
+        print(s.length)
+               ^
+gravc: tests/errors/nullable.grav:16:13: type error: the fallback of '??' must be an int or int?, but got string
+        print(a ?? "zero")
+                ^
+gravc: 9 error(s); aborting

@@ -1,0 +1,6 @@
+running 4 tests
+  ok    values, null, text and equality
+  ok    getting the value out: !, ?? and null checks
+  ok    nullable strings, fields and parameters
+  ok    unwrapping null throws a StateError
+result: 4 passed, 0 failed

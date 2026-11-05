@@ -1,0 +1,10 @@
+gravc: tests/errors/locals.grav:3:5: warning: unused variable 'loop'
+        let loop = fn(n: int) { return loop(n - 1) }
+        ^
+gravc: tests/errors/locals.grav:3:16: type error: 'loop' calls itself, so its lambda needs a result type: fn(...) -> T { ... }
+        let loop = fn(n: int) { return loop(n - 1) }
+                   ^
+gravc: tests/errors/locals.grav:4:18: type error: a [...] literal can build Box only if it has a constructor without parameters and add/push
+        let b: Box = [1, 2]
+                     ^
+gravc: 2 error(s); aborting

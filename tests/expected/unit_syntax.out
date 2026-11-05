@@ -1,0 +1,9 @@
+running 6 tests
+  ok    raw strings keep backslashes and dollar signs
+  ok    multi-line strings drop the shared indentation
+  ok    character literals are their code points
+  ok    collection literals build the expected type
+local!
+  ok    functions declared inside a block
+  ok    lambdas that call themselves
+result: 6 passed, 0 failed
