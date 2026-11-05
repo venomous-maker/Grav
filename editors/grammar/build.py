@@ -41,7 +41,12 @@ repo = {
              {"name": "meta.interpolation.grav", "begin": r"\$\{", "end": r"\}",
               "beginCaptures": {"0": {"name": "punctuation.section.interpolation.begin.grav"}},
               "endCaptures": {"0": {"name": "punctuation.section.interpolation.end.grav"}},
-              "contentName": "source.grav.embedded", "patterns": [{"include": "#expression"}]},
+              "contentName": "source.grav.embedded", "patterns": [
+                  {"comment": "${x:.2f} — a format spec after the last ':'",
+                   "match": r"(?<!:)(:)([<>^]?\+?0?\d*(?:\.\d+)?[dfexXobs%]?)(?=\})",
+                   "captures": {"1": {"name": "punctuation.separator.format.grav"},
+                                "2": {"name": "constant.other.format-spec.grav"}}},
+                  {"include": "#expression"}]},
          ]},
         {"name": "string.quoted.single.grav", "match": r"'(?:\\.|[^'\\])'"},
     ]},
@@ -67,6 +72,18 @@ repo = {
                       {"match": ID + r"(?=\s*(?:\.|::))", "name": "entity.name.namespace.grav"},
                       {"match": ID, "name": "entity.name.type.grav"}]},
     ]},
+    "labels": {"patterns": [
+        {"comment": "outer: for (...) — a labeled loop",
+         "match": r"^\s*(" + ID + r")\s*(:)(?=\s*(?:for|while|do)\b)",
+         "captures": {"1": {"name": "entity.name.label.grav"}, "2": {"name": "punctuation.separator.label.grav"}}},
+        {"comment": "break outer / continue outer",
+         "match": r"\b(break|continue)\s+(?!case\b|default\b)(" + ID + r")\b",
+         "captures": {"1": {"name": "keyword.control.grav"}, "2": {"name": "entity.name.label.grav"}}},
+    ]},
+    "named-args": {
+        "comment": "f(x, name: value) — a named argument (also struct literal fields)",
+        "match": r"(?<=[(,{])\s*(" + ID + r")\s*(:)(?!:)",
+        "captures": {"1": {"name": "variable.parameter.named.grav"}, "2": {"name": "punctuation.separator.grav"}}},
     "decorators": {"match": r"(@)(" + ID + r")", "captures": {"1": {"name": "punctuation.definition.decorator.grav"}, "2": {"name": "entity.name.function.decorator.grav"}}},
     "type-params": {
         "comment": "<T, U: Bound> after a declaration name",
@@ -88,7 +105,7 @@ repo = {
         "patterns": [
             {"begin": r"(->)\s*", "end": r"(?=[{=;]|=>|$)", "beginCaptures": {"1": {"name": "punctuation.separator.return.grav"}},
              "patterns": [{"include": "#type-args"}] + type_patterns()},
-            {"begin": r"(?<![:?])(:)(?!:)\s*(?=fn\b|" + PRIM + r"\b|[A-Z]|[a-z_][\w.]*\s*(?:<|[,)=\]]|$))",
+            {"begin": r"(?<![:?])(:)(?!:)\s*(?=fn\b|\(|" + PRIM + r"\b|[A-Z]|[a-z_][\w.]*\s*(?:<|[,)=\]]|$))",
              "end": r"(?=[,)=;{}]|$)", "beginCaptures": {"1": {"name": "punctuation.separator.type.grav"}},
              "patterns": [{"include": "#type-args"},
                           {"begin": r"\b(fn)\s*(\()", "end": r"\)",
@@ -134,7 +151,8 @@ repo = {
     "keywords": {"patterns": [
         {"match": r"\b(if|else|while|for|in|step|do|switch|match|case|default|break|continue|return|try|catch|finally|throw|defer)\b", "name": "keyword.control.grav"},
         {"match": r"\b(async|await)\b", "name": "keyword.control.async.grav"},
-        {"match": r"\b(public|private|protected|static|readonly|abstract|final|export)\b", "name": "storage.modifier.grav"},
+        {"match": r"\b(public|private|protected|static|readonly|abstract|final|export|weak)\b", "name": "storage.modifier.grav"},
+        {"match": r"\b(operator)\b", "name": "keyword.other.operator.grav"},
         {"match": r"\b(new|free|sizeof|typename)\b", "name": "keyword.operator.new.grav"},
         {"match": r"\b(is|as)\s+(" + PRIM + r")\b", "captures": {"1": {"name": "keyword.operator.type.grav"}, "2": {"name": "storage.type.primitive.grav"}}},
         {"match": r"\b(is|as)\s+((?:" + ID + r"\.)*[A-Z]\w*)", "captures": {"1": {"name": "keyword.operator.type.grav"}, "2": {"name": "entity.name.type.grav"}}},
@@ -151,7 +169,7 @@ repo = {
         {"match": r"\b0[bB][01](?:_?[01])*\b", "name": "constant.numeric.binary.grav"},
         {"match": r"\b\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d+)?\b", "name": "constant.numeric.decimal.grav"},
     ]},
-    "builtins": {"match": r"\b(print|str|input|assert|assertEq|panic|exit|argc|argv|isInstance)\b(?=\s*\()", "name": "support.function.builtin.grav"},
+    "builtins": {"match": r"\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|int|float|bool)\b(?=\s*\()", "name": "support.function.builtin.grav"},
     "case-pattern": {
         "comment": "case Circle(r, _): / case Shape.Empty:",
         "match": r"\b(case)\s+((?:" + ID + r"\.)*)(" + ID + r")(?=\s*[(:,])",
@@ -179,6 +197,7 @@ repo = {
     "operators": {"patterns": [
         {"match": r"=>|->", "name": "keyword.operator.arrow.grav"},
         {"match": r"\?\?|\?\.", "name": "keyword.operator.null.grav"},
+        {"match": r"\.\.\.", "name": "keyword.operator.spread.grav"},
         {"match": r"\.\.=?", "name": "keyword.operator.range.grav"},
         {"match": r"==|!=|<=|>=|<|>", "name": "keyword.operator.comparison.grav"},
         {"match": r"&&|\|\||!", "name": "keyword.operator.logical.grav"},
@@ -195,8 +214,8 @@ repo = {
     ]},
     "expression": {"patterns": [
         {"include": "#comments"}, {"include": "#inline-c"}, {"include": "#strings"}, {"include": "#numbers"},
-        {"include": "#case-pattern"}, {"include": "#new-expr"}, {"include": "#turbofish"}, {"include": "#declarations"},
-        {"include": "#type-annotation"}, {"include": "#keywords"}, {"include": "#constants"}, {"include": "#builtins"},
+        {"include": "#labels"}, {"include": "#case-pattern"}, {"include": "#new-expr"}, {"include": "#turbofish"},
+        {"include": "#declarations"}, {"include": "#type-annotation"}, {"include": "#named-args"}, {"include": "#keywords"}, {"include": "#constants"}, {"include": "#builtins"},
         {"include": "#calls"}, {"include": "#names"}, {"include": "#operators"}, {"include": "#punctuation"},
     ]},
 }

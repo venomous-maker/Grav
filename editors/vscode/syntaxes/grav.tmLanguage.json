@@ -93,6 +93,18 @@
               "contentName": "source.grav.embedded",
               "patterns": [
                 {
+                  "comment": "${x:.2f} \u2014 a format spec after the last ':'",
+                  "match": "(?<!:)(:)([<>^]?\\+?0?\\d*(?:\\.\\d+)?[dfexXobs%]?)(?=\\})",
+                  "captures": {
+                    "1": {
+                      "name": "punctuation.separator.format.grav"
+                    },
+                    "2": {
+                      "name": "constant.other.format-spec.grav"
+                    }
+                  }
+                },
+                {
                   "include": "#expression"
                 }
               ]
@@ -203,6 +215,46 @@
           ]
         }
       ]
+    },
+    "labels": {
+      "patterns": [
+        {
+          "comment": "outer: for (...) \u2014 a labeled loop",
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?=\\s*(?:for|while|do)\\b)",
+          "captures": {
+            "1": {
+              "name": "entity.name.label.grav"
+            },
+            "2": {
+              "name": "punctuation.separator.label.grav"
+            }
+          }
+        },
+        {
+          "comment": "break outer / continue outer",
+          "match": "\\b(break|continue)\\s+(?!case\\b|default\\b)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.grav"
+            },
+            "2": {
+              "name": "entity.name.label.grav"
+            }
+          }
+        }
+      ]
+    },
+    "named-args": {
+      "comment": "f(x, name: value) \u2014 a named argument (also struct literal fields)",
+      "match": "(?<=[(,{])\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?!:)",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.named.grav"
+        },
+        "2": {
+          "name": "punctuation.separator.grav"
+        }
+      }
     },
     "decorators": {
       "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
@@ -369,7 +421,7 @@
           ]
         },
         {
-          "begin": "(?<![:?])(:)(?!:)\\s*(?=fn\\b|(?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b|[A-Z]|[a-z_][\\w.]*\\s*(?:<|[,)=\\]]|$))",
+          "begin": "(?<![:?])(:)(?!:)\\s*(?=fn\\b|\\(|(?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b|[A-Z]|[a-z_][\\w.]*\\s*(?:<|[,)=\\]]|$))",
           "end": "(?=[,)=;{}]|$)",
           "beginCaptures": {
             "1": {
@@ -647,8 +699,12 @@
           "name": "keyword.control.async.grav"
         },
         {
-          "match": "\\b(public|private|protected|static|readonly|weak|abstract|final|export)\\b",
+          "match": "\\b(public|private|protected|static|readonly|abstract|final|export|weak)\\b",
           "name": "storage.modifier.grav"
+        },
+        {
+          "match": "\\b(operator)\\b",
+          "name": "keyword.other.operator.grav"
         },
         {
           "match": "\\b(new|free|sizeof|typename)\\b",
@@ -719,7 +775,7 @@
       ]
     },
     "builtins": {
-      "match": "\\b(print|str|input|assert|assertEq|panic|exit|argc|argv|isInstance)\\b(?=\\s*\\()",
+      "match": "\\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|int|float|bool)\\b(?=\\s*\\()",
       "name": "support.function.builtin.grav"
     },
     "case-pattern": {
@@ -862,6 +918,10 @@
           "name": "keyword.operator.null.grav"
         },
         {
+          "match": "\\.\\.\\.",
+          "name": "keyword.operator.spread.grav"
+        },
+        {
           "match": "\\.\\.=?",
           "name": "keyword.operator.range.grav"
         },
@@ -926,6 +986,9 @@
           "include": "#numbers"
         },
         {
+          "include": "#labels"
+        },
+        {
           "include": "#case-pattern"
         },
         {
@@ -939,6 +1002,9 @@
         },
         {
           "include": "#type-annotation"
+        },
+        {
+          "include": "#named-args"
         },
         {
           "include": "#keywords"

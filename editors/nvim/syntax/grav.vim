@@ -14,7 +14,7 @@ syn region  gravBlockComment start="/\*" end="\*/" contains=gravTodo
 syn keyword gravKeyword fn class struct enum type typedef interface abstract namespace
 syn keyword gravKeyword constructor extends implements uses new return import export from use test
 syn keyword gravKeyword trait destructor operator final
-syn keyword gravStorage  let const static readonly public private protected
+syn keyword gravStorage  let const static readonly public private protected weak
 syn keyword gravKeyword async await
 
 " Control flow
@@ -50,7 +50,8 @@ syn match gravFloat  "\<\d\%(_\=\d\)*[eE][-+]\=\d\+\>"
 " Strings with ${...} interpolation. The interpolated expression highlights its
 " own numbers / booleans / builtins / types / operators (not nested strings).
 syn cluster gravInterpInner contains=gravNumber,gravFloat,gravBoolean,gravConstant,gravBuiltin,gravType,gravOperator
-syn region gravInterp matchgroup=gravInterpDelim start="\${" end="}" contained contains=@gravInterpInner
+syn match  gravFormatSpec ":\%([<>^]\=+\=0\=\d*\%(\.\d\+\)\=[dfexXobs%]\=\)\ze}" contained   " ${x:.2f}
+syn region gravInterp matchgroup=gravInterpDelim start="\${" end="}" contained contains=@gravInterpInner,gravFormatSpec
 syn region gravString start=+"+ skip=+\\"+ end=+"+ contains=gravInterp,gravEscape
 syn match  gravEscape "\\[ntr\\\"$]" contained
 
@@ -84,6 +85,10 @@ syn match gravNamespace   "\%(\<import\s\+"[^"]*"\s\+as\s\+\)\@<=\w\+"
 syn match gravEnumMember  "\%(\<case\s\+\%(\w\+\.\)*\)\@<=\u\w*"   " case Circle(r):
 syn match gravImportPath  +\%(\<\%(import\|from\)\s*\)\@<="[^"]*"+
 syn match gravTestName    +\%(^\s*test\s\+\)\@<="[^"]*"+
+syn match gravLabel       "^\s*\zs\w\+\ze\s*:\s*\%(for\|while\|do\)\>"      " outer: for (...)
+syn match gravLabel       "\%(\<\%(break\|continue\)\s\+\)\@<=\w\+"        " break outer
+syn match gravNamedArg    "\%([(,]\s*\)\@<=\w\+\ze\s*:[^:]"                " f(name: value)
+syn match gravSpread      "\.\.\."                                         " f(...xs)
 
 " Operators
 syn match gravOperator "[-+*/%<>=!&|^~?:.]"
@@ -108,6 +113,10 @@ hi def link gravString        String
 hi def link gravEscape        SpecialChar
 hi def link gravInterp        Special
 hi def link gravInterpDelim   SpecialChar
+hi def link gravFormatSpec    SpecialChar
+hi def link gravLabel         Label
+hi def link gravNamedArg      Identifier
+hi def link gravSpread        Operator
 hi def link gravCBlock        PreProc
 hi def link gravCBlockDelim   Special
 hi def link gravDecorator     PreProc
