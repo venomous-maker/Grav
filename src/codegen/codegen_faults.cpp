@@ -51,12 +51,12 @@ static inline long long grav_idx(long long i, long long n) {
 }
 /* `s[i]`: the byte at index i (checked against the string's length). */
 static inline unsigned char grav_str_byte(const char* s, long long i) {
-    if (GRAV_UNLIKELY(i < 0 || strnlen(s, (size_t)i + 1) <= (size_t)i)) grav_fault_index_of("string", i, (long long)strlen(s));
+    if (GRAV_UNLIKELY((unsigned long long)i >= (unsigned long long)grav_str_len(s))) grav_fault_index_of("string", i, grav_str_len(s));
     return (unsigned char)s[i];
 }
 /* `s[lo..hi]`: the bytes in [lo, hi), clamped to the string (a fresh string). */
 static const char* grav_str_range(const char* s, long long lo, long long hi) {
-    long long n = (long long)strlen(s);
+    long long n = grav_str_len(s);
     if (lo < 0) lo = 0;
     if (hi > n) hi = n;
     if (hi < lo) hi = lo;

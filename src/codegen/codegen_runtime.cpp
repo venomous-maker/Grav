@@ -280,7 +280,9 @@ static inline void grav_iface_release(struct GravIface i) { grav_release(i.obj);
    release do nothing, so an unrecognized string can leak but never be freed.
    Blocks come in size classes; freed blocks go to a per-thread cache (no lock),
    which spills to a shared list when it grows large. */
-typedef struct GravStrHdr { long long rc; unsigned long long meta; } GravStrHdr;
+/* len caches strlen (-1 until first asked, or past 2 GiB): strings never change once
+   Grav code holds them, so `s.length` and `s[i]` cost O(1) instead of a scan. */
+typedef struct GravStrHdr { int rc; int len; unsigned long long meta; } GravStrHdr;
 #define GRAV_SCLASSES 34
 static size_t grav_ssize[GRAV_SCLASSES];
 static char* grav_sbase = 0;            /* reserved range [grav_sbase, grav_slimit) */
@@ -366,6 +368,7 @@ static char* grav_str_new(size_t n) {
         return m;
     }
     h->rc = 1;
+    h->len = -1;
     h->meta = grav_smeta(h, cls);
     __atomic_add_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
     char* s = (char*)(h + 1);
@@ -424,12 +427,23 @@ static void grav_str_free(const char* s) {
 static char* grav_str_realloc(char* s, size_t n) {
     if (!s) return grav_str_new(n);
     GravStrHdr* h = grav_shdr(s);
-    if (h && grav_ssize[h->meta & 0xff] >= n + 1 + sizeof(GravStrHdr)) return s;
+    if (h && grav_ssize[h->meta & 0xff] >= n + 1 + sizeof(GravStrHdr)) { h->len = -1; return s; }
     char* r = grav_str_new(n);
     size_t old = h ? grav_ssize[h->meta & 0xff] - sizeof(GravStrHdr) : strlen(s) + 1;
     memcpy(r, s, old < n + 1 ? old : n + 1);
     if (h) grav_sblock_free(h);
     return r;
+}
+/* The length of a string in bytes: cached in a counted string's header after the
+   first call; a scan for literals and C strings. */
+static inline long long grav_str_len(const char* s) {
+    GravStrHdr* h = grav_shdr(s);
+    if (!h) return (long long)strlen(s);
+    int n = __atomic_load_n(&h->len, __ATOMIC_RELAXED);
+    if (n >= 0) return n;
+    size_t m = strlen(s);
+    if (m < 0x7fffffff) __atomic_store_n(&h->len, (int)m, __ATOMIC_RELAXED);
+    return (long long)m;
 }
 /* A counted copy of a malloc'd buffer the caller owns (the buffer is freed). */
 static const char* grav_str_take(char* m) {

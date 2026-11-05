@@ -523,7 +523,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         if (e->object->type.isArray() && e->member == "length")
             return std::to_string(e->object->type.arrayLen);
         if (e->object->type.kind == TypeRef::Kind::String && e->member == "length")
-            return "((int)strlen(" + emitExpr(*e->object) + "))";
+            return "((int)grav_str_len(" + emitExpr(*e->object) + "))";
         // `bytes.length` is the runtime byte count stored alongside the buffer.
         if (e->object->type.isBinary() && e->member == "length")
             return "(int)((" + emitExpr(*e->object) + ").len)";
