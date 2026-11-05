@@ -48,6 +48,8 @@ namespace std.collections {
             if (i < 0 || i >= self.len) { throw new IndexError("Array index ${i} out of range (length ${self.len})"); }
         }
 
+        // Library-internal: the element buffer (valid until the array next grows).
+        public fn __buffer() -> T* { return self.data; }
         private fn ensure(need: int) {
             if (self.cap >= need) { return; }
             let nc = self.cap < 4 ? 4 : self.cap * 2;
