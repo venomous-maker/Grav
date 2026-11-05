@@ -147,7 +147,8 @@ const providers = {
         const item = new vscode.CompletionItem(c.label, COMPLETION_KIND(c.kind));
         item.detail = c.detail;
         if (c.documentation) item.documentation = new vscode.MarkdownString(c.documentation);
-        if (c.insertText) item.insertText = c.insertText;
+        if (c.insertText) item.insertText = c.snippet ? new vscode.SnippetString(c.insertText) : c.insertText;
+        if (c.sortText) item.sortText = c.sortText;
         if (c.filterText) item.filterText = c.filterText;
         return item;
       });

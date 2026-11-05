@@ -60,6 +60,119 @@ const BUILTINS = [
   ["typename", "typename(value) -> string", "The runtime type name of a value."],
   ["sizeof", "sizeof(T) -> int", "Byte size of a type or value."],
   ["free", "free(object)", "Release an object (runs its destructor)."],
+  ["println", "println(value)", "Same as print."],
+  ["env", "env(name) -> string", "An environment variable (\"\" when unset)."],
+  ["cwd", "cwd() -> string", "The working directory."],
+  ["isInstance", "isInstance(object, Type) -> bool", "Is the object a Type (or a subclass)?"],
+];
+// Hover explanations for keywords and built-in types: [summary, example].
+const KEYWORD_DOCS = {
+  fn: ["Declares a function or method; `fn(a) => e` is a lambda. Parameters may have defaults (`b: int = 1`).", "fn add(a: int, b: int = 1) -> int { return a + b }"],
+  class: ["A reference type with fields, constructors, methods, single inheritance and interfaces.", "class Dog extends Animal implements Named { ... }"],
+  struct: ["A value type: named fields, copied on assignment. It may have methods; inside them `self` is the struct.", "struct Point { x: int  y: int  fn sum() -> int { return self.x + self.y } }"],
+  enum: ["A set of named constants (members may have values), or a data enum whose variants carry fields.", "enum Http { Ok = 200, NotFound = 404 }\nenum Shape { Circle(r: float), Empty }"],
+  type: ["A type alias; fully interchangeable with what it names (`typedef` is a synonym).", "type Meters = double"],
+  typedef: ["A synonym of `type`: a type alias.", "typedef Grid = int[3]"],
+  interface: ["A set of method signatures a class can implement; `is` / `as` check and convert at run time.", "interface Shape { fn area() -> float }"],
+  trait: ["An interface whose methods may have default bodies; `Self` is the implementing class.", "trait Comparable { fn compareTo(o: Self) -> int }"],
+  abstract: ["An abstract class cannot be instantiated; an abstract method has no body and must be overridden.", "abstract class Shape { abstract fn area() -> float }"],
+  final: ["A final class cannot be extended; a final method cannot be overridden (calls are direct).", "final class Version { ... }"],
+  namespace: ["Groups declarations under a dotted name.", "namespace geo { class Point { ... } }"],
+  constructor: ["Runs when `new` creates an object. A class may have several; a subclass without one inherits its parent's.", "constructor(name: string) { super(name) }"],
+  destructor: ["Runs when the object is released with `free(obj)`, most-derived class first.", "destructor() { print(\"bye\") }"],
+  extends: ["The base class(es) of a class.", "class Puppy extends Dog { }"],
+  implements: ["The interfaces a class implements.", "class Box implements Drawable, Resizable { }"],
+  uses: ["Composition: forwards the methods of a field's type to that field.", "class Car uses engine: Engine { }"],
+  use: ["Brings names from a namespace into scope (`*` for all, `as` to rename).", "use std.collections.*"],
+  import: ["Loads another file or library module: \"std\", \"std/json\", a relative path, or a package.", "import \"std\""],
+  from: ["Picks names out of an import.", "import { Array, HashMap as Map } from \"std/collections\""],
+  export: ["Marks a declaration as part of a package's public surface.", "export fn helper() { }"],
+  new: ["Creates an object by calling a constructor (type arguments may be inferred).", "let b = new Box(5)"],
+  return: ["Leaves the function, giving its value.", "return a + b"],
+  async: ["An async function runs on the worker pool; calling it gives a Future<T>.", "async fn fetch(url: string) -> string { ... }"],
+  await: ["Waits for a Future and gives its value (re-throwing its exception).", "let page = await fetch(url)"],
+  let: ["Declares a variable (its type is inferred from the value if omitted). Patterns take values apart.", "let (q, r) = divmod(17, 5)"],
+  const: ["Declares a constant: assigning it later is an error.", "const LIMIT: int = 10"],
+  static: ["A member that belongs to the class rather than to its instances.", "static fn make() -> Id { ... }"],
+  readonly: ["A field that can only be assigned in a constructor.", "readonly id: int"],
+  weak: ["A field that does not keep its object alive (breaks reference cycles).", "weak parent: Node"],
+  public: ["Visible everywhere (the default).", "public name: string"],
+  private: ["Visible only inside the class; private fields get get_/set_ accessors.", "private secret: string"],
+  protected: ["Visible inside the class and its subclasses.", "protected count: int"],
+  if: ["Runs a block when the condition (a bool) holds; also `case x if cond:` guards.", "if (n > 0) { ... } else { ... }"],
+  else: ["The branch taken when the `if` condition is false.", "else if (n == 0) { ... }"],
+  while: ["Repeats a block while the condition holds.", "while (i < 10) { i++ }"],
+  for: ["A C-style loop, a range `for (i in 0..n step 2)`, or for-each `for (i, x in xs)` / `for ((k, v) in pairs)`.", "for (x in xs) { print(x) }"],
+  do: ["A loop whose body runs at least once.", "do { tries++ } while (tries < 3)"],
+  in: ["Separates the loop variable from what it iterates.", "for (ch in \"héllo\") { }"],
+  step: ["The increment of a range loop (may be negative).", "for (i in 10..0 step -2) { }"],
+  switch: ["Picks a case: values, ranges (`lo..hi`), guards (`if cond`), data-enum patterns. No fall-through.", "switch (n) { case 1, 2: { } case 3..10: { } default: { } }"],
+  match: ["Like `switch`; where a value is expected each case gives an expression.", "let word = match (n) { case 1: \"one\" default: \"many\" }"],
+  case: ["One alternative of a switch/match: values, a range, a variant pattern, and an optional `if` guard.", "case Circle(r) if r > 1.0: print(r)"],
+  default: ["The case taken when no other case matches.", "default: { print(\"other\") }"],
+  break: ["Leaves the innermost loop, or the loop with the given label.", "break outer"],
+  continue: ["Goes on with the next iteration of the innermost (or labeled) loop.", "continue outer"],
+  try: ["Runs a block whose exceptions the `catch` clauses handle.", "try { risky() } catch (e: ValueError) { } finally { }"],
+  catch: ["Handles exceptions of a class (or its subclasses) thrown in the `try` block.", "catch (e: IndexError) { print(e.message()) }"],
+  finally: ["Always runs when leaving the `try`, normally or by an exception.", "finally { file.close() }"],
+  throw: ["Raises an exception: any class instance.", "throw new ValueError(\"bad input\")"],
+  defer: ["Runs a statement when the enclosing block exits (last registered first).", "defer { lock.unlock() }"],
+  as: ["Converts: numbers, enums from ints, down/up casts, interfaces, `any` (checked at run time).", "let d = animal as Dog"],
+  is: ["Tests a value's runtime type: a class, an interface, or what an `any` holds.", "if (shape is Named) { }"],
+  sizeof: ["The size in bytes of a type or value.", "sizeof(Point)"],
+  operator: ["Defines an operator for a class: + - * / % == < [] []= ...", "fn operator+(o: Vec) -> Vec { ... }"],
+  test: ["A test block, run by `grav test`.", "test \"adds\" { assertEq(1 + 1, 2) }"],
+  self: ["The object (or struct) a method was called on. `this` is a synonym.", "self.count += 1"],
+  super: ["The parent class: `super(...)` runs its constructor, `super.m()` its method.", "super(name)"],
+  true: ["The boolean true.", "let ok = true"],
+  false: ["The boolean false.", "let done = false"],
+  null: ["No object: valid for classes, interfaces, functions and pointers.", "let next: Node = null"],
+  free: ["Releases an object now (running destructors), a pointer, closure, or finished future.", "free(conn)"],
+  auto: ["An inferred type or type argument.", "let xs = new Array<auto>()"],
+  int: ["32-bit signed integer. Integer literals beyond its range are longs.", "let n: int = 42"],
+  long: ["64-bit signed integer (int64).", "let big: long = 9000000000"],
+  uint: ["32-bit unsigned integer.", "let mask: uint = 0xFFFF"],
+  byte: ["8-bit unsigned integer (uint8); `s[i]` gives one.", "let b: byte = 255"],
+  float: ["64-bit floating point (like double). Prints in the shortest exact form.", "let ratio = 0.5"],
+  float32: ["32-bit floating point.", "let f: float32 = 1.5"],
+  double: ["64-bit floating point (same as float).", "let d: double = 3.14"],
+  bool: ["true or false; conditions must be bools.", "let ready: bool = false"],
+  string: ["Immutable UTF-8 text: `+`, `==`, `<`, `s.length`, `s[i]`, `s[lo..hi]`, `${...}` interpolation.", "let s = \"sum=${a + b:.2f}\""],
+  void: ["No value: the result of a function that returns nothing.", "fn log(msg: string) -> void { }"],
+  binary: ["Raw bytes with a length (may contain zeros).", "let data: binary = File.readBinary(path)"],
+  any: ["A value of any type with its runtime type; `is` tests and `as` takes it out.", "let v: any = 42"],
+};
+for (const t of ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"])
+  KEYWORD_DOCS[t] = [`${t.startsWith("u") ? "Unsigned" : "Signed"} ${t.replace(/\D/g, "")}-bit integer.`, `let v: ${t} = 1`];
+
+// Completion snippets (LSP snippet syntax): [label, description, body].
+const SNIPPETS = [
+  ["fn", "function", "fn ${1:name}(${2}) -> ${3:void} {\n\t$0\n}"],
+  ["main", "entry point", "fn main() {\n\t$0\n}"],
+  ["class", "class with a constructor", "class ${1:Name} {\n\tpublic ${2:value}: ${3:int}\n\tconstructor(${2:value}: ${3:int}) { self.${2:value} = ${2:value} }\n\t$0\n}"],
+  ["struct", "struct with a method", "struct ${1:Name} {\n\t${2:x}: ${3:int}\n\tfn ${4:describe}() -> string { return \"${self.${2:x}}\" }\n}"],
+  ["enum", "enum", "enum ${1:Name} { ${2:A}, ${3:B} }"],
+  ["enumdata", "data enum with a match", "enum ${1:Shape} {\n\t${2:Circle}(${3:r}: float),\n\t${4:Empty},\n}"],
+  ["interface", "interface", "interface ${1:Name} {\n\tfn ${2:method}() -> ${3:int}\n}"],
+  ["if", "if / else", "if (${1:cond}) {\n\t$0\n} else {\n}"],
+  ["for", "for-each loop", "for (${1:x} in ${2:xs}) {\n\t$0\n}"],
+  ["fori", "range loop", "for (${1:i} in ${2:0}..${3:n}) {\n\t$0\n}"],
+  ["forkv", "destructuring loop", "for ((${1:k}, ${2:v}) in ${3:pairs}) {\n\t$0\n}"],
+  ["while", "while loop", "while (${1:cond}) {\n\t$0\n}"],
+  ["match", "match statement", "match (${1:value}) {\n\tcase ${2:pattern}: ${3}\n\tdefault: ${0}\n}"],
+  ["matchexpr", "match expression", "let ${1:result} = match (${2:value}) { case ${3:1}: ${4:\"one\"} default: ${5:\"other\"} }"],
+  ["try", "try / catch / finally", "try {\n\t$1\n} catch (e: ${2:Exception}) {\n\tprint(e.message())\n} finally {\n\t$0\n}"],
+  ["test", "test block", "test \"${1:does something}\" {\n\tassertEq(${2:actual}, ${3:expected})\n}"],
+  ["lambda", "lambda", "fn(${1:x}) => ${0}"],
+  ["defer", "defer block", "defer { $0 }"],
+  ["label", "labeled loop", "${1:outer}: for (${2:x} in ${3:xs}) {\n\t$0\n}"],
+  ["letd", "destructuring let", "let (${1:a}, ${2:b}) = ${0}"],
+  ["fmt", "formatted interpolation", "\"\\${${1:value}:${2:.2f}}\""],
+  ["async", "async function", "async fn ${1:name}(${2}) -> ${3:int} {\n\t$0\n}"],
+  ["extends", "subclass", "class ${1:Name} extends ${2:Base} {\n\tconstructor(${3}) { super(${4}) }\n\t$0\n}"],
+  ["trait", "trait with a default method", "trait ${1:Name} {\n\tfn ${2:method}() -> ${3:int}\n\tfn ${4:helper}() -> ${3:int} { return self.${2:method}() }\n}"],
+  ["importstd", "import the standard library", "import \"std\""],
+  ["inlinec", "inline C", "%{ $0 %}"],
 ];
 const KEYWORD_SET = new Set([...KEYWORDS, ...TYPES]);
 const IDENT = "[A-Za-z_][A-Za-z0-9_]*";
@@ -788,7 +901,10 @@ class Workspace {
     const text = this.text(file) || "";
     const w = wordAtPosition(text, pos);
     if (!w) return null;
-    if (KEYWORD_SET.has(w.word)) return null;
+    if (KEYWORD_SET.has(w.word)) {
+      const d = KEYWORD_DOCS[w.word];
+      return d ? { markdown: `**${w.word}** — ${d[0]}\n\n\`\`\`grav\n${d[1]}\n\`\`\``, range: w.range } : null;
+    }
     const b = BUILTINS.find((x) => x[0] === w.word);
     const defs = this.definition(file, pos);
     for (const d of defs) {
@@ -890,8 +1006,13 @@ class Workspace {
         push(s.name, COMPLETION_KIND[s.kind] || 6, s.detail, s.doc);
       }
     }
-    for (const k of KEYWORDS) push(k, 14, "keyword");
-    for (const t of TYPES) push(t, 25, "type");
+    const kwDoc = (k) => KEYWORD_DOCS[k] ? `${KEYWORD_DOCS[k][0]}\n\n\`\`\`grav\n${KEYWORD_DOCS[k][1]}\n\`\`\`` : "";
+    for (const k of KEYWORDS) push(k, 14, "keyword", kwDoc(k));
+    for (const t of TYPES) push(t, 25, "type", kwDoc(t));
+    if (!/\S$/.test(lineText) || /^\s*\w*$/.test(lineText))   // statement position: offer snippets
+      for (const [label, desc, body] of SNIPPETS)
+        items.push({ label, kind: 15, detail: desc, documentation: "```grav\n" + body.replace(/\$\{\d+:?([^}]*)\}|\$\d/g, "$1") + "\n```",
+                     insertText: body, snippet: true, sortText: "~" + label });
     for (const b of BUILTINS) push(b[0], 3, b[1], b[2]);
     return items;
   }
@@ -1050,6 +1171,6 @@ class Workspace {
 }
 
 module.exports = {
-  KIND, COMPLETION_KIND, KEYWORDS, TYPES, BUILTINS, splitLines, mask, parseFile, wordAtPosition,
+  KIND, COMPLETION_KIND, KEYWORDS, TYPES, BUILTINS, KEYWORD_DOCS, SNIPPETS, splitLines, mask, parseFile, wordAtPosition,
   Workspace, inferType,
 };

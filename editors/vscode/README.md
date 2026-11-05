@@ -9,16 +9,19 @@ Syntax highlighting, snippets, and build/run commands for the
   bounds, type annotations (including `fn(A) -> B`), every import form
   (`import { A as B } from "…"`, `import "…" as x`), `use a::b::*`, namespaces,
   `test "…"` blocks, data enum variants in `case`, turbofish `::<T>`, hex/binary/
-  underscore/exponent literals, `${…}` interpolation highlighted as code, and
-  inline C `%{ … %}` with the real C grammar.
+  underscore/exponent literals, `${…}` interpolation highlighted as code (with
+  format specs like `${x:.2f}`), loop labels (`outer:` / `break outer`), named
+  arguments, the spread `...`, and inline C `%{ … %}` with the real C grammar.
 - **Understands your imports** — go to definition (`F12`) and hover follow
   `import` lines into the standard library, `grav.toml` paths and installed
   packages; `F12` on an import string opens the module.
 - **Completion** — members after `.` (from the variable's type), static members
   after a type name, namespace and alias members, import paths after
-  `import "`, keywords and built-ins; **signature help** inside calls.
+  `import "`, keywords (with explanations) and built-ins; **signature help**
+  inside calls.
 - **Hover** — the declaration's signature, its doc comment, and where it lives
-  (`namespace std.net · std/net/http`).
+  (`namespace std.net · std/net/http`); on a keyword or built-in type, what it
+  means and an example.
 - **Outline, workspace symbols (including the library), references, rename.**
 - **Diagnostics** — `grav check --json` runs on open and save (`grav.checkOnSave`).
 - **Formatting** — *Format Document* runs `grav fmt`.
@@ -26,7 +29,8 @@ Syntax highlighting, snippets, and build/run commands for the
   (`Ctrl+Alt+T`), Check, Format, Show Generated C, Run/Test Project, New Project,
   Add Package, Install Packages.
 - **Snippets** — `main`, `fn`, `class`, `extends`, `interface`, `trait`, `struct`,
-  `enum`, `match`, `for`, `try`, `importstd`, `inlinec`, and more.
+  `enum`, `enumdata`, `match`, `matchexpr`, `for`, `fori`, `forkv`, `label`, `letd`,
+  `fmt`, `try`, `test`, `lambda`, `defer`, `async`, `importstd`, `inlinec`.
 
 Settings: `grav.compilerPath` (default `grav`), `grav.checkOnSave` (default on).
 

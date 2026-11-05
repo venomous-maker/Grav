@@ -99,7 +99,8 @@ function handle(msg) {
       const items = ws.completion(uriToPath(params.textDocument.uri), params.position).map((c) => ({
         label: c.label, kind: c.kind, detail: c.detail,
         documentation: c.documentation ? { kind: "markdown", value: c.documentation } : undefined,
-        insertText: c.insertText, filterText: c.filterText,
+        insertText: c.insertText, filterText: c.filterText, sortText: c.sortText,
+        insertTextFormat: c.snippet ? 2 : 1,   // 2: snippet syntax ($1, ${2:name})
       }));
       return reply(id, { isIncomplete: false, items });
     }

@@ -1,8 +1,8 @@
 {
   "name": "grav-lang",
   "displayName": "Grav Language",
-  "description": "Grav language support: full syntax highlighting, go to definition across imports, the standard library and packages, completion, signature help, hover docs, outline, rename, grav fmt formatting, grav check diagnostics, and run/test/package commands.",
-  "version": "1.6.0",
+  "description": "Grav language support: syntax highlighting (format specs, labels, named arguments), go to definition across imports, the standard library and packages, completion with snippets and keyword docs, signature help, hover explanations for keywords and types, outline, rename, grav fmt formatting, grav check diagnostics, and run/test/package commands.",
+  "version": "1.7.0",
   "publisher": "grav",
   "license": "MIT",
   "engines": {
@@ -49,12 +49,6 @@
         "embeddedLanguages": {
           "meta.embedded.block.c.grav": "c"
         }
-      }
-    ],
-    "snippets": [
-      {
-        "language": "grav",
-        "path": "./snippets/grav.json"
       }
     ],
     "commands": [
