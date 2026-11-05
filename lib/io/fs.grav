@@ -13,6 +13,7 @@
 import "../core/exception.grav"
 import "../text/string.grav"
 import "../collections/array.grav"
+import "path.grav"
 
 namespace std.io {
 
@@ -24,6 +25,24 @@ namespace std.io {
     #include <dirent.h>
     #include <sys/stat.h>
     #include <unistd.h>
+    #include <fnmatch.h>
+    /* A whole line from f without its line break, or NULL at the end (a counted string). */
+    static const char* grav_read_line(void* fp) {
+        FILE* f = (FILE*)fp;
+        if (!f) return 0;
+        size_t cap = 256, n = 0; char* b = (char*)malloc(cap);
+        int c, any = 0;
+        while ((c = fgetc(f)) != EOF) {
+            any = 1;
+            if (c == '\n') break;
+            if (n + 1 >= cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            b[n++] = (char)c;
+        }
+        if (!any) { free(b); return 0; }
+        if (n > 0 && b[n - 1] == '\r') n--;
+        char* r = grav_str_new(n); memcpy(r, b, n); r[n] = 0; free(b);
+        return r;
+    }
 
     static GravBytes grav_file_read_bytes(const char* path) {
         GravBytes out; out.data = 0; out.len = 0;
@@ -195,6 +214,119 @@ namespace std.io {
             let t = env("TMPDIR");
             return Str.isEmpty(t) ? "/tmp" : t;
         }
+        // Every file under `path`, recursively, as paths starting with `path`, sorted.
+        static fn walk(path: string) -> Array<string> {
+            let out = new Array<string>();
+            Dir.walkInto(path, out);
+            return out;
+        }
+        private static fn walkInto(path: string, out: Array<string>) {
+            for (name in Dir.list(path)) {
+                let p = Path.combine(path, name);
+                if (Dir.exists(p) && !Dir.isLink(p)) { Dir.walkInto(p, out); }
+                else { out.push(p); }
+            }
+        }
+        // The files under `path` (recursively) whose name matches a glob pattern such as
+        // "*.grav" or "test_?.txt" (* any text, ? one character, [abc] one of).
+        static fn find(path: string, pattern: string) -> Array<string> {
+            return Dir.walk(path).filter(fn(p) => Path.matches(Path.basename(p), pattern));
+        }
+        // Removes a directory and everything in it (like rm -r); whether it worked.
+        // Symbolic links are removed, not followed.
+        static fn removeAll(path: string) -> bool {
+            if (!Dir.exists(path) || Dir.isLink(path)) { return %{ unlink(path) == 0 %} as bool; }
+            let ok = true;
+            for (name in Dir.list(path)) {
+                let p = Path.combine(path, name);
+                if (Dir.exists(p) && !Dir.isLink(p)) { ok = Dir.removeAll(p) && ok; }
+                else { ok = %{ unlink(p) == 0 %} as bool && ok; }
+            }
+            return Dir.remove(path) && ok;
+        }
+        // Whether `path` is a symbolic link.
+        static fn isLink(path: string) -> bool {
+            return %{ ({ struct stat grav_st; lstat(path, &grav_st) == 0 && S_ISLNK(grav_st.st_mode); }) %} as bool;
+        }
+        // The total size in bytes of the files under `path`.
+        static fn size(path: string) -> long {
+            let t: long = 0;
+            for (f in Dir.walk(path)) { let n = new File(f).size(); if (n > 0) { t += n; } }
+            return t;
+        }
     }
 
+    // Reads a text file one line at a time, without loading it all: for large files.
+    //
+    //   let r = new FileReader("big.log")
+    //   while (true) { let line = r.readLine(); if (line == null) { break }  ... }
+    //   r.close()
+    class FileReader {
+        private f: byte*
+        // The path being read.
+        readonly path: string
+        // Opens `path` for reading; IOError when it cannot be opened.
+        constructor(path: string) {
+            self.path = path;
+            self.f = %{ (unsigned char*)fopen(path, "rb") %} as byte*;
+            if (self.f == null) {
+                let why = %{ strerror(errno) %} as string;
+                throw new IOError("cannot read '${path}': ${why}");
+            }
+        }
+        destructor() { self.close(); }
+        // The next line without its line break (\n or \r\n), or null at the end of the file.
+        public fn readLine() -> string? { return %{ grav_read_line(self->f) %} as string?; }
+        // Calls f with each remaining line, then closes the file.
+        public fn forEachLine(f: fn(string)) {
+            while (true) {
+                let line = self.readLine();
+                if (line == null) { break; }
+                f(line);
+            }
+            self.close();
+        }
+        // Closes the file (safe to call twice).
+        public fn close() { if (self.f != null) { %{ fclose((FILE*)self->f); %}; self.f = null; } }
+    }
+
+    // Writes a file piece by piece through a buffer: for large or incremental output.
+    class FileWriter {
+        private f: byte*
+        // The path being written.
+        readonly path: string
+        // Opens `path` for writing, replacing it, or adding to its end when `append`
+        // is true; IOError when it cannot be opened.
+        constructor(path: string, append: bool) {
+            self.path = path;
+            self.f = %{ (unsigned char*)fopen(path, append ? "ab" : "wb") %} as byte*;
+            if (self.f == null) {
+                let why = %{ strerror(errno) %} as string;
+                throw new IOError("cannot write '${path}': ${why}");
+            }
+        }
+        // Opens `path` for writing, replacing it.
+        constructor(path: string) { self.path = path; self.f = null; self.reopen(path); }
+        private fn reopen(path: string) {
+            self.f = %{ (unsigned char*)fopen(path, "wb") %} as byte*;
+            if (self.f == null) {
+                let why = %{ strerror(errno) %} as string;
+                throw new IOError("cannot write '${path}': ${why}");
+            }
+        }
+        destructor() { self.close(); }
+        // Writes text; IOError after close().
+        public fn write(text: string) -> FileWriter {
+            if (self.f == null) { throw new IOError("FileWriter: '${self.path}' is closed"); }
+            %{ fputs(text, (FILE*)self->f); %};
+            return self;
+        }
+        // Writes text and a line break.
+        public fn writeLine(text: string) -> FileWriter { return self.write(text).write("\n"); }
+        // Sends buffered text to the file now.
+        public fn flush() { if (self.f != null) { %{ fflush((FILE*)self->f); %}; } }
+        // Flushes and closes the file (safe to call twice).
+        public fn close() { if (self.f != null) { %{ fclose((FILE*)self->f); %}; self.f = null; } }
+    }
 }
+

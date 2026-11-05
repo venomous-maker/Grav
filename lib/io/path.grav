@@ -9,6 +9,8 @@ namespace std.io {
     static int grav_path_last(const char* s, int ch) { const char* p = strrchr(s, ch); return p ? (int)(p - s) : -1; }
     %}
 
+    %{ #include <fnmatch.h> %}
+
     class Path {
         private static fn lastIndex(s: string, ch: int) -> int { return %{ grav_path_last(s, ch) %} as int; }
 
@@ -82,6 +84,11 @@ namespace std.io {
             free(out);
             if (abs) { return "/" + body; }
             return Str.isEmpty(body) ? "." : body;
+        }
+        // Whether `name` matches a glob pattern: * any text, ? one character, [abc] one of
+        // the listed characters: Path.matches("app.grav", "*.grav").
+        static fn matches(name: string, pattern: string) -> bool {
+            return %{ fnmatch(pattern, name, 0) == 0 %} as bool;
         }
     }
 

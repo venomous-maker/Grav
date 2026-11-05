@@ -58,9 +58,56 @@ read failed: true
   bytes (`binary`, see [`Bytes`](../data/bytes.md)).
 - `write` replaces the file; `append` adds to its end. Both create it if needed.
 - `modified()` is the last change time in Unix seconds.
-- `Dir.list` returns names (not full paths), in no particular order.
-- `Dir.create` creates one level; `Dir.remove` removes an empty directory.
+- `Dir.list` returns names (not full paths), sorted.
+- `Dir.create` creates the directory and any missing parents; `Dir.remove`
+  removes an empty directory and `Dir.removeAll` a whole tree.
 - Paths are plain strings; [`Path`](path.md) builds and takes them apart.
+
+## Folders, globs and large files
+
+`Dir.walk(path)` lists every file under a folder; `Dir.find(path, "*.grav")`
+filters them by a glob pattern; `Dir.size` adds up their sizes. For files too
+large to read at once, `FileReader` reads one line at a time and `FileWriter`
+writes through a buffer.
+
+```grav
+import "std"
+
+fn main() {
+    let root = Path.combine(Dir.temp(), "grav-docs-tree")
+    Dir.removeAll(root)
+    Dir.create(Path.combine(root, "src/util"))
+    new File(Path.combine(root, "src/main.grav")).write("fn main() { }\n")
+    new File(Path.combine(root, "src/util/text.grav")).write("// helpers\n")
+    new File(Path.combine(root, "notes.txt")).write("todo\n")
+
+    for (f in Dir.find(root, "*.grav")) { print(f[root.length + 1..]) }
+
+    let w = new FileWriter(Path.combine(root, "log.txt"))
+    for (i in 1..=3) { w.writeLine("line ${i}") }
+    w.close()
+
+    let r = new FileReader(Path.combine(root, "log.txt"))
+    print(r.readLine())
+    r.forEachLine(fn(line) { print("then: " + line) })
+
+    print(Dir.removeAll(root))
+}
+```
+
+Output:
+
+```text
+src/main.grav
+src/util/text.grav
+line 1
+then: line 2
+then: line 3
+true
+```
+
+`FileReader.readLine()` returns a `string?`: the next line without its line break,
+or `null` at the end of the file.
 
 ## API
 
@@ -108,5 +155,52 @@ Directory operations on paths.
 - `static fn current() -> string` — The working directory.
 - `static fn change(path: string) -> bool` — Changes the working directory; whether it worked.
 - `static fn temp() -> string` — The system temporary directory ($TMPDIR, else /tmp).
+- `static fn walk(path: string) -> Array<string>` — Every file under `path`, recursively, as paths starting with `path`, sorted.
+- `static fn find(path: string, pattern: string) -> Array<string>` — The files under `path` (recursively) whose name matches a glob pattern such as "*.grav" or "test_?.txt" (* any text, ? one character, [abc] one of).
+- `static fn removeAll(path: string) -> bool` — Removes a directory and everything in it (like rm -r); whether it worked. Symbolic links are removed, not followed.
+- `static fn isLink(path: string) -> bool` — Whether `path` is a symbolic link.
+- `static fn size(path: string) -> long` — The total size in bytes of the files under `path`.
+
+### class FileReader
+
+Reads a text file one line at a time, without loading it all: for large files.
+
+  let r = new FileReader("big.log")
+  while (true) { let line = r.readLine(); if (line == null) { break }  ... }
+  r.close()
+
+**Constructors**
+
+- `new FileReader(path: string)` — Opens `path` for reading; IOError when it cannot be opened.
+
+**Fields**
+
+- `readonly path: string` — The path being read.
+
+**Methods**
+
+- `fn readLine() -> string?` — The next line without its line break (\n or \r\n), or null at the end of the file.
+- `fn forEachLine(f: fn(string))` — Calls f with each remaining line, then closes the file.
+- `fn close()` — Closes the file (safe to call twice).
+
+### class FileWriter
+
+Writes a file piece by piece through a buffer: for large or incremental output.
+
+**Constructors**
+
+- `new FileWriter(path: string, append: bool)` — Opens `path` for writing, replacing it, or adding to its end when `append` is true; IOError when it cannot be opened.
+- `new FileWriter(path: string)` — Opens `path` for writing, replacing it.
+
+**Fields**
+
+- `readonly path: string` — The path being written.
+
+**Methods**
+
+- `fn write(text: string) -> FileWriter` — Writes text; IOError after close().
+- `fn writeLine(text: string) -> FileWriter` — Writes text and a line break.
+- `fn flush()` — Sends buffered text to the file now.
+- `fn close()` — Flushes and closes the file (safe to call twice).
 
 <!-- api:end -->
