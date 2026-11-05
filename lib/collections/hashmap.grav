@@ -43,13 +43,21 @@ namespace std.collections {
     }
     %}
 
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: int) -> long { return %{ grav_hash_u64((unsigned long long)(long long)x) %} as long; }
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: long) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+    // A hash of the string's contents, used by HashMap and HashSet keys.
     fn hashOf(x: string) -> long { return %{ grav_hash_str(x) %} as long; }
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: uint) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: ulong) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: byte) -> long { return %{ grav_hash_u64((unsigned long long)x) %} as long; }
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: bool) -> long { return x ? 1 : 2; }
+    // A hash of the value, used by HashMap and HashSet keys.
     fn hashOf(x: float) -> long { let a: any = x; return hashOf(a); }
     // Anything else that fits in an `any`: objects hash by identity (matching their
     // `==`), enums by value, so HashMap<MyClass, V> and HashMap<MyEnum, V> work too.
@@ -106,6 +114,7 @@ namespace std.collections {
             free(oldK); free(oldV); free(oldU);
         }
 
+        // Sets the value for `key` (adding the key, or replacing its value).
         public fn put(key: K, value: V) {
             if ((self.count + 1) * 4 > self.cap * 3) { self.grow(); }   // load factor 0.75
             let i = self.slot(key);
@@ -130,12 +139,16 @@ namespace std.collections {
         }
         // The value for `key`, or the zero value of V when absent.
         public fn get(key: K) -> V { return self.vs[self.slot(key)]; }
+        // The value for `key`, or `fallback` when the key is missing.
         public fn getOr(key: K, fallback: V) -> V {
             let i = self.slot(key);
             return self.used[i] != 0 ? self.vs[i] : fallback;
         }
+        // Whether the map has `key`.
         public fn containsKey(key: K) -> bool { return self.used[self.slot(key)] != 0; }
+        // `map[key]`: the value for key.
         fn operator[](key: K) -> V { return self.get(key); }
+        // `map[key] = value`: sets the value for key.
         fn operator[]=(key: K, value: V) { self.put(key, value); }
 
         // Removes `key`; re-inserts the rest of its probe run so lookups stay correct.
@@ -159,9 +172,13 @@ namespace std.collections {
             return true;
         }
 
+        // The number of keys.
         public fn size() -> int { return self.count; }
+        // The number of keys (same as size()).
         public fn length() -> int { return self.count; }
+        // Whether the map has no keys.
         public fn isEmpty() -> bool { return self.count == 0; }
+        // Removes every key and value.
         public fn clear() {
             for (i in 0..self.cap) {
                 if (self.used[i] != 0) { __release(self.ks[i]); __release(self.vs[i]); }
@@ -180,11 +197,13 @@ namespace std.collections {
             }
             return out + "}"
         }
+        // The keys, as a new array (in no particular order).
         public fn keys() -> Array<K> {
             let out = new Array<K>();
             for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.ks[i]); } }
             return out;
         }
+        // Calls f with each key and its value (in no particular order).
         public fn forEach(f: fn(K, V)) {
             for (i in 0..self.cap) { if (self.used[i] != 0) { f(self.ks[i], self.vs[i]); } }
         }
@@ -195,6 +214,7 @@ namespace std.collections {
             self.put(key, fallback);
             return fallback;
         }
+        // The values, as a new array (in the same order as keys()).
         public fn values() -> Array<V> {
             let out = new Array<V>();
             for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.vs[i]); } }

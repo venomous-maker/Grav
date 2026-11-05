@@ -60,26 +60,33 @@ namespace std.core {
         public fn nextInt(min: int, max: int) -> int {
             return %{ (int)grav_rng_range((GravRng*)self->state, min, max) %} as int;
         }
+        // A random long in min..max (both included).
         public fn nextLong(min: long, max: long) -> long {
             return %{ grav_rng_range((GravRng*)self->state, min, max) %} as long;
         }
         // A random float in [0, 1).
         public fn nextFloat() -> float { return %{ grav_rng_float((GravRng*)self->state) %} as float; }
+        // true or false, each half of the time.
         public fn nextBool() -> bool { return %{ (grav_rng_next((GravRng*)self->state) >> 63) != 0 %} as bool; }
     }
 
     class Random {
+        // Seeds the shared generator, making the sequence repeatable.
         static fn seed(n: long) { %{ grav_rng_seed(grav_rng_global(), (uint64_t)n); %}; }
+        // Seeds the shared generator from the clock.
         static fn seedTime() {
             %{ { struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
                  grav_rng_seed(grav_rng_global(), (uint64_t)t.tv_sec * 1000000000ULL + (uint64_t)t.tv_nsec); } %};
         }
         // A random integer in [min, max] (both inclusive), without modulo bias.
         static fn nextInt(min: int, max: int) -> int { return %{ (int)grav_rng_range(grav_rng_global(), min, max) %} as int; }
+        // A random long in min..max (both included).
         static fn nextLong(min: long, max: long) -> long { return %{ grav_rng_range(grav_rng_global(), min, max) %} as long; }
         // A random float in [0, 1), or in [min, max).
         static fn nextFloat() -> float { return %{ grav_rng_float(grav_rng_global()) %} as float; }
+        // A random float in [min, max).
         static fn nextFloat(min: float, max: float) -> float { return min + Random.nextFloat() * (max - min); }
+        // true or false, each half of the time.
         static fn nextBool() -> bool { return %{ (grav_rng_next(grav_rng_global()) >> 63) != 0 %} as bool; }
         // true with the given probability (0..1).
         static fn chance(p: float) -> bool { return Random.nextFloat() < p; }
@@ -94,6 +101,7 @@ namespace std.core {
         static fn shuffle<T>(xs: Array<T>) {
             for (i in xs.size() - 1..0 step -1) { xs.swap(i, Random.nextInt(0, i)); }
         }
+        // A random element (StateError when empty).
         static fn choice<T>(xs: Array<T>) -> T {
             if (xs.isEmpty()) { throw new StateError("Random.choice on an empty array"); }
             return xs.get(Random.nextInt(0, xs.size() - 1));

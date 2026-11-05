@@ -135,14 +135,19 @@ namespace std.text {
 
     class Str {
         // ── inspecting ─────────────────────────────────────────────────────────
+        // The length in bytes (UTF-8: a character may take several).
         static fn length(s: string) -> int { return %{ (int)strlen(s) %} as int; }
+        // Whether the string is "".
         static fn isEmpty(s: string) -> bool { return %{ (s[0] == 0) %} as bool; }
         // Empty or only whitespace.
         static fn isBlank(s: string) -> bool { return Str.isEmpty(s) || %{ grav_str_all(s, 3) %} as bool; }
+        // Whether the strings have the same contents (same as ==).
         static fn equals(a: string, b: string) -> bool { return a == b; }
+        // Whether the strings are equal ignoring ASCII letter case.
         static fn equalsIgnoreCase(a: string, b: string) -> bool { return %{ grav_str_casecmp(a, b) == 0 %} as bool; }
         // <0, 0, >0 like strcmp: `xs.sortBy(fn(a, b) => Str.compare(a, b))` sorts A-Z.
         static fn compare(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }
+        // Like compare, ignoring ASCII letter case.
         static fn compareIgnoreCase(a: string, b: string) -> int { return %{ grav_str_casecmp(a, b) %} as int; }
         // The byte at index i (bounds-checked).
         static fn charAt(s: string, i: int) -> int {
@@ -151,30 +156,49 @@ namespace std.text {
         }
         // A one-character string from a byte value (65 -> "A").
         static fn fromChar(code: int) -> string { return %{ grav_str_from_char(code) %} as string; }
+        // Whether every character is a digit 0-9 (false for "").
         static fn isDigits(s: string) -> bool { return %{ grav_str_all(s, 0) %} as bool; }
+        // Whether every character is an ASCII letter (false for "").
         static fn isAlpha(s: string) -> bool { return %{ grav_str_all(s, 1) %} as bool; }
+        // Whether every character is an ASCII letter or digit (false for "").
         static fn isAlphanumeric(s: string) -> bool { return %{ grav_str_all(s, 2) %} as bool; }
+        // Whether no letter is lowercase (false for "").
         static fn isUpper(s: string) -> bool { return %{ grav_str_all(s, 4) %} as bool; }
+        // Whether no letter is uppercase (false for "").
         static fn isLower(s: string) -> bool { return %{ grav_str_all(s, 5) %} as bool; }
 
         // ── searching ──────────────────────────────────────────────────────────
+        // The byte index of the first occurrence of `sub`, or -1.
         static fn indexOf(s: string, sub: string) -> int { return %{ grav_str_indexof(s, sub, 0) %} as int; }
+        // The byte index of the first occurrence of `sub` at or after `from`, or -1.
         static fn indexFrom(s: string, sub: string, from: int) -> int { return %{ grav_str_indexof(s, sub, from) %} as int; }
+        // The byte index of the last occurrence of `sub`, or -1.
         static fn lastIndexOf(s: string, sub: string) -> int { return %{ grav_str_lastindexof(s, sub) %} as int; }
+        // Whether `sub` occurs in the string.
         static fn contains(s: string, sub: string) -> bool { return Str.indexOf(s, sub) >= 0; }
+        // How many non-overlapping times `sub` occurs (0 for an empty `sub`).
         static fn count(s: string, sub: string) -> int { return %{ grav_str_count(s, sub) %} as int; }
+        // Whether the string begins with `prefix`.
         static fn startsWith(s: string, prefix: string) -> bool {
             return %{ (strncmp(s, prefix, strlen(prefix)) == 0) %} as bool;
         }
+        // Whether the string ends with `suffix`.
         static fn endsWith(s: string, suffix: string) -> bool { return %{ grav_str_ends(s, suffix) %} as bool; }
 
         // ── transforming (each returns a new string) ───────────────────────────
+        // The two strings joined (same as a + b).
         static fn concat(a: string, b: string) -> string { return a + b; }
+        // ASCII letters made uppercase.
         static fn upper(s: string) -> string { return %{ grav_str_upper(s) %} as string; }
+        // ASCII letters made lowercase.
         static fn lower(s: string) -> string { return %{ grav_str_lower(s) %} as string; }
+        // The first character made uppercase (ASCII).
         static fn capitalize(s: string) -> string { return %{ grav_str_capitalize(s) %} as string; }
+        // The bytes in reverse order.
         static fn reverse(s: string) -> string { return %{ grav_str_reverse(s) %} as string; }
+        // The string repeated n times ("" for n <= 0).
         static fn repeat(s: string, n: int) -> string { return %{ grav_str_repeat(s, n) %} as string; }
+        // `len` bytes starting at `start` (bounds are clamped).
         static fn substring(s: string, start: int, len: int) -> string {
             return %{ grav_str_sub(s, start, len) %} as string;
         }
@@ -182,19 +206,26 @@ namespace std.text {
         static fn slice(s: string, start: int, end: int) -> string {
             return %{ grav_str_sub(s, start, end > start ? end - start : 0) %} as string;
         }
+        // The string without the `len` bytes starting at `start`.
         static fn remove(s: string, start: int, len: int) -> string {
             return Str.substring(s, 0, start) + Str.substring(s, start + len, Str.length(s));
         }
+        // The string without `prefix` at its start (unchanged when it does not start with it).
         static fn removePrefix(s: string, prefix: string) -> string {
             return Str.startsWith(s, prefix) ? Str.substring(s, Str.length(prefix), Str.length(s)) : Str.substring(s, 0, Str.length(s));
         }
+        // The string without `suffix` at its end (unchanged when it does not end with it).
         static fn removeSuffix(s: string, suffix: string) -> string {
             let n = Str.length(s);
             return Str.endsWith(s, suffix) ? Str.substring(s, 0, n - Str.length(suffix)) : Str.substring(s, 0, n);
         }
+        // Without whitespace at both ends.
         static fn trim(s: string) -> string { return %{ grav_str_trim(s, 1, 1) %} as string; }
+        // Without whitespace at the start.
         static fn trimStart(s: string) -> string { return %{ grav_str_trim(s, 1, 0) %} as string; }
+        // Without whitespace at the end.
         static fn trimEnd(s: string) -> string { return %{ grav_str_trim(s, 0, 1) %} as string; }
+        // Every occurrence of `old` replaced by `repl`.
         static fn replace(s: string, old: string, repl: string) -> string {
             return %{ grav_str_replace(s, old, repl) %} as string;
         }
@@ -202,14 +233,17 @@ namespace std.text {
         static fn padLeft(s: string, len: int, ch: string) -> string {
             return %{ grav_str_pad(s, len, ch[0] ? ch[0] : ' ', 1) %} as string;
         }
+        // Padded on the right to `len` characters with the first character of `ch` (a space if empty).
         static fn padRight(s: string, len: int, ch: string) -> string {
             return %{ grav_str_pad(s, len, ch[0] ? ch[0] : ' ', 0) %} as string;
         }
+        // Centered in `width` characters, padded with the first character of `ch` (a space if empty).
         static fn center(s: string, width: int, ch: string) -> string {
             return %{ grav_str_center(s, width, ch[0] ? ch[0] : ' ') %} as string;
         }
 
         // ── splitting and joining ──────────────────────────────────────────────
+        // The parts between occurrences of `delim` ("a,,b" by "," gives "a", "", "b").
         static fn split(s: string, delim: string) -> Array<string> {
             let out = new Array<string>();
             let dl = Str.length(delim);

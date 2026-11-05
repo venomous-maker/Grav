@@ -183,7 +183,9 @@ namespace std.sys {
         constructor(code: int, stdout: string, stderr: string, timedOut: bool) {
             self.code = code; self.stdout = stdout; self.stderr = stderr; self.timedOut = timedOut;
         }
+        // Whether the program exited with status 0 (and did not time out).
         public fn ok() -> bool { return self.code == 0 && !self.timedOut; }
+        // "CommandResult(code n)", with ", timed out" when it did.
         fn toString() -> string {
             return "CommandResult(code ${self.code}${self.timedOut ? ", timed out" : ""})";
         }
@@ -198,6 +200,7 @@ namespace std.sys {
             self.h = h; self.input = input; self.timeout = timeout;
         }
         destructor() { %{ free(self->h); %}; }
+        // The child process's id.
         public fn pid() -> int { return %{ ((GravChild*)self->h)->pid %} as int; }
         // Whether the program is still running.
         public fn isRunning() -> bool {
@@ -205,6 +208,7 @@ namespace std.sys {
         }
         // Send a signal (default SIGTERM = 15; 9 is SIGKILL).
         public fn kill() { self.signal(15); }
+        // Sends a signal (e.g. 15 for SIGTERM) to the child.
         public fn signal(sig: int) { %{ kill(((GravChild*)self->h)->pid, sig); %}; }
         // Wait for the program to exit, collecting what it printed (when captured).
         public fn wait() -> CommandResult {
@@ -241,7 +245,9 @@ namespace std.sys {
         }
         destructor() { free(self.argv); free(self.envs); }
 
+        // Adds one argument; returns this command.
         public fn arg(a: string) -> Command { self.argv.push(a); return self; }
+        // Adds several arguments; returns this command.
         public fn args(list: Array<string>) -> Command {
             for (a in list) { self.argv.push(a); }
             return self;

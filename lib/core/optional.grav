@@ -16,17 +16,24 @@ namespace std.core {
         constructor() { self.present = false; }
         constructor(value: T) { self.present = true; self.value = value; }
 
+        // Whether there is a value.
         public fn isPresent() -> bool { return self.present; }
+        // Whether there is no value.
         public fn isEmpty() -> bool { return !self.present; }
+        // The value (StateError when empty).
         public fn get() -> T {
             if (!self.present) { throw new StateError("Optional.get on an empty Optional"); }
             return self.value;
         }
+        // The value, or `fallback` when empty.
         public fn getOr(fallback: T) -> T { return self.present ? self.value : fallback; }
+        // Calls f with the value, if there is one.
         public fn ifPresent(f: fn(T)) { if (self.present) { f(self.value); } }
+        // An Optional of f(value), or an empty one.
         public fn map<U>(f: fn(T) -> U) -> Optional<U> {
             return self.present ? new Optional<U>(f(self.value)) : new Optional<U>();
         }
+        // This Optional when its value passes `pred`, else an empty one.
         public fn filter(pred: fn(T) -> bool) -> Optional<T> {
             return self.present && pred(self.value) ? self : new Optional<T>();
         }

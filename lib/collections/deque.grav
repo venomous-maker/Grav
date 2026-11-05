@@ -43,26 +43,33 @@ namespace std.collections {
             if (i < 0 || i >= self.len) { throw new IndexError("Deque index ${i} out of range (size ${self.len})"); }
         }
 
+        // The number of elements.
         public fn size() -> int { return self.len; }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.len; }
+        // Whether the deque is empty.
         public fn isEmpty() -> bool { return self.len == 0; }
+        // Removes every element.
         public fn clear() {
             for (i in 0..self.len) { __release(self.buf[(self.head + i) & (self.cap - 1)]); }
             self.len = 0;
             self.head = 0;
         }
 
+        // Adds an element at the back (O(1)).
         public fn pushBack(item: T) {
             if (self.len == self.cap) { self.grow(); }
             self.buf[(self.head + self.len) & (self.cap - 1)] = __retain(item);
             self.len = self.len + 1;
         }
+        // Adds an element at the front (O(1)).
         public fn pushFront(item: T) {
             if (self.len == self.cap) { self.grow(); }
             self.head = (self.head - 1) & (self.cap - 1);
             self.buf[self.head] = __retain(item);
             self.len = self.len + 1;
         }
+        // Removes and returns the front element (StateError when empty).
         public fn popFront() -> T {
             if (self.len == 0) { throw new StateError("Deque.popFront on an empty deque"); }
             let item = self.buf[self.head];
@@ -71,6 +78,7 @@ namespace std.collections {
             __release(item);          // the deque's reference
             return item;
         }
+        // Removes and returns the back element (StateError when empty).
         public fn popBack() -> T {
             if (self.len == 0) { throw new StateError("Deque.popBack on an empty deque"); }
             self.len = self.len - 1;
@@ -78,9 +86,13 @@ namespace std.collections {
             __release(item);          // the deque's reference
             return item;
         }
+        // The front element (IndexError when empty).
         public fn peekFront() -> T { self.check(0); return self.buf[self.head]; }
+        // The back element (IndexError when empty).
         public fn peekBack() -> T { self.check(self.len - 1); return self.buf[(self.head + self.len - 1) & (self.cap - 1)]; }
+        // The element at index i from the front (IndexError when out of range).
         public fn get(i: int) -> T { self.check(i); return self.buf[(self.head + i) & (self.cap - 1)]; }
+        // Replaces the element at index i from the front.
         public fn set(i: int, item: T) {
             self.check(i);
             let k = (self.head + i) & (self.cap - 1);
@@ -88,13 +100,17 @@ namespace std.collections {
             self.buf[k] = __retain(item);
             __release(old);
         }
+        // `d[i]`: the element at index i from the front.
         fn operator[](i: int) -> T { return self.get(i); }
+        // `d[i] = v`: replaces the element at index i.
         fn operator[]=(i: int, item: T) { self.set(i, item); }
 
+        // Whether some element equals `item`.
         public fn contains(item: T) -> bool {
             for (i in 0..self.len) { if (self.buf[(self.head + i) & (self.cap - 1)] == item) { return true; } }
             return false;
         }
+        // Calls f on each element, front to back.
         public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.buf[(self.head + i) & (self.cap - 1)]); } }
         // As text: [1, 2, 3] (strings in quotes).
         public fn toString() -> string {
@@ -105,6 +121,7 @@ namespace std.collections {
             }
             return out + "]"
         }
+        // The elements as a new Array, front to back.
         public fn toArray() -> Array<T> {
             let out = new Array<T>(self.len);
             for (i in 0..self.len) { out.push(self.buf[(self.head + i) & (self.cap - 1)]); }

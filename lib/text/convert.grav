@@ -71,41 +71,50 @@ namespace std.text {
             if (v < -2147483648 || v > 2147483647) { throw new ValueError("'${s}' is out of range for int") }
             return v
         }
+        // Parses a whole number (leading digits; "x" is 0); ValueError when it does not fit in a long.
         static fn toLong(s: string) -> long {
             let range = 0
             let v = %{ grav_parse_ll(s, &range) %} as long
             if (range != 0) { throw new ValueError("'${s}' is out of range for long") }
             return v
         }
+        // Parses a whole number into a uint; ValueError when it is negative or too big.
         static fn toUInt(s: string) -> uint {
             let v = Format.toLong(s)
             if (v < 0 || v > 4294967295) { throw new ValueError("'${s}' is out of range for uint") }
             return v
         }
+        // Parses a whole number into a byte; ValueError outside 0..255.
         static fn toByte(s: string) -> byte {
             let v = Format.toLong(s)
             if (v < 0 || v > 255) { throw new ValueError("'${s}' is out of range for byte") }
             return v
         }
+        // Parses a decimal number ("x" is 0.0).
         static fn toFloat(s: string) -> float { return %{ atof(s) %} as float; }
+        // Parses a decimal number ("x" is 0.0).
         static fn toDouble(s: string) -> double { return %{ atof(s) %} as double; }
         // true for "true", "1", "yes", "y", "on" (any case); false otherwise.
         static fn toBool(s: string) -> bool {
             return %{ (strcasecmp(s, "true") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "yes") == 0 ||
                        strcasecmp(s, "y") == 0 || strcasecmp(s, "on") == 0) %} as bool;
         }
+        // Whether the text (spaces around allowed) is exactly one integer.
         static fn isInt(s: string) -> bool { return %{ grav_is_number(s, 1) %} as bool; }
+        // Whether the text (spaces around allowed) is exactly one number.
         static fn isNumber(s: string) -> bool { return %{ grav_is_number(s, 0) %} as bool; }
         // Parse, or return `fallback` unless the whole text is a valid number.
         static fn toIntOr(s: string, fallback: int) -> int {
             let v = Format.toLongOr(s, -2147483649)
             return v < -2147483648 || v > 2147483647 ? fallback : v;
         }
+        // Parses a long, or returns `fallback` unless the text is a valid long.
         static fn toLongOr(s: string, fallback: long) -> long {
             let range = 0
             let v = %{ grav_parse_ll(s, &range) %} as long
             return Format.isInt(s) && range == 0 ? v : fallback;
         }
+        // Parses a float, or returns `fallback` unless the text is a valid number.
         static fn toFloatOr(s: string, fallback: float) -> float {
             return Format.isNumber(s) ? Format.toFloat(s) : fallback;
         }
@@ -117,9 +126,13 @@ namespace std.text {
         }
 
         // ---- value -> string ---- (str(x) is the general builtin; these read nicely)
+        // The number as text (same as str(n)).
         static fn toStr(n: int) -> string { return str(n); }
+        // The number in hexadecimal: 255 -> "0xff".
         static fn hex(n: int) -> string { return %{ grav_to_hex(n) %} as string; }
+        // The number in binary: 5 -> "0b101".
         static fn binary(n: long) -> string { return %{ grav_fmt_base((unsigned long long)n, 2, "0b") %} as string; }
+        // The number in octal: 8 -> "0o10".
         static fn octal(n: long) -> string { return %{ grav_fmt_base((unsigned long long)n, 8, "0o") %} as string; }
         // A float with exactly `digits` decimals: Format.fixed(3.14159, 2) == "3.14".
         static fn fixed(x: float, digits: int) -> string { return %{ grav_fmt_fixed(x, digits) %} as string; }
@@ -137,15 +150,23 @@ namespace std.text {
         }
 
         // ---- numeric type conversions ----
+        // The int as a float.
         static fn intToFloat(n: int) -> float { return n as float; }
+        // The float as an int (the fraction is dropped).
         static fn floatToInt(f: float) -> int { return f as int; }
+        // The int as a long.
         static fn intToLong(n: int) -> long { return n as long; }
+        // The long as an int (wraps when out of range).
         static fn longToInt(n: long) -> int { return n as int; }
+        // The low 8 bits of the int, as a byte.
         static fn intToByte(n: int) -> byte { return n as byte; }
+        // The int as a double.
         static fn intToDouble(n: int) -> double { return n as double; }
 
         // ---- string <-> binary ----
+        // The string's bytes as a binary value.
         static fn toBinary(s: string) -> binary { return s as binary; }
+        // The bytes as a string (up to the first zero byte).
         static fn fromBinary(b: binary) -> string { return b as string; }
     }
 

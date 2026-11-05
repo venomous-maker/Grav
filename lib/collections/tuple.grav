@@ -10,7 +10,9 @@ namespace std.collections {
         readonly first: A
         readonly second: B
         constructor(first: A, second: B) { self.first = first; self.second = second; }
+        // A pair with the two values swapped.
         public fn swap() -> Pair<B, A> { return new Pair<B, A>(self.second, self.first); }
+        // Whether both values are equal (==).
         fn operator==(o: Pair<A, B>) -> bool { return self.first == o.first && self.second == o.second; }
         // As text: (1, "a") (strings in quotes).
         fn toString() -> string { return "(" + __repr(self.first) + ", " + __repr(self.second) + ")" }
@@ -21,9 +23,11 @@ namespace std.collections {
         readonly second: B
         readonly third: C
         constructor(first: A, second: B, third: C) { self.first = first; self.second = second; self.third = third; }
+        // Whether all three values are equal (==).
         fn operator==(o: Triple<A, B, C>) -> bool {
             return self.first == o.first && self.second == o.second && self.third == o.third;
         }
+        // As text: (1, 2.5, "c") (strings in quotes).
         fn toString() -> string {
             return "(" + __repr(self.first) + ", " + __repr(self.second) + ", " + __repr(self.third) + ")"
         }

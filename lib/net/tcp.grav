@@ -236,6 +236,7 @@ namespace std.net {
     // A network failure: refused or reset connections, unknown hosts, and so on.
     class NetError extends IOError {
         constructor(m: string) { super(m); }
+        // "NetError".
         public fn kind() -> string { return "NetError"; }
     }
 
@@ -284,15 +285,18 @@ namespace std.net {
         }
 
         // ── writing ────────────────────────────────────────────────────────────
+        // Sends text (NetError when the connection is closed or fails).
         public fn write(text: string) {
             self.ensureOpen();
             let rc = %{ grav_sock_write((GravSock*)self->s, text, (long long)strlen(text)) %} as int;
             if (rc != 0) { self.failed("write"); }
         }
+        // Sends text followed by "\n".
         public fn writeLine(text: string) {
             self.write(text);
             self.write("\n");
         }
+        // Sends raw bytes.
         public fn writeBytes(data: Bytes) {
             self.ensureOpen();
             let p = data.rawData();
@@ -374,15 +378,19 @@ namespace std.net {
         public fn setNoDelay(on: bool) {
             %{ int v = on ? 1 : 0; setsockopt(((GravSock*)self->s)->fd, IPPROTO_TCP, TCP_NODELAY, &v, sizeof v); %};
         }
+        // The other side's address ("host:port").
         public fn peerAddress() -> string { return self.peer; }
+        // The local port of this connection.
         public fn localPort() -> int { return %{ grav_sock_port(((GravSock*)self->s)->fd) %} as int; }
         // Stop sending (the peer sees end of input) but keep reading.
         public fn shutdownWrite() { %{ shutdown(((GravSock*)self->s)->fd, SHUT_WR); %}; }
+        // Closes the connection (a second close does nothing).
         public fn close() {
             if (self.closed) { return; }
             self.closed = true;
             %{ close(((GravSock*)self->s)->fd); %};
         }
+        // Whether close() was called.
         public fn isClosed() -> bool { return self.closed; }
     }
 
@@ -403,10 +411,12 @@ namespace std.net {
             if (fd < 0) { throw new NetError(err + " (${host}:${port})"); }
             return new TcpListener(fd, host);
         }
+        // Listens on every interface at `port` (0 picks a free port).
         static fn bind(port: int) -> TcpListener { return TcpListener.bind("*", port); }
 
         // The port actually listened on (useful after binding port 0).
         public fn port() -> int { return %{ grav_sock_port(self->fd) %} as int; }
+        // "host:port" this listener is bound to.
         public fn address() -> string { return self.host + ":" + "${self.port()}"; }
 
         // Wait for the next connection. Throws NetError once the listener is closed.
@@ -426,6 +436,7 @@ namespace std.net {
             if (%{ __atomic_exchange_n(&self->closedFlag, 1, __ATOMIC_SEQ_CST) %} as int == 1) { return; }
             %{ shutdown(self->fd, SHUT_RDWR); close(self->fd); %};
         }
+        // Whether the listener was closed.
         public fn isClosed() -> bool { return %{ __atomic_load_n(&self->closedFlag, __ATOMIC_SEQ_CST) %} as int == 1; }
     }
 

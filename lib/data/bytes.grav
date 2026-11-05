@@ -29,11 +29,13 @@ namespace std.data {
         }
         destructor() { free(self.data); }
 
+        // The string's bytes.
         static fn fromString(s: string) -> Bytes {
             let b = new Bytes();
             b.appendString(s);
             return b;
         }
+        // A copy of a binary value's bytes.
         static fn fromBinary(x: binary) -> Bytes {
             let b = new Bytes();
             b.appendRaw(%{ x.data %} as byte*, %{ (int)x.len %} as int);
@@ -53,6 +55,7 @@ namespace std.data {
             return b;
         }
 
+        // Makes room for at least n bytes in total.
         public fn reserve(n: int) {
             if (n <= self.cap) { return; }
             let nc = self.cap < 16 ? 16 : self.cap;
@@ -63,28 +66,38 @@ namespace std.data {
             %};
             self.cap = nc;
         }
+        // The number of bytes.
         public fn size() -> int { return self.len; }
+        // The number of bytes (same as size()).
         public fn length() -> int { return self.len; }
+        // Whether there are no bytes.
         public fn isEmpty() -> bool { return self.len == 0; }
+        // Removes every byte.
         public fn clear() { self.len = 0; }
 
+        // The byte at index i, 0..255 (IndexError when out of range).
         public fn get(i: int) -> int {
             if (i < 0 || i >= self.len) { throw new IndexError("Bytes index ${i} out of range (size ${self.len})"); }
             return self.data[i] as int;
         }
+        // Sets the byte at index i to v (IndexError when out of range).
         public fn set(i: int, v: int) {
             if (i < 0 || i >= self.len) { throw new IndexError("Bytes index ${i} out of range (size ${self.len})"); }
             self.data[i] = v as byte;
         }
+        // `b[i]`: the byte at index i.
         fn operator[](i: int) -> int { return self.get(i); }
+        // `b[i] = v`: sets the byte at index i.
         fn operator[]=(i: int, v: int) { self.set(i, v); }
 
+        // Appends one byte (the low 8 bits of v); returns this buffer.
         public fn appendByte(v: int) -> Bytes {
             self.reserve(self.len + 1);
             self.data[self.len] = v as byte;
             self.len += 1;
             return self;
         }
+        // Appends a string's bytes; returns this buffer.
         public fn appendString(s: string) -> Bytes {
             let n = %{ (int)strlen(s) %} as int;
             self.reserve(self.len + n);
@@ -92,6 +105,7 @@ namespace std.data {
             self.len += n;
             return self;
         }
+        // Appends another buffer's bytes; returns this buffer.
         public fn append(other: Bytes) -> Bytes {
             let n = other.len;
             self.reserve(self.len + n);
@@ -104,6 +118,7 @@ namespace std.data {
             for (k in width - 1..=0 step -1) { self.appendByte(((v >> (k * 8)) & 255) as int); }
             return self;
         }
+        // Reads a `width`-byte big-endian unsigned number starting at `at`.
         public fn readUint(at: int, width: int) -> long {
             let v: long = 0;
             for (k in 0..width) { v = (v << 8) | (self.get(at + k) as long); }
@@ -127,6 +142,7 @@ namespace std.data {
             %{ memmove(self->data, self->data + k, (size_t)(self->len - k)); %};
             self.len -= k;
         }
+        // The index of the first occurrence of `sub`'s bytes, or -1.
         public fn indexOf(sub: string) -> int {
             let n = %{ (int)strlen(sub) %} as int;
             if (n == 0) { return 0; }
@@ -140,14 +156,18 @@ namespace std.data {
         public fn toString() -> string {
             return %{ grav_bytes_to_cstr(self->data, self->len) %} as string;
         }
+        // The bytes as a binary value.
         public fn toBinary() -> binary {
             let out: binary = %{ grav_bytes_to_binary(self->data, self->len) %} as binary;
             return out;
         }
+        // The bytes in hexadecimal ("00ff10").
         public fn toHex() -> string {
             return %{ grav_bytes_hex(self->data, self->len) %} as string;
         }
+        // A new buffer with the same bytes.
         public fn copy() -> Bytes { return self.slice(0, self.len); }
+        // Whether both buffers hold the same bytes.
         fn operator==(other: Bytes) -> bool {
             if (%{ other == 0 %} as bool) { return false; }
             return self.len == other.len && %{ (self->len == 0 || memcmp(self->data, other->data, (size_t)self->len) == 0) %} as bool;
@@ -155,6 +175,7 @@ namespace std.data {
 
         // For C helpers in other modules: the raw buffer.
         public fn rawData() -> byte* { return self.data; }
+        // Appends n bytes from raw memory.
         public fn appendRaw(p: byte*, n: int) {
             self.reserve(self.len + n);
             %{ if (n > 0) memcpy(self->data + self->len, p, (size_t)n); %};

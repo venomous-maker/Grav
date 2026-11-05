@@ -43,9 +43,11 @@ namespace std.concurrency {
         static fn setMaxProcs(n: int) { %{ grav_set_max_procs(n); %}; }
         // Tasks spawned but not finished yet.
         static fn pending() -> int { return %{ grav_pending_tasks() %} as int; }
+        // The number of CPU cores online.
         static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
         // An identifier for the calling thread (differs between workers).
         static fn threadId() -> long { return %{ (long long)(uintptr_t)pthread_self() %} as long; }
+        // Pauses the calling thread for `ms` milliseconds.
         static fn sleepMs(ms: int) { %{ usleep((useconds_t)ms * 1000); %}; }
     }
 
@@ -54,9 +56,13 @@ namespace std.concurrency {
         private h: byte*
         constructor() { self.h = %{ (unsigned char*)grav_sync_new() %} as byte*; }
         destructor() { %{ grav_sync_free((GravSync*)self->h); %}; }
+        // Takes the lock, waiting while another thread holds it.
         public fn lock() { %{ pthread_mutex_lock(&((GravSync*)self->h)->mu); %}; }
+        // Releases the lock.
         public fn unlock() { %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %}; }
+        // Takes the lock if it is free right now; whether it did.
         public fn tryLock() -> bool { return %{ pthread_mutex_trylock(&((GravSync*)self->h)->mu) == 0 %} as bool; }
+        // Runs `body` holding the lock (released even when body throws).
         public fn withLock(body: fn()) {
             self.lock();
             try { body(); } finally { self.unlock(); }
@@ -67,11 +73,15 @@ namespace std.concurrency {
     class AtomicInt {
         private v: long
         constructor(initial: long) { self.v = initial; }
+        // The current value.
         public fn get() -> long { return %{ __atomic_load_n(&self->v, __ATOMIC_SEQ_CST) %} as long; }
+        // Sets the value.
         public fn set(n: long) { %{ __atomic_store_n(&self->v, n, __ATOMIC_SEQ_CST); %}; }
         // Adds and returns the new value.
         public fn add(n: long) -> long { return %{ __atomic_add_fetch(&self->v, n, __ATOMIC_SEQ_CST) %} as long; }
+        // Adds 1 and returns the new value.
         public fn increment() -> long { return self.add(1); }
+        // Subtracts 1 and returns the new value.
         public fn decrement() -> long { return self.add(-1); }
         // Sets to `desired` only if the value is `expected`; reports success.
         public fn compareAndSet(expected: long, desired: long) -> bool {
@@ -163,6 +173,7 @@ namespace std.concurrency {
                pthread_cond_broadcast(&s->notEmpty); pthread_cond_broadcast(&s->notFull);
                pthread_mutex_unlock(&s->mu); %};
         }
+        // The number of values waiting in the channel.
         public fn size() -> int {
             %{ pthread_mutex_lock(&((GravSync*)self->h)->mu); %};
             let n = self.count;

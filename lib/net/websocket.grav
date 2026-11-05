@@ -114,9 +114,13 @@ namespace std.net {
         public binary: bool
         public data: Bytes
         constructor(binary: bool, data: Bytes) { self.binary = binary; self.data = data; }
+        // Whether this is a text message.
         public fn isText() -> bool { return !self.binary; }
+        // Whether this is a binary message.
         public fn isBinary() -> bool { return self.binary; }
+        // The message as text.
         public fn text() -> string { return self.data.toString(); }
+        // "WsMessage(text)" or "WsMessage(n bytes)".
         fn toString() -> string { return self.binary ? "WsMessage(${self.data.size()} bytes)" : "WsMessage(" + self.text() + ")"; }
     }
 
@@ -148,6 +152,7 @@ namespace std.net {
         // ── opening ────────────────────────────────────────────────────────────
         // Connect to "ws://host[:port]/path". Throws NetError if the server refuses.
         static fn connect(url: string) -> WebSocket { return WebSocket.connect(url, 30000); }
+        // Opens a WebSocket to `url` (ws:// or wss://), waiting at most `timeoutMs` (NetError on failure).
         static fn connect(url: string, timeoutMs: int) -> WebSocket {
             let httpUrl = url;
             if (Str.startsWith(url, "wss://")) { throw new NetError("wss:// is not supported yet (no TLS): " + url); }
@@ -215,9 +220,13 @@ namespace std.net {
         }
 
         // ── sending ────────────────────────────────────────────────────────────
+        // Sends a text message.
         public fn send(text: string) { self.sendFrame(1, Bytes.fromString(text)); }
+        // Sends a binary message.
         public fn sendBytes(data: Bytes) { self.sendFrame(2, data); }
+        // Sends a ping frame.
         public fn ping() { self.sendFrame(9, new Bytes()); }
+        // Whether the connection is open.
         public fn isOpen() -> bool { return self.open; }
 
         private fn sendFrame(opcode: int, payload: Bytes) {
@@ -334,6 +343,7 @@ namespace std.net {
         }
 
         // ── closing ────────────────────────────────────────────────────────────
+        // Closes the connection normally (status 1000).
         public fn close() { self.close(1000, ""); }
         // Send a close frame with a status code and reason, then close the socket.
         public fn close(code: int, reason: string) {

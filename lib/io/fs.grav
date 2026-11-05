@@ -86,8 +86,11 @@ namespace std.io {
         private path: string
         constructor(path: string) { self.path = path; }
 
+        // The path the file was opened with.
         public fn name() -> string { return self.path; }
+        // The path the file was opened with.
         public fn path() -> string { return self.path; }
+        // Whether a regular file exists at the path.
         public fn exists() -> bool { return %{ grav_path_kind(self->path) == 1 %} as bool; }
         // Size in bytes (-1 if it does not exist); 64-bit, so large files are fine.
         public fn size() -> long { return %{ grav_file_size(self->path) %} as long; }
@@ -96,16 +99,21 @@ namespace std.io {
 
         // Text I/O. read() returns "" when the file cannot be read.
         public fn read() -> string { return %{ grav_file_read(self->path) %} as string; }
+        // Replaces the file's contents with `data`; whether it worked.
         public fn write(data: string) -> bool {
             return %{ grav_file_write_bytes(self->path, (const unsigned char*)data, (long long)strlen(data), "wb") %} as bool;
         }
+        // Adds `data` at the end of the file (creating it); whether it worked.
         public fn append(data: string) -> bool {
             return %{ grav_file_write_bytes(self->path, (const unsigned char*)data, (long long)strlen(data), "ab") %} as bool;
         }
+        // Adds a line (with "\n") at the end of the file; whether it worked.
         public fn writeLine(line: string) -> bool { return self.append(line + "\n"); }
+        // Adds a line (with "\n") at the end of the file; whether it worked.
         public fn appendLine(line: string) -> bool { return self.append(line + "\n"); }
         // Lines of the file (handles \n and \r\n).
         public fn readLines() -> Array<string> { return Str.lines(self.read()); }
+        // Replaces the contents with the lines joined by "\n"; whether it worked.
         public fn writeLines(lines: Array<string>) -> bool {
             let body = Str.join(lines, "\n");
             return self.write(lines.isEmpty() ? body : body + "\n");
@@ -113,23 +121,28 @@ namespace std.io {
 
         // Whole-file binary I/O (NUL-safe).
         public fn readBinary() -> binary { return %{ grav_file_read_bytes(self->path) %} as binary; }
+        // Replaces the file's contents with raw bytes; whether it worked.
         public fn writeBinary(data: binary) -> bool {
             return %{ grav_file_write_bytes(self->path, data.data, data.len, "wb") %} as bool;
         }
+        // Adds raw bytes at the end of the file; whether it worked.
         public fn appendBinary(data: binary) -> bool {
             return %{ grav_file_write_bytes(self->path, data.data, data.len, "ab") %} as bool;
         }
 
+        // Deletes the file; whether it worked.
         public fn delete() -> bool { return %{ remove(self->path) == 0 %} as bool; }
         // Byte-for-byte copy (works for binary files).
         public fn copyTo(dest: string) -> bool {
             return %{ grav_file_copy(self->path, dest) %} as bool;
         }
+        // Renames or moves the file to `dest`; whether it worked.
         public fn moveTo(dest: string) -> bool { return %{ rename(self->path, dest) == 0 %} as bool; }
     }
 
     // Directory operations on paths.
     class Dir {
+        // Whether a directory exists at `path`.
         static fn exists(path: string) -> bool { return %{ grav_path_kind(path) == 2 %} as bool; }
         // Creates the directory and any missing parents (like mkdir -p).
         static fn create(path: string) -> bool { return %{ grav_mkdirs(path) %} as bool; }
@@ -149,8 +162,11 @@ namespace std.io {
             out.sortBy(fn(a, b) => Str.compare(a, b));
             return out;
         }
+        // Whether a regular file exists at `path`.
         static fn isFile(path: string) -> bool { return %{ grav_path_kind(path) == 1 %} as bool; }
+        // The working directory.
         static fn current() -> string { return cwd(); }
+        // Changes the working directory; whether it worked.
         static fn change(path: string) -> bool { return %{ chdir(path) == 0 %} as bool; }
         // The system temporary directory ($TMPDIR, else /tmp).
         static fn temp() -> string {

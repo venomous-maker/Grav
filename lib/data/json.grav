@@ -220,29 +220,41 @@ namespace std.data {
             if (kind == JsonKind.Array || kind == JsonKind.Object) { self.items = new Array<JsonValue>(); }
             if (kind == JsonKind.Object) { self.keyList = new Array<string>(); }
         }
+        // A new empty value of the given kind (null, false, 0, "", [], {}).
         static fn ofKind(kind: JsonKind) -> JsonValue {
             let v = new JsonValue();
             v.init(kind);
             return v;
         }
+        // A JSON boolean.
         static fn ofBool(b: bool) -> JsonValue { let v = JsonValue.ofKind(JsonKind.Bool); v.b = b; return v; }
+        // A JSON number holding an integer.
         static fn ofInt(n: long) -> JsonValue {
             let v = JsonValue.ofKind(JsonKind.Number);
             v.i = n; v.n = n as double; v.isInt = true;
             return v;
         }
+        // A JSON number.
         static fn ofFloat(d: double) -> JsonValue { let v = JsonValue.ofKind(JsonKind.Number); v.n = d; return v; }
+        // A JSON string.
         static fn ofString(s: string) -> JsonValue { let v = JsonValue.ofKind(JsonKind.String); v.s = s; return v; }
 
         // ── what is it? ───────────────────────────────────────────────────────
+        // What kind of value this is (Null, Bool, Number, String, Array, Object).
         public fn kind() -> JsonKind { return self.k; }
+        // Whether this is null.
         public fn isNull() -> bool { return self.k == JsonKind.Null; }
+        // Whether this is true or false.
         public fn isBool() -> bool { return self.k == JsonKind.Bool; }
+        // Whether this is a number.
         public fn isNumber() -> bool { return self.k == JsonKind.Number; }
         // A number with no fractional part that fits in a long.
         public fn isInteger() -> bool { return self.k == JsonKind.Number && self.isInt; }
+        // Whether this is a string.
         public fn isString() -> bool { return self.k == JsonKind.String; }
+        // Whether this is an array.
         public fn isArray() -> bool { return self.k == JsonKind.Array; }
+        // Whether this is an object.
         public fn isObject() -> bool { return self.k == JsonKind.Object; }
 
         // ── reading (asX throws TypeError when the value is not an X) ────────
@@ -263,21 +275,29 @@ namespace std.data {
         private fn expect(want: JsonKind, what: string) {
             if (self.k != want) { throw new TypeError("JSON value is ${self.k}, not " + what); }
         }
+        // The boolean (TypeError when this is not a boolean).
         public fn asBool() -> bool { self.expect(JsonKind.Bool, "a boolean"); return self.b; }
+        // The number as a double (TypeError when this is not a number).
         public fn asFloat() -> double { self.expect(JsonKind.Number, "a number"); return self.n; }
+        // The number as a long, fraction dropped (TypeError when this is not a number).
         public fn asLong() -> long {
             self.expect(JsonKind.Number, "a number");
             return self.isInt ? self.i : self.n as long;
         }
+        // The number as an int (TypeError when this is not a number).
         public fn asInt() -> int { return self.asLong() as int; }
+        // The string (TypeError when this is not a string).
         public fn asString() -> string { self.expect(JsonKind.String, "a string"); return self.s; }
+        // The elements (TypeError when this is not an array).
         public fn asArray() -> Array<JsonValue> { self.expect(JsonKind.Array, "an array"); return self.items; }
 
         // Elements of an array or members of an object (0 for anything else).
         public fn size() -> int {
             return self.k == JsonKind.Array || self.k == JsonKind.Object ? self.items.size() : 0;
         }
+        // The number of elements or members (same as size()).
         public fn length() -> int { return self.size(); }
+        // Whether an array or object has nothing in it.
         public fn isEmpty() -> bool { return self.size() == 0; }
 
         // Member `key` of an object; a null value when absent or not an object.
@@ -290,8 +310,11 @@ namespace std.data {
             if (self.k != JsonKind.Array || i < 0 || i >= self.items.size()) { return new JsonValue(); }
             return self.items.get(i);
         }
+        // `v["key"]`: member key of an object (null when absent).
         fn operator[](key: string) -> JsonValue { return self.get(key); }
+        // `v[i]`: element i of an array.
         fn operator[](i: int) -> JsonValue { return self.at(i); }
+        // Whether an object has member `key`.
         public fn has(key: string) -> bool { return self.find(key) >= 0; }
         // An object's keys, in insertion order.
         public fn keys() -> Array<string> {
@@ -317,18 +340,22 @@ namespace std.data {
             let v = self.get(key);
             return v.isString() ? v.s : fallback;
         }
+        // Member `key` as an int, or `fallback` when it is missing or not a number.
         public fn getInt(key: string, fallback: int) -> int {
             let v = self.get(key);
             return v.isNumber() ? v.asInt() : fallback;
         }
+        // Member `key` as a long, or `fallback` when it is missing or not a number.
         public fn getLong(key: string, fallback: long) -> long {
             let v = self.get(key);
             return v.isNumber() ? v.asLong() : fallback;
         }
+        // Member `key` as a double, or `fallback` when it is missing or not a number.
         public fn getFloat(key: string, fallback: double) -> double {
             let v = self.get(key);
             return v.isNumber() ? v.n : fallback;
         }
+        // Member `key` as a bool, or `fallback` when it is missing or not a boolean.
         public fn getBool(key: string, fallback: bool) -> bool {
             let v = self.get(key);
             return v.isBool() ? v.b : fallback;
@@ -349,11 +376,17 @@ namespace std.data {
             }
             return self;
         }
+        // Sets member `key` to a string (adding it, or replacing its value); returns this object.
         public fn set(key: string, value: string) -> JsonValue { return self.set(key, JsonValue.ofString(value)); }
+        // Sets member `key` to a number; returns this object.
         public fn set(key: string, value: long) -> JsonValue { return self.set(key, JsonValue.ofInt(value)); }
+        // Sets member `key` to a number; returns this object.
         public fn set(key: string, value: double) -> JsonValue { return self.set(key, JsonValue.ofFloat(value)); }
+        // Sets member `key` to a boolean; returns this object.
         public fn set(key: string, value: bool) -> JsonValue { return self.set(key, JsonValue.ofBool(value)); }
+        // `v["key"] = value`: sets member key of an object.
         fn operator[]=(key: string, value: JsonValue) { self.set(key, value); }
+        // Removes member `key`; whether it was there.
         public fn remove(key: string) -> bool {
             if (!self.has(key)) { return false; }
             let at = self.find(key);
@@ -368,9 +401,13 @@ namespace std.data {
             self.items.push(value);
             return self;
         }
+        // Appends a string to an array; returns this array.
         public fn push(value: string) -> JsonValue { return self.push(JsonValue.ofString(value)); }
+        // Appends a number to an array; returns this array.
         public fn push(value: long) -> JsonValue { return self.push(JsonValue.ofInt(value)); }
+        // Appends a number to an array; returns this array.
         public fn push(value: double) -> JsonValue { return self.push(JsonValue.ofFloat(value)); }
+        // Appends a boolean to an array; returns this array.
         public fn push(value: bool) -> JsonValue { return self.push(JsonValue.ofBool(value)); }
 
         // ── writing ────────────────────────────────────────────────────────────
@@ -384,6 +421,7 @@ namespace std.data {
         }
         // Indented JSON text (`indent` spaces per level; 2 by default).
         public fn pretty() -> string { return self.pretty(2); }
+        // Indented JSON text, `indent` spaces per level.
         public fn pretty(indent: int) -> string {
             let sb = new StringBuilder();
             self.write(sb, indent, 0);
@@ -391,6 +429,7 @@ namespace std.data {
             free(sb);
             return out;
         }
+        // The compact JSON text (same as toJson()).
         fn toString() -> string { return self.toJson(); }
 
         private fn newline(sb: StringBuilder, indent: int, depth: int) {
@@ -501,6 +540,7 @@ namespace std.data {
             if (err != "") { self.fail(err); }
             return out;
         }
+        // Parses the whole input as one JSON value (ValueError on bad input or trailing text).
         public fn document() -> JsonValue {
             let v = self.value();
             self.skipSpace();
@@ -589,13 +629,21 @@ namespace std.data {
         static fn tryParse(text: string) -> JsonValue {
             try { return Json.parse(text); } catch (e: ValueError) { return null; }
         }
+        // The compact JSON text of a value.
         static fn stringify(v: JsonValue) -> string { return v.toJson(); }
+        // A new empty JSON object {}.
         static fn object() -> JsonValue { return JsonValue.ofKind(JsonKind.Object); }
+        // A new empty JSON array [].
         static fn array() -> JsonValue { return JsonValue.ofKind(JsonKind.Array); }
+        // The JSON null value.
         static fn nil() -> JsonValue { return new JsonValue(); }
+        // A JSON boolean.
         static fn of(b: bool) -> JsonValue { return JsonValue.ofBool(b); }
+        // A JSON number holding an integer.
         static fn of(n: long) -> JsonValue { return JsonValue.ofInt(n); }
+        // A JSON number.
         static fn of(d: double) -> JsonValue { return JsonValue.ofFloat(d); }
+        // A JSON string.
         static fn of(s: string) -> JsonValue { return JsonValue.ofString(s); }
         // A JSON array of strings.
         static fn strings(xs: Array<string>) -> JsonValue {

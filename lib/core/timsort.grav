@@ -55,6 +55,7 @@ namespace std.core {
             %{ free((void*)self->tmp); free(self->runBase); free(self->runLen); %};
         }
 
+        // Sorts the elements in place.
         fn sort() {
             if (self.n < 2) { return }
             try {

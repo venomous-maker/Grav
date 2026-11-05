@@ -29,6 +29,7 @@ namespace std.collections {
             return -(lo + 1);
         }
 
+        // Sets the value for `key` (adding it in order, or replacing its value).
         public fn put(key: K, value: V) {
             let i = self.find(key);
             if (i >= 0) { self.vs[i] = value; return; }
@@ -36,18 +37,24 @@ namespace std.collections {
             self.ks.insert(at, key);
             self.vs.insert(at, value);
         }
+        // The value for `key` (NotFound when missing).
         public fn get(key: K) -> V {
             let i = self.find(key);
             if (i < 0) { throw new NotFound("SortedMap.get: key not found"); }
             return self.vs[i];
         }
+        // The value for `key`, or `fallback` when missing.
         public fn getOr(key: K, fallback: V) -> V {
             let i = self.find(key);
             return i >= 0 ? self.vs[i] : fallback;
         }
+        // `m[key]`: the value for key (NotFound when missing).
         fn operator[](key: K) -> V { return self.get(key); }
+        // `m[key] = value`: sets the value for key.
         fn operator[]=(key: K, value: V) { self.put(key, value); }
+        // Whether the map has `key`.
         public fn containsKey(key: K) -> bool { return self.find(key) >= 0; }
+        // Removes `key`; whether it was there.
         public fn remove(key: K) -> bool {
             let i = self.find(key);
             if (i < 0) { return false; }
@@ -55,12 +62,18 @@ namespace std.collections {
             self.vs.removeAt(i);
             return true;
         }
+        // The number of keys.
         public fn size() -> int { return self.ks.size(); }
+        // The number of keys (same as size()).
         public fn length() -> int { return self.ks.size(); }
+        // Whether the map is empty.
         public fn isEmpty() -> bool { return self.ks.isEmpty(); }
+        // Removes every key.
         public fn clear() { self.ks.clear(); self.vs.clear(); }
 
+        // The smallest key (IndexError when empty).
         public fn firstKey() -> K { return self.ks.first(); }
+        // The largest key (IndexError when empty).
         public fn lastKey() -> K { return self.ks.last(); }
         // Keys and values in key order (copies).
         // As text: {"a": 1, "b": 2} (strings in quotes).
@@ -73,7 +86,9 @@ namespace std.collections {
             }
             return out + "}"
         }
+        // The keys in order (a copy).
         public fn keys() -> Array<K> { return self.ks.copy(); }
+        // The values in key order (a copy).
         public fn values() -> Array<V> { return self.vs.copy(); }
         // Keys k with lo <= k < hi, in order.
         public fn keysBetween(lo: K, hi: K) -> Array<K> {
@@ -86,6 +101,7 @@ namespace std.collections {
             }
             return out;
         }
+        // Calls f with each key and value, in key order.
         public fn forEach(f: fn(K, V)) { for (i in 0..self.ks.size()) { f(self.ks[i], self.vs[i]); } }
     }
 

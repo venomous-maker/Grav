@@ -30,25 +30,42 @@ namespace std.sys {
     %}
 
     class OS {
+        // "linux", "macos", "windows", ... (the system this program was built for).
         static fn platform() -> string { return %{ grav_os_platform() %} as string; }
+        // The machine architecture ("x86_64", "aarch64", ...).
         static fn arch() -> string { return %{ grav_os_uname(0) %} as string; }
+        // The computer's host name.
         static fn hostname() -> string { return %{ grav_os_uname(1) %} as string; }
+        // The kernel's name and release.
         static fn kernel() -> string { return %{ grav_os_uname(2) %} as string; }
+        // The user name ($USER).
         static fn user() -> string { return env("USER"); }
+        // The home directory ($HOME).
         static fn home() -> string { return env("HOME"); }
+        // The working directory.
         static fn cwd() -> string { return cwd(); }
+        // Changes the working directory; whether it worked.
         static fn chdir(path: string) -> bool { return %{ chdir(path) == 0 %} as bool; }
+        // This process's id.
         static fn pid() -> int { return %{ (int)getpid() %} as int; }
+        // The parent process's id.
         static fn ppid() -> int { return %{ (int)getppid() %} as int; }
+        // The number of CPU cores online.
         static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
+        // The memory page size in bytes.
         static fn pageSize() -> int { return %{ (int)sysconf(_SC_PAGESIZE) %} as int; }
 
+        // An environment variable ("" when unset).
         static fn getEnv(name: string) -> string { return env(name); }
+        // An environment variable, or `fallback` when unset.
         static fn getEnvOr(name: string, fallback: string) -> string {
             return OS.hasEnv(name) ? env(name) : fallback;
         }
+        // Whether an environment variable is set.
         static fn hasEnv(name: string) -> bool { return %{ getenv(name) != 0 %} as bool; }
+        // Sets an environment variable (for this process and its children); whether it worked.
         static fn setEnv(name: string, value: string) -> bool { return %{ setenv(name, value, 1) == 0 %} as bool; }
+        // Removes an environment variable; whether it worked.
         static fn unsetEnv(name: string) -> bool { return %{ unsetenv(name) == 0 %} as bool; }
 
         // Is stdout attached to a terminal (vs. a pipe or file)?

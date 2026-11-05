@@ -18,12 +18,19 @@ namespace std.collections {
             self.m.put(item, true);
             return true;
         }
+        // Adds every element of an array.
         public fn addAll(items: Array<T>) { for (x in items) { self.add(x); } }
+        // Whether the set has `item`.
         public fn contains(item: T) -> bool { return self.m.containsKey(item); }
+        // Removes `item`; whether it was there.
         public fn remove(item: T) -> bool { return self.m.remove(item); }
+        // The number of elements.
         public fn size() -> int { return self.m.size(); }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.m.size(); }
+        // Whether the set is empty.
         public fn isEmpty() -> bool { return self.m.isEmpty(); }
+        // Removes every element.
         public fn clear() { self.m.clear(); }
         // As text: {1, 2, 3} (strings in quotes).
         public fn toString() -> string {
@@ -35,9 +42,12 @@ namespace std.collections {
             }
             return out + "}"
         }
+        // The elements as a new Array (in no particular order).
         public fn toArray() -> Array<T> { return self.m.keys(); }
+        // Calls f on each element (in no particular order).
         public fn forEach(f: fn(T)) { self.m.forEach(fn(k, v) => f(k)); }
 
+        // A new set with the elements of both sets.
         public fn union(other: HashSet<T>) -> HashSet<T> {
             let r = new HashSet<T>();
             let mine = self.toArray();
@@ -48,6 +58,7 @@ namespace std.collections {
             free(theirs);
             return r;
         }
+        // A new set with the elements in both sets.
         public fn intersect(other: HashSet<T>) -> HashSet<T> {
             let r = new HashSet<T>();
             let mine = self.toArray();
@@ -55,6 +66,7 @@ namespace std.collections {
             free(mine);
             return r;
         }
+        // A new set with the elements of this set that are not in `other`.
         public fn difference(other: HashSet<T>) -> HashSet<T> {
             let r = new HashSet<T>();
             let mine = self.toArray();
@@ -62,6 +74,7 @@ namespace std.collections {
             free(mine);
             return r;
         }
+        // Whether every element of this set is in `other`.
         public fn isSubsetOf(other: HashSet<T>) -> bool {
             let mine = self.toArray();
             let ok = mine.all(fn(x) => other.contains(x));

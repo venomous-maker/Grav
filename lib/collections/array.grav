@@ -61,43 +61,58 @@ namespace std.collections {
         public fn reserve(capacity: int) { self.ensure(capacity); }
 
         // ── size ───────────────────────────────────────────────────────────────
+        // The number of elements.
         public fn size() -> int { return self.len; }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.len; }
+        // Whether the array has no elements.
         public fn isEmpty() -> bool { return self.len == 0; }
+        // Removes every element.
         public fn clear() {
             for (i in 0..self.len) { __release(self.data[i]); }
             self.len = 0;
         }
 
         // ── element access ─────────────────────────────────────────────────────
+        // The element at index i; an index out of range throws IndexError.
         public fn get(i: int) -> T { self.check(i); return self.data[i]; }
+        // Replaces the element at index i; an index out of range throws IndexError.
         public fn set(i: int, item: T) {
             self.check(i);
             let old = self.data[i];
             self.data[i] = __retain(item);
             __release(old);
         }
+        // `xs[i]`: the element at index i (IndexError when out of range).
         fn operator[](i: int) -> T { self.check(i); return self.data[i]; }
+        // `xs[i] = v`: replaces the element at index i.
         fn operator[]=(i: int, item: T) { self.set(i, item); }
+        // The first element; an empty array throws IndexError.
         public fn first() -> T { self.check(0); return self.data[0]; }
+        // The last element; an empty array throws IndexError.
         public fn last() -> T { self.check(self.len - 1); return self.data[self.len - 1]; }
+        // The element at index i, or `fallback` when i is out of range.
         public fn getOr(i: int, fallback: T) -> T {
             return i >= 0 && i < self.len ? self.data[i] : fallback;
         }
 
         // ── adding and removing ────────────────────────────────────────────────
+        // Appends an element at the end (amortized O(1)).
         public fn push(item: T) {
             if (self.len == self.cap) { self.ensure(self.len + 1); }
             self.data[self.len] = __retain(item);
             self.len = self.len + 1;
         }
+        // Appends an element at the end (same as push).
         public fn add(item: T) { self.push(item); }
+        // Appends every element of another array.
         public fn addAll(other: Array<T>) {
             let n = other.length();
             self.ensure(self.len + n);
             for (i in 0..n) { self.data[self.len + i] = other.get(i); }
             self.len = self.len + n;
         }
+        // Removes and returns the last element; an empty array throws StateError.
         public fn pop() -> T {
             if (self.len == 0) { throw new StateError("Array.pop on an empty array"); }
             self.len = self.len - 1;
@@ -105,6 +120,7 @@ namespace std.collections {
             __release(item);          // the array's reference (the caller gets its own)
             return item;
         }
+        // Inserts an element before `index` (0..size()); later elements move up.
         public fn insert(index: int, item: T) {
             if (index < 0 || index > self.len) { throw new IndexError("Array.insert index ${index} out of range"); }
             self.ensure(self.len + 1);
@@ -113,6 +129,7 @@ namespace std.collections {
             self.data[index] = __retain(item);
             self.len = self.len + 1;
         }
+        // Removes and returns the element at index; later elements move down.
         public fn removeAt(index: int) -> T {
             self.check(index);
             let item = self.data[index];
@@ -140,6 +157,7 @@ namespace std.collections {
             self.len = w;
             return removed;
         }
+        // Exchanges the elements at indexes i and j.
         public fn swap(i: int, j: int) {
             self.check(i);
             self.check(j);
@@ -147,20 +165,25 @@ namespace std.collections {
             self.data[i] = self.data[j];
             self.data[j] = t;
         }
+        // Sets every element to `item`.
         public fn fill(item: T) { for (i in 0..self.len) { self.set(i, item); } }
 
         // ── searching ──────────────────────────────────────────────────────────
+        // The index of the first element equal to `item` (==), or -1.
         public fn indexOf(item: T) -> int {
             for (i in 0..self.len) { if (self.data[i] == item) { return i; } }
             return -1;
         }
+        // The index of the last element equal to `item` (==), or -1.
         public fn lastIndexOf(item: T) -> int {
             for (i in self.len - 1..=0 step -1) { if (self.data[i] == item) { return i; } }
             return -1;
         }
+        // Whether some element equals `item` (==).
         public fn contains(item: T) -> bool { return self.indexOf(item) >= 0; }
 
         // ── whole-array operations ─────────────────────────────────────────────
+        // Reverses the order of the elements in place.
         public fn reverse() {
             let i = 0;
             let j = self.len - 1;
@@ -170,6 +193,7 @@ namespace std.collections {
                 j -= 1;
             }
         }
+        // A new array with the same elements (a shallow copy).
         public fn copy() -> Array<T> {
             let out = new Array<T>(self.len);
             let n = self.len;
@@ -187,6 +211,7 @@ namespace std.collections {
             }
             return out + "]"
         }
+        // A new array with the same elements (same as copy()).
         public fn toArray() -> Array<T> { return self.copy(); }
         // Elements [start, end) as a new array (bounds are clamped).
         public fn slice(start: int, end: int) -> Array<T> {
@@ -196,37 +221,46 @@ namespace std.collections {
             for (i in s..e) { out.push(self.data[i]); }
             return out;
         }
+        // Releases the elements and the buffer now, leaving the array empty.
         public fn dispose() {
             for (i in 0..self.len) { __release(self.data[i]); }
             free(self.data); self.data = null; self.len = 0; self.cap = 0;
         }
 
         // ── higher-order operations ────────────────────────────────────────────
+        // Calls f on each element, in order.
         public fn forEach(f: fn(T)) { for (i in 0..self.len) { f(self.data[i]); } }
+        // Calls f with each index and element, in order.
         public fn forEachIndexed(f: fn(int, T)) { for (i in 0..self.len) { f(i, self.data[i]); } }
+        // A new array of f(x) for each element x (same element type; see mapTo for another).
         public fn map(f: fn(T) -> T) -> Array<T> {
             let out = new Array<T>(self.len);
             for (i in 0..self.len) { out.push(f(self.data[i])); }
             return out;
         }
+        // A new array of the elements for which `keep` returns true.
         public fn filter(keep: fn(T) -> bool) -> Array<T> {
             let out = new Array<T>();
             for (i in 0..self.len) { if (keep(self.data[i])) { out.push(self.data[i]); } }
             return out;
         }
+        // Combines the elements left to right: f(f(init, x0), x1)...
         public fn reduce(init: T, f: fn(T, T) -> T) -> T {
             let acc = init;
             for (i in 0..self.len) { acc = f(acc, self.data[i]); }
             return acc;
         }
+        // Whether `pred` holds for at least one element.
         public fn any(pred: fn(T) -> bool) -> bool {
             for (i in 0..self.len) { if (pred(self.data[i])) { return true; } }
             return false;
         }
+        // Whether `pred` holds for every element (true when empty).
         public fn all(pred: fn(T) -> bool) -> bool {
             for (i in 0..self.len) { if (!pred(self.data[i])) { return false; } }
             return true;
         }
+        // How many elements `pred` holds for.
         public fn countWhere(pred: fn(T) -> bool) -> int {
             let n = 0;
             for (i in 0..self.len) { if (pred(self.data[i])) { n += 1; } }
@@ -261,6 +295,7 @@ namespace std.collections {
             for (i in 1..self.len) { if (cmp(self.data[i], best) > 0) { best = self.data[i]; } }
             return best;
         }
+        // The smallest element by `cmp` (cmp(a, b) < 0 means a is smaller); empty throws IndexError.
         public fn minBy(cmp: fn(T, T) -> int) -> T {
             self.check(0);
             let best = self.data[0];
@@ -277,6 +312,7 @@ namespace std.collections {
 
     // Free-function forms (kept for compatibility; prefer xs.mapTo(f) / xs.fold(init, f)).
     fn mapTo<T, U>(xs: Array<T>, f: fn(T) -> U) -> Array<U> { return xs.mapTo::<U>(f); }
+    // Folds an array into a value of another type: f(f(init, x0), x1)...
     fn fold<T, A>(xs: Array<T>, init: A, f: fn(A, T) -> A) -> A { return xs.fold::<A>(init, f); }
 
 }

@@ -22,9 +22,13 @@ namespace std.collections {
         constructor() { self.head = null; self.tail = null; self.len = 0; }
         destructor() { self.clear(); }
 
+        // The number of elements.
         public fn size() -> int { return self.len; }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.len; }
+        // Whether the list is empty.
         public fn isEmpty() -> bool { return self.len == 0; }
+        // Removes every element.
         public fn clear() {
             let n = self.head;
             while (n != null) { let next = n.next; free(n); n = next; }
@@ -33,6 +37,7 @@ namespace std.collections {
             self.len = 0;
         }
 
+        // Adds an element at the front (O(1)).
         public fn addFirst(item: T) {
             let n = new LinkedNode<T>(item);
             n.next = self.head;
@@ -40,6 +45,7 @@ namespace std.collections {
             self.head = n;
             self.len = self.len + 1;
         }
+        // Adds an element at the back (O(1)).
         public fn addLast(item: T) {
             let n = new LinkedNode<T>(item);
             n.prev = self.tail;
@@ -47,6 +53,7 @@ namespace std.collections {
             self.tail = n;
             self.len = self.len + 1;
         }
+        // Adds an element at the back (same as addLast).
         public fn add(item: T) { self.addLast(item); }
 
         private fn unlink(n: LinkedNode<T>) -> T {
@@ -57,18 +64,22 @@ namespace std.collections {
             self.len = self.len - 1;
             return v;
         }
+        // Removes and returns the first element (StateError when empty).
         public fn removeFirst() -> T {
             if (self.head == null) { throw new StateError("LinkedList.removeFirst on an empty list"); }
             return self.unlink(self.head);
         }
+        // Removes and returns the last element (StateError when empty).
         public fn removeLast() -> T {
             if (self.tail == null) { throw new StateError("LinkedList.removeLast on an empty list"); }
             return self.unlink(self.tail);
         }
+        // The first element (StateError when empty).
         public fn first() -> T {
             if (self.head == null) { throw new StateError("LinkedList.first on an empty list"); }
             return self.head.value;
         }
+        // The last element (StateError when empty).
         public fn last() -> T {
             if (self.tail == null) { throw new StateError("LinkedList.last on an empty list"); }
             return self.tail.value;
@@ -85,8 +96,11 @@ namespace std.collections {
             for (k in 0..self.len - 1 - i) { n = n.prev; }
             return n;
         }
+        // The element at index i (walks the list: O(i)).
         public fn get(i: int) -> T { return self.nodeAt(i).value; }
+        // Replaces the element at index i.
         public fn set(i: int, item: T) { self.nodeAt(i).value = item; }
+        // Removes and returns the element at index i.
         public fn removeAt(i: int) -> T { return self.unlink(self.nodeAt(i)); }
         // Removes the first element equal to `item`; reports whether one was found.
         public fn remove(item: T) -> bool {
@@ -97,15 +111,18 @@ namespace std.collections {
             }
             return false;
         }
+        // Whether some element equals `item`.
         public fn contains(item: T) -> bool {
             let n = self.head;
             while (n != null) { if (n.value == item) { return true; } n = n.next; }
             return false;
         }
+        // Calls f on each element, front to back.
         public fn forEach(f: fn(T)) {
             let n = self.head;
             while (n != null) { f(n.value); n = n.next; }
         }
+        // Reverses the order of the elements in place.
         public fn reverse() {
             let n = self.head;
             while (n != null) {
@@ -120,6 +137,7 @@ namespace std.collections {
         }
         // As text: [1, 2, 3] (strings in quotes).
         public fn toString() -> string { return self.toArray().toString() }
+        // The elements as a new Array, front to back.
         public fn toArray() -> Array<T> {
             let out = new Array<T>(self.len);
             let n = self.head;

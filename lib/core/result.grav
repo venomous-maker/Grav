@@ -26,12 +26,14 @@ namespace std.core {
         Ok(T),
         Err(E),
 
+        // Whether this is Ok.
         fn isOk() -> bool {
             match (self) {
                 case Ok(_): return true
                 default: return false
             }
         }
+        // Whether this is Err.
         fn isErr() -> bool { return !self.isOk() }
         // The value; throws StateError (showing the error) when this is an Err.
         fn unwrap() -> T {
@@ -47,12 +49,14 @@ namespace std.core {
                 case Err(e): throw new StateError(message + ": " + __show(e))
             }
         }
+        // The value, or `fallback` when this is Err.
         fn unwrapOr(fallback: T) -> T {
             match (self) {
                 case Ok(v): return v
                 default: return fallback
             }
         }
+        // The value, or f(error) when this is Err.
         fn unwrapOrElse(f: fn(E) -> T) -> T {
             match (self) {
                 case Ok(v): return v
@@ -87,6 +91,7 @@ namespace std.core {
                 case Err(e): return Result.Err::<U, E>(e)
             }
         }
+        // Some(value) when Ok, None when Err.
         fn ok() -> Option<T> {
             match (self) {
                 case Ok(v): return Option.Some::<T>(v)
@@ -100,12 +105,14 @@ namespace std.core {
         Some(T),
         None,
 
+        // Whether this holds a value.
         fn isSome() -> bool {
             match (self) {
                 case Some(_): return true
                 default: return false
             }
         }
+        // Whether this is None.
         fn isNone() -> bool { return !self.isSome() }
         // The value; throws StateError when this is None.
         fn unwrap() -> T {
@@ -114,42 +121,49 @@ namespace std.core {
                 case None: throw new StateError("called unwrap() on None")
             }
         }
+        // The value; StateError with `message` when this is None.
         fn expect(message: string) -> T {
             match (self) {
                 case Some(v): return v
                 case None: throw new StateError(message)
             }
         }
+        // The value, or `fallback` when this is None.
         fn unwrapOr(fallback: T) -> T {
             match (self) {
                 case Some(v): return v
                 default: return fallback
             }
         }
+        // The value, or f() when this is None.
         fn unwrapOrElse(f: fn() -> T) -> T {
             match (self) {
                 case Some(v): return v
                 default: return f()
             }
         }
+        // Some(f(value)), or None.
         fn map<U>(f: fn(T) -> U) -> Option<U> {
             match (self) {
                 case Some(v): return Option.Some::<U>(f(v))
                 default: return Option.None::<U>()
             }
         }
+        // f(value) (itself an Option), or None.
         fn andThen<U>(f: fn(T) -> Option<U>) -> Option<U> {
             match (self) {
                 case Some(v): return f(v)
                 default: return Option.None::<U>()
             }
         }
+        // This option when it holds a value `keep` accepts, else None.
         fn filter(keep: fn(T) -> bool) -> Option<T> {
             match (self) {
                 case Some(v): if (keep(v)) { return self } else { return Option.None::<T>() }
                 default: return Option.None::<T>()
             }
         }
+        // Calls f with the value, if there is one.
         fn ifSome(f: fn(T)) {
             match (self) {
                 case Some(v): f(v)

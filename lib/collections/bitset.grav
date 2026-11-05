@@ -34,21 +34,26 @@ namespace std.collections {
         }
         private fn checkBit(bit: int) { if (bit < 0) { throw new IndexError("BitSet: negative bit ${bit}"); } }
 
+        // Turns bit `bit` on (IndexError when negative).
         public fn set(bit: int) {
             self.checkBit(bit);
             self.ensure(bit);
             %{ self->words[bit / 64] |= 1ULL << (bit % 64); %};
         }
+        // Turns bit `bit` off.
         public fn unset(bit: int) {
             self.checkBit(bit);
             if (bit / 64 >= self.nwords) { return; }
             %{ self->words[bit / 64] &= ~(1ULL << (bit % 64)); %};
         }
+        // Turns bit `bit` on if it was off, and off if it was on.
         public fn flip(bit: int) { if (self.get(bit)) { self.unset(bit); } else { self.set(bit); } }
+        // Whether bit `bit` is on.
         public fn get(bit: int) -> bool {
             if (bit < 0 || bit / 64 >= self.nwords) { return false; }
             return %{ ((self->words[bit / 64] >> (bit % 64)) & 1ULL) != 0 %} as bool;
         }
+        // Whether bit `bit` is on (same as get).
         public fn contains(bit: int) -> bool { return self.get(bit); }
         // Number of set bits.
         public fn count() -> int {
@@ -56,8 +61,11 @@ namespace std.collections {
             for (i in 0..self.nwords) { n += %{ __builtin_popcountll(self->words[i]) %} as int; }
             return n;
         }
+        // The number of bits that are on (same as count()).
         public fn size() -> int { return self.count(); }
+        // Whether no bit is on.
         public fn isEmpty() -> bool { return self.count() == 0; }
+        // Turns every bit off.
         public fn clear() { let n = self.nwords; %{ if (n) memset(self->words, 0, (size_t)n * 8); %}; }
 
         // In-place set algebra.
@@ -66,6 +74,7 @@ namespace std.collections {
             for (b in bits) { self.set(b); }
             free(bits);
         }
+        // Keeps only the bits that are also on in `other`.
         public fn intersectWith(other: BitSet) {
             let bits = self.toArray();
             for (b in bits) { if (!other.get(b)) { self.unset(b); } }
@@ -82,6 +91,7 @@ namespace std.collections {
             }
             return out + "}"
         }
+        // The numbers of the bits that are on, in increasing order.
         public fn toArray() -> Array<int> {
             let out = new Array<int>();
             for (w in 0..self.nwords) {

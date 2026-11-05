@@ -16,6 +16,7 @@ namespace std.collections {
         constructor(cmp: fn(T, T) -> int) { self.items = new Array<T>(); self.cmp = cmp; }
         destructor() { free(self.items); }
 
+        // Adds an element (O(log n)).
         public fn push(item: T) {
             self.items.push(item);
             let i = self.items.size() - 1;
@@ -26,6 +27,7 @@ namespace std.collections {
                 i = parent;
             }
         }
+        // Removes and returns the first element by the comparator (StateError when empty).
         public fn pop() -> T {
             if (self.items.isEmpty()) { throw new StateError("PriorityQueue.pop on an empty queue"); }
             let top = self.items[0];
@@ -47,18 +49,25 @@ namespace std.collections {
             }
             return top;
         }
+        // The first element by the comparator, left in place (StateError when empty).
         public fn peek() -> T {
             if (self.items.isEmpty()) { throw new StateError("PriorityQueue.peek on an empty queue"); }
             return self.items[0];
         }
+        // The number of elements.
         public fn size() -> int { return self.items.size(); }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.items.size(); }
+        // Whether the queue is empty.
         public fn isEmpty() -> bool { return self.items.isEmpty(); }
+        // Removes every element.
         public fn clear() { self.items.clear(); }
+        // Whether some element equals `item`.
         public fn contains(item: T) -> bool { return self.items.contains(item); }
         // Every element, in priority order (the queue is left unchanged).
         // As text: [1, 2, 3] (strings in quotes).
         public fn toString() -> string { return self.items.toString() }
+        // Every element, sorted by the comparator, as a new Array.
         public fn toArray() -> Array<T> {
             let out = self.items.copy();
             out.sortBy(self.cmp);

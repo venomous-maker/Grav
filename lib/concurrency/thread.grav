@@ -126,6 +126,7 @@ namespace std.concurrency {
             t.start();
             return t;
         }
+        // Creates a thread named `name` running `body` and starts it.
         static fn spawn(name: string, body: fn()) -> Thread {
             let t = new Thread(name, body);
             t.start();
@@ -156,6 +157,7 @@ namespace std.concurrency {
             return self;
         }
 
+        // Starts running the body (StateError when already started).
         public fn start() {
             if (self.started) { throw new StateError("Thread '" + self.name + "' was already started"); }
             self.started = true;
@@ -202,13 +204,18 @@ namespace std.concurrency {
                 self.joined = true;
             }
         }
+        // The thread's name.
         public fn getName() -> string { return self.name; }
+        // Whether start() was called.
         public fn isStarted() -> bool { return self.started; }
 
+        // Pauses the calling thread for `ms` milliseconds.
         static fn sleepMs(ms: int) { %{ usleep((useconds_t)ms * 1000); %}; }
         // Give other threads a chance to run.
         static fn yieldNow() { %{ sched_yield(); %}; }
+        // An id for the calling thread.
         static fn currentId() -> long { return %{ (long long)(uintptr_t)pthread_self() %} as long; }
+        // The number of CPU cores online.
         static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
     }
 
@@ -218,11 +225,15 @@ namespace std.concurrency {
         private c: byte*
         constructor() { self.c = %{ (unsigned char*)grav_counter_new(0) %} as byte*; }
         destructor() { %{ grav_counter_free((GravCounter*)self->c); %}; }
+        // Adds n to the count of pending tasks.
         public fn add(n: int) { %{ grav_counter_add((GravCounter*)self->c, n); %}; }
+        // Marks one task as finished (count - 1).
         public fn done() { %{ grav_counter_add((GravCounter*)self->c, -1); %}; }
+        // Waits until the count reaches zero.
         public fn wait() { %{ grav_counter_wait_zero((GravCounter*)self->c, -1); %}; }
         // Wait at most `ms` milliseconds; reports whether the count reached zero.
         public fn waitFor(ms: int) -> bool { return %{ grav_counter_wait_zero((GravCounter*)self->c, ms) %} as bool; }
+        // The current count.
         public fn count() -> int {
             return %{ (int)__atomic_load_n(&((GravCounter*)self->c)->n, __ATOMIC_SEQ_CST) %} as int;
         }
@@ -233,8 +244,11 @@ namespace std.concurrency {
         private c: byte*
         constructor(n: int) { self.c = %{ (unsigned char*)grav_counter_new(n) %} as byte*; }
         destructor() { %{ grav_counter_free((GravCounter*)self->c); %}; }
+        // Counts down by one; waiters wake at zero.
         public fn countDown() { %{ grav_counter_add((GravCounter*)self->c, -1); %}; }
+        // Waits until the count reaches zero.
         public fn wait() { %{ grav_counter_wait_zero((GravCounter*)self->c, -1); %}; }
+        // Waits at most `ms` milliseconds; whether the count reached zero.
         public fn waitFor(ms: int) -> bool { return %{ grav_counter_wait_zero((GravCounter*)self->c, ms) %} as bool; }
     }
 
@@ -244,8 +258,11 @@ namespace std.concurrency {
         private c: byte*
         constructor(permits: int) { self.c = %{ (unsigned char*)grav_counter_new(permits) %} as byte*; }
         destructor() { %{ grav_counter_free((GravCounter*)self->c); %}; }
+        // Takes a permit, waiting while there is none.
         public fn acquire() { %{ grav_counter_take((GravCounter*)self->c, 1); %}; }
+        // Takes a permit if one is free right now; whether it did.
         public fn tryAcquire() -> bool { return %{ grav_counter_take((GravCounter*)self->c, 0) %} as bool; }
+        // Gives back a permit.
         public fn release() { %{ grav_counter_add((GravCounter*)self->c, 1); %}; }
         // Run `body` holding a permit (released even if it throws).
         public fn withPermit(body: fn()) {
@@ -265,13 +282,18 @@ namespace std.concurrency {
             %};
         }
         destructor() { %{ pthread_rwlock_destroy((pthread_rwlock_t*)self->h); free(self->h); %}; }
+        // Waits for shared (read) access.
         public fn readLock() { %{ pthread_rwlock_rdlock((pthread_rwlock_t*)self->h); %}; }
+        // Waits for exclusive (write) access.
         public fn writeLock() { %{ pthread_rwlock_wrlock((pthread_rwlock_t*)self->h); %}; }
+        // Releases the read or write access.
         public fn unlock() { %{ pthread_rwlock_unlock((pthread_rwlock_t*)self->h); %}; }
+        // Runs `body` with read access (released even when body throws).
         public fn withRead(body: fn()) {
             self.readLock();
             try { body(); } finally { self.unlock(); }
         }
+        // Runs `body` with write access (released even when body throws).
         public fn withWrite(body: fn()) {
             self.writeLock();
             try { body(); } finally { self.unlock(); }
@@ -284,6 +306,7 @@ namespace std.concurrency {
         private m: Mutex
         constructor() { self.done = new AtomicInt(0); self.m = new Mutex(); }
         destructor() { free(self.done); free(self.m); }
+        // Runs `body` the first time it is called, from whichever thread gets there first.
         public fn run(body: fn()) {
             if (self.done.get() == 1) { return; }
             self.m.lock();
@@ -296,6 +319,7 @@ namespace std.concurrency {
                 self.m.unlock();
             }
         }
+        // Whether run() has finished its body.
         public fn isDone() -> bool { return self.done.get() == 1; }
     }
 

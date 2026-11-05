@@ -10,37 +10,63 @@ namespace std.core {
         static readonly PI: float = 3.141592653589793
         static readonly E: float = 2.718281828459045
         static readonly TAU: float = 6.283185307179586
+        // π (3.14159...).
         static fn pi() -> float { return Math.PI; }
+        // Euler's number e (2.71828...).
         static fn e() -> float { return Math.E; }
 
         // ── powers and roots ───────────────────────────────────────────────────
+        // The square root (NaN for negative x).
         static fn sqrt(x: float) -> float { return %{ sqrt(x) %} as float; }
+        // The cube root.
         static fn cbrt(x: float) -> float { return %{ cbrt(x) %} as float; }
+        // `base` raised to the power `exp`.
         static fn pow(base: float, exp: float) -> float { return %{ pow(base, exp) %} as float; }
+        // sqrt(x*x + y*y), without overflow in between.
         static fn hypot(x: float, y: float) -> float { return %{ hypot(x, y) %} as float; }
+        // e raised to the power x.
         static fn exp(x: float) -> float { return %{ exp(x) %} as float; }
+        // The natural logarithm (base e).
         static fn log(x: float) -> float { return %{ log(x) %} as float; }
+        // The base-2 logarithm.
         static fn log2(x: float) -> float { return %{ log2(x) %} as float; }
+        // The base-10 logarithm.
         static fn log10(x: float) -> float { return %{ log10(x) %} as float; }
 
         // ── trigonometry ───────────────────────────────────────────────────────
+        // The sine of x (in radians).
         static fn sin(x: float) -> float { return %{ sin(x) %} as float; }
+        // The cosine of x (in radians).
         static fn cos(x: float) -> float { return %{ cos(x) %} as float; }
+        // The tangent of x (in radians).
         static fn tan(x: float) -> float { return %{ tan(x) %} as float; }
+        // The arcsine, in radians (-π/2..π/2).
         static fn asin(x: float) -> float { return %{ asin(x) %} as float; }
+        // The arccosine, in radians (0..π).
         static fn acos(x: float) -> float { return %{ acos(x) %} as float; }
+        // The arctangent, in radians (-π/2..π/2).
         static fn atan(x: float) -> float { return %{ atan(x) %} as float; }
+        // The angle of the point (x, y), in radians (-π..π).
         static fn atan2(y: float, x: float) -> float { return %{ atan2(y, x) %} as float; }
+        // The hyperbolic sine.
         static fn sinh(x: float) -> float { return %{ sinh(x) %} as float; }
+        // The hyperbolic cosine.
         static fn cosh(x: float) -> float { return %{ cosh(x) %} as float; }
+        // The hyperbolic tangent.
         static fn tanh(x: float) -> float { return %{ tanh(x) %} as float; }
+        // Degrees converted to radians.
         static fn toRadians(deg: float) -> float { return deg * Math.PI / 180.0; }
+        // Radians converted to degrees.
         static fn toDegrees(rad: float) -> float { return rad * 180.0 / Math.PI; }
 
         // ── rounding ───────────────────────────────────────────────────────────
+        // The largest whole number <= x.
         static fn floor(x: float) -> float { return %{ floor(x) %} as float; }
+        // The smallest whole number >= x.
         static fn ceil(x: float) -> float { return %{ ceil(x) %} as float; }
+        // The nearest whole number (halves round away from zero).
         static fn round(x: float) -> float { return %{ round(x) %} as float; }
+        // x without its fractional part (towards zero).
         static fn trunc(x: float) -> float { return %{ trunc(x) %} as float; }
         // Round to `digits` decimal places.
         static fn roundTo(x: float, digits: int) -> float {
@@ -49,33 +75,52 @@ namespace std.core {
         }
 
         // ── comparisons (float and integer overloads) ──────────────────────────
+        // The absolute value.
         static fn abs(x: float) -> float { return %{ fabs(x) %} as float; }
+        // The absolute value.
         static fn abs(x: int) -> int { return x < 0 ? -x : x; }
+        // The absolute value.
         static fn abs(x: long) -> long { return x < 0 ? -x : x; }
+        // The smaller of a and b.
         static fn min(a: float, b: float) -> float { return a < b ? a : b; }
+        // The smaller of a and b.
         static fn min(a: int, b: int) -> int { return a < b ? a : b; }
+        // The smaller of a and b.
         static fn min(a: long, b: long) -> long { return a < b ? a : b; }
+        // The larger of a and b.
         static fn max(a: float, b: float) -> float { return a > b ? a : b; }
+        // The larger of a and b.
         static fn max(a: int, b: int) -> int { return a > b ? a : b; }
+        // The larger of a and b.
         static fn max(a: long, b: long) -> long { return a > b ? a : b; }
+        // x limited to the range lo..hi.
         static fn clamp(x: float, lo: float, hi: float) -> float { return x < lo ? lo : (x > hi ? hi : x); }
+        // x limited to the range lo..hi.
         static fn clamp(x: int, lo: int, hi: int) -> int { return x < lo ? lo : (x > hi ? hi : x); }
+        // -1, 0 or 1: the sign of x.
         static fn sign(x: float) -> int { return x > 0.0 ? 1 : (x < 0.0 ? -1 : 0); }
+        // -1, 0 or 1: the sign of x.
         static fn sign(x: int) -> int { return x > 0 ? 1 : (x < 0 ? -1 : 0); }
 
         // ── floating-point classification ──────────────────────────────────────
+        // Whether x is NaN (not a number).
         static fn isNaN(x: float) -> bool { return %{ isnan(x) != 0 %} as bool; }
+        // Whether x is +∞ or -∞.
         static fn isInfinite(x: float) -> bool { return %{ isinf(x) != 0 %} as bool; }
+        // Whether x is neither infinite nor NaN.
         static fn isFinite(x: float) -> bool { return %{ isfinite(x) != 0 %} as bool; }
 
         // ── integer math ───────────────────────────────────────────────────────
+        // The greatest common divisor (always >= 0).
         static fn gcd(a: long, b: long) -> long {
             let x = a < 0 ? -a : a;
             let y = b < 0 ? -b : b;
             while (y != 0) { let t = x % y; x = y; y = t; }
             return x;
         }
+        // The least common multiple (0 when either is 0).
         static fn lcm(a: long, b: long) -> long { return a == 0 || b == 0 ? 0 : Math.abs(a / Math.gcd(a, b) * b); }
+        // Whether n is a prime number.
         static fn isPrime(n: long) -> bool {
             if (n < 2) { return false; }
             if (n % 2 == 0) { return n == 2; }
@@ -83,6 +128,7 @@ namespace std.core {
             while (d * d <= n) { if (n % d == 0) { return false; } d += 2; }
             return true;
         }
+        // n! (1 for n <= 1; overflows past 20!).
         static fn factorial(n: int) -> long {
             let r: long = 1;
             for (i in 2..=n) { r *= i; }

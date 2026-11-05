@@ -49,14 +49,19 @@ namespace std.text {
                self->buf[self->len] = 0; %};
         }
 
+        // Appends text; returns this builder (calls chain).
         public fn append(s: string) -> StringBuilder { self.put(s, %{ (int)strlen(s) %} as int); return self; }
+        // Appends text and a newline; returns this builder.
         public fn appendLine(s: string) -> StringBuilder { self.append(s); self.put("\n", 1); return self; }
+        // Appends a number; returns this builder.
         public fn appendInt(n: long) -> StringBuilder {
             return self.append(%{ grav_sb_ll((long long)n) %} as string);
         }
+        // Appends a number (shortest exact form); returns this builder.
         public fn appendFloat(f: double) -> StringBuilder {
             return self.append(%{ grav_sb_g(f) %} as string);
         }
+        // Appends "true" or "false"; returns this builder.
         public fn appendBool(b: bool) -> StringBuilder { return self.append(b ? "true" : "false"); }
         // Any value, formatted like print()/str().
         public fn append(value: any) -> StringBuilder { return self.append(str(value)); }
@@ -84,13 +89,17 @@ namespace std.text {
                self->buf[self->len] = 0; %};
             return self;
         }
+        // Appends `s` `times` times; returns this builder.
         public fn repeat(s: string, times: int) -> StringBuilder {
             for (i in 0..times) { self.append(s); }
             return self;
         }
 
+        // The length in bytes so far.
         public fn length() -> int { return self.len; }
+        // Whether nothing has been appended.
         public fn isEmpty() -> bool { return self.len == 0; }
+        // Empties the builder (keeping its buffer).
         public fn clear() { self.len = 0; if (self.buf != null) { self.buf[0] = 0; } }
         // A fresh copy of the contents (the builder stays usable).
         public fn toString() -> string { return %{ grav_sb_dup(self->buf, self->len) %} as string; }

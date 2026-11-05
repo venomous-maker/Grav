@@ -38,48 +38,74 @@ namespace std.sys {
         private ts: long                      // unix seconds (64-bit: safe past 2038)
         constructor(unixSeconds: long) { self.ts = unixSeconds; }
 
+        // The current moment.
         static fn now() -> DateTime { return new DateTime(%{ (long long)time(0) %} as long); }
+        // The moment `seconds` after 1970-01-01 00:00 UTC.
         static fn fromUnix(seconds: long) -> DateTime { return new DateTime(seconds); }
         // From calendar fields (local time); out-of-range fields roll over (Jan 32 -> Feb 1).
         static fn of(year: int, month: int, day: int, hour: int, minute: int, second: int) -> DateTime {
             return new DateTime(%{ grav_mktime(year, month, day, hour, minute, second) %} as long);
         }
+        // Midnight (local time) of the given date.
         static fn of(year: int, month: int, day: int) -> DateTime { return DateTime.of(year, month, day, 0, 0, 0); }
+        // Whether `year` has a February 29.
         static fn isLeapYear(year: int) -> bool { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
+        // How many days the month has (month 1..12).
         static fn daysInMonth(year: int, month: int) -> int {
             if (month == 2) { return DateTime.isLeapYear(year) ? 29 : 28; }
             return month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31;
         }
 
+        // Seconds since 1970-01-01 00:00 UTC.
         public fn unix() -> long { return self.ts; }
+        // The year (local time).
         public fn year() -> int { let t = self.ts; return %{ grav_tm_field(t, 0) %} as int; }
+        // The month, 1..12 (local time).
         public fn month() -> int { let t = self.ts; return %{ grav_tm_field(t, 1) %} as int; }
+        // The day of the month, 1..31 (local time).
         public fn day() -> int { let t = self.ts; return %{ grav_tm_field(t, 2) %} as int; }
+        // The hour, 0..23 (local time).
         public fn hour() -> int { let t = self.ts; return %{ grav_tm_field(t, 3) %} as int; }
+        // The minute, 0..59.
         public fn minute() -> int { let t = self.ts; return %{ grav_tm_field(t, 4) %} as int; }
+        // The second, 0..59.
         public fn second() -> int { let t = self.ts; return %{ grav_tm_field(t, 5) %} as int; }
         // ISO weekday: 1 = Monday … 7 = Sunday.
         public fn weekday() -> int { let t = self.ts; return %{ grav_tm_field(t, 6) %} as int; }
+        // The day of the year, 1..366.
         public fn dayOfYear() -> int { let t = self.ts; return %{ grav_tm_field(t, 7) %} as int; }
 
         // strftime patterns, e.g. "%Y-%m-%d %H:%M".
         public fn format(fmt: string) -> string { let t = self.ts; return %{ grav_strftime(t, fmt) %} as string; }
+        // The date as "YYYY-MM-DD".
         public fn date() -> string { return self.format("%Y-%m-%d"); }
+        // The time of day as "HH:MM:SS".
         public fn time() -> string { return self.format("%H:%M:%S"); }
+        // "YYYY-MM-DD HH:MM:SS".
         fn toString() -> string { return self.format("%Y-%m-%d %H:%M:%S"); }
 
+        // A moment `s` seconds later (earlier when negative).
         public fn addSeconds(s: long) -> DateTime { return new DateTime(self.ts + s); }
+        // A moment `m` minutes later.
         public fn addMinutes(m: int) -> DateTime { return new DateTime(self.ts + (m as long) * 60); }
+        // A moment `hours` hours later.
         public fn addHours(hours: int) -> DateTime { return new DateTime(self.ts + (hours as long) * 3600); }
+        // A moment `days` days later (24-hour days).
         public fn addDays(days: int) -> DateTime { return new DateTime(self.ts + (days as long) * 86400); }
         // Seconds from this instant to `other` (negative if `other` is earlier).
         public fn secondsUntil(other: DateTime) -> long { return other.ts - self.ts; }
+        // Whole days from this moment to `other` (negative when `other` is earlier).
         public fn daysUntil(other: DateTime) -> long { return (other.ts - self.ts) / 86400; }
 
+        // Whether both are the same moment.
         fn operator==(o: DateTime) -> bool { return self.ts == o.ts; }
+        // Whether this moment is earlier than `o`.
         fn operator<(o: DateTime) -> bool { return self.ts < o.ts; }
+        // Whether this moment is not later than `o`.
         fn operator<=(o: DateTime) -> bool { return self.ts <= o.ts; }
+        // Whether this moment is later than `o`.
         fn operator>(o: DateTime) -> bool { return self.ts > o.ts; }
+        // Whether this moment is not earlier than `o`.
         fn operator>=(o: DateTime) -> bool { return self.ts >= o.ts; }
     }
 

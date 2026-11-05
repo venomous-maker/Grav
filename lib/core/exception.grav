@@ -10,55 +10,68 @@ namespace std.core {
     class Exception {
         protected msg: string
         constructor(m: string) { self.msg = m; }
+        // The message the exception was created with.
         public fn message() -> string { return self.msg; }
+        // The exception's kind ("ValueError", ...): its class name for the standard ones.
         public fn kind() -> string { return "Exception"; }
+        // "Kind: message" — what an uncaught exception prints.
         public fn describe() -> string { return "${self.kind()}: ${self.msg}"; }
+        // The same as describe().
         fn toString() -> string { return self.describe(); }
     }
 
     // A value is unsuitable (bad argument, unparsable input).
     class ValueError extends Exception {
         constructor(m: string) { super(m); }
+        // "ValueError".
         public fn kind() -> string { return "ValueError"; }
     }
     // A value has the wrong type (e.g. an `any` holding something unexpected).
     class TypeError extends Exception {
         constructor(m: string) { super(m); }
+        // "TypeError".
         public fn kind() -> string { return "TypeError"; }
     }
     // An index or position is out of range.
     class IndexError extends Exception {
         constructor(m: string) { super(m); }
+        // "IndexError".
         public fn kind() -> string { return "IndexError"; }
     }
     // A key, file, or record does not exist.
     class NotFound extends Exception {
         constructor(m: string) { super(m); }
+        // "NotFound".
         public fn kind() -> string { return "NotFound"; }
     }
     // Reading or writing a file, pipe, or device failed.
     class IOError extends Exception {
         constructor(m: string) { super(m); }
+        // "IOError".
         public fn kind() -> string { return "IOError"; }
     }
     // An operation is not valid in the object's current state.
     class StateError extends Exception {
         constructor(m: string) { super(m); }
+        // "StateError".
         public fn kind() -> string { return "StateError"; }
     }
     // Something took longer than allowed.
     class TimeoutError extends Exception {
         constructor(m: string) { super(m); }
+        // "TimeoutError".
         public fn kind() -> string { return "TimeoutError"; }
     }
     // Integer division (or `%`) by zero.
     class ArithmeticError extends Exception {
         constructor(m: string) { super(m); }
+        // "ArithmeticError".
         public fn kind() -> string { return "ArithmeticError"; }
     }
     // Any other failure while the program runs.
     class RuntimeError extends Exception {
         constructor(m: string) { super(m); }
+        // "RuntimeError".
         public fn kind() -> string { return "RuntimeError"; }
     }
 

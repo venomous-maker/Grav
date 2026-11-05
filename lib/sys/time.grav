@@ -23,18 +23,26 @@ namespace std.sys {
 
     class Time {
         static fn now() -> long { return %{ grav_clock_ns(0) / 1000000000LL %} as long; }   // unix seconds
+        // Milliseconds since 1970-01-01 00:00 UTC (wall clock).
         static fn nowMs() -> long { return %{ grav_clock_ns(0) / 1000000LL %} as long; }
+        // Milliseconds on a clock that never goes back (for measuring durations).
         static fn monotonicMs() -> long { return %{ grav_clock_ns(1) / 1000000LL %} as long; }
+        // Nanoseconds on a clock that never goes back.
         static fn monotonicNs() -> long { return %{ grav_clock_ns(1) %} as long; }
+        // Pauses the calling thread for `ms` milliseconds.
         static fn sleepMs(ms: long) { %{ grav_sleep_ms(ms); %}; }
     }
 
     class Stopwatch {
         private startNs: long
         constructor() { self.startNs = Time.monotonicNs(); }
+        // Starts measuring again from now.
         public fn reset() { self.startNs = Time.monotonicNs(); }
+        // Nanoseconds since the stopwatch was created or reset.
         public fn elapsedNs() -> long { return Time.monotonicNs() - self.startNs; }
+        // Milliseconds since the stopwatch was created or reset.
         public fn elapsedMs() -> long { return self.elapsedNs() / 1000000; }
+        // Seconds since the stopwatch was created or reset.
         public fn elapsedSeconds() -> double { return (self.elapsedNs() as double) / 1000000000.0; }
     }
 

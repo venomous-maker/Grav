@@ -21,25 +21,43 @@ namespace std.core {
 
     class Sort {
         // ── natural order (ascending; Descending reverses it) ──────────────────
+        // Sorts in place, smallest first.
         static fn sort(xs: Array<int>) { xs.sortBy(fn(a: int, b: int) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // Sorts in place, largest first.
         static fn sortDescending(xs: Array<int>) { xs.sortBy(fn(a: int, b: int) -> int { return b < a ? -1 : (b > a ? 1 : 0); }) }
+        // Whether the elements are in ascending order.
         static fn isSorted(xs: Array<int>) -> bool { return Sort.isSortedBy(xs, fn(a: int, b: int) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // In a sorted array: the index of key, or -(insertion point) - 1.
         static fn binarySearch(xs: Array<int>, key: int) -> int { return Sort.binarySearchBy(xs, key, fn(a: int, b: int) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // Sorts in place, smallest first.
         static fn sort(xs: Array<long>) { xs.sortBy(fn(a: long, b: long) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // Sorts in place, largest first.
         static fn sortDescending(xs: Array<long>) { xs.sortBy(fn(a: long, b: long) -> int { return b < a ? -1 : (b > a ? 1 : 0); }) }
+        // Whether the elements are in ascending order.
         static fn isSorted(xs: Array<long>) -> bool { return Sort.isSortedBy(xs, fn(a: long, b: long) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // In a sorted array: the index of key, or -(insertion point) - 1.
         static fn binarySearch(xs: Array<long>, key: long) -> int { return Sort.binarySearchBy(xs, key, fn(a: long, b: long) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // Sorts in place, smallest first.
         static fn sort(xs: Array<float>) { xs.sortBy(fn(a: float, b: float) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // Sorts in place, largest first.
         static fn sortDescending(xs: Array<float>) { xs.sortBy(fn(a: float, b: float) -> int { return b < a ? -1 : (b > a ? 1 : 0); }) }
+        // Whether the elements are in ascending order.
         static fn isSorted(xs: Array<float>) -> bool { return Sort.isSortedBy(xs, fn(a: float, b: float) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // In a sorted array: the index of key, or -(insertion point) - 1.
         static fn binarySearch(xs: Array<float>, key: float) -> int { return Sort.binarySearchBy(xs, key, fn(a: float, b: float) -> int { return a < b ? -1 : (a > b ? 1 : 0); }) }
+        // Sorts in place, smallest first (strings byte by byte).
         static fn sort(xs: Array<string>) { xs.sortBy(fn(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }) }
+        // Sorts in place, largest first.
         static fn sortDescending(xs: Array<string>) { xs.sortBy(fn(a: string, b: string) -> int { return %{ strcmp(b, a) %} as int; }) }
+        // Whether the elements are in ascending order.
         static fn isSorted(xs: Array<string>) -> bool { return Sort.isSortedBy(xs, fn(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }) }
+        // In a sorted array: the index of key, or -(insertion point) - 1.
         static fn binarySearch(xs: Array<string>, key: string) -> int { return Sort.binarySearchBy(xs, key, fn(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }) }
 
         // ── any type, by a comparison: cmp(a, b) < 0 puts a first, > 0 puts b first
+        // Sorts in place (stable): cmp(a, b) < 0 puts a first.
         static fn sortBy<T>(xs: Array<T>, cmp: fn(T, T) -> int) { xs.sortBy(cmp) }
+        // Whether the elements are in order by cmp (no element sorts before the one ahead of it).
         static fn isSortedBy<T>(xs: Array<T>, cmp: fn(T, T) -> int) -> bool {
             for (i in 1..xs.size()) { if (cmp(xs.get(i - 1), xs.get(i)) > 0) { return false } }
             return true

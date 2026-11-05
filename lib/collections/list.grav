@@ -8,37 +8,63 @@ namespace std.collections {
         constructor() { self.items = new Array<T>(); }
         destructor() { free(self.items); }
 
+        // Appends an element at the end.
         public fn add(item: T) { self.items.push(item); }
+        // Appends every element of another list.
         public fn addAll(other: List<T>) { for (x in other) { self.items.push(x); } }
+        // Inserts an element before `index`.
         public fn insert(index: int, item: T) { self.items.insert(index, item); }
+        // The element at index (IndexError when out of range).
         public fn get(index: int) -> T { return self.items.get(index); }
+        // Replaces the element at index.
         public fn set(index: int, item: T) { self.items.set(index, item); }
+        // `list[i]`: the element at index i.
         fn operator[](index: int) -> T { return self.items.get(index); }
+        // `list[i] = v`: replaces the element at index i.
         fn operator[]=(index: int, item: T) { self.items.set(index, item); }
+        // The first element (IndexError when empty).
         public fn first() -> T { return self.items.first(); }
+        // The last element (IndexError when empty).
         public fn last() -> T { return self.items.last(); }
+        // Removes and returns the element at index.
         public fn removeAt(index: int) -> T { return self.items.removeAt(index); }
+        // Removes the first element equal to `item`; whether one was found.
         public fn remove(item: T) -> bool { return self.items.remove(item); }
+        // Removes every element `pred` holds for; how many were removed.
         public fn removeWhere(pred: fn(T) -> bool) -> int { return self.items.removeWhere(pred); }
+        // The index of the first element equal to `item`, or -1.
         public fn indexOf(item: T) -> int { return self.items.indexOf(item); }
+        // Whether some element equals `item`.
         public fn contains(item: T) -> bool { return self.items.contains(item); }
+        // The number of elements.
         public fn size() -> int { return self.items.size(); }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.items.size(); }
+        // Whether the list has no elements.
         public fn isEmpty() -> bool { return self.items.isEmpty(); }
+        // Removes every element.
         public fn clear() { self.items.clear(); }
+        // Reverses the order of the elements in place.
         public fn reverse() { self.items.reverse(); }
+        // Calls f on each element, in order.
         public fn forEach(f: fn(T)) { self.items.forEach(f); }
+        // A new list of the elements `keep` returns true for.
         public fn filter(keep: fn(T) -> bool) -> List<T> {
             let out = new List<T>();
             for (x in self.items) { if (keep(x)) { out.add(x); } }
             return out;
         }
+        // Whether `pred` holds for at least one element.
         public fn any(pred: fn(T) -> bool) -> bool { return self.items.any(pred); }
+        // Whether `pred` holds for every element (true when empty).
         public fn all(pred: fn(T) -> bool) -> bool { return self.items.all(pred); }
+        // How many elements `pred` holds for.
         public fn countWhere(pred: fn(T) -> bool) -> int { return self.items.countWhere(pred); }
+        // Sorts in place (stable): cmp(a, b) < 0 puts a first.
         public fn sortBy(cmp: fn(T, T) -> int) { self.items.sortBy(cmp); }
         // As text: [1, 2, 3] (strings in quotes).
         public fn toString() -> string { return self.items.toString() }
+        // The elements as a new Array.
         public fn toArray() -> Array<T> { return self.items.copy(); }
     }
 

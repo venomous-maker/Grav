@@ -69,6 +69,7 @@ namespace std.net {
             if (host == "") { throw new ValueError("URL has no host: " + text); }
             return new Url(scheme, host, port, path);
         }
+        // The URL as text (the port is left out when it is the scheme's default).
         fn toString() -> string {
             let defaultPort = self.scheme == "https" ? 443 : 80;
             let p = self.port == defaultPort ? "" : ":${self.port}";
@@ -142,6 +143,7 @@ namespace std.net {
             let i = self.find(name);
             return i < 0 ? "" : self.values.get(i);
         }
+        // Whether a header named `name` is present (names ignore case).
         public fn has(name: string) -> bool { return self.find(name) >= 0; }
         // Replace every value of `name` with one value.
         public fn set(name: string, value: string) {
@@ -150,6 +152,7 @@ namespace std.net {
         }
         // Add a value (keeps existing ones, e.g. several Set-Cookie headers).
         public fn add(name: string, value: string) { self.names.push(name); self.values.push(value); }
+        // Removes every header named `name`.
         public fn remove(name: string) {
             let i = self.find(name);
             while (i >= 0) {
@@ -158,9 +161,13 @@ namespace std.net {
                 i = self.find(name);
             }
         }
+        // The number of header lines.
         public fn size() -> int { return self.names.size(); }
+        // The name of header line i.
         public fn nameAt(i: int) -> string { return self.names.get(i); }
+        // The value of header line i.
         public fn valueAt(i: int) -> string { return self.values.get(i); }
+        // Calls f with each header's name and value, in order.
         public fn forEach(f: fn(string, string)) {
             for (i, n in self.names) { f(n, self.values.get(i)); }
         }
@@ -192,6 +199,7 @@ namespace std.net {
             self.queryMap = null;
             self.params = new HashMap<string, string>();
         }
+        // The value of header `name` ("" when absent).
         public fn header(name: string) -> string { return self.headers.get(name); }
         // The body as text.
         public fn body() -> string { return self.bodyBytes.toString(); }
@@ -199,12 +207,14 @@ namespace std.net {
         public fn json() -> JsonValue { return Json.parse(self.body()); }
         // A route parameter: for the route "/users/:id", param("id").
         public fn param(name: string) -> string { return self.params.getOr(name, ""); }
+        // Sets a path parameter (as a route pattern's `:name` would).
         public fn setParam(name: string, value: string) { self.params.put(name, value); }
         // A query-string value ("" when absent).
         public fn query(name: string) -> string {
             if (self.queryMap == null) { self.queryMap = Url.parseQuery(self.queryText); }
             return self.queryMap.getOr(name, "");
         }
+        // Whether the query string has `name`.
         public fn hasQuery(name: string) -> bool {
             if (self.queryMap == null) { self.queryMap = Url.parseQuery(self.queryText); }
             return self.queryMap.containsKey(name);
@@ -231,24 +241,32 @@ namespace std.net {
             self.bodyBytes = new Bytes();
         }
         // ── builders ───────────────────────────────────────────────────────────
+        // A 200 response with a plain-text body.
         static fn text(body: string) -> HttpResponse { return HttpResponse.of(200, "text/plain; charset=utf-8", body); }
+        // A 200 response with an HTML body.
         static fn html(body: string) -> HttpResponse { return HttpResponse.of(200, "text/html; charset=utf-8", body); }
+        // A 200 response with a JSON body.
         static fn json(value: JsonValue) -> HttpResponse {
             return HttpResponse.of(200, "application/json", value.toJson());
         }
+        // A response with the given status, Content-Type and body.
         static fn of(status: int, contentType: string, body: string) -> HttpResponse {
             let r = new HttpResponse(status);
             r.headers.set("Content-Type", contentType);
             r.bodyBytes.appendString(body);
             return r;
         }
+        // A response with the given status and its reason phrase as the body.
         static fn status(code: int) -> HttpResponse {
             return HttpResponse.of(code, "text/plain; charset=utf-8", HttpResponse.reason(code));
         }
+        // A 404 Not Found response.
         static fn notFound() -> HttpResponse { return HttpResponse.status(404); }
+        // A 400 Bad Request response with a message.
         static fn badRequest(message: string) -> HttpResponse {
             return HttpResponse.of(400, "text/plain; charset=utf-8", message);
         }
+        // A 302 redirect to `location`.
         static fn redirect(location: string) -> HttpResponse {
             let r = HttpResponse.status(302);
             r.headers.set("Location", location);
@@ -256,15 +274,22 @@ namespace std.net {
         }
         // Chainable tweaks.
         public fn header(name: string, value: string) -> HttpResponse { self.headers.set(name, value); return self; }
+        // Changes the status code; returns this response.
         public fn withStatus(code: int) -> HttpResponse { self.status = code; return self; }
 
         // ── reading ────────────────────────────────────────────────────────────
+        // Whether the status is 2xx.
         public fn ok() -> bool { return self.status >= 200 && self.status < 300; }
+        // The body as text.
         public fn body() -> string { return self.bodyBytes.toString(); }
+        // The body parsed as JSON (ValueError when it is not JSON).
         public fn json() -> JsonValue { return Json.parse(self.body()); }
+        // The value of response header `name` ("" when absent).
         public fn getHeader(name: string) -> string { return self.headers.get(name); }
+        // "HttpResponse(404 Not Found)".
         fn toString() -> string { return "HttpResponse(${self.status} ${HttpResponse.reason(self.status)})"; }
 
+        // The reason phrase for a status code ("Not Found" for 404).
         static fn reason(code: int) -> string {
             switch (code) {
                 case 100: return "Continue"
@@ -356,6 +381,7 @@ namespace std.net {
             }
             return out;
         }
+        // Writes a request or status line and the headers to the connection.
         static fn writeHead(conn: TcpStream, firstLine: string, headers: Headers) {
             let sb = new StringBuilder();
             sb.append(firstLine).append("\r\n");
@@ -385,6 +411,7 @@ namespace std.net {
             self.parts = Route.split(pattern);
             self.isUpgrade = false;
         }
+        // The non-empty segments of a path ("/a/b/" gives "a", "b").
         static fn split(path: string) -> Array<string> {
             return Str.split(path, "/").filter(fn(s: string) => s != "");
         }
@@ -442,16 +469,22 @@ namespace std.net {
         }
 
         // ── routes ─────────────────────────────────────────────────────────────
+        // Adds a handler for requests with this method whose path matches `pattern` (`:name` captures a segment); returns this server.
         public fn route(method: string, pattern: string, handler: fn(HttpRequest) -> HttpResponse) -> HttpServer {
             let r = new Route(Str.upper(method), pattern);
             r.handler = handler;
             self.routes.push(r);
             return self;
         }
+        // Handles GET requests matching `pattern`; returns this server.
         public fn get(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("GET", pattern, h); }
+        // Handles POST requests matching `pattern`; returns this server.
         public fn post(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("POST", pattern, h); }
+        // Handles PUT requests matching `pattern`; returns this server.
         public fn put(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("PUT", pattern, h); }
+        // Handles PATCH requests matching `pattern`; returns this server.
         public fn patch(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("PATCH", pattern, h); }
+        // Handles DELETE requests matching `pattern`; returns this server.
         public fn delete(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("DELETE", pattern, h); }
         // Any method.
         public fn any(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("*", pattern, h); }
@@ -468,6 +501,7 @@ namespace std.net {
         public fn use(f: fn(HttpRequest) -> HttpResponse) -> HttpServer { self.middleware.push(f); return self; }
         // Print one line per request ("GET /path -> 200").
         public fn logRequests(on: bool) -> HttpServer { self.log = on; return self; }
+        // Whether a panic in a handler is answered with a 500 instead of stopping the server (on by default).
         public fn withPanicRecovery(on: bool) -> HttpServer { self.recoverPanics = on; return self; }
 
         // ── running ────────────────────────────────────────────────────────────
@@ -476,6 +510,7 @@ namespace std.net {
             self.bind(host, port);
             self.acceptLoop();
         }
+        // Serves on every interface at `port`, blocking until stop().
         public fn listen(port: int) { self.listen("*", port); }
         // Serve on a background thread and return at once (port 0 picks a free port).
         public fn start(host: string, port: int) -> HttpServer {
@@ -483,6 +518,7 @@ namespace std.net {
             self.acceptThread = Thread.spawn("http-accept", fn() { self.acceptLoop(); });
             return self;
         }
+        // Serves on 127.0.0.1:port on a background thread and returns at once (port 0 picks a free port).
         public fn start(port: int) -> HttpServer { return self.start("127.0.0.1", port); }
         // The port being served.
         public fn port() -> int { return self.listener == null ? 0 : self.listener.port(); }
@@ -635,17 +671,23 @@ namespace std.net {
         // One-off GET with default settings.
         static fn fetch(url: string) -> HttpResponse { return new HttpClient().get(url); }
 
+        // Sends a GET request.
         public fn get(url: string) -> HttpResponse { return self.request("GET", url, "", ""); }
+        // Sends a DELETE request.
         public fn delete(url: string) -> HttpResponse { return self.request("DELETE", url, "", ""); }
+        // Sends a POST request with a body of the given Content-Type.
         public fn post(url: string, body: string, contentType: string) -> HttpResponse {
             return self.request("POST", url, body, contentType);
         }
+        // Sends a PUT request with a body of the given Content-Type.
         public fn put(url: string, body: string, contentType: string) -> HttpResponse {
             return self.request("PUT", url, body, contentType);
         }
+        // Sends a POST request with a JSON body.
         public fn postJson(url: string, value: JsonValue) -> HttpResponse {
             return self.request("POST", url, value.toJson(), "application/json");
         }
+        // Sends a POST request with form fields (application/x-www-form-urlencoded).
         public fn postForm(url: string, fields: HashMap<string, string>) -> HttpResponse {
             let parts = new Array<string>();
             fields.forEach(fn(k: string, v: string) { parts.push(Url.encode(k) + "=" + Url.encode(v)); });

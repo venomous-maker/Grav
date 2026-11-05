@@ -40,8 +40,10 @@ namespace std.io {
             let e = Path.extension(path);
             return Str.substring(path, 0, Str.length(path) - Str.length(e)) + ext;
         }
+        // Whether the path starts at the root ("/").
         static fn isAbsolute(path: string) -> bool { return Str.startsWith(path, "/"); }
 
+        // The parts joined with "/" (an absolute part starts over; empty parts are skipped).
         static fn join(parts: Array<string>) -> string {
             let out = "";
             for (part in parts) {
@@ -52,6 +54,7 @@ namespace std.io {
             }
             return out;
         }
+        // `a` and `b` joined with "/".
         static fn combine(a: string, b: string) -> string {
             let parts = new Array<string>();
             parts.push(a); parts.push(b);
@@ -59,6 +62,7 @@ namespace std.io {
             free(parts);
             return r;
         }
+        // `a`, `b` and `c` joined with "/".
         static fn combine(a: string, b: string, c: string) -> string { return Path.combine(Path.combine(a, b), c); }
 
         // Resolves "." and ".." and repeated slashes: "a/./b/../c//d" -> "a/c/d".

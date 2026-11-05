@@ -16,15 +16,23 @@ namespace std.collections {
             self.items.push(item);
             return true;
         }
+        // Whether the set has `item` (==).
         public fn contains(item: T) -> bool { return self.items.contains(item); }
+        // Removes `item`; whether it was there.
         public fn remove(item: T) -> bool { return self.items.remove(item); }
+        // The number of elements.
         public fn size() -> int { return self.items.size(); }
+        // The number of elements (same as size()).
         public fn length() -> int { return self.items.size(); }
+        // Whether the set is empty.
         public fn isEmpty() -> bool { return self.items.isEmpty(); }
+        // Removes every element.
         public fn clear() { self.items.clear(); }
         // Elements in insertion order (index-based access for iteration).
         public fn get(index: int) -> T { return self.items.get(index); }
+        // The element at index (insertion order).
         public fn at(index: int) -> T { return self.items.get(index); }
+        // Calls f on each element, in insertion order.
         public fn forEach(f: fn(T)) { self.items.forEach(f); }
         // As text: {1, 2, 3} (strings in quotes).
         public fn toString() -> string {
@@ -36,24 +44,29 @@ namespace std.collections {
             }
             return out + "}"
         }
+        // The elements as a new Array, in insertion order.
         public fn toArray() -> Array<T> { return self.items.copy(); }
 
+        // A new set with the elements of both sets.
         public fn union(other: Set<T>) -> Set<T> {
             let r = new Set<T>();
             for (x in self.items) { r.add(x); }
             for (i in 0..other.size()) { r.add(other.get(i)); }
             return r;
         }
+        // A new set with the elements in both sets.
         public fn intersect(other: Set<T>) -> Set<T> {
             let r = new Set<T>();
             for (x in self.items) { if (other.contains(x)) { r.add(x); } }
             return r;
         }
+        // A new set with the elements of this set that are not in `other`.
         public fn difference(other: Set<T>) -> Set<T> {
             let r = new Set<T>();
             for (x in self.items) { if (!other.contains(x)) { r.add(x); } }
             return r;
         }
+        // Whether every element of this set is in `other`.
         public fn isSubsetOf(other: Set<T>) -> bool {
             for (x in self.items) { if (!other.contains(x)) { return false; } }
             return true;
