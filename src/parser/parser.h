@@ -79,6 +79,7 @@ private:
     StmtPtr parseSwitch(bool asExpr = false); // also handles 'match' (asExpr: a match expression)
     Block parseArmValue();
     StmtPtr parseDestructure(const Token &kw);
+    StmtPtr parseLocalFunction();
     bool destructureAhead() const;
     void parseStructMethod(StructDecl &st);
     std::vector<DeclPtr> pendingDecls_; // declarations made alongside the last one (struct methods)

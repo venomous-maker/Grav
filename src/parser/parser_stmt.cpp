@@ -31,6 +31,9 @@ StmtPtr Parser::parseStatement() {
         case TokenType::For: return parseFor();
         case TokenType::Switch:
         case TokenType::Match: return parseSwitch();
+        case TokenType::Fn: // `fn name(...) { }` inside a function: a local function
+            if (peekAt(1).type == TokenType::Identifier) return parseLocalFunction();
+            return parseExprOrAssign();
         case TokenType::Try: return parseTry();
         case TokenType::Throw: return parseThrow();
         case TokenType::Break: {
@@ -396,6 +399,32 @@ StmtPtr Parser::parseDestructure(const Token &kw) {
         pendingStmts_.push_back(std::move(let));
     }
     return hidden;
+}
+
+// A function declared inside a block: `const name = fn(params) -> R { body }`,
+// which can call itself (and see the block's variables, captured like a lambda's).
+StmtPtr Parser::parseLocalFunction() {
+    const Token &kw = advance(); // 'fn'
+    const Token &name = expect(TokenType::Identifier, "after 'fn'");
+    if (check(TokenType::Less)) fail(peek(), "a function inside a block cannot have type parameters");
+    auto lam = std::make_unique<LambdaExpr>();
+    lam->line = kw.line; lam->col = kw.col;
+    lam->params = parseParams(/*allowVariadic=*/false);
+    for (const auto &p : lam->params) {
+        if (p.defaultValue) fail(name, "a function inside a block cannot have default values");
+        lam->paramTyped.push_back(true);
+    }
+    lam->hasReturnType = true;
+    lam->returnType = matchToken(TokenType::Arrow) ? parseType("as the return type") : TypeRef::prim(TypeRef::Kind::Void);
+    lam->body = parseBlock();
+    lam->selfName = name.lexeme;
+    auto let = std::make_unique<LetStmt>();
+    let->line = kw.line; let->col = kw.col;
+    let->name = name.lexeme;
+    let->isConst = true;
+    let->quietUnused = true; // like a function, it may be declared and not used
+    let->init = std::move(lam);
+    return let;
 }
 
 StmtPtr Parser::parseLet() {
