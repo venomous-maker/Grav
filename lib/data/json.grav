@@ -178,6 +178,12 @@ namespace std.data {
         out[o++] = '"'; out[o] = 0;
         return out;
     }
+    /* Whether s needs no escaping inside a JSON string (most keys and values). */
+    static int grav_json_plain(const char* s) {
+        for (const unsigned char* p = (const unsigned char*)s; *p; p++)
+            if (*p < 0x20 || *p == '"' || *p == '\\') return 0;
+        return 1;
+    }
     /* Shortest text that reads back as the same double. */
     static const char* grav_json_double(double d) {
         char* b = grav_str_alloc(32);
@@ -207,6 +213,8 @@ namespace std.data {
         private index: HashMap<string, int>
 
         constructor() { self.init(JsonKind.Null); }
+        // A new empty value of the given kind (null, false, 0, "", [], {}).
+        constructor(kind: JsonKind) { self.init(kind); }
         private fn init(kind: JsonKind) {
             self.k = kind;
             self.b = false;
@@ -221,11 +229,7 @@ namespace std.data {
             if (kind == JsonKind.Object) { self.keyList = new Array<string>(); }
         }
         // A new empty value of the given kind (null, false, 0, "", [], {}).
-        static fn ofKind(kind: JsonKind) -> JsonValue {
-            let v = new JsonValue();
-            v.init(kind);
-            return v;
-        }
+        static fn ofKind(kind: JsonKind) -> JsonValue { return new JsonValue(kind); }
         // A JSON boolean.
         static fn ofBool(b: bool) -> JsonValue { let v = JsonValue.ofKind(JsonKind.Bool); v.b = b; return v; }
         // A JSON number holding an integer.
@@ -437,6 +441,11 @@ namespace std.data {
             sb.appendChar(10);
             sb.repeat(" ", indent * depth);
         }
+        // A JSON string literal, without building a quoted copy first unless escapes are needed.
+        private static fn writeQuoted(sb: StringBuilder, s: string) {
+            if (%{ grav_json_plain(s) %} as bool) { sb.appendChar(34).append(s).appendChar(34); }
+            else { sb.append(%{ grav_json_quote(s) %} as string); }
+        }
         private fn write(sb: StringBuilder, indent: int, depth: int) {
             match (self.k) {
                 case JsonKind.Null: sb.append("null")
@@ -444,7 +453,7 @@ namespace std.data {
                 case JsonKind.Number: {
                     if (self.isInt) { sb.appendInt(self.i) } else { sb.append(%{ grav_json_double(self->n) %} as string) }
                 }
-                case JsonKind.String: sb.append(%{ grav_json_quote(self->s) %} as string)
+                case JsonKind.String: JsonValue.writeQuoted(sb, self.s)
                 case JsonKind.Array: {
                     sb.appendChar(91);
                     for (j, v in self.items) {
@@ -460,8 +469,7 @@ namespace std.data {
                     for (j, v in self.items) {
                         if (j > 0) { sb.appendChar(44) }
                         self.newline(sb, indent, depth + 1);
-                        let key = self.keyList.get(j);
-                        sb.append(%{ grav_json_quote(key) %} as string);
+                        JsonValue.writeQuoted(sb, self.keyList.get(j));
                         sb.append(indent < 0 ? ":" : ": ");
                         v.write(sb, indent, depth + 1);
                     }

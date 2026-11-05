@@ -93,6 +93,7 @@ One JSON value: null, a boolean, a number, a string, an array, or an object.
 **Constructors**
 
 - `new JsonValue()`
+- `new JsonValue(kind: JsonKind)` — A new empty value of the given kind (null, false, 0, "", [], {}).
 
 **Static members**
 
