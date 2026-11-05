@@ -36,11 +36,23 @@ namespace std.text {
        start and end (-1 when the group did not take part). Returns whether it matched. */
     static int grav_re_search(void* re, const char* s, int from, int* out) {
         regmatch_t m[GRAV_RE_SLOTS];
+    #ifdef REG_STARTEND
+        /* Bounds given up front: regexec does not rescan the rest of the text with
+           strlen on every call, so finding every match stays linear. */
+        m[0].rm_so = from;
+        m[0].rm_eo = (regoff_t)grav_str_len(s);
+        if (regexec((regex_t*)re, s, GRAV_RE_SLOTS, m, REG_STARTEND | (from > 0 ? REG_NOTBOL : 0)) != 0) return 0;
+        for (int i = 0; i < GRAV_RE_SLOTS; i++) {
+            out[2 * i] = m[i].rm_so < 0 ? -1 : (int)m[i].rm_so;
+            out[2 * i + 1] = m[i].rm_eo < 0 ? -1 : (int)m[i].rm_eo;
+        }
+    #else
         if (regexec((regex_t*)re, s + from, GRAV_RE_SLOTS, m, from > 0 ? REG_NOTBOL : 0) != 0) return 0;
         for (int i = 0; i < GRAV_RE_SLOTS; i++) {
             out[2 * i] = m[i].rm_so < 0 ? -1 : (int)m[i].rm_so + from;
             out[2 * i + 1] = m[i].rm_eo < 0 ? -1 : (int)m[i].rm_eo + from;
         }
+    #endif
         return 1;
     }
     %}
@@ -94,7 +106,16 @@ namespace std.text {
         }
 
         // Whether the pattern matches somewhere in `s`.
-        public fn test(s: string) -> bool { return self.find(s) != null }
+        public fn test(s: string) -> bool { return self.at(s, 0) >= 0 }
+        // Start offset of the first match at or after `from` (-1 if none), with its end in
+        // self.lastEnd: the fast path for test and count, which need no match objects.
+        private fn at(s: string, from: int) -> int {
+            let offs: int[20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            if (!(%{ grav_re_search(self->re, s, from, offs.data) %} as bool)) { return -1 }
+            self.lastEnd = offs[1]
+            return offs[0]
+        }
+        private lastEnd: int
         // Whether the pattern matches the whole of `s`.
         public fn matches(s: string) -> bool {
             let m = self.find(s)
@@ -132,7 +153,18 @@ namespace std.text {
             return self.findAll(s).mapTo(fn(m: RegexMatch) => m.text)
         }
         // The number of non-overlapping matches.
-        public fn count(s: string) -> int { return self.findAll(s).size() }
+        public fn count(s: string) -> int {
+            let n = 0
+            let pos = 0
+            let len = s.length
+            while (pos <= len) {
+                let start = self.at(s, pos)
+                if (start < 0) { break }
+                n += 1
+                pos = self.lastEnd > start ? self.lastEnd : self.lastEnd + 1
+            }
+            return n
+        }
 
         // `s` with the first match replaced by `replacement`, where $0 is the whole
         // match, $1..$9 are groups and $$ is a dollar sign.
