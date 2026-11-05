@@ -1,0 +1,157 @@
+// lib/sys/log.grav — leveled logging to standard error or a file.
+//
+//   Log.info("server started")                  // 2024-05-01 12:00:00 INFO  server started
+//   Log.setLevel(LogLevel.Debug)
+//   let db = Log.named("db").with("host", "localhost")
+//   db.warn("slow query")                       // ... WARN  [db] slow query host=localhost
+//
+// Each line is written whole (lines from different threads never mix) and flushed.
+// The starting level is Info, or the GRAV_LOG environment variable (debug, info,
+// warn, error, off).
+import "../core/exception.grav"
+import "../text/strbuf.grav"
+import "../text/string.grav"
+import "datetime.grav"
+
+namespace std.sys {
+
+    %{
+    #include <stdio.h>
+    #include <stdlib.h>
+    static void grav_log_write(void* f, const char* line) {
+        FILE* out = f ? (FILE*)f : stderr;
+        fflush(stdout);
+        flockfile(out); fputs(line, out); fputc('\n', out); fflush(out); funlockfile(out);
+    }
+    static void* grav_log_open(const char* path) { return fopen(path, "a"); }
+    static void grav_log_close(void* f) { if (f) fclose((FILE*)f); }
+    %}
+
+    // How important a log message is. A logger shows messages at its level and above.
+    enum LogLevel { Debug, Info, Warn, Error, Off }
+
+    // A named logger with its own level, destination and fields.
+    class Logger {
+        // The logger's name, shown in brackets ("" for none).
+        readonly name: string
+        // Messages below this level are skipped.
+        public level: LogLevel
+        // Whether lines start with the local date and time (default true).
+        public timestamps: bool
+        private fields: string
+        private file: byte*
+        private ownsFile: bool
+        private parent: Logger       // keeps a shared log file open while children use it
+
+        // A logger writing to standard error at the default level.
+        constructor(name: string) {
+            self.name = name
+            self.level = Log.defaultLevel()
+            self.timestamps = true
+            self.fields = ""
+            self.file = null
+            self.ownsFile = false
+            self.parent = null
+        }
+        destructor() { if (self.ownsFile) { %{ grav_log_close(self->file); %}; } }
+
+        // Also send this logger's lines to the file at `path` (appending) instead of
+        // standard error; IOError when it cannot be opened.
+        public fn toFile(path: string) -> Logger {
+            let f = %{ (unsigned char*)grav_log_open(path) %} as byte*
+            if (f == null) { throw new IOError("cannot open log file '${path}'") }
+            if (self.ownsFile) { %{ grav_log_close(self->file); %}; }
+            self.file = f
+            self.ownsFile = true
+            return self
+        }
+        // Sets the level; returns the logger.
+        public fn withLevel(l: LogLevel) -> Logger { self.level = l; return self }
+        // A copy of this logger that adds `key=value` to every line (same level and destination).
+        public fn with(key: string, value: any) -> Logger {
+            let child = new Logger(self.name)
+            child.level = self.level
+            child.timestamps = self.timestamps
+            child.file = self.file
+            child.parent = self
+            child.fields = self.fields + " " + key + "=" + Logger.fieldText(value)
+            return child
+        }
+        private static fn fieldText(v: any) -> string {
+            let s = str(v)
+            if (Str.contains(s, " ") || Str.contains(s, "\"") || s == "") { return __repr(s) }
+            return s
+        }
+        // Whether a message at `l` would be written.
+        public fn enabled(l: LogLevel) -> bool { return l != LogLevel.Off && int(l) >= int(self.level) }
+
+        // Logs at Debug level.
+        public fn debug(message: string) { self.write(LogLevel.Debug, message) }
+        // Logs at Info level.
+        public fn info(message: string) { self.write(LogLevel.Info, message) }
+        // Logs at Warn level.
+        public fn warn(message: string) { self.write(LogLevel.Warn, message) }
+        // Logs at Error level.
+        public fn error(message: string) { self.write(LogLevel.Error, message) }
+        // Logs an exception at Error level: the message, then the exception's describe().
+        public fn error(message: string, e: Exception) { self.write(LogLevel.Error, message + ": " + e.describe()) }
+
+        // Writes one line at level `l` (when enabled).
+        public fn write(l: LogLevel, message: string) {
+            if (!self.enabled(l)) { return }
+            let sb = new StringBuilder()
+            if (self.timestamps) { sb.append(DateTime.now().toString()).append(" ") }
+            sb.append(Logger.levelName(l))
+            if (self.name != "") { sb.append("[").append(self.name).append("] ") }
+            sb.append(message).append(self.fields)
+            let line = sb.toString()
+            %{ grav_log_write(self->file, line); %};
+        }
+        private static fn levelName(l: LogLevel) -> string {
+            return match (l) {
+                case LogLevel.Debug: "DEBUG "
+                case LogLevel.Info: "INFO  "
+                case LogLevel.Warn: "WARN  "
+                case LogLevel.Error: "ERROR "
+                case LogLevel.Off: "      "
+            }
+        }
+    }
+
+    // The shared logger, and helpers to create named ones.
+    class Log {
+        private static root: Logger = null
+
+        // The shared logger used by Log.info and friends.
+        static fn root() -> Logger {
+            if (Log.root == null) { Log.root = new Logger("") }
+            return Log.root
+        }
+        // A new logger with a name, starting at the default level.
+        static fn named(name: string) -> Logger { return new Logger(name) }
+        // The level a new logger starts at: GRAV_LOG (debug, info, warn, error, off) or Info.
+        static fn defaultLevel() -> LogLevel { return Log.parseLevel(env("GRAV_LOG"), LogLevel.Info) }
+        // The level a name stands for ("debug", "info", "warn"/"warning", "error", "off"; any case), or `fallback`.
+        static fn parseLevel(name: string, fallback: LogLevel) -> LogLevel {
+            let n = Str.lower(Str.trim(name))
+            if (n == "debug") { return LogLevel.Debug }
+            if (n == "info") { return LogLevel.Info }
+            if (n == "warn" || n == "warning") { return LogLevel.Warn }
+            if (n == "error") { return LogLevel.Error }
+            if (n == "off" || n == "none") { return LogLevel.Off }
+            return fallback
+        }
+        // Sets the shared logger's level.
+        static fn setLevel(l: LogLevel) { Log.root().level = l }
+        // Sends the shared logger's lines to a file (appending).
+        static fn toFile(path: string) { Log.root().toFile(path) }
+        // Logs at Debug level on the shared logger.
+        static fn debug(message: string) { Log.root().debug(message) }
+        // Logs at Info level on the shared logger.
+        static fn info(message: string) { Log.root().info(message) }
+        // Logs at Warn level on the shared logger.
+        static fn warn(message: string) { Log.root().warn(message) }
+        // Logs at Error level on the shared logger.
+        static fn error(message: string) { Log.root().error(message) }
+    }
+}
