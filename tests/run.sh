@@ -100,6 +100,12 @@ if [ $UPDATE = 0 ] && [ -x tests/packages.sh ]; then
   else cat "$TMP/pkg.out"; fail=$((fail+1)); fi
 fi
 
+# The standard-library pages' API sections must match the library source.
+if command -v node >/dev/null; then
+  if node docs/std/gen-api.js --check >"$TMP/api.out" 2>&1; then echo "ok   docs/std API sections"; pass=$((pass+1))
+  else echo "FAIL (docs)    docs/std API sections are stale: run node docs/std/gen-api.js"; sed 's/^/    /' "$TMP/api.out"; fail=$((fail+1)); fi
+fi
+
 # The documentation's snippets must compile and print what the docs claim.
 if [ $UPDATE = 0 ] && [ -x tests/docs.sh ]; then
   if bash tests/docs.sh >"$TMP/docs.out" 2>&1; then tail -1 "$TMP/docs.out"
