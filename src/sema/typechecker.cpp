@@ -410,13 +410,23 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
               "switch/match subject must be int, string, or enum, got " +
                   typeRefName(subj));
     for (auto &c : s.cases) {
-        for (auto &v : c.values) {
+        for (size_t i = 0; i < c.values.size(); ++i) {
+            auto &v = c.values[i];
             TypeRef vt = checkExpr(*v);
-            if (!vt.isError() && !subj.isError() && vt != subj)
+            if (!vt.isError() && !subj.isError() && vt != subj && !(vt.isNumeric() && subj.isNumeric()))
                 error(v->line, v->col, "case value type " + typeRefName(vt) +
                                            " does not match subject type " +
                                            typeRefName(subj));
+            if (i < c.rangeHi.size() && c.rangeHi[i]) {
+                TypeRef ht = checkExpr(*c.rangeHi[i]);
+                bool ordered = subj.isNumeric() || subj.kind == TypeRef::Kind::String;
+                if (!subj.isError() && !ordered)
+                    error(v->line, v->col, "a range case needs a number or string subject, got " + typeRefName(subj));
+                else if (!ht.isError() && ht != vt && !(ht.isNumeric() && vt.isNumeric()))
+                    error(c.rangeHi[i]->line, c.rangeHi[i]->col, "the range ends must have the same type");
+            }
         }
+        if (c.guard) requireBool(*c.guard, "a case guard");
         checkBlock(c.body);
     }
     if (s.hasDefault) checkBlock(s.defaultBody);
@@ -425,7 +435,7 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
         std::vector<std::string> seen;
         for (auto &c : s.cases)
             for (auto &v : c.values)
-                if (auto *m = dynamic_cast<MemberExpr *>(v.get()); m && m->kind == MemberKind::EnumValue) {
+                if (auto *m = dynamic_cast<MemberExpr *>(v.get()); m && m->kind == MemberKind::EnumValue && !c.guard) {
                     if (std::find(seen.begin(), seen.end(), m->member) != seen.end())
                         error(v->line, v->col, "'" + m->member + "' is already handled by an earlier case");
                     seen.push_back(m->member);
@@ -434,10 +444,37 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
         if (const EnumInfo *ei = reg_->en(subj.name); ei && !s.hasDefault)
             for (const auto &mem : ei->members)
                 if (std::find(seen.begin(), seen.end(), mem) == seen.end()) missing += (missing.empty() ? "" : ", ") + mem;
-        if (!missing.empty())
+        if (!missing.empty() && !s.isExpr)
             warn(s.line, s.col, "switch on " + subj.name + " does not handle " + missing +
                                     " (add the cases or a default)");
+        if (!missing.empty() && s.isExpr)
+            error(s.line, s.col, "this match has no value for " + missing + "; add the cases or a default");
+        if (missing.empty() && !s.hasDefault && s.isExpr) unreachableDefault(s); // every member covered
+    } else if (s.isExpr && !s.hasDefault && !subj.isError()) {
+        error(s.line, s.col, "a match on " + aTypeName(subj) + " needs a default case to have a value");
     }
+}
+
+// The default of a match expression that already covers every enum member.
+void TypeChecker::unreachableDefault(SwitchStmt &s) {
+    auto callee = std::make_unique<NameExpr>();
+    callee->name = "panic";
+    auto msg = std::make_unique<StringLiteralExpr>();
+    msg->value = "no case of the match applies";
+    auto call = std::make_unique<CallExpr>();
+    call->callee = std::move(callee);
+    call->args.push_back(std::move(msg));
+    for (Expr *e : {static_cast<Expr *>(call.get()), call->callee.get(), call->args[0].get()}) {
+        e->line = s.line;
+        e->col = s.col;
+    }
+    auto st = std::make_unique<ExprStmt>();
+    st->line = s.line;
+    st->col = s.col;
+    st->expr = std::move(call);
+    s.defaultBody.statements.push_back(std::move(st));
+    s.hasDefault = true;
+    checkBlock(s.defaultBody);
 }
 
 void TypeChecker::checkLet(LetStmt &s) {
@@ -482,6 +519,7 @@ void TypeChecker::checkLet(LetStmt &s) {
         }
     }
     declareLocal(s.name, s.resolvedType, false, s.isConst, s.line, s.col);
+    if (s.quietUnused) lookupLocal(s.name)->used = true;
 }
 
 void TypeChecker::checkAssign(AssignStmt &s) {
@@ -703,6 +741,10 @@ void TypeChecker::checkCompound(const AssignStmt &s, const TypeRef &targetType,
 
 void TypeChecker::checkReturn(ReturnStmt &s) {
     if (inDefer_) error(s.line, s.col, "'return' is not allowed inside a 'defer' block");
+    if (inferringReturn_) {
+        inferredReturns_.push_back(s.value ? checkExpr(*s.value) : TypeRef::prim(TypeRef::Kind::Void));
+        return;
+    }
     if (s.value) {
         TypeRef vt = checkExprExpect(*s.value, currentReturn_);
         if (currentReturn_.isVoid()) {

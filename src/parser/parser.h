@@ -76,7 +76,12 @@ private:
     StmtPtr parseWhile();
     StmtPtr parseDoWhile();
     StmtPtr parseFor();
-    StmtPtr parseSwitch(); // also handles 'match'
+    StmtPtr parseSwitch(bool asExpr = false); // also handles 'match' (asExpr: a match expression)
+    Block parseArmValue();
+    StmtPtr parseDestructure(const Token &kw);
+    bool destructureAhead() const;
+    std::vector<StmtPtr> pendingStmts_; // more statements from the last one (destructuring)
+    int destructureCounter_ = 0;
     Block parseCaseBody();
     StmtPtr parseTry();
     StmtPtr parseThrow();

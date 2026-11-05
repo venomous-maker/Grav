@@ -88,7 +88,12 @@ struct Visitor {
             expr(x->lo.get()); expr(x->hi.get()); expr(x->step.get()); block(x->body);
         } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
             expr(x->subject.get());
-            for (auto &c : x->cases) { for (auto &v : c.values) expr(v.get()); block(c.body); }
+            for (auto &c : x->cases) {
+                for (auto &v : c.values) expr(v.get());
+                for (auto &h : c.rangeHi) expr(h.get());
+                expr(c.guard.get());
+                block(c.body);
+            }
             block(x->defaultBody);
         } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value.get());
         else if (auto *x = dynamic_cast<TryStmt *>(s)) {
@@ -146,7 +151,7 @@ struct Rewriter {
             expr(x->lo); expr(x->hi); expr(x->step); block(x->body);
         } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
             expr(x->subject);
-            for (auto &c : x->cases) block(c.body);
+            for (auto &c : x->cases) { expr(c.guard); block(c.body); }
             block(x->defaultBody);
         } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value);
         else if (auto *x = dynamic_cast<TryStmt *>(s)) {
@@ -210,6 +215,11 @@ std::vector<std::string> nameCandidates(const std::string &name, const std::stri
         level = dot == std::string::npos ? "" : level.substr(0, dot);
     }
     return out;
+}
+
+void rewriteExpr(ExprPtr &slot, const std::function<void(ExprPtr &)> &f) {
+    Rewriter v{f};
+    v.expr(slot);
 }
 
 void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f) {

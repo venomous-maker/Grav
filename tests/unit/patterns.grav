@@ -1,0 +1,95 @@
+// Case guards and ranges, match as an expression, block lambdas that infer
+// their result, tuples and destructuring.
+import "std"
+
+enum Op { Add(int, int), Neg(int), Zero }
+enum Shape { Circle(r: float), Rect(w: float, h: float), Empty }
+enum Color { Red, Green, Blue }
+struct Point { x: int  y: int }
+class Animal { fn name() -> string { return "animal" } }
+class Dog extends Animal { fn name() -> string { return "dog" } }
+class Cat extends Animal { fn name() -> string { return "cat" } }
+
+fn ev(o: Op) -> int {
+    match (o) {
+        case Add(a, b) if a > 100: return 999
+        case Add(a, b): return a + b
+        case Neg(x) if x == 0: return 0
+        case Neg(x): return -x
+        case Zero: return 0
+    }
+}
+fn grade(n: int) -> string {
+    switch (n) {
+        case 90..=100: { return "A" }
+        case 75..90: { return "B" }
+        case 0, 1 if n == 0: { return "zero" }
+        default: { return "C" }
+    }
+}
+fn area(s: Shape) -> float {
+    return match (s) {
+        case Circle(r): 3.0 * r * r
+        case Rect(w, h) if w == h: w * w
+        case Rect(w, h): w * h
+        case Empty: 0.0
+    }
+}
+fn divmod(a: int, b: int) -> (int, int) { return (a / b, a % b) }
+
+test "case guards" {
+    assertEq(ev(Op.Add(1, 2)), 3)
+    assertEq(ev(Op.Add(200, 2)), 999)
+    assertEq(ev(Op.Neg(5)), -5)
+    assertEq(grade(0), "zero")
+    assertEq(grade(1), "C")
+}
+
+test "range cases" {
+    assertEq(grade(100), "A")
+    assertEq(grade(90), "A")
+    assertEq(grade(89), "B")
+    let initial = "m"
+    let half = ""
+    switch (initial) { case "a".."n": { half = "first" } default: { half = "second" } }
+    assertEq(half, "first")
+}
+
+test "match as an expression" {
+    let n = 3
+    assertEq(match (n) { case 1: "one" case 2, 3: "few" default: "many" }, "few")
+    assertEq(area(Shape.Circle(1.0)) + area(Shape.Rect(2.0, 2.0)) + area(Shape.Rect(2.0, 3.0)), 13.0)
+    let c = Color.Green
+    assertEq(match (c) { case Color.Red: "#f00", case Color.Green: "#0f0", case Color.Blue: "#00f" }, "#0f0")
+    let pet = match (n % 2) { case 0: new Dog() default: new Cat() }
+    assertEq(pet.name(), "cat")
+}
+
+test "a block lambda without a result type infers it" {
+    let sign = fn(x: int) {
+        if (x < 0) { return "negative" }
+        return "non-negative"
+    }
+    assertEq(sign(-1), "negative")
+}
+
+test "tuples and destructuring" {
+    let (q, r) = divmod(17, 5)
+    assertEq(q * 10 + r, 32)
+    let t = ("age", 36)
+    assertEq(t.first, "age")
+    assertEq(str(t), "(\"age\", 36)")
+    let [a, _, c] = [10, 20, 30]
+    assertEq(a + c, 40)
+    let {x, y} = Point { x: 1, y: 2 }
+    assertEq(x * 10 + y, 12)
+    let pairs = new Array<(string, int)>()
+    pairs.push(("a", 1))
+    pairs.push(("b", 2))
+    let seen = ""
+    for ((k, v) in pairs) { seen += "${k}${v} " }
+    assertEq(seen, "a1 b2 ")
+    let sum = 0
+    for ({x, y} in [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]) { sum += x * y }
+    assertEq(sum, 14)
+}

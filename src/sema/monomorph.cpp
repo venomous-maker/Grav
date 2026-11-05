@@ -148,7 +148,7 @@ ExprPtr cloneExpr(const Expr *e) {
         auto n = mkE<LambdaExpr>(e);
         n->params = x->params; n->paramTyped = x->paramTyped;
         n->hasReturnType = x->hasReturnType; n->returnType = x->returnType;
-        n->isArrow = x->isArrow; n->exprBody = cloneExpr(x->exprBody.get());
+        n->isArrow = x->isArrow; n->isMatch = x->isMatch; n->exprBody = cloneExpr(x->exprBody.get());
         n->body = cloneBlock(x->body);
         return n;
     }
@@ -198,7 +198,7 @@ StmtPtr cloneStmt(const Stmt *s) {
     if (auto *x = dynamic_cast<const LetStmt *>(s)) {
         auto n = mkS<LetStmt>(s); n->name = x->name; n->isConst = x->isConst;
         n->hasDeclaredType = x->hasDeclaredType; n->declaredType = x->declaredType;
-        n->resolvedType = x->resolvedType; n->init = cloneExpr(x->init.get()); return n;
+        n->resolvedType = x->resolvedType; n->quietUnused = x->quietUnused; n->init = cloneExpr(x->init.get()); return n;
     }
     if (auto *x = dynamic_cast<const AssignStmt *>(s)) {
         auto n = mkS<AssignStmt>(s); n->isCompound = x->isCompound; n->compoundOp = x->compoundOp;
@@ -225,10 +225,13 @@ StmtPtr cloneStmt(const Stmt *s) {
     }
     if (auto *x = dynamic_cast<const SwitchStmt *>(s)) {
         auto n = mkS<SwitchStmt>(s); n->subject = cloneExpr(x->subject.get());
-        n->hasDefault = x->hasDefault; n->defaultBody = cloneBlock(x->defaultBody);
+        n->hasDefault = x->hasDefault; n->defaultBody = cloneBlock(x->defaultBody); n->isExpr = x->isExpr;
         for (const auto &c : x->cases) {
             SwitchCase nc;
             for (const auto &v : c.values) nc.values.push_back(cloneExpr(v.get()));
+            for (const auto &h : c.rangeHi) nc.rangeHi.push_back(cloneExpr(h.get()));
+            nc.rangeInclusive = c.rangeInclusive;
+            nc.guard = cloneExpr(c.guard.get());
             nc.body = cloneBlock(c.body); n->cases.push_back(std::move(nc));
         }
         return n;
@@ -726,7 +729,12 @@ void Mono::walkStmt(Stmt *s, const Subst &subst) {
         walkBlock(x->body, subst); walkExpr(x->cond.get(), subst);
     } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
         walkExpr(x->subject.get(), subst);
-        for (auto &c : x->cases) { for (auto &v : c.values) walkExpr(v.get(), subst); walkBlock(c.body, subst); }
+        for (auto &c : x->cases) {
+            for (auto &v : c.values) walkExpr(v.get(), subst);
+            for (auto &h : c.rangeHi) walkExpr(h.get(), subst);
+            walkExpr(c.guard.get(), subst);
+            walkBlock(c.body, subst);
+        }
         if (x->hasDefault) walkBlock(x->defaultBody, subst);
     } else if (auto *x = dynamic_cast<ForStmt *>(s)) {
         walkStmt(x->init.get(), subst); walkExpr(x->cond.get(), subst);

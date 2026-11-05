@@ -232,6 +232,8 @@ void CodeGen::collectInStmt(const Stmt &stmt) {
         collectInExpr(*s->subject);
         for (const auto &c : s->cases) {
             for (const auto &v : c.values) collectInExpr(*v);
+            for (const auto &h : c.rangeHi) if (h) collectInExpr(*h);
+            if (c.guard) collectInExpr(*c.guard);
             collectInBlock(c.body);
         }
         if (s->hasDefault) collectInBlock(s->defaultBody);

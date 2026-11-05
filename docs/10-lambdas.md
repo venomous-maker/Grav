@@ -50,6 +50,9 @@ Output:
 hi Ada
 ```
 
+A block lambda without `-> R` takes its result type from its `return` statements
+(none means `void`).
+
 Parameter types can be omitted wherever the expected function type is known — a
 function argument, a typed `let`, a field assignment, or a `return`:
 

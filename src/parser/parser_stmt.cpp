@@ -10,6 +10,8 @@ Block Parser::parseBlock() {
     while (!check(TokenType::RBrace) && !atEnd()) {
         if (matchToken(TokenType::Semicolon)) continue; // stray / empty statement
         block.statements.push_back(parseStatement());
+        for (auto &extra : pendingStmts_) block.statements.push_back(std::move(extra)); // destructuring
+        pendingStmts_.clear();
         // Statements may be terminated by ';' (recommended). Consume any here;
         // whitespace/newlines also separate statements when ';' is omitted.
         while (matchToken(TokenType::Semicolon)) {}
@@ -173,9 +175,72 @@ StmtPtr Parser::parseSimpleStmt() {
     return parseExprOrAssign();
 }
 
+// At `(`, `[` or `{` in a for-header: a destructuring pattern followed by `in`?
+bool Parser::destructureAhead() const {
+    size_t i = pos_;
+    int depth = 0;
+    do {
+        if (i >= tokens_.size()) return false;
+        TokenType tt = tokens_[i++].type;
+        if (tt == TokenType::LParen || tt == TokenType::LBracket || tt == TokenType::LBrace) ++depth;
+        else if (tt == TokenType::RParen || tt == TokenType::RBracket || tt == TokenType::RBrace) --depth;
+        else if (tt != TokenType::Identifier && tt != TokenType::Comma) return false;
+    } while (depth > 0);
+    return i < tokens_.size() && tokens_[i].type == TokenType::In;
+}
+
 StmtPtr Parser::parseFor() {
     const Token &kw = advance(); // 'for'
     expect(TokenType::LParen, "after 'for'");
+
+    // `for ((k, v) in pairs)` / `for ([a, b] in rows)` / `for ({x, y} in points)`:
+    // each element goes into a hidden variable that the body destructures.
+    if ((check(TokenType::LParen) || check(TokenType::LBracket) || check(TokenType::LBrace)) &&
+        destructureAhead()) {
+        auto stmt = std::make_unique<ForInStmt>();
+        stmt->line = kw.line; stmt->col = kw.col;
+        // Reuse `let <pattern> = <hidden>` by parsing the pattern against a placeholder.
+        size_t patternAt = pos_;
+        int depth = 0;
+        do { // skip the pattern
+            TokenType tt = advance().type;
+            if (tt == TokenType::LParen || tt == TokenType::LBracket || tt == TokenType::LBrace) ++depth;
+            if (tt == TokenType::RParen || tt == TokenType::RBracket || tt == TokenType::RBrace) --depth;
+        } while (depth > 0 && !atEnd());
+        expect(TokenType::In, "after the names");
+        stmt->lo = parseExpression();
+        expect(TokenType::RParen, "to close the for-header");
+        size_t afterHeader = pos_;
+        stmt->var = "destructured__" + std::to_string(destructureCounter_++);
+        // Parse `<pattern> = <var>` from synthetic tokens: the pattern, '=', the name.
+        // (The real tokens are moved aside and back, so references into them stay valid.)
+        std::vector<Token> synth;
+        size_t p = patternAt;
+        depth = 0;
+        do {
+            const Token &tk = tokens_[p++];
+            synth.push_back(tk);
+            if (tk.type == TokenType::LParen || tk.type == TokenType::LBracket || tk.type == TokenType::LBrace) ++depth;
+            if (tk.type == TokenType::RParen || tk.type == TokenType::RBracket || tk.type == TokenType::RBrace) --depth;
+        } while (depth > 0);
+        Token eq = synth.back(); eq.type = TokenType::Assign; eq.lexeme = "=";
+        Token nm = synth.back(); nm.type = TokenType::Identifier; nm.lexeme = stmt->var;
+        Token end = synth.back(); end.type = TokenType::Semicolon; end.lexeme = ";";
+        synth.push_back(eq); synth.push_back(nm); synth.push_back(end);
+        std::vector<Token> saved = std::move(tokens_);
+        tokens_ = std::move(synth);
+        pos_ = 0;
+        StmtPtr hidden = parseDestructure(kw); // `let destructured__M = <var>` plus pendingStmts_
+        tokens_ = std::move(saved);
+        pos_ = afterHeader;
+        std::vector<StmtPtr> binds = std::move(pendingStmts_);
+        pendingStmts_.clear();
+        stmt->body = parseBlock();
+        auto &body = stmt->body.statements;
+        body.insert(body.begin(), std::make_move_iterator(binds.begin()), std::make_move_iterator(binds.end()));
+        body.insert(body.begin(), std::move(hidden));
+        return stmt;
+    }
 
     // `for (i in lo..hi [step s])`, `for (x in xs)`, `for (i, x in xs)`.
     bool pairForm = check(TokenType::Identifier) && peekAt(1).type == TokenType::Comma &&
@@ -222,13 +287,28 @@ Block Parser::parseCaseBody() {
     if (check(TokenType::LBrace)) return parseBlock();
     Block b;
     b.statements.push_back(parseStatement());
+    for (auto &extra : pendingStmts_) b.statements.push_back(std::move(extra));
+    pendingStmts_.clear();
     matchToken(TokenType::Semicolon);
     return b;
 }
 
-StmtPtr Parser::parseSwitch() {
+// In a `match` expression each arm is an expression: its value is the result.
+Block Parser::parseArmValue() {
+    const Token &t = peek();
+    auto ret = std::make_unique<ReturnStmt>();
+    ret->line = t.line; ret->col = t.col;
+    ret->value = parseExpression();
+    matchToken(TokenType::Comma); // arms may be separated by commas
+    Block b;
+    b.statements.push_back(std::move(ret));
+    return b;
+}
+
+StmtPtr Parser::parseSwitch(bool asExpr) {
     const Token &kw = advance(); // 'switch' or 'match'
     auto stmt = std::make_unique<SwitchStmt>();
+    stmt->isExpr = asExpr;
     stmt->line = kw.line; stmt->col = kw.col;
     expect(TokenType::LParen, "after 'switch'");
     stmt->subject = parseExpression();
@@ -239,14 +319,25 @@ StmtPtr Parser::parseSwitch() {
             if (stmt->hasDefault) fail(previous(), "duplicate 'default' case");
             stmt->hasDefault = true;
             expect(TokenType::Colon, "after 'default'");
-            stmt->defaultBody = parseCaseBody();
+            stmt->defaultBody = asExpr ? parseArmValue() : parseCaseBody();
         } else {
             expect(TokenType::Case, "to begin a switch case");
             SwitchCase c;
-            c.values.push_back(parseExpression());
-            while (matchToken(TokenType::Comma)) c.values.push_back(parseExpression());
+            do {
+                c.values.push_back(parseExpression());
+                // `case 1..5:` / `case 1..=5:` — a range of values.
+                bool incl = check(TokenType::DotDotEq);
+                if (matchToken(TokenType::DotDot) || matchToken(TokenType::DotDotEq)) {
+                    c.rangeHi.push_back(parseExpression());
+                    c.rangeInclusive.push_back(incl);
+                } else {
+                    c.rangeHi.push_back(nullptr);
+                    c.rangeInclusive.push_back(false);
+                }
+            } while (matchToken(TokenType::Comma));
+            if (matchToken(TokenType::If)) c.guard = parseExpression(); // `case v if cond:`
             expect(TokenType::Colon, "after the case value");
-            c.body = parseCaseBody();
+            c.body = asExpr ? parseArmValue() : parseCaseBody();
             stmt->cases.push_back(std::move(c));
         }
     }
@@ -254,8 +345,63 @@ StmtPtr Parser::parseSwitch() {
     return stmt;
 }
 
+// `let (a, b) = pair` (tuple fields first/second/third), `let [x, y] = arr`
+// (indexes) and `let {x, y} = point` (fields by name): the value goes into a
+// hidden local, and each name is a `let` reading its part (`_` skips one).
+StmtPtr Parser::parseDestructure(const Token &kw) {
+    TokenType open = peek().type;
+    TokenType close = open == TokenType::LParen ? TokenType::RParen
+                    : open == TokenType::LBracket ? TokenType::RBracket : TokenType::RBrace;
+    advance();
+    std::vector<const Token *> names;
+    do { names.push_back(&expect(TokenType::Identifier, "as a name to bind")); } while (matchToken(TokenType::Comma));
+    expect(close, "to close the names");
+    if (open == TokenType::LParen && (names.size() < 2 || names.size() > 3))
+        fail(kw, "a tuple has 2 or 3 elements to bind");
+    expect(TokenType::Assign, "after the names");
+    auto hidden = std::make_unique<LetStmt>();
+    hidden->line = kw.line; hidden->col = kw.col;
+    hidden->name = "destructured__" + std::to_string(destructureCounter_++);
+    hidden->isConst = true;
+    hidden->init = parseExpression();
+    static const char *tupleFields[] = {"first", "second", "third"};
+    for (size_t i = 0; i < names.size(); ++i) {
+        const Token &n = *names[i];
+        if (n.lexeme == "_") continue;
+        auto src = std::make_unique<NameExpr>();
+        src->line = n.line; src->col = n.col;
+        src->name = hidden->name;
+        ExprPtr part;
+        if (open == TokenType::LBracket) {
+            auto ix = std::make_unique<IndexExpr>();
+            auto lit = std::make_unique<IntLiteralExpr>();
+            lit->value = static_cast<long long>(i);
+            lit->raw = std::to_string(i);
+            lit->line = n.line; lit->col = n.col;
+            ix->base = std::move(src);
+            ix->index = std::move(lit);
+            part = std::move(ix);
+        } else {
+            auto m = std::make_unique<MemberExpr>();
+            m->object = std::move(src);
+            m->member = open == TokenType::LParen ? tupleFields[i] : n.lexeme;
+            part = std::move(m);
+        }
+        part->line = n.line; part->col = n.col;
+        auto let = std::make_unique<LetStmt>();
+        let->line = n.line; let->col = n.col;
+        let->name = n.lexeme;
+        let->isConst = kw.type == TokenType::Const;
+        let->init = std::move(part);
+        pendingStmts_.push_back(std::move(let));
+    }
+    return hidden;
+}
+
 StmtPtr Parser::parseLet() {
     const Token &kw = advance(); // 'let' or 'const'
+    if (check(TokenType::LParen) || check(TokenType::LBracket) || check(TokenType::LBrace))
+        return parseDestructure(kw);
     auto stmt = std::make_unique<LetStmt>();
     stmt->line = kw.line;
     stmt->col = kw.col;

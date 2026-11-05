@@ -16,6 +16,7 @@
 // Without a `default`, every variant must be handled; the last case then needs
 // no test, so a match whose cases all return counts as returning.
 #include "sema/typechecker.h"
+#include "sema/monomorph.h"
 
 #include <set>
 
@@ -91,6 +92,7 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
 
     struct Arm {
         std::vector<int> tags;
+        ExprPtr guard; // with the bindings replaced by the fields they name
         Block body;
     };
     std::vector<Arm> arms;
@@ -99,6 +101,9 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
     for (auto &c : s.cases) {
         Arm arm;
         std::vector<StmtPtr> prelude;
+        std::vector<std::pair<std::string, ExprPtr>> fieldOf; // binding -> its field access
+        for (auto &h : c.rangeHi)
+            if (h) { error(h->line, h->col, "a range case needs a number or string subject, got " + enumName); bad = true; }
         for (auto &v : c.values) {
             Pattern p = readPattern(v.get());
             int tag = p.ok ? variantIndex(p.variant) : -1;
@@ -119,7 +124,7 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
             }
             if (covered.count(tag))
                 error(v->line, v->col, "variant '" + p.variant + "' is already handled by an earlier case");
-            covered.insert(tag);
+            if (!c.guard) covered.insert(tag); // a guarded case may not apply
             arm.tags.push_back(tag);
             if (!p.hasArgs) continue;
             const ClassInfo *vi = reg_->cls(variantClass(p.variant));
@@ -151,14 +156,24 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
                 auto field = at<MemberExpr>(v->line, v->col);
                 field->object = std::move(cast);
                 field->member = fields[i];
+                fieldOf.push_back({p.binds[i], cloneExpression(field.get())});
                 auto bind = at<LetStmt>(v->line, v->col);
                 bind->name = p.binds[i];
+                bind->quietUnused = c.guard != nullptr; // it may be used only by the guard
                 bind->init = std::move(field);
                 prelude.push_back(std::move(bind));
             }
         }
         for (auto &st : c.body.statements) prelude.push_back(std::move(st));
         arm.body.statements = std::move(prelude);
+        if (c.guard) {
+            arm.guard = std::move(c.guard);
+            rewriteExpr(arm.guard, [&](ExprPtr &slot) {
+                if (auto *n = dynamic_cast<NameExpr *>(slot.get()))
+                    for (auto &[name, field] : fieldOf)
+                        if (n->name == name) { slot = cloneExpression(field.get()); return; }
+            });
+        }
         arms.push_back(std::move(arm));
     }
     if (!s.hasDefault && !bad && covered.size() < base.enumVariants.size()) {
@@ -181,7 +196,7 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
     for (size_t k = arms.size(); k-- > 0;) {
         Arm &arm = arms[k];
         if (arm.tags.empty()) continue;
-        if (!chain && exhaustive) { // the final arm of an exhaustive match: no test needed
+        if (!chain && exhaustive && !arm.guard) { // the final arm of an exhaustive match: no test needed
             auto b = at<BlockStmt>(line, col);
             b->block = std::move(arm.body);
             chain = std::move(b);
@@ -209,6 +224,13 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
             orE->left = std::move(cond);
             orE->right = std::move(eq);
             cond = std::move(orE);
+        }
+        if (arm.guard) {
+            auto andE = at<BinaryExpr>(line, col);
+            andE->op = BinaryOp::And;
+            andE->left = std::move(cond);
+            andE->right = std::move(arm.guard);
+            cond = std::move(andE);
         }
         auto ifs = at<IfStmt>(line, col);
         ifs->cond = std::move(cond);

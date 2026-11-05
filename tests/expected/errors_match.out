@@ -1,0 +1,13 @@
+gravc: tests/errors/match.grav:4:13: type error: a match on an int needs a default case to have a value
+        let a = match (x) { case 1: "one" }
+                ^
+gravc: tests/errors/match.grav:6:13: type error: this match has no value for Green, Blue; add the cases or a default
+        let b = match (c) { case Color.Red: 1 }
+                ^
+gravc: tests/errors/match.grav:7:13: type error: the match's cases give both an int and a string
+        let d = match (x) { case 1: 1 default: "s" }
+                ^
+gravc: tests/errors/match.grav:8:35: type error: a range case needs a number or string subject, got Color
+        let e = match (c) { case Color.Red..Color.Blue: 1 default: 2 }
+                                      ^
+gravc: 4 error(s); aborting

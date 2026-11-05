@@ -3,6 +3,8 @@
 // it), references to named functions, and calls through function values.
 #include "sema/typechecker.h"
 
+#include <utility>
+
 namespace grav {
 
 TypeChecker::LocalVar *TypeChecker::lookupLocalAt(const std::string &name, size_t &scopeIdx) {
@@ -113,15 +115,11 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
         ret = reg_->resolveCanonical(e.returnType, currentNs_, ok);
         if (!ok) ret = TypeRef::prim(TypeRef::Kind::Error);
     } else if (haveExp && expect.fnReturn().isError()) {
-        // The caller is inferring a type parameter from this lambda's result.
-        if (e.isArrow) retKnown = false;
-        else ret = TypeRef::prim(TypeRef::Kind::Void);
+        retKnown = false; // the caller is inferring a type parameter from this lambda's result
     } else if (haveExp) {
         ret = expect.fnReturn();
-    } else if (e.isArrow) {
-        retKnown = false; // inferred from the body expression
     } else {
-        ret = TypeRef::prim(TypeRef::Kind::Void);
+        retKnown = false; // inferred from the body expression, or from the block's returns
     }
 
     // The body is checked like a fresh function nested in the current scopes.
@@ -144,10 +142,21 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
             error(e.exprBody->line, e.exprBody->col,
                   "lambda returns " + typeRefName(bt) + " but " + typeRefName(ret) + " is expected");
         }
-    } else {
+    } else if (retKnown) {
         currentReturn_ = ret;
+        bool savedInfer = std::exchange(inferringReturn_, false);
         checkBlock(e.body);
+        inferringReturn_ = savedInfer;
         checkFallthrough(e.body, ret, e.line, e.col, "lambda");
+    } else {
+        // The result type is what the `return`s give (void without any).
+        bool savedInfer = std::exchange(inferringReturn_, true);
+        auto savedReturns = std::exchange(inferredReturns_, {});
+        checkBlock(e.body);
+        ret = inferReturnType(inferredReturns_, e.line, e.col, e.isMatch ? "the match's cases give" : "the lambda returns");
+        inferringReturn_ = savedInfer;
+        inferredReturns_ = std::move(savedReturns);
+        if (!e.isMatch) checkFallthrough(e.body, ret, e.line, e.col, "lambda"); // a match reports its own gaps
     }
     popScope();
     lambdaStack_.pop_back();
@@ -161,6 +170,29 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
     e.hasReturnType = true;
     e.fnType = TypeRef::function(ptypes, ret);
     return e.fnType;
+}
+
+// The common type of a block lambda's `return` values.
+TypeRef TypeChecker::inferReturnType(const std::vector<TypeRef> &types, int line, int col,
+                                     const std::string &what) {
+    TypeRef ret = TypeRef::prim(TypeRef::Kind::Void);
+    bool any = false, sawNull = false;
+    for (const TypeRef &t : types) {
+        if (t.isError()) return t;
+        if (t.kind == TypeRef::Kind::Null) { sawNull = true; continue; }
+        if (!any) { ret = t; any = true; continue; }
+        if (isAssignable(t, ret)) continue;
+        if (isAssignable(ret, t)) { ret = t; continue; }
+        if (auto base = commonBase(ret, t)) { ret = *base; continue; }
+        error(line, col, what + " both " + aTypeName(ret) + " and " + aTypeName(t) +
+                             (what == "the lambda returns" ? "; give it a return type" : ""));
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    if (sawNull && !any) {
+        error(line, col, what + " only null; give it a type");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
+    return ret;
 }
 
 TypeRef TypeChecker::checkFnValueCall(CallExpr &e, const TypeRef &fnType) {

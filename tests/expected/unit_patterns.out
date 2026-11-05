@@ -1,0 +1,7 @@
+running 5 tests
+  ok    case guards
+  ok    range cases
+  ok    match as an expression
+  ok    a block lambda without a result type infers it
+  ok    tuples and destructuring
+result: 5 passed, 0 failed

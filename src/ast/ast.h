@@ -283,6 +283,7 @@ struct LetStmt : Stmt {
     TypeRef declaredType; // when hasDeclaredType; otherwise inferred
     TypeRef resolvedType; // final type after checking
     ExprPtr init;
+    bool quietUnused = false; // generated binding: no "unused variable" warning
 };
 
 struct AssignStmt : Stmt {
@@ -338,6 +339,11 @@ struct DoWhileStmt : Stmt {
 // switch / match: each case matches one or more constant values; no fall-through.
 struct SwitchCase {
     std::vector<ExprPtr> values;
+    // `case lo..hi:` / `case lo..=hi:`: values[i] is lo and rangeHi[i] hi (null
+    // for a single value).
+    std::vector<ExprPtr> rangeHi;
+    std::vector<bool> rangeInclusive;
+    ExprPtr guard; // `case v if cond:` — the case applies only when cond holds
     Block body;
 };
 struct SwitchStmt : Stmt {
@@ -345,6 +351,7 @@ struct SwitchStmt : Stmt {
     std::vector<SwitchCase> cases;
     bool hasDefault = false;
     Block defaultBody;
+    bool isExpr = false; // the body of a `match` expression: every arm returns its value
 };
 
 // C-style: for (init; cond; update) { body }. Any of init/cond/update may be null.
@@ -600,6 +607,7 @@ struct LambdaExpr : Expr {
     bool hasReturnType = false;
     TypeRef returnType;
     bool isArrow = false;          // `=> expr` form
+    bool isMatch = false;          // the lambda a `match` expression lowers to
     ExprPtr exprBody;              // arrow form
     Block body;                    // block form
     // Filled by the checker.
@@ -671,6 +679,8 @@ void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f);
 // after `f` returns, the (possibly new) expression's children are visited.
 // `switch`/`match` case values are skipped (they may be patterns).
 void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f);
+// The same, over one expression (its slot first, then its children).
+void rewriteExpr(ExprPtr &slot, const std::function<void(ExprPtr &)> &f);
 
 } // namespace grav
 

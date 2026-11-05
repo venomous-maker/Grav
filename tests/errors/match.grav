@@ -1,0 +1,10 @@
+enum Color { Red, Green, Blue }
+fn main() {
+    let x = 3
+    let a = match (x) { case 1: "one" }
+    let c = Color.Red
+    let b = match (c) { case Color.Red: 1 }
+    let d = match (x) { case 1: 1 default: "s" }
+    let e = match (c) { case Color.Red..Color.Blue: 1 default: 2 }
+    print(a + str(b) + str(d) + str(e))
+}

@@ -287,6 +287,8 @@ struct OwnScan {
             expr(x->subject.get(), x->subject->type.kind == TypeRef::Kind::String);
             for (const auto &c : x->cases) {
                 for (const auto &v : c.values) expr(v.get(), false);
+                for (const auto &h : c.rangeHi) expr(h.get(), false);
+                expr(c.guard.get(), false);
                 block(c.body);
             }
             if (x->hasDefault) block(x->defaultBody);

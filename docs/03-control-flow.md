@@ -216,6 +216,61 @@ so there is nothing else for it to mean).
 A `switch` on an enum without a `default` should handle every member: leaving one
 out is a warning that names it, and handling a member twice is an error.
 
+A case can be a range (`lo..hi` excludes `hi`, `lo..=hi` includes it) of numbers
+or strings, and a guard (`if cond` before the `:`) makes a case apply only when the
+condition holds; otherwise the next cases are tried.
+
+```grav
+fn describe(n: int) -> string {
+    switch (n) {
+        case 0: { return "zero" }
+        case 1..10 if n % 2 == 0: { return "small even" }
+        case 1..10: { return "small odd" }
+        case 10..=99: { return "two digits" }
+        default: { return "big" }
+    }
+}
+
+fn main() {
+    print(describe(4))
+    print(describe(7))
+    print(describe(42))
+}
+```
+
+Output:
+
+```text
+small even
+small odd
+two digits
+```
+
+### match as an expression
+
+Where a value is expected, `match` (or `switch`) picks one: each case gives an
+expression, and the match needs a `default` unless its cases cover every enum
+member or data-enum variant.
+
+```grav
+enum Size { Small, Medium, Large }
+
+fn main() {
+    let n = 3
+    let word = match (n) { case 1: "one" case 2, 3: "a few" default: "many" }
+    print(word)
+    let s = Size.Medium
+    print(match (s) { case Size.Small: 1, case Size.Medium: 2, case Size.Large: 3 })
+}
+```
+
+Output:
+
+```text
+a few
+2
+```
+
 ## defer
 
 `defer stmt` or `defer { ... }` schedules code to run when the enclosing block exits —

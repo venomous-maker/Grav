@@ -190,6 +190,8 @@ private:
     static void unwrapDefaults(std::vector<ExprPtr> &args);
     void checkArgValues(std::vector<ExprPtr> &args);
     std::optional<TypeRef> commonBase(const TypeRef &a, const TypeRef &b) const;
+    TypeRef inferReturnType(const std::vector<TypeRef> &types, int line, int col, const std::string &what);
+    void unreachableDefault(SwitchStmt &s);
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
     // a scalar/reference/enum (not a value-type struct or interface fat pointer).
     void checkOptionalResult(int line, int col, const TypeRef &t, bool allowVoid);
@@ -239,6 +241,9 @@ private:
     std::string currentClass_; // FQ, empty in a free function
     std::string currentNs_;    // namespace context
     TypeRef currentReturn_;
+    // A block lambda without a return type infers it from its `return`s.
+    bool inferringReturn_ = false;
+    std::vector<TypeRef> inferredReturns_;
     bool inConstructor_ = false;
     bool inStatic_ = false;
     bool inAsync_ = false; // true while checking an `async fn` body

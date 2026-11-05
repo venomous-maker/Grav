@@ -230,9 +230,18 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             for (size_t i = 0; i < c.values.size(); ++i) {
                 if (i) cond += " || ";
                 std::string v = emitExpr(*c.values[i]);
+                if (i < c.rangeHi.size() && c.rangeHi[i]) { // `case lo..hi:`
+                    std::string hi = emitExpr(*c.rangeHi[i]);
+                    cond += isStr ? "(strcmp(" + tmp + ", " + v + ") >= 0 && strcmp(" + tmp + ", " + hi + ") " +
+                                        (c.rangeInclusive[i] ? "<=" : "<") + " 0)"
+                                  : "(" + tmp + " >= " + v + " && " + tmp + (c.rangeInclusive[i] ? " <= " : " < ") +
+                                        hi + ")";
+                    continue;
+                }
                 cond += isStr ? ("grav_streq(" + tmp + ", " + v + ")")
                               : ("(" + tmp + " == " + v + ")");
             }
+            if (c.guard) cond = "(" + cond + ") && (" + emitExpr(*c.guard) + ")";
             line((first ? "if (" : "} else if (") + cond + ") {");
             first = false;
             indent_++; emitBlock(c.body); indent_--;

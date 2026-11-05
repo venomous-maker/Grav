@@ -75,6 +75,9 @@ radius 1
   Every variant has the enum's type, so they mix in arrays and return values.
 - `match` takes one case per variant and binds its fields by position. Use `_`
   to skip a field, and leave off the parentheses to ignore all of them.
+- A guard refines a case: `case Rect(w, h) if w == h: ...` applies only to
+  squares, and the following cases see the rest. `match` also works as an
+  expression: `let a = match (s) { case Circle(r): 3.0 * r * r  default: 0.0 }`.
 - Without a `default`, a match must handle every variant. Leaving one out is a
   compile error that names the missing variants.
 - Values print as `Circle(1)`, and `==` compares variant and fields. Defining
@@ -162,6 +165,43 @@ true
 ```
 
 Use a [class](06-classes.md) when you need methods, inheritance, or shared mutable state.
+
+## Tuples and destructuring
+
+`(a, b)` and `(a, b, c)` group values without declaring a type; `(int, string)` is
+the type of such a pair. Tuples are the standard library's `Pair` and `Triple`
+(fields `first`, `second`, `third`), so they need `import "std"`. A `let` can take
+a value apart: `let (a, b) = pair` for tuples, `let [x, y] = array` for fixed
+arrays and `let {x, y} = point` for struct fields by name (`_` skips a part). The
+same patterns work in `for`.
+
+```grav
+import "std"
+
+struct Point { x: int  y: int }
+
+fn divmod(a: int, b: int) -> (int, int) { return (a / b, a % b) }
+
+fn main() {
+    let (q, r) = divmod(17, 5)
+    print("${q} remainder ${r}")
+    let {x, y} = Point { x: 3, y: 4 }
+    print(x * y)
+    let scores = new Array<(string, int)>()
+    scores.push(("ada", 9))
+    scores.push(("bob", 7))
+    for ((name, score) in scores) { print("${name}: ${score}") }
+}
+```
+
+Output:
+
+```text
+3 remainder 2
+12
+ada: 9
+bob: 7
+```
 
 ## Type aliases
 

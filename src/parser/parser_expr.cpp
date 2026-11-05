@@ -560,6 +560,17 @@ ExprPtr Parser::parsePrimary() {
             expect(TokenType::RParen, "to close 'sizeof'");
             return e;
         }
+        case TokenType::Match:
+        case TokenType::Switch: {
+            // `match (x) { case 1: "one" default: "many" }` as a value: a lambda
+            // whose body returns the chosen arm, called on the spot.
+            auto lam = at<LambdaExpr>(t);
+            lam->isMatch = true;
+            lam->body.statements.push_back(parseSwitch(/*asExpr=*/true));
+            auto call = at<CallExpr>(t);
+            call->callee = std::move(lam);
+            return call;
+        }
         case TokenType::Fn: { // a lambda: `fn(x: T, y) => expr` / `fn(x: T) -> R { ... }`
             advance();
             auto e = at<LambdaExpr>(t);
@@ -665,6 +676,16 @@ ExprPtr Parser::parsePrimary() {
         case TokenType::LParen: {
             advance();
             ExprPtr inner = parseExpression();
+            // `(a, b)` / `(a, b, c)`: a tuple, built as the standard library's Pair / Triple.
+            if (check(TokenType::Comma)) {
+                auto tuple = at<NewExpr>(t);
+                tuple->args.push_back(std::move(inner));
+                while (matchToken(TokenType::Comma)) tuple->args.push_back(parseExpression());
+                if (tuple->args.size() > 3) fail(t, "a tuple has 2 or 3 elements");
+                tuple->className = tuple->args.size() == 2 ? "Pair" : "Triple";
+                expect(TokenType::RParen, "to close the tuple");
+                return tuple;
+            }
             expect(TokenType::RParen, "to close the parenthesized expression");
             return inner;
         }

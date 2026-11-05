@@ -48,7 +48,12 @@ void walkStmt(Stmt *s) {
         walkExpr(x->lo.get()); walkExpr(x->hi.get()); walkExpr(x->step.get()); walkBlock(x->body);
     } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
         walkExpr(x->subject.get());
-        for (auto &c : x->cases) { for (auto &v : c.values) walkExpr(v.get()); walkBlock(c.body); }
+        for (auto &c : x->cases) {
+            for (auto &v : c.values) walkExpr(v.get());
+            for (auto &h : c.rangeHi) walkExpr(h.get());
+            walkExpr(c.guard.get());
+            walkBlock(c.body);
+        }
         walkBlock(x->defaultBody);
     } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) walkExpr(x->value.get());
     else if (auto *x = dynamic_cast<TryStmt *>(s)) {

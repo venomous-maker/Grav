@@ -58,6 +58,7 @@ are evaluated left to right; `&&`, `||`, `??`, `?:`, and `?.` short-circuit.
 | arrays | `[1, 2, 3]`, `[[1, 2], [3, 4]]` |
 | structs | `Point { x: 1, y: 2 }`, `Pair<int, string> { first: 1, second: "a" }` |
 | lambdas | `fn(x) => x * 2`, `fn(a: int, b: int) -> int { return a + b }` |
+| tuples | `(1, "one")`, type `(int, string)` (the standard library's `Pair`/`Triple`) |
 | null | `null` |
 
 ## Types
@@ -108,7 +109,9 @@ while (c) { } / do { } while (c)                     (a loop may be labeled: `ou
 for (init; cond; update) { }
 for (i in a..b [step s]) { } / for (i in a..=b) { }
 for (x in xs) { } / for (i, x in xs) { }
-switch (v) { case a, b: { } default: { } }            (match is a synonym)
+switch (v) { case a, b: { } case lo..hi: { } case x if cond: { } default: { } }   (match is a synonym)
+let r = match (v) { case a: e1 default: e2 }          (match as an expression)
+let (a, b) = pair / let [x, y] = arr / let {x, y} = point   (destructuring; also in for)
 break [label] / continue [label] / return [e]
 f(x, name: value)                                     (named arguments)
 defer stmt / defer { }
