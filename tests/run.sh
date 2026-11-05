@@ -55,6 +55,14 @@ for f in tests/unit/*.grav; do
   else echo "ok   $f (grav test)"; pass=$((pass+1)); fi
 done
 
+# Every standard-library module type-checks on its own (as an editor checks it).
+for f in lib/*/*.grav; do
+  if ! "$GRAV" check "$f" >"$TMP/err" 2>&1; then
+    echo "FAIL (lib)     $f"; grep -v '^ ' "$TMP/err" | head -5 | sed 's/^/    /'; fail=$((fail+1))
+  else pass=$((pass+1)); fi
+done
+echo "ok   lib/*/*.grav (each checks on its own)"
+
 # Programs that must not compile: `grav check`'s diagnostics are golden-checked.
 for f in tests/errors/*.grav; do
   name="errors_$(basename "$f" .grav)"; gold="tests/expected/$name.out"
