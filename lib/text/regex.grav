@@ -1,0 +1,210 @@
+// lib/text/regex.grav — regular expressions (POSIX extended syntax, from the C library).
+//
+//   let date = new Regex("([0-9]{4})-([0-9]{2})-([0-9]{2})")
+//   let m = date.find("due 2024-03-15!")
+//   if (m != null) { print(m.group(1)) }               // 2024
+//   print(date.replaceAll("2024-03-15", "$3/$2/$1"))    // 15/03/2024
+//
+// Syntax: . [abc] [^a-z] * + ? {n,m} | ( ) ^ $ and classes like [[:digit:]],
+// [[:alpha:]], [[:space:]]. Positions are byte offsets, like s[i] and Str.indexOf.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "string.grav"
+import "strbuf.grav"
+
+namespace std.text {
+
+    %{
+    #include <regex.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #define GRAV_RE_SLOTS 10
+    /* Compiles `pat`; on failure returns 0 and writes the reason into `err` (a counted string). */
+    static void* grav_re_compile(const char* pat, int icase, const char** err) {
+        regex_t* re = (regex_t*)malloc(sizeof(regex_t));
+        int rc = regcomp(re, pat, REG_EXTENDED | (icase ? REG_ICASE : 0));
+        if (rc != 0) {
+            char buf[256]; regerror(rc, re, buf, sizeof buf);
+            size_t n = strlen(buf); char* m = grav_str_new(n); memcpy(m, buf, n + 1);
+            *err = m; free(re); return 0;
+        }
+        return re;
+    }
+    static void grav_re_free(void* re) { if (re) { regfree((regex_t*)re); free(re); } }
+    static int grav_re_groups(void* re) { return (int)((regex_t*)re)->re_nsub; }
+    /* Searches s from byte `from`; fills out[2i], out[2i+1] with group i's absolute
+       start and end (-1 when the group did not take part). Returns whether it matched. */
+    static int grav_re_search(void* re, const char* s, int from, int* out) {
+        regmatch_t m[GRAV_RE_SLOTS];
+        if (regexec((regex_t*)re, s + from, GRAV_RE_SLOTS, m, from > 0 ? REG_NOTBOL : 0) != 0) return 0;
+        for (int i = 0; i < GRAV_RE_SLOTS; i++) {
+            out[2 * i] = m[i].rm_so < 0 ? -1 : (int)m[i].rm_so + from;
+            out[2 * i + 1] = m[i].rm_eo < 0 ? -1 : (int)m[i].rm_eo + from;
+        }
+        return 1;
+    }
+    %}
+
+    // One match: the matched text, where it is, and its capture groups.
+    class RegexMatch {
+        // The whole matched text.
+        readonly text: string
+        // Byte offset where the match starts.
+        readonly start: int
+        // Byte offset just after the match.
+        readonly end: int
+        private groups: Array<string>
+        constructor(text: string, start: int, end: int, groups: Array<string>) {
+            self.text = text; self.start = start; self.end = end; self.groups = groups
+        }
+        // Capture group i (0 is the whole match); "" when the group did not take part.
+        // IndexError for a group the pattern does not have.
+        public fn group(i: int) -> string {
+            if (i == 0) { return self.text }
+            return self.groups.get(i - 1)
+        }
+        // The number of capture groups in the pattern.
+        public fn groupCount() -> int { return self.groups.size() }
+        // Every capture group (not the whole match), in order.
+        public fn groupList() -> Array<string> { return self.groups.copy() }
+        // As text: the matched text.
+        public fn toString() -> string { return self.text }
+    }
+
+    // A compiled regular expression (POSIX extended syntax).
+    class Regex {
+        // The pattern as written.
+        readonly pattern: string
+        private re: byte*
+        private ngroups: int
+
+        // Compiles `pattern`; ValueError when it is not a valid regular expression.
+        constructor(pattern: string) { self.pattern = pattern; self.compile(false) }
+        // Compiles `pattern`, ignoring upper/lower case when `ignoreCase` is true.
+        constructor(pattern: string, ignoreCase: bool) { self.pattern = pattern; self.compile(ignoreCase) }
+        destructor() { %{ grav_re_free(self->re); %}; }
+
+        private fn compile(icase: bool) {
+            let p = self.pattern
+            let err = ""
+            self.re = %{ (unsigned char*)grav_re_compile(p, icase, &err) %} as byte*
+            if (err != "") { throw new ValueError("bad regular expression '${p}': ${err}") }
+            self.ngroups = %{ grav_re_groups(self->re) %} as int
+            if (self.ngroups > 9) { throw new ValueError("regular expression '${p}' has more than 9 groups") }
+        }
+
+        // Whether the pattern matches somewhere in `s`.
+        public fn test(s: string) -> bool { return self.find(s) != null }
+        // Whether the pattern matches the whole of `s`.
+        public fn matches(s: string) -> bool {
+            let m = self.find(s)
+            return m != null && m.start == 0 && m.end == s.length
+        }
+        // The first match in `s`, or null.
+        public fn find(s: string) -> RegexMatch { return self.findFrom(s, 0) }
+        // The first match at or after byte offset `from`, or null.
+        public fn findFrom(s: string, from: int) -> RegexMatch {
+            if (from < 0 || from > s.length) { return null }
+            let offs: int[20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            let found = %{ grav_re_search(self->re, s, from, offs.data) %} as bool
+            if (!found) { return null }
+            let groups = new Array<string>()
+            for (g in 1..=self.ngroups) {
+                let a = offs[2 * g]
+                groups.push(a < 0 ? "" : s[a..offs[2 * g + 1]])
+            }
+            return new RegexMatch(s[offs[0]..offs[1]], offs[0], offs[1], groups)
+        }
+        // Every non-overlapping match in `s`, left to right.
+        public fn findAll(s: string) -> Array<RegexMatch> {
+            let out = new Array<RegexMatch>()
+            let at = 0
+            while (at <= s.length) {
+                let m = self.findFrom(s, at)
+                if (m == null) { break }
+                out.push(m)
+                at = m.end > m.start ? m.end : m.end + 1      // step past an empty match
+            }
+            return out
+        }
+        // The text of every match.
+        public fn findAllText(s: string) -> Array<string> {
+            return self.findAll(s).mapTo(fn(m: RegexMatch) => m.text)
+        }
+        // The number of non-overlapping matches.
+        public fn count(s: string) -> int { return self.findAll(s).size() }
+
+        // `s` with the first match replaced by `replacement`, where $0 is the whole
+        // match, $1..$9 are groups and $$ is a dollar sign.
+        public fn replace(s: string, replacement: string) -> string { return self.replaceN(s, replacement, 1) }
+        // `s` with every match replaced by `replacement` ($0, $1..$9, $$ as in replace).
+        public fn replaceAll(s: string, replacement: string) -> string { return self.replaceN(s, replacement, -1) }
+        // `s` with every match replaced by what `f` returns for it.
+        public fn replaceAllWith(s: string, f: fn(RegexMatch) -> string) -> string {
+            let sb = new StringBuilder()
+            let last = 0
+            for (m in self.findAll(s)) {
+                sb.append(s[last..m.start]).append(f(m))
+                last = m.end
+            }
+            return sb.append(s[last..]).toString()
+        }
+        private fn replaceN(s: string, replacement: string, limit: int) -> string {
+            let sb = new StringBuilder()
+            let last = 0
+            let done = 0
+            for (m in self.findAll(s)) {
+                if (limit >= 0 && done >= limit) { break }
+                sb.append(s[last..m.start]).append(Regex.expand(replacement, m))
+                last = m.end
+                done += 1
+            }
+            return sb.append(s[last..]).toString()
+        }
+        private static fn expand(template: string, m: RegexMatch) -> string {
+            if (Str.indexOf(template, "$") < 0) { return template }
+            let sb = new StringBuilder()
+            let i = 0
+            while (i < template.length) {
+                let c = template[i]
+                if (c == '$' && i + 1 < template.length) {
+                    let d = template[i + 1]
+                    if (d == '$') { sb.append("$"); i += 2; continue }
+                    if (d >= '0' && d <= '9' && d - '0' <= m.groupCount()) {
+                        sb.append(m.group(d - '0'))
+                        i += 2
+                        continue
+                    }
+                }
+                sb.appendChar(c)
+                i += 1
+            }
+            return sb.toString()
+        }
+
+        // The pieces of `s` between matches.
+        public fn split(s: string) -> Array<string> {
+            let out = new Array<string>()
+            let last = 0
+            for (m in self.findAll(s)) {
+                if (m.end == m.start) { continue }        // empty matches do not split
+                out.push(s[last..m.start])
+                last = m.end
+            }
+            out.push(s[last..])
+            return out
+        }
+
+        // `s` with every character that is special in a pattern escaped, so it matches literally.
+        static fn escape(s: string) -> string {
+            let sb = new StringBuilder()
+            for (ch in s) {
+                if (Str.contains("\\.^$|()[]{}*+?", ch)) { sb.append("\\") }
+                sb.append(ch)
+            }
+            return sb.toString()
+        }
+        // As text: the pattern.
+        public fn toString() -> string { return "/" + self.pattern + "/" }
+    }
+}
