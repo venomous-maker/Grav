@@ -4,6 +4,10 @@
 //   print(d)                              // 2024-02-29 09:30:00
 //   print(d.addDays(1).format("%A %d %B"))
 
+import "../core/exception.grav"
+import "../text/string.grav"
+import "time.grav"
+
 namespace std.sys {
 
     %{
@@ -25,6 +29,17 @@ namespace std.sys {
     static const char* grav_strftime(long long ts, const char* fmt) {
         time_t tt = (time_t)ts; struct tm tmv; struct tm* m = localtime_r(&tt, &tmv); /* thread-safe */
         char* b = grav_str_alloc(256); if (!strftime(b, 256, fmt, m)) b[0] = 0; return b;
+    }
+    char* strptime(const char* s, const char* format, struct tm* tm);   /* POSIX; hidden without _XOPEN_SOURCE */
+    /* strptime into local time; -1 (and *ok = 0) when the text does not fit the format. */
+    static long long grav_strptime(const char* text, const char* fmt, int* ok) {
+        struct tm t = {0}; t.tm_isdst = -1;
+        const char* end = strptime(text, fmt, &t);
+        if (!end) { *ok = 0; return -1; }
+        while (*end == ' ') end++;
+        if (*end) { *ok = 0; return -1; }
+        *ok = 1;
+        return (long long)mktime(&t);
     }
     static long long grav_mktime(int y, int mo, int d, int h, int mi, int s) {
         struct tm t = {0};
@@ -107,6 +122,53 @@ namespace std.sys {
         fn operator>(o: DateTime) -> bool { return self.ts > o.ts; }
         // Whether this moment is not earlier than `o`.
         fn operator>=(o: DateTime) -> bool { return self.ts >= o.ts; }
+
+        // ── parsing and more arithmetic ─────────────────────────────────────────
+        // Parses "2024-02-28", "2024-02-28 09:30", "2024-02-28 09:30:15" or the ISO
+        // "2024-02-28T09:30:15" (local time); ValueError for anything else.
+        static fn parse(text: string) -> DateTime {
+            let t = Str.trim(text);
+            for (f in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"]) {
+                let ok = 0;
+                let ts = %{ grav_strptime(t, f, &ok) %} as long;
+                if (ok != 0) { return new DateTime(ts); }
+            }
+            throw new ValueError("not a date: '${text}' (expected YYYY-MM-DD, optionally with HH:MM[:SS])");
+        }
+        // Parses `text` with a strptime pattern such as "%d/%m/%Y %H:%M" (local time);
+        // ValueError when it does not fit.
+        static fn parse(text: string, pattern: string) -> DateTime {
+            let ok = 0;
+            let ts = %{ grav_strptime(text, pattern, &ok) %} as long;
+            if (ok == 0) { throw new ValueError("'${text}' does not match '${pattern}'"); }
+            return new DateTime(ts);
+        }
+        // "YYYY-MM-DDTHH:MM:SS" (ISO 8601, local time).
+        public fn iso() -> string { return self.format("%Y-%m-%dT%H:%M:%S"); }
+        // Midnight at the start of this day.
+        public fn startOfDay() -> DateTime { return DateTime.of(self.year(), self.month(), self.day()); }
+        // The same day and time `months` later (or earlier when negative); a day that the
+        // target month lacks becomes its last day (Jan 31 + 1 month = Feb 28 or 29).
+        public fn addMonths(months: int) -> DateTime {
+            let total = self.year() * 12 + (self.month() - 1) + months;
+            let y = total / 12;
+            let m = total % 12 + 1;
+            let d = self.day();
+            let last = DateTime.daysInMonth(y, m);
+            return DateTime.of(y, m, d > last ? last : d, self.hour(), self.minute(), self.second());
+        }
+        // The same date `years` later (Feb 29 becomes Feb 28 in a non-leap year).
+        public fn addYears(years: int) -> DateTime { return self.addMonths(years * 12); }
+        // This moment plus a Duration.
+        public fn plus(d: Duration) -> DateTime { return new DateTime(self.ts + d.ms / 1000); }
+        // This moment minus a Duration.
+        public fn minus(d: Duration) -> DateTime { return new DateTime(self.ts - d.ms / 1000); }
+        // The time from this moment until `other` (negative when other is earlier).
+        public fn until(other: DateTime) -> Duration { return Duration.ofSeconds(other.ts - self.ts); }
+        // Whether both are on the same calendar day.
+        public fn isSameDay(other: DateTime) -> bool {
+            return self.year() == other.year() && self.dayOfYear() == other.dayOfYear();
+        }
     }
 
 }

@@ -5,6 +5,10 @@
 //   work()
 //   print("took ${sw.elapsedMs()} ms")
 
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+
 namespace std.sys {
 
     %{
@@ -44,6 +48,89 @@ namespace std.sys {
         public fn elapsedMs() -> long { return self.elapsedNs() / 1000000; }
         // Seconds since the stopwatch was created or reset.
         public fn elapsedSeconds() -> double { return (self.elapsedNs() as double) / 1000000000.0; }
+        // The time since the stopwatch was created or reset.
+        public fn elapsed() -> Duration { return new Duration(self.elapsedMs()); }
     }
+
+    // A length of time, stored in milliseconds: Duration.ofMinutes(90) prints as "1h30m".
+    class Duration {
+        // The length in milliseconds.
+        readonly ms: long
+        constructor(ms: long) { self.ms = ms; }
+        // A duration of `n` milliseconds.
+        static fn ofMillis(n: long) -> Duration { return new Duration(n); }
+        // A duration of `n` seconds.
+        static fn ofSeconds(n: long) -> Duration { return new Duration(n * 1000); }
+        // A duration of `n` minutes.
+        static fn ofMinutes(n: long) -> Duration { return new Duration(n * 60000); }
+        // A duration of `n` hours.
+        static fn ofHours(n: long) -> Duration { return new Duration(n * 3600000); }
+        // A duration of `n` days.
+        static fn ofDays(n: long) -> Duration { return new Duration(n * 86400000); }
+        // Parses text like "90s", "1h30m", "2d", "250ms", "1h 5m 3s" (units d, h, m, s, ms);
+        // ValueError for anything else.
+        static fn parse(text: string) -> Duration {
+            let t = Str.trim(text);
+            if (t == "") { throw new ValueError("not a duration: ''"); }
+            let total: long = 0;
+            let i = 0;
+            let n = t.length;
+            while (i < n) {
+                while (i < n && t[i] == ' ') { i += 1; }
+                if (i >= n) { break; }
+                let start = i;
+                while (i < n && t[i] >= '0' && t[i] <= '9') { i += 1; }
+                if (i == start) { throw new ValueError("not a duration: '${text}'"); }
+                let num = Format.toLong(t[start..i]);
+                let u = i;
+                while (i < n && t[i] >= 'a' && t[i] <= 'z') { i += 1; }
+                let unit = t[u..i];
+                if (unit == "ms") { total += num; }
+                else if (unit == "s") { total += num * 1000; }
+                else if (unit == "m") { total += num * 60000; }
+                else if (unit == "h") { total += num * 3600000; }
+                else if (unit == "d") { total += num * 86400000; }
+                else { throw new ValueError("not a duration: '${text}' (units are d, h, m, s, ms)"); }
+            }
+            return new Duration(total);
+        }
+        // The length in whole seconds.
+        public fn seconds() -> long { return self.ms / 1000; }
+        // The length in whole minutes.
+        public fn minutes() -> long { return self.ms / 60000; }
+        // The length in whole hours.
+        public fn hours() -> long { return self.ms / 3600000; }
+        // The length in seconds, with the fraction.
+        public fn totalSeconds() -> float { return (self.ms as float) / 1000.0; }
+        // The sum of two durations.
+        fn operator+(o: Duration) -> Duration { return new Duration(self.ms + o.ms); }
+        // The difference of two durations.
+        fn operator-(o: Duration) -> Duration { return new Duration(self.ms - o.ms); }
+        // The duration multiplied by a whole number.
+        fn operator*(k: long) -> Duration { return new Duration(self.ms * k); }
+        // Whether two durations are equally long.
+        fn operator==(o: Duration) -> bool { return self.ms == o.ms; }
+        // Whether this duration is shorter.
+        fn operator<(o: Duration) -> bool { return self.ms < o.ms; }
+        // As text: "1d2h", "1h30m", "45s", "250ms", "0s" (negative durations start with "-").
+        public fn toString() -> string {
+            if (self.ms == 0) { return "0s"; }
+            let rest = self.ms < 0 ? -self.ms : self.ms;
+            let out = self.ms < 0 ? "-" : "";
+            let d = rest / 86400000; rest = rest % 86400000;
+            let h = rest / 3600000; rest = rest % 3600000;
+            let m = rest / 60000; rest = rest % 60000;
+            let s = rest / 1000; let msPart = rest % 1000;
+            if (d > 0) { out += "${d}d"; }
+            if (h > 0) { out += "${h}h"; }
+            if (m > 0) { out += "${m}m"; }
+            if (s > 0) { out += "${s}s"; }
+            if (msPart > 0) { out += "${msPart}ms"; }
+            return out;
+        }
+        // Pauses the calling thread for this long.
+        public fn sleep() { Time.sleepMs(self.ms); }
+    }
+
 
 }
