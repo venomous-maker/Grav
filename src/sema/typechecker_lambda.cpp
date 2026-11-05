@@ -122,6 +122,10 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
         retKnown = false; // inferred from the body expression, or from the block's returns
     }
 
+    if (!e.selfName.empty() && (!retKnown || ret.isError())) {
+        error(e.line, e.col, "'" + e.selfName + "' calls itself, so its lambda needs a result type: fn(...) -> T { ... }");
+        ret = TypeRef::prim(TypeRef::Kind::Error); // its own calls then report nothing more
+    }
     // The body is checked like a fresh function nested in the current scopes.
     TypeRef savedReturn = currentReturn_;
     int savedLoop = loopDepth_;
@@ -130,6 +134,8 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
     pushScope();
     for (size_t i = 0; i < e.params.size(); ++i)
         declareLocal(e.params[i].name, ptypes[i], true, false, e.line, e.col);
+    if (!e.selfName.empty()) // the lambda itself, for its own recursive calls
+        declareLocal(e.selfName, TypeRef::function(ptypes, ret), true, true, e.line, e.col);
     loopDepth_ = 0;
     inDefer_ = false;
     inAsync_ = false;
@@ -170,6 +176,24 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
     e.hasReturnType = true;
     e.fnType = TypeRef::function(ptypes, ret);
     return e.fnType;
+}
+
+// Does the lambda's body use `name` (so a `let name = <lambda>` calls itself)?
+bool TypeChecker::lambdaMentions(LambdaExpr &lam, const std::string &name) {
+    bool found = false;
+    auto look = [&](Expr &x) {
+        if (auto *n = dynamic_cast<NameExpr *>(&x); n && n->name == name) found = true;
+    };
+    if (lam.exprBody) {
+        Block tmp;
+        auto st = std::make_unique<ExprStmt>();
+        st->expr = std::move(lam.exprBody);
+        tmp.statements.push_back(std::move(st));
+        visitBlockExprs(tmp, look);
+        lam.exprBody = std::move(static_cast<ExprStmt *>(tmp.statements[0].get())->expr);
+    }
+    visitBlockExprs(lam.body, look);
+    return found;
 }
 
 // The common type of a block lambda's `return` values.

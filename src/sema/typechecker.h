@@ -195,6 +195,7 @@ private:
     TypeRef bindMethod(MemberExpr &e, const TypeRef &objType, const TypeRef *want);
     TypeRef inferReturnType(const std::vector<TypeRef> &types, int line, int col, const std::string &what);
     void unreachableDefault(SwitchStmt &s);
+    bool lambdaMentions(LambdaExpr &lam, const std::string &name);
     // `?.` lowers to a null guard returning a zero sentinel, so its result must be
     // a scalar/reference/enum (not a value-type struct or interface fat pointer).
     void checkOptionalResult(int line, int col, const TypeRef &t, bool allowVoid);

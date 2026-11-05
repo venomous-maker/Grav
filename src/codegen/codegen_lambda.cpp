@@ -82,6 +82,9 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
         for (const auto &c : lam.captures)
             line(cTy(c.type) + " " + c.name + " = grav_env->" + c.name + ";");
     }
+    if (!lam.selfName.empty()) // the lambda's own name: itself, borrowed (not released here)
+        line("GravFn " + lam.selfName + " = (GravFn){ .fn = (void (*)(void))" + fn + ", .env = grav_envp }; (void)" +
+             lam.selfName + ";");
     if (lam.isArrow) {
         volatileNames_.clear();
         cleanups_.clear();

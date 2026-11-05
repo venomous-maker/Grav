@@ -148,7 +148,7 @@ ExprPtr cloneExpr(const Expr *e) {
         auto n = mkE<LambdaExpr>(e);
         n->params = x->params; n->paramTyped = x->paramTyped;
         n->hasReturnType = x->hasReturnType; n->returnType = x->returnType;
-        n->isArrow = x->isArrow; n->isMatch = x->isMatch; n->exprBody = cloneExpr(x->exprBody.get());
+        n->isArrow = x->isArrow; n->isMatch = x->isMatch; n->selfName = x->selfName; n->exprBody = cloneExpr(x->exprBody.get());
         n->body = cloneBlock(x->body);
         return n;
     }

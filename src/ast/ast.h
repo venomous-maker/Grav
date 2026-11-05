@@ -622,6 +622,9 @@ struct LambdaExpr : Expr {
     TypeRef returnType;
     bool isArrow = false;          // `=> expr` form
     bool isMatch = false;          // the lambda a `match` expression lowers to
+    // `let fib = fn(n: int) -> int { ... fib(n - 1) ... }` (and nested `fn name`):
+    // inside the body this name is the lambda itself, not a captured copy.
+    std::string selfName;
     ExprPtr exprBody;              // arrow form
     Block body;                    // block form
     // Filled by the checker.

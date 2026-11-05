@@ -478,6 +478,8 @@ void TypeChecker::unreachableDefault(SwitchStmt &s) {
 }
 
 void TypeChecker::checkLet(LetStmt &s) {
+    if (auto *lam = dynamic_cast<LambdaExpr *>(s.init.get()); lam && lam->selfName.empty() && lambdaMentions(*lam, s.name))
+        lam->selfName = s.name; // a lambda that calls itself
     if (s.hasDeclaredType) {
         bool ok = true;
         TypeRef c = reg_->resolveCanonical(s.declaredType, currentNs_, ok);
@@ -524,6 +526,10 @@ void TypeChecker::checkLet(LetStmt &s) {
 
 void TypeChecker::checkAssign(AssignStmt &s) {
     if (std::exchange(assignAtBlockLevel_, false) && rewriteElementStore(s)) return;
+    if (auto *lam = dynamic_cast<LambdaExpr *>(s.value.get()))
+        if (auto *n = dynamic_cast<NameExpr *>(s.target.get()); n && !s.isCompound && lam->selfName.empty() &&
+                                                                lambdaMentions(*lam, n->name))
+            lam->selfName = n->name; // `fib = fn(...) { ... fib(...) ... }`
     // `obj[k] = value` on a class with `operator[]=` calls `op_index_set(k, value)`.
     if (auto *ix = dynamic_cast<IndexExpr *>(s.target.get())) {
         TypeRef bt = checkExpr(*ix->base);
