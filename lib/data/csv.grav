@@ -1,0 +1,126 @@
+// lib/data/csv.grav — reading and writing CSV (comma-separated values, RFC 4180).
+//
+//   let rows = Csv.parse("name,age\nada,36\n")       // [["name", "age"], ["ada", "36"]]
+//   let people = Csv.parseRecords(text)               // one HashMap per row, keyed by the header
+//   print(Csv.format(rows))
+//
+// Fields may be quoted ("a, b"), with "" for a quote inside and line breaks allowed
+// inside quotes. Lines may end in \n or \r\n. Other separators (tab, ;) use the
+// `...With` variants.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../text/strbuf.grav"
+import "../text/string.grav"
+
+namespace std.data {
+
+    // Parsing and formatting CSV text.
+    class Csv {
+        // The rows of comma-separated `text`, each a list of fields. A blank last line
+        // is ignored. ValueError for a quote that is never closed.
+        static fn parse(text: string) -> Array<Array<string>> { return Csv.parseWith(text, ",") }
+
+        // The rows of `text` with fields separated by `sep` (one character, such as "\t" or ";").
+        static fn parseWith(text: string, sep: string) -> Array<Array<string>> {
+            if (sep.length != 1) { throw new ValueError("Csv: the separator must be one character, got '${sep}'") }
+            let d = sep[0]
+            let rows = new Array<Array<string>>()
+            let row = new Array<string>()
+            let field = new StringBuilder()
+            let quoted = false
+            let fieldStarted = false
+            let i = 0
+            let n = text.length
+            while (i < n) {
+                let c = text[i]
+                if (quoted) {
+                    if (c == '"') {
+                        if (i + 1 < n && text[i + 1] == '"') { field.append("\""); i += 2; continue }
+                        quoted = false
+                    } else {
+                        field.appendChar(c)
+                    }
+                    i += 1
+                    continue
+                }
+                if (c == '"' && !fieldStarted) {
+                    quoted = true
+                    fieldStarted = true
+                } else if (c == d) {
+                    row.push(field.toString())
+                    field.clear()
+                    fieldStarted = false
+                } else if (c == '\n' || c == '\r') {
+                    row.push(field.toString())
+                    field.clear()
+                    fieldStarted = false
+                    rows.push(row)
+                    row = new Array<string>()
+                    if (c == '\r' && i + 1 < n && text[i + 1] == '\n') { i += 1 }
+                } else {
+                    field.appendChar(c)
+                    fieldStarted = true
+                }
+                i += 1
+            }
+            if (quoted) { throw new ValueError("Csv: a quoted field is never closed") }
+            if (fieldStarted || !field.isEmpty() || !row.isEmpty()) {
+                row.push(field.toString())
+                rows.push(row)
+            }
+            return rows
+        }
+
+        // The rows after the first, each as a map from the first row's column names to
+        // the row's values (missing fields are "").
+        static fn parseRecords(text: string) -> Array<HashMap<string, string>> {
+            return Csv.recordsOf(Csv.parse(text))
+        }
+        // The same as parseRecords, with fields separated by `sep`.
+        static fn parseRecordsWith(text: string, sep: string) -> Array<HashMap<string, string>> {
+            return Csv.recordsOf(Csv.parseWith(text, sep))
+        }
+        private static fn recordsOf(rows: Array<Array<string>>) -> Array<HashMap<string, string>> {
+            let out = new Array<HashMap<string, string>>()
+            if (rows.isEmpty()) { return out }
+            let header = rows[0]
+            for (r in 1..rows.size()) {
+                let m = new HashMap<string, string>()
+                let row = rows[r]
+                for (c in 0..header.size()) { m[header[c]] = c < row.size() ? row[c] : "" }
+                out.push(m)
+            }
+            return out
+        }
+
+        // One field, quoted when it contains the separator, a quote or a line break.
+        static fn quote(field: string) -> string { return Csv.quoteWith(field, ",") }
+        // One field, quoted when it contains `sep`, a quote or a line break.
+        static fn quoteWith(field: string, sep: string) -> string {
+            let needs = Str.contains(field, sep) || Str.contains(field, "\"") ||
+                        Str.contains(field, "\n") || Str.contains(field, "\r")
+            if (!needs) { return field }
+            return "\"" + Str.replace(field, "\"", "\"\"") + "\""
+        }
+        // One row as a CSV line (without the line break).
+        static fn formatRow(row: Array<string>) -> string { return Csv.formatRowWith(row, ",") }
+        // One row with fields separated by `sep`.
+        static fn formatRowWith(row: Array<string>, sep: string) -> string {
+            let sb = new StringBuilder()
+            for (i, f in row) {
+                if (i > 0) { sb.append(sep) }
+                sb.append(Csv.quoteWith(f, sep))
+            }
+            return sb.toString()
+        }
+        // Rows as CSV text, each line ending in "\n".
+        static fn format(rows: Array<Array<string>>) -> string { return Csv.formatWith(rows, ",") }
+        // Rows as text with fields separated by `sep`.
+        static fn formatWith(rows: Array<Array<string>>, sep: string) -> string {
+            let sb = new StringBuilder()
+            for (r in rows) { sb.append(Csv.formatRowWith(r, sep)).append("\n") }
+            return sb.toString()
+        }
+    }
+}
