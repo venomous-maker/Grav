@@ -1,0 +1,187 @@
+// IP addresses and ranges, Unix sockets, DNS helpers and SMTP (local only).
+import "std"
+import "std/net"
+
+test "IP addresses: parsing, kinds and canonical text" {
+    let a = IpAddress.parse("192.168.1.20")
+    assert(a.isV4())
+    assert(a.isPrivate())
+    assert(!a.isPublic())
+    assertEq(a.toString(), "192.168.1.20")
+    let six = IpAddress.parse("2001:0DB8:0000:0000:0000:0000:0000:0001")
+    assertEq(six.toString(), "2001:db8::1")
+    assert(six.isV6())
+    assert(IpAddress.parse("::1").isLoopback())
+    assert(IpAddress.parse("127.8.9.10").isLoopback())
+    assert(IpAddress.parse("fe80::1%eth0").isLinkLocal())
+    assert(IpAddress.parse("239.1.2.3").isMulticast())
+    assert(IpAddress.parse("0.0.0.0").isUnspecified())
+    assert(IpAddress.parse("8.8.8.8").isPublic())
+    assert(!IpAddress.parse("100.64.1.1").isPublic())      // carrier-grade NAT
+    let mapped = IpAddress.parse("::ffff:10.0.0.1")
+    assert(mapped.isV4Mapped())
+    assertEq(mapped.unmapped().toString(), "10.0.0.1")
+    assert(mapped.isPrivate())
+    assert(IpAddress.parse("[::1]").equals(IpAddress.parse("0:0:0:0:0:0:0:1")))
+    assertEq(IpAddress.parse("10.1.2.3").toBytes().toHex(), "0a010203")
+    assert(!IpAddress.isValid("256.1.1.1"))
+    assert(!IpAddress.isValid("example.com"))
+}
+
+test "CIDR ranges" {
+    let lan = Cidr.parse("192.168.0.0/16")
+    assert(lan.contains(IpAddress.parse("192.168.200.7")))
+    assert(!lan.contains(IpAddress.parse("192.169.0.1")))
+    assert(lan.containsText("::ffff:192.168.1.1"))
+    assert(!lan.containsText("not an address"))
+    assertEq(Cidr.parse("10.9.8.7/8").toString(), "10.0.0.0/8")
+    assertEq(Cidr.parse("2001:db8:abcd::/48").network().toString(), "2001:db8:abcd::")
+    assert(Cidr.parse("2001:db8::/32").contains(IpAddress.parse("2001:db8:ffff::1")))
+    assert(!Cidr.parse("2001:db8::/32").contains(IpAddress.parse("10.0.0.1")))
+    assert(Cidr.parse("10.0.0.5").contains(IpAddress.parse("10.0.0.5")))
+    assert(Cidr.parse("0.0.0.0/0").contains(IpAddress.parse("1.2.3.4")))
+    assert(!Cidr.isValid("10.0.0.0/33"))
+    assertEq(Cidr.parse("172.16.5.4/12").prefix(), 12)
+}
+
+test "Unix sockets carry lines" {
+    let path = "/tmp/grav-test-${Process.pid()}.sock"
+    let listener = UnixSocket.listen(path)
+    let server = Thread.spawn(fn() {
+        let c = listener.accept()
+        c.lines(fn(line: string) { c.writeLine("got " + line) })
+        c.close()
+    })
+    let c = UnixSocket.connect(path)
+    c.writeLine("over unix")
+    assertEq(c.readLine(), "got over unix")
+    assert(Str.startsWith(c.peerAddress(), "unix:"))
+    c.shutdownWrite()
+    server.join()
+    c.close()
+    UnixSocket.remove(listener, path)
+    assert(!new File(path).exists())
+    let refused = false
+    try { UnixSocket.connect(path) } catch (e: NetError) { refused = true }
+    assert(refused)
+}
+
+test "DNS and reachability helpers" {
+    assert(Net.hostname() != "")
+    assert(Net.resolve("localhost").size() > 0)
+    assertEq(Net.reverse("not an ip"), "")
+    let port = Net.freePort()
+    assert(port > 0)
+    assert(!Net.isReachable("127.0.0.1", port, 500))
+    let l = TcpListener.bind("127.0.0.1", port)
+    assert(Net.isReachable("127.0.0.1", port, 500))
+    l.close()
+}
+
+// A tiny SMTP server for one session: STARTTLS when given a context, AUTH, and
+// a record of what it was sent.
+class FakeSmtp {
+    public listener: TcpListener
+    public thread: Thread
+    public log: Array<string>
+    constructor(ctx: TlsContext) {
+        self.listener = TcpListener.bind("127.0.0.1", 0)
+        self.log = new Array<string>()
+        let l = self.listener
+        let log = self.log
+        self.thread = Thread.spawn(fn() {
+            let c = l.accept()
+            c.setTimeoutMs(5000)
+            try {
+                c.write("220 fake ESMTP\r\n")
+                let secure = false
+                while (true) {
+                    let line = c.readLine()
+                    if (line == "" && c.eof()) { break }
+                    let cmd = Str.upper(Str.split(line, " ").getOr(0, ""))
+                    if (cmd == "EHLO") {
+                        c.write("250-fake\r\n" + (ctx != null && !secure ? "250-STARTTLS\r\n" : "") + "250 AUTH PLAIN LOGIN\r\n")
+                    } else if (cmd == "STARTTLS") {
+                        c.write("220 go ahead\r\n")
+                        Tls.startServer(c, ctx)
+                        secure = true
+                        log.push("tls")
+                    } else if (cmd == "AUTH") {
+                        let decoded = Base64.decodeBytes(Str.split(line, " ").getOr(2, ""))
+                        log.push("auth " + decoded.slice(1, decoded.size()).toString())   // "user" (the text stops at the NUL)
+                        c.write("235 ok\r\n")
+                    } else if (cmd == "MAIL" || cmd == "RCPT") {
+                        log.push(line)
+                        c.write("250 ok\r\n")
+                    } else if (cmd == "DATA") {
+                        c.write("354 send it\r\n")
+                        let body = new StringBuilder()
+                        while (true) {
+                            let d = c.readLine()
+                            if (d == ".") { break }
+                            body.append(d).append("\n")
+                        }
+                        log.push("data " + body.toString())
+                        c.write("250 queued\r\n")
+                    } else if (cmd == "QUIT") {
+                        c.write("221 bye\r\n")
+                        break
+                    } else {
+                        c.write("500 what\r\n")
+                    }
+                }
+            } catch (e: Exception) { log.push("error " + e.message()) }
+            c.close()
+        })
+    }
+    public fn port() -> int { return self.listener.port() }
+    public fn finish() { self.thread.join(); self.listener.close() }
+}
+
+test "SMTP: STARTTLS, login and a multipart message" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let server = new FakeSmtp(ctx)
+    let mail = new EmailMessage()
+        .from("Ada <ada@example.com>").to("bob@example.com").cc("Cy <cy@example.com>").bcc("dee@example.com")
+        .subject("Grüße").text("Hello\n.hidden dot line").html("<p>Hello</p>")
+        .attach("data.csv", "text/csv", Bytes.fromString("a,b\n1,2\n"))
+    new SmtpClient("localhost", server.port())
+        .withTls(TlsContext.client().trustPem(ctx.certificatePem()))
+        .login("ada", "pw").send(mail)
+    server.finish()
+    let log = server.log
+    assertEq(log.get(0), "tls")
+    assert(Str.startsWith(log.get(1), "auth ada"))
+    assertEq(log.get(2), "MAIL FROM:<ada@example.com>")
+    assertEq(log.get(3), "RCPT TO:<bob@example.com>")
+    assertEq(log.get(4), "RCPT TO:<cy@example.com>")
+    assertEq(log.get(5), "RCPT TO:<dee@example.com>")
+    let data = log.get(6)
+    assert(Str.contains(data, "Subject: =?UTF-8?B?"))
+    assert(Str.contains(data, "Cc: Cy <cy@example.com>"))
+    assert(!Str.contains(data, "dee@example.com"))          // bcc stays out of the message
+    assert(Str.contains(data, "multipart/mixed"))
+    assert(Str.contains(data, "multipart/alternative"))
+    assert(Str.contains(data, "filename=\"data.csv\""))
+    assertEq(log.size(), 7)
+}
+
+test "SMTP refuses to log in without TLS, and reports server errors" {
+    let server = new FakeSmtp(null)                         // offers no STARTTLS
+    let refused = ""
+    try {
+        new SmtpClient("127.0.0.1", server.port()).login("ada", "pw")
+            .send(new EmailMessage().from("a@x.test").to("b@x.test").text("hi"))
+    } catch (e: NetError) { refused = e.message() }
+    assert(Str.contains(refused, "does not offer STARTTLS"))
+    server.finish()
+    let plain = new FakeSmtp(null)
+    new SmtpClient("127.0.0.1", plain.port()).withSecurity("none")
+        .send(new EmailMessage().from("a@x.test").to("b@x.test").subject("plain").text("hi"))
+    plain.finish()
+    assertEq(plain.log.get(0), "MAIL FROM:<a@x.test>")
+    let missing = false
+    try { new SmtpClient("127.0.0.1", 1).send(new EmailMessage().to("b@x.test")) } catch (e: ValueError) { missing = true }
+    assert(missing)                                         // no From address
+}

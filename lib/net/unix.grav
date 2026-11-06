@@ -1,0 +1,86 @@
+// lib/net/unix.grav — Unix domain sockets: connections between programs on the
+// same machine through a file path, faster than TCP over localhost and guarded
+// by file permissions.
+//
+//   let listener = UnixSocket.listen("/tmp/app.sock")
+//   // another program:
+//   let c = UnixSocket.connect("/tmp/app.sock")
+//   c.writeLine("ping")
+//
+// The streams and listeners are the TCP classes ([TcpStream], [TcpListener]), so
+// everything that works on TCP connections, HTTP included, works here too.
+import "../core/exception.grav"
+import "../io/fs.grav"
+import "tcp.grav"
+
+namespace std.net {
+
+    %{
+    #include <sys/socket.h>
+    #include <sys/stat.h>
+    #include <sys/un.h>
+    #include <unistd.h>
+    static int grav_unix_addr(const char* path, struct sockaddr_un* a, const char** err) {
+        memset(a, 0, sizeof *a);
+        a->sun_family = AF_UNIX;
+        if (strlen(path) >= sizeof a->sun_path) { *err = grav_net_copy("the socket path is too long"); return -1; }
+        strcpy(a->sun_path, path);
+        return 0;
+    }
+    static int grav_unix_connect(const char* path, const char** err) {
+        grav_net_init();
+        struct sockaddr_un a;
+        if (grav_unix_addr(path, &a, err) != 0) return -1;
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd < 0) { *err = grav_net_err("cannot create a socket", strerror(errno)); return -1; }
+        if (connect(fd, (struct sockaddr*)&a, sizeof a) != 0) {
+            *err = grav_net_err("cannot connect", strerror(errno));
+            close(fd);
+            return -1;
+        }
+        return fd;
+    }
+    static int grav_unix_listen(const char* path, int backlog, const char** err) {
+        grav_net_init();
+        struct sockaddr_un a;
+        if (grav_unix_addr(path, &a, err) != 0) return -1;
+        struct stat st;
+        if (stat(path, &st) == 0) {
+            if (!S_ISSOCK(st.st_mode)) { *err = grav_net_copy("a file that is not a socket is in the way"); return -1; }
+            unlink(path);                                   /* a socket left by an earlier run */
+        }
+        int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (fd < 0) { *err = grav_net_err("cannot create a socket", strerror(errno)); return -1; }
+        if (bind(fd, (struct sockaddr*)&a, sizeof a) != 0 || listen(fd, backlog) != 0) {
+            *err = grav_net_err("cannot listen", strerror(errno));
+            close(fd);
+            return -1;
+        }
+        return fd;
+    }
+    %}
+
+    // Unix domain sockets.
+    class UnixSocket {
+        // Connects to the socket at `path` (NetError when nothing listens there).
+        static fn connect(path: string) -> TcpStream {
+            let err = "";
+            let fd = %{ grav_unix_connect(path, &err) %} as int;
+            if (fd < 0) { throw new NetError(err + " (" + path + ")"); }
+            return new TcpStream(fd, "unix:" + path);
+        }
+        // Listens at `path`, replacing a socket file left by an earlier run (but
+        // never another kind of file). Delete the file with remove(path) when done.
+        static fn listen(path: string) -> TcpListener {
+            let err = "";
+            let fd = %{ grav_unix_listen(path, 128, &err) %} as int;
+            if (fd < 0) { throw new NetError(err + " (" + path + ")"); }
+            return new TcpListener(fd, "unix:" + path);
+        }
+        // Closes `listener` and deletes its socket file.
+        static fn remove(listener: TcpListener, path: string) {
+            listener.close();
+            if (new File(path).exists()) { new File(path).delete(); }
+        }
+    }
+}

@@ -39,6 +39,7 @@ namespace std.net {
     #include <sys/socket.h>
     #include <sys/time.h>
     #include <sys/types.h>
+    #include <sys/un.h>
     #include <unistd.h>
 
     /* A connection: the socket, its read buffer, and (after a TLS handshake,
@@ -93,6 +94,7 @@ namespace std.net {
     static const char* grav_addr_text(const struct sockaddr* sa) {
         char host[INET6_ADDRSTRLEN] = "?";
         int port = 0;
+        if (sa->sa_family == AF_UNIX) return grav_net_copy("unix");
         if (sa->sa_family == AF_INET) {
             const struct sockaddr_in* a = (const struct sockaddr_in*)sa;
             inet_ntop(AF_INET, &a->sin_addr, host, sizeof host);
@@ -489,8 +491,27 @@ namespace std.net {
         public fn isClosed() -> bool { return %{ __atomic_load_n(&self->closedFlag, __ATOMIC_SEQ_CST) %} as int == 1; }
     }
 
-    // Name resolution helpers.
+    // Name resolution and other helpers.
     class Net {
+        // This machine's host name.
+        static fn hostname() -> string {
+            return %{ ({ char grav_hn[256] = ""; gethostname(grav_hn, sizeof grav_hn - 1); grav_net_copy(grav_hn); }) %} as string;
+        }
+        // The host name registered for an address (reverse DNS), "" when there is none.
+        static fn reverse(ip: string) -> string {
+            return %{ grav_net_reverse(ip) %} as string;
+        }
+        // Whether a TCP connection to host:port succeeds within `timeoutMs`.
+        static fn isReachable(host: string, port: int, timeoutMs: int) -> bool {
+            try { TcpStream.connect(host, port, timeoutMs).close(); return true; } catch (e: Exception) { return false; }
+        }
+        // A TCP port that is free on this machine right now.
+        static fn freePort() -> int {
+            let l = TcpListener.bind("127.0.0.1", 0);
+            let p = l.port();
+            l.close();
+            return p;
+        }
         // Every address `host` resolves to (IPv4 and IPv6), as text.
         static fn resolve(host: string) -> Array<string> {
             let out = new Array<string>();
@@ -523,6 +544,19 @@ namespace std.net {
     }
 
     %{
+    static const char* grav_net_reverse(const char* ip) {
+        struct sockaddr_storage ss;
+        memset(&ss, 0, sizeof ss);
+        socklen_t len = 0;
+        struct sockaddr_in* a4 = (struct sockaddr_in*)&ss;
+        struct sockaddr_in6* a6 = (struct sockaddr_in6*)&ss;
+        if (inet_pton(AF_INET, ip, &a4->sin_addr) == 1) { a4->sin_family = AF_INET; len = sizeof *a4; }
+        else if (inet_pton(AF_INET6, ip, &a6->sin6_addr) == 1) { a6->sin6_family = AF_INET6; len = sizeof *a6; }
+        else return grav_net_copy("");
+        char host[1025] = "";
+        if (getnameinfo((struct sockaddr*)&ss, len, host, sizeof host, 0, 0, NI_NAMEREQD) != 0) host[0] = 0;
+        return grav_net_copy(host);
+    }
     static const char* grav_net_slice(const char* s, int n) {
         int start = (s[0] == '[') ? 1 : 0;
         int end = (n > 0 && s[n - 1] == ']') ? n - 1 : n;

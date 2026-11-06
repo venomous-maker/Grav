@@ -1,0 +1,339 @@
+// lib/net/smtp.grav — sending email over SMTP, with STARTTLS or TLS and login.
+//
+//   let mail = new EmailMessage()
+//       .from("Ada <ada@example.com>")
+//       .to("bob@example.com")
+//       .subject("Report")
+//       .text("The numbers are attached.")
+//       .attach("report.csv", "text/csv", Bytes.fromString("a,b\n1,2\n"))
+//   new SmtpClient("smtp.example.com", 587).login("ada@example.com", password).send(mail)
+//
+// Port 587 (submission) upgrades to TLS with STARTTLS, port 465 uses TLS from
+// the start, and other ports use STARTTLS when the server offers it. Set
+// `security` to "none" only for a local test server. Failures throw NetError
+// with the server's reply.
+import "../collections/array.grav"
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/strbuf.grav"
+import "../text/convert.grav"
+import "../data/bytes.grav"
+import "../data/encoding.grav"
+import "tcp.grav"
+import "tls.grav"
+import "http.grav"
+
+namespace std.net {
+
+    %{
+    #include <time.h>
+    /* RFC 5322 date: "Tue, 15 Nov 1994 08:12:31 +0000". */
+    static const char* grav_mail_date(void) {
+        char buf[64];
+        time_t now = time(0);
+        struct tm g;
+        gmtime_r(&now, &g);
+        strftime(buf, sizeof buf, "%a, %d %b %Y %H:%M:%S +0000", &g);
+        return grav_net_copy(buf);
+    }
+    static int grav_mail_ascii(const char* s) {
+        for (; *s; s++) if ((unsigned char)*s >= 128 || *s == '\r' || *s == '\n') return 0;
+        return 1;
+    }
+    %}
+
+    // An email: addresses, subject, a text and/or HTML body, and attachments.
+    class EmailMessage {
+        // The From address.
+        public sender: string
+        // The To addresses.
+        public recipients: Array<string>
+        // The Cc addresses.
+        public ccList: Array<string>
+        // The hidden recipients.
+        public bccList: Array<string>
+        // The Subject.
+        public subjectLine: string
+        // The plain-text body.
+        public textBody: string
+        // The HTML body.
+        public htmlBody: string
+        // The Reply-To address ("" for none).
+        public replyAddress: string
+        // Extra headers.
+        public headers: Headers
+        // Attached files.
+        public attachments: Array<FormPart>
+
+        constructor() {
+            self.sender = ""; self.recipients = new Array<string>(); self.ccList = new Array<string>();
+            self.bccList = new Array<string>(); self.subjectLine = ""; self.textBody = ""; self.htmlBody = "";
+            self.replyAddress = ""; self.headers = new Headers(); self.attachments = new Array<FormPart>();
+        }
+        // The sender, "Name <addr@host>" or "addr@host"; returns this message.
+        public fn from(address: string) -> EmailMessage { self.sender = address; return self; }
+        // Adds a recipient; returns this message.
+        public fn to(address: string) -> EmailMessage { self.recipients.push(address); return self; }
+        // Adds a copy recipient (listed in the Cc header).
+        public fn cc(address: string) -> EmailMessage { self.ccList.push(address); return self; }
+        // Adds a hidden recipient (not listed in the message).
+        public fn bcc(address: string) -> EmailMessage { self.bccList.push(address); return self; }
+        // The subject; returns this message.
+        public fn subject(text: string) -> EmailMessage { self.subjectLine = text; return self; }
+        // The plain-text body; returns this message.
+        public fn text(body: string) -> EmailMessage { self.textBody = body; return self; }
+        // An HTML body (sent next to the text one, if any); returns this message.
+        public fn html(body: string) -> EmailMessage { self.htmlBody = body; return self; }
+        // Where replies should go; returns this message.
+        public fn replyTo(address: string) -> EmailMessage { self.replyAddress = address; return self; }
+        // Adds a header; returns this message.
+        public fn header(name: string, value: string) -> EmailMessage { self.headers.set(name, value); return self; }
+        // Attaches a file; returns this message.
+        public fn attach(filename: string, contentType: string, data: Bytes) -> EmailMessage {
+            self.attachments.push(new FormPart("", filename, contentType == "" ? "application/octet-stream" : contentType, data));
+            return self;
+        }
+        // Every envelope recipient: to, cc and bcc, as bare addresses.
+        public fn allRecipients() -> Array<string> {
+            let out = new Array<string>();
+            for (list in [self.recipients, self.ccList, self.bccList]) {
+                for (a in list) { out.push(EmailMessage.address(a)); }
+            }
+            return out;
+        }
+        // "addr@host" from "Name <addr@host>".
+        static fn address(text: string) -> string {
+            let lt = Str.lastIndexOf(text, "<");
+            let gt = Str.lastIndexOf(text, ">");
+            return lt >= 0 && gt > lt ? Str.trim(text[lt + 1..gt]) : Str.trim(text);
+        }
+        // A header value safe for any text: non-ASCII is written as a MIME
+        // encoded word (=?UTF-8?B?...?=).
+        static fn encodeHeader(value: string) -> string {
+            if (%{ grav_mail_ascii(value) %} as bool) { return value; }
+            return "=?UTF-8?B?" + Base64.encode(value) + "?=";
+        }
+        // Base64 in lines of 76 characters (as MIME bodies are sent).
+        static fn base64Lines(data: Bytes) -> string {
+            let b = Base64.encodeBytes(data);
+            let sb = new StringBuilder();
+            let i = 0;
+            while (i < b.length) {
+                let end = i + 76 < b.length ? i + 76 : b.length;
+                sb.append(b[i..end]).append("\r\n");
+                i = end;
+            }
+            return sb.toString();
+        }
+        // The message in MIME format (headers and body, CRLF line ends).
+        public fn toMime() -> string {
+            let sb = new StringBuilder();
+            let h = new Headers();
+            h.set("From", self.sender);
+            if (self.recipients.size() > 0) { h.set("To", Str.join(self.recipients, ", ")); }
+            if (self.ccList.size() > 0) { h.set("Cc", Str.join(self.ccList, ", ")); }
+            if (self.replyAddress != "") { h.set("Reply-To", self.replyAddress); }
+            h.set("Subject", EmailMessage.encodeHeader(self.subjectLine));
+            h.set("Date", %{ grav_mail_date() %} as string);
+            let domain = EmailMessage.address(self.sender);
+            let at = Str.indexOf(domain, "@");
+            h.set("Message-ID", "<" + %{ grav_http_token(16) %} as string + "@" + (at >= 0 ? domain[at + 1..] : "localhost") + ">");
+            h.set("MIME-Version", "1.0");
+            h.addAll(self.headers);
+            for (i in 0..h.size()) { sb.append(h.nameAt(i)).append(": ").append(h.valueAt(i)).append("\r\n"); }
+            sb.append(self.bodyPart());
+            return sb.toString();
+        }
+        // The Content-Type headers and body below the top-level headers.
+        private fn bodyPart() -> string {
+            let alt = self.alternative();
+            if (self.attachments.isEmpty()) { return alt; }
+            let boundary = "mixed-" + %{ grav_http_token(12) %} as string;
+            let sb = new StringBuilder();
+            sb.append("Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n");
+            sb.append("--" + boundary + "\r\n").append(alt).append("\r\n");
+            for (a in self.attachments) {
+                sb.append("--" + boundary + "\r\n");
+                sb.append("Content-Type: " + a.contentType + "; name=\"" + a.filename + "\"\r\n");
+                sb.append("Content-Disposition: attachment; filename=\"" + a.filename + "\"\r\n");
+                sb.append("Content-Transfer-Encoding: base64\r\n\r\n");
+                sb.append(EmailMessage.base64Lines(a.data));
+            }
+            sb.append("--" + boundary + "--\r\n");
+            return sb.toString();
+        }
+        private fn alternative() -> string {
+            let text = EmailMessage.leaf("text/plain", self.textBody);
+            if (self.htmlBody == "") { return text; }
+            let html = EmailMessage.leaf("text/html", self.htmlBody);
+            if (self.textBody == "") { return html; }
+            let boundary = "alt-" + %{ grav_http_token(12) %} as string;
+            return "Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n\r\n" +
+                   "--" + boundary + "\r\n" + text + "\r\n--" + boundary + "\r\n" + html + "\r\n--" + boundary + "--\r\n";
+        }
+        private static fn leaf(mime: string, body: string) -> string {
+            return "Content-Type: " + mime + "; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" +
+                   EmailMessage.base64Lines(Bytes.fromString(body));
+        }
+    }
+
+    // A reply from an SMTP server: its code and text (lines joined with "\n").
+    class SmtpReply {
+        // The three-digit reply code (250, 354, ...).
+        public code: int
+        // The reply text.
+        public text: string
+        constructor(code: int, text: string) { self.code = code; self.text = text; }
+        fn toString() -> string { return "${self.code} " + self.text; }
+    }
+
+    // Sends email through an SMTP server.
+    class SmtpClient {
+        // The mail server.
+        public host: string
+        // Its port: 587 (submission), 465 (TLS) or 25.
+        public port: int
+        // "starttls" (upgrade when offered; required on port 587), "tls" (from the
+        // start; the default on port 465) or "none" (never encrypt).
+        public security: string
+        // The name sent in EHLO (this machine's host name by default).
+        public heloName: string
+        // Give up on a silent server after this long.
+        public timeoutMs: int
+        // TLS settings (null: verify against the system's CAs).
+        public tls: TlsContext
+        private user: string
+        private password: string
+
+        constructor(host: string, port: int) {
+            self.host = host;
+            self.port = port;
+            self.security = port == 465 ? "tls" : "starttls";
+            self.heloName = Net.hostname();
+            self.timeoutMs = 30000;
+            self.tls = null;
+            self.user = "";
+            self.password = "";
+        }
+        // Logs in with these credentials (AUTH PLAIN or LOGIN); returns this client.
+        public fn login(user: string, password: string) -> SmtpClient { self.user = user; self.password = password; return self; }
+        // Sets the security mode ("starttls", "tls" or "none"); returns this client.
+        public fn withSecurity(mode: string) -> SmtpClient { self.security = Str.lower(mode); return self; }
+        // Uses these TLS settings; returns this client.
+        public fn withTls(ctx: TlsContext) -> SmtpClient { self.tls = ctx; return self; }
+
+        // Sends `message` to all its recipients in one session.
+        public fn send(message: EmailMessage) {
+            if (message.sender == "") { throw new ValueError("an email needs a From address"); }
+            let rcpts = message.allRecipients();
+            if (rcpts.isEmpty()) { throw new ValueError("an email needs at least one recipient"); }
+            let conn = self.security == "tls" ? Tls.connect(self.host, self.port, self.tls, self.timeoutMs)
+                                             : TcpStream.connect(self.host, self.port, self.timeoutMs);
+            try {
+                conn.setTimeoutMs(self.timeoutMs);
+                self.expect(conn, SmtpClient.reply(conn), 220, "greeting");
+                let ehlo = self.command(conn, "EHLO " + self.heloName, 250);
+                if (self.security == "starttls") {
+                    if (SmtpClient.offers(ehlo, "STARTTLS")) {
+                        self.command(conn, "STARTTLS", 220);
+                        Tls.startClient(conn, self.host, self.tls);
+                        ehlo = self.command(conn, "EHLO " + self.heloName, 250);
+                    } else if (self.port == 587 || self.user != "") {
+                        throw new NetError("the SMTP server " + self.host + " does not offer STARTTLS; refusing to send credentials or mail in the clear");
+                    }
+                }
+                if (self.user != "") { self.authenticate(conn, ehlo); }
+                self.command(conn, "MAIL FROM:<" + EmailMessage.address(message.sender) + ">", 250);
+                for (r in rcpts) {
+                    let rep = self.send(conn, "RCPT TO:<" + r + ">");
+                    if (rep.code != 250 && rep.code != 251) { self.fail("RCPT TO:<" + r + ">", rep); }
+                }
+                self.command(conn, "DATA", 354);
+                conn.write(SmtpClient.dotStuff(message.toMime()) + ".\r\n");
+                self.expect(conn, SmtpClient.reply(conn), 250, "message");
+                try { self.send(conn, "QUIT"); } catch (e: Exception) {}
+            } catch (e: Exception) {
+                conn.close();
+                throw e;
+            }
+            conn.close();
+        }
+
+        private fn authenticate(conn: TcpStream, ehlo: SmtpReply) {
+            let methods = Str.upper(SmtpClient.capability(ehlo, "AUTH"));
+            if (Str.contains(methods, "PLAIN") || methods == "") {
+                let raw = new Bytes();                     // "\0user\0password"
+                raw.appendByte(0).appendString(self.user).appendByte(0).appendString(self.password);
+                let token = Base64.encodeBytes(raw);
+                self.command(conn, "AUTH PLAIN " + token, 235);
+                return;
+            }
+            if (Str.contains(methods, "LOGIN")) {
+                self.command(conn, "AUTH LOGIN", 334);
+                self.command(conn, Base64.encode(self.user), 334);
+                self.command(conn, Base64.encode(self.password), 235);
+                return;
+            }
+            throw new NetError("the SMTP server offers no login method this client knows (" + methods + ")");
+        }
+        private fn command(conn: TcpStream, line: string, want: int) -> SmtpReply {
+            let rep = self.send(conn, line);
+            self.expect(conn, rep, want, line);
+            return rep;
+        }
+        private fn send(conn: TcpStream, line: string) -> SmtpReply {
+            conn.write(line + "\r\n");
+            return SmtpClient.reply(conn);
+        }
+        private fn expect(conn: TcpStream, rep: SmtpReply, want: int, what: string) {
+            if (rep.code != want) { self.fail(what, rep); }
+        }
+        private fn fail(what: string, rep: SmtpReply) {
+            let shown = Str.startsWith(what, "AUTH") ? "AUTH" : Str.truncate(what, 60);
+            throw new NetError("SMTP " + shown + " failed: " + rep.toString());
+        }
+        // One reply, joining continuation lines ("250-a" then "250 b").
+        static fn reply(conn: TcpStream) -> SmtpReply {
+            let lines = new Array<string>();
+            let code = 0;
+            while (true) {
+                let line = conn.readLine(4096);
+                if (line == "" && conn.eof()) { throw new NetError("the SMTP server closed the connection"); }
+                if (line.length < 3) { throw new NetError("not an SMTP reply: " + line); }
+                code = Format.toIntOr(line[..3], 0);
+                lines.push(line.length > 4 ? line[4..] : "");
+                if (line.length == 3 || line[3] != '-') { break; }
+            }
+            return new SmtpReply(code, Str.join(lines, "\n"));
+        }
+        // Whether an EHLO reply lists `ext`.
+        static fn offers(ehlo: SmtpReply, ext: string) -> bool {
+            for (line in Str.split(ehlo.text, "\n")) {
+                let word = Str.split(Str.trim(line), " ").getOr(0, "");
+                if (Str.equalsIgnoreCase(word, ext)) { return true; }
+            }
+            return false;
+        }
+        // The parameters of an EHLO extension ("AUTH PLAIN LOGIN" -> "PLAIN LOGIN").
+        static fn capability(ehlo: SmtpReply, ext: string) -> string {
+            for (line in Str.split(ehlo.text, "\n")) {
+                let t = Str.trim(line);
+                let sp = Str.indexOf(t, " ");
+                let word = sp >= 0 ? t[..sp] : t;
+                if (Str.equalsIgnoreCase(word, ext)) { return sp >= 0 ? Str.trim(t[sp + 1..]) : ""; }
+            }
+            return "";
+        }
+        // A message body ready for DATA: lines starting with "." get another one,
+        // and every line ends with CRLF.
+        static fn dotStuff(text: string) -> string {
+            let sb = new StringBuilder();
+            for (line in Str.split(Str.replace(text, "\r\n", "\n"), "\n")) {
+                if (Str.startsWith(line, ".")) { sb.append("."); }
+                sb.append(line).append("\r\n");
+            }
+            let s = sb.toString();
+            return Str.endsWith(s, "\r\n\r\n") ? s[..s.length - 2] : s;
+        }
+    }
+}

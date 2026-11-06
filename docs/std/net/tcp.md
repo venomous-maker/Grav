@@ -130,10 +130,14 @@ A listening socket that accepts TCP connections.
 
 ### class Net
 
-Name resolution helpers.
+Name resolution and other helpers.
 
 **Static members**
 
+- `static fn hostname() -> string` — This machine's host name.
+- `static fn reverse(ip: string) -> string` — The host name registered for an address (reverse DNS), "" when there is none.
+- `static fn isReachable(host: string, port: int, timeoutMs: int) -> bool` — Whether a TCP connection to host:port succeeds within `timeoutMs`.
+- `static fn freePort() -> int` — A TCP port that is free on this machine right now.
 - `static fn resolve(host: string) -> Array<string>` — Every address `host` resolves to (IPv4 and IPv6), as text.
 
 <!-- api:end -->

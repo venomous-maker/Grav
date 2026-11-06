@@ -107,11 +107,14 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [tcp](net/tcp.md) | `TcpStream`, `TcpListener`, `Net`: TCP clients and servers |
 | [tls](net/tls.md) | `Tls`, `TlsContext`: encrypted connections (OpenSSL), certificates |
 | [udp](net/udp.md) | `UdpSocket`, `UdpPacket`: datagrams |
+| [unix](net/unix.md) | `UnixSocket`: local connections through a file path |
+| [ip](net/ip.md) | `IpAddress`, `Cidr`: IPv4/IPv6 addresses and ranges |
 | [url](net/url.md) | `Url`: parsing, building, resolving links, percent-encoding |
 | [http](net/http.md) | `HttpRequest`, `HttpResponse`, `Headers`, `Cookie`, `FormData`, streaming and server-sent events |
 | [http_server](net/http_server.md) | `HttpServer`, `Cors`: routing, CORS, HTTPS, conditional and range requests |
 | [http_client](net/http_client.md) | `HttpClient`: pooled keep-alive, HTTPS, redirects, auth, cookies |
 | [websocket](net/websocket.md) | `WebSocket`: two-way connections over HTTP (`ws://`, `wss://`) |
+| [smtp](net/smtp.md) | `SmtpClient`, `EmailMessage`: sending email with STARTTLS and login |
 
 ## Conventions
 

@@ -1,0 +1,171 @@
+// lib/net/ip.grav — IP addresses and address ranges (CIDR), IPv4 and IPv6.
+//
+//   let a = IpAddress.parse("192.168.1.20")
+//   print(a.isPrivate())                       // true
+//   let lan = Cidr.parse("192.168.0.0/16")
+//   print(lan.contains(a))                     // true
+//   print(IpAddress.parse("::ffff:10.0.0.1").isV4Mapped())   // true
+//
+// Addresses are compared and printed in canonical form ("2001:db8::1"). Useful
+// for allow lists, rate limits per client (HttpRequest.ip()), and validating
+// user input.
+import "../core/exception.grav"
+import "../data/bytes.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+
+namespace std.net {
+
+    %{
+    #include <arpa/inet.h>
+    #include <string.h>
+    /* Parses text into 16 bytes (an IPv4 address in the first 4). Returns 4, 6 or 0. */
+    static int grav_ip_parse(const char* text, unsigned char* out) {
+        memset(out, 0, 16);
+        if (inet_pton(AF_INET, text, out) == 1) return 4;
+        if (inet_pton(AF_INET6, text, out) == 1) return 6;
+        return 0;
+    }
+    static const char* grav_ip_text(const unsigned char* b, int family) {
+        char buf[INET6_ADDRSTRLEN];
+        if (!inet_ntop(family == 4 ? AF_INET : AF_INET6, b, buf, sizeof buf)) buf[0] = 0;
+        return grav_net_copy(buf);
+    }
+    /* Whether the first `bits` bits of a and b agree. */
+    static int grav_ip_prefix_eq(const unsigned char* a, const unsigned char* b, int bits) {
+        int whole = bits / 8, rest = bits % 8;
+        if (memcmp(a, b, (size_t)whole) != 0) return 0;
+        if (rest == 0) return 1;
+        unsigned char mask = (unsigned char)(0xff << (8 - rest));
+        return (a[whole] & mask) == (b[whole] & mask);
+    }
+    %}
+
+    // An IPv4 or IPv6 address.
+    class IpAddress {
+        private raw: Bytes          // 4 or 16 bytes
+        private family: int         // 4 or 6
+
+        constructor(raw: Bytes, family: int) { self.raw = raw; self.family = family; }
+
+        // Parses "10.0.0.1", "::1", "2001:db8::2" (an IPv6 zone like "%eth0" is
+        // dropped). ValueError for anything else.
+        static fn parse(text: string) -> IpAddress {
+            let t = Str.trim(text);
+            if (Str.startsWith(t, "[") && Str.endsWith(t, "]")) { t = t[1..t.length - 1]; }
+            let pct = Str.indexOf(t, "%");
+            if (pct >= 0) { t = t[..pct]; }
+            let b = new Bytes(16);
+            for (i in 0..16) { b.appendByte(0) }
+            let fam = %{ grav_ip_parse(t, b->data) %} as int;
+            if (fam == 0) { throw new ValueError("not an IP address: '" + text + "'"); }
+            if (fam == 4) { b = b.slice(0, 4); }
+            return new IpAddress(b, fam);
+        }
+        // Whether `text` is an IPv4 or IPv6 address.
+        static fn isValid(text: string) -> bool {
+            try { IpAddress.parse(text); return true; } catch (e: ValueError) { return false; }
+        }
+        // An address from its 4 or 16 bytes.
+        static fn fromBytes(b: Bytes) -> IpAddress {
+            if (b.size() != 4 && b.size() != 16) { throw new ValueError("an IP address has 4 or 16 bytes, not ${b.size()}"); }
+            return new IpAddress(b.copy(), b.size() == 4 ? 4 : 6);
+        }
+
+        // Whether this is an IPv4 address.
+        public fn isV4() -> bool { return self.family == 4; }
+        // Whether this is an IPv6 address.
+        public fn isV6() -> bool { return self.family == 6; }
+        // The 4 or 16 bytes.
+        public fn toBytes() -> Bytes { return self.raw.copy(); }
+        // The address in canonical form.
+        fn toString() -> string { return %{ grav_ip_text(self->raw->data, self->family) %} as string; }
+        // Whether `other` is the same address.
+        public fn equals(other: IpAddress) -> bool { return other != null && self.family == other.family && self.raw.toHex() == other.raw.toHex(); }
+        // An IPv6 "::ffff:a.b.c.d" form of an IPv4 address.
+        public fn isV4Mapped() -> bool {
+            if (self.family != 6) { return false; }
+            for (i in 0..10) { if (self.raw.get(i) != 0) { return false; } }
+            return self.raw.get(10) == 255 && self.raw.get(11) == 255;
+        }
+        // The IPv4 address inside an IPv4-mapped IPv6 one (else this address).
+        public fn unmapped() -> IpAddress { return self.isV4Mapped() ? new IpAddress(self.raw.slice(12, 16), 4) : self; }
+        // 127.0.0.0/8 or ::1.
+        public fn isLoopback() -> bool { return self.inAny("127.0.0.0/8 ::1/128"); }
+        // A private network: 10/8, 172.16/12, 192.168/16 or fc00::/7.
+        public fn isPrivate() -> bool { return self.inAny("10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7"); }
+        // Link-local: 169.254/16 or fe80::/10.
+        public fn isLinkLocal() -> bool { return self.inAny("169.254.0.0/16 fe80::/10"); }
+        // Multicast: 224/4 or ff00::/8.
+        public fn isMulticast() -> bool { return self.inAny("224.0.0.0/4 ff00::/8"); }
+        // 0.0.0.0 or ::.
+        public fn isUnspecified() -> bool {
+            for (i in 0..self.raw.size()) { if (self.raw.get(i) != 0) { return false; } }
+            return true;
+        }
+        // A public (globally routed) address: none of the above.
+        public fn isPublic() -> bool {
+            let a = self.unmapped();
+            return !(a.isLoopback() || a.isPrivate() || a.isLinkLocal() || a.isMulticast() || a.isUnspecified() ||
+                     a.inAny("100.64.0.0/10 192.0.2.0/24 198.51.100.0/24 203.0.113.0/24 2001:db8::/32"));
+        }
+        // Whether the address is in one of the space-separated ranges.
+        private fn inAny(ranges: string) -> bool {
+            let a = self.unmapped();
+            for (r in Str.split(ranges, " ")) { if (Cidr.parse(r).contains(a)) { return true; } }
+            return false;
+        }
+        // The raw bytes, for Cidr.
+        public fn rawBytes() -> Bytes { return self.raw; }
+    }
+
+    // A range of addresses written as address/prefix: "10.0.0.0/8", "2001:db8::/32".
+    class Cidr {
+        private base: IpAddress
+        private bits: int
+
+        constructor(base: IpAddress, bits: int) { self.base = base; self.bits = bits; }
+        // Parses "address/prefix" (a bare address is a range of one). ValueError
+        // for a bad address or prefix.
+        static fn parse(text: string) -> Cidr {
+            let slash = Str.indexOf(text, "/");
+            let ip = IpAddress.parse(slash >= 0 ? text[..slash] : text);
+            let max = ip.isV4() ? 32 : 128;
+            let bits = slash >= 0 ? Format.toIntOr(Str.trim(text[slash + 1..]), -1) : max;
+            if (bits < 0 || bits > max) { throw new ValueError("bad prefix length in '" + text + "'"); }
+            return new Cidr(ip, bits);
+        }
+        // Whether `text` is a valid range.
+        static fn isValid(text: string) -> bool {
+            try { Cidr.parse(text); return true; } catch (e: ValueError) { return false; }
+        }
+        // Whether `ip` is in the range (an IPv4-mapped IPv6 address counts as IPv4).
+        public fn contains(ip: IpAddress) -> bool {
+            let a = self.base.isV4() ? ip.unmapped() : ip;
+            if (a.isV4() != self.base.isV4()) { return false; }
+            let x = a.rawBytes();
+            let y = self.base.rawBytes();
+            let n = self.bits;
+            return %{ grav_ip_prefix_eq(x->data, y->data, n) %} as bool;
+        }
+        // Whether the address text is in the range (false for text that is not an address).
+        public fn containsText(text: string) -> bool {
+            if (!IpAddress.isValid(text)) { return false; }
+            return self.contains(IpAddress.parse(text));
+        }
+        // The prefix length.
+        public fn prefix() -> int { return self.bits; }
+        // The first address of the range (the address with the host bits cleared).
+        public fn network() -> IpAddress {
+            let b = self.base.toBytes();
+            for (i in 0..b.size()) {
+                let keep = self.bits - i * 8;
+                let mask = keep >= 8 ? 255 : keep <= 0 ? 0 : (255 << (8 - keep)) & 255;
+                b.set(i, b.get(i) & mask);
+            }
+            return IpAddress.fromBytes(b);
+        }
+        // "10.0.0.0/8".
+        fn toString() -> string { return self.network().toString() + "/${self.bits}"; }
+    }
+}

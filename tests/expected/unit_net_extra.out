@@ -1,0 +1,8 @@
+running 6 tests
+  ok    IP addresses: parsing, kinds and canonical text
+  ok    CIDR ranges
+  ok    Unix sockets carry lines
+  ok    DNS and reachability helpers
+  ok    SMTP: STARTTLS, login and a multipart message
+  ok    SMTP refuses to log in without TLS, and reports server errors
+result: 6 passed, 0 failed

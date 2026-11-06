@@ -56,8 +56,8 @@ true
 - **Switching part way:** `Tls.startClient(conn, host, ctx)` starts TLS on a
   connection that is already open, as SMTP's STARTTLS does.
 - **Higher levels:** `HttpServer.startTls`/`listenTls`, `HttpClient` with
-  `https://` URLs, and `WebSocket.connect("wss://...")` all use
-  this module.
+  `https://` URLs, `WebSocket.connect("wss://...")` and `SmtpClient` (STARTTLS)
+  all use this module.
 - **Protocols:** TLS 1.2 and 1.3; older versions are refused. Timeouts set with
   `setTimeoutMs` apply to the handshake and to every read and write.
 - **Without OpenSSL** (libssl 3 or 1.1), `Tls.available()` is false,

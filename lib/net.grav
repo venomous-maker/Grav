@@ -1,9 +1,13 @@
-// lib/net.grav — `import "std/net"`: TCP, TLS, UDP, URLs, HTTP server and client, WebSocket.
+// lib/net.grav — `import "std/net"`: TCP, TLS, UDP, Unix sockets, IP addresses, URLs,
+// HTTP server and client, WebSocket, SMTP.
 import "net/tcp.grav"
 import "net/tls.grav"
 import "net/udp.grav"
+import "net/unix.grav"
+import "net/ip.grav"
 import "net/url.grav"
 import "net/http.grav"
 import "net/http_server.grav"
 import "net/http_client.grav"
 import "net/websocket.grav"
+import "net/smtp.grav"
