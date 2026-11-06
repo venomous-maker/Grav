@@ -101,7 +101,7 @@ namespace std.data {
         public fn appendString(s: string) -> Bytes {
             let n = %{ (int)strlen(s) %} as int;
             self.reserve(self.len + n);
-            %{ memcpy(self->data + self->len, s, (size_t)n); %};
+            %{ if (n > 0) memcpy(self->data + self->len, s, (size_t)n); %};
             self.len += n;
             return self;
         }
