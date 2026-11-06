@@ -313,3 +313,26 @@ test "a recovered panic frees the locals of the frames it leaves" {
     assertEq(Live.count, base)
     assertEq(unwindDepth(), depth)
 }
+
+fn residentKb() -> long {
+    return %{ ({ long grav_p = 0, grav_r = 0; FILE* grav_f = fopen("/proc/self/statm", "r");
+                 if (grav_f) { if (fscanf(grav_f, "%ld %ld", &grav_p, &grav_r) != 2) grav_r = 0; fclose(grav_f); }
+                 (long long)grav_r * 4; }) %} as long
+}
+fn churn(n: int) {
+    for (i in 0..n) {
+        Thread.spawn(fn() {
+            let held = new Tracked(i)
+            try { descend(1) } catch (e: Oops) {}                 // unwinds through registered locals
+            assertEq(held.n, i)
+        }).join()
+    }
+}
+
+test "threads that end give their unwind registry back" {
+    churn(200)                                             // warm up allocator caches
+    let before = residentKb()
+    churn(2000)                                            // each thread registered locals
+    let grew = residentKb() - before
+    assert(grew < 2048)                                    // was 4 KiB per thread
+}

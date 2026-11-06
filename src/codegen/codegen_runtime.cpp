@@ -677,6 +677,7 @@ static void grav_thread_end(void) {
     __atomic_sub_fetch(&grav_gc_others, 1, __ATOMIC_SEQ_CST);  /* counted in Thread.start */
     free(grav_pool); grav_pool = 0; grav_pool_cap = 0;
     free(grav_dead); grav_dead = 0; grav_dead_cap = 0; grav_dead_n = 0;
+    free(grav_uw); grav_uw = 0; grav_uw_cap = 0; grav_uw_top = 0;
     pthread_mutex_lock(&grav_slock);
     for (int c = 0; c < GRAV_SCLASSES; c++) {
         while (grav_scache[c]) {
