@@ -15,13 +15,16 @@
 //
 // receive() returns null once the connection is closed. Pings are answered
 // automatically; fragmented messages are reassembled. send() may be called from
-// several threads at once. Only ws:// is supported (no TLS yet).
+// several threads at once. wss:// uses TLS (lib/net/tls.grav); servers get it from HttpServer.startTls.
 import "../collections/array.grav"
 import "../text/string.grav"
 import "../data/bytes.grav"
 import "../concurrency/async.grav"
 import "tcp.grav"
+import "tls.grav"
+import "url.grav"
 import "http.grav"
+import "http_server.grav"
 
 namespace std.net {
 
@@ -111,7 +114,9 @@ namespace std.net {
 
     // One complete message.
     class WsMessage {
+        // Whether the message was sent as binary (else text).
         public binary: bool
+        // The payload.
         public data: Bytes
         constructor(binary: bool, data: Bytes) { self.binary = binary; self.data = data; }
         // Whether this is a text message.
@@ -132,6 +137,7 @@ namespace std.net {
         private sendLock: Mutex
         // The close code the peer sent (1000 = normal), or 0.
         public closeCode: int
+        // The reason text the peer sent with its close, or "".
         public closeReason: string
         // Messages larger than this (bytes) close the connection with 1009.
         public maxMessageBytes: int
@@ -150,19 +156,21 @@ namespace std.net {
         }
 
         // ── opening ────────────────────────────────────────────────────────────
-        // Connect to "ws://host[:port]/path". Throws NetError if the server refuses.
-        static fn connect(url: string) -> WebSocket { return WebSocket.connect(url, 30000); }
+        // Connect to "ws://host[:port]/path" or "wss://..." (TLS, verified against
+        // the system's CAs). Throws NetError if the server refuses.
+        static fn connect(url: string) -> WebSocket { return WebSocket.connect(url, 30000, null); }
         // Opens a WebSocket to `url` (ws:// or wss://), waiting at most `timeoutMs` (NetError on failure).
-        static fn connect(url: string, timeoutMs: int) -> WebSocket {
-            let httpUrl = url;
-            if (Str.startsWith(url, "wss://")) { throw new NetError("wss:// is not supported yet (no TLS): " + url); }
-            if (Str.startsWith(url, "ws://")) { httpUrl = "http://" + Str.slice(url, 5, Str.length(url)); }
-            let u = Url.parse(httpUrl);
-            let conn = TcpStream.connect(u.host, u.port, timeoutMs);
+        static fn connect(url: string, timeoutMs: int) -> WebSocket { return WebSocket.connect(url, timeoutMs, null); }
+        // Opens a WebSocket; for wss://, `tls` says which servers to trust (null:
+        // the system's CAs).
+        static fn connect(url: string, timeoutMs: int, tls: TlsContext) -> WebSocket {
+            let u = Url.parse(url);
+            if (u.scheme != "ws" && u.scheme != "wss") { throw new NetError("a WebSocket URL starts with ws:// or wss://: " + url); }
+            let conn = u.scheme == "wss" ? Tls.connect(u.host, u.port, tls, timeoutMs) : TcpStream.connect(u.host, u.port, timeoutMs);
             conn.setTimeoutMs(timeoutMs);
             let key = %{ grav_ws_new_key() %} as string;
             let h = new Headers();
-            h.set("Host", u.port == 80 ? u.host : u.host + ":${u.port}");
+            h.set("Host", u.hostHeader());
             h.set("Upgrade", "websocket");
             h.set("Connection", "Upgrade");
             h.set("Sec-WebSocket-Key", key);

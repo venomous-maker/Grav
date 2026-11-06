@@ -46,7 +46,9 @@ closed: true, code 4000, reason: see you
   Fragmented messages are reassembled; `maxMessageBytes` limits their size.
 - `close(code, reason)` performs the closing handshake; `closeCode` and
   `closeReason` hold what the other side sent.
-- Only `ws://` is supported (no TLS yet).
+- `wss://` URLs use TLS; `WebSocket.connect(url, timeoutMs, ctx)` takes a
+  [`TlsContext`](tls.md) for servers the system does not trust, and a server
+  started with `HttpServer.startTls` serves `wss://` on its routes.
 
 ## API
 
@@ -62,7 +64,7 @@ One complete message.
 
 **Fields**
 
-- `data: Bytes`
+- `data: Bytes` — The payload.
 
 **Methods**
 
@@ -81,15 +83,16 @@ A WebSocket connection (either end).
 
 **Static members**
 
-- `static fn connect(url: string) -> WebSocket` — Connect to "ws://host[:port]/path". Throws NetError if the server refuses.
+- `static fn connect(url: string) -> WebSocket` — Connect to "ws://host[:port]/path" or "wss://..." (TLS, verified against the system's CAs). Throws NetError if the server refuses.
 - `static fn connect(url: string, timeoutMs: int) -> WebSocket` — Opens a WebSocket to `url` (ws:// or wss://), waiting at most `timeoutMs` (NetError on failure).
+- `static fn connect(url: string, timeoutMs: int, tls: TlsContext) -> WebSocket` — Opens a WebSocket; for wss://, `tls` says which servers to trust (null: the system's CAs).
 - `static fn accept(req: HttpRequest, conn: TcpStream) -> WebSocket` — Complete the server side of the handshake for an upgrade request.
 - `static fn route(server: HttpServer, path: string, handler: fn(WebSocket))` — Serve WebSockets on `path` of an HttpServer: `handler` runs on the connection's thread; the socket is closed when it returns.
 
 **Fields**
 
 - `closeCode: int` — The close code the peer sent (1000 = normal), or 0.
-- `closeReason: string`
+- `closeReason: string` — The reason text the peer sent with its close, or "".
 - `maxMessageBytes: int` — Messages larger than this (bytes) close the connection with 1009.
 - `path: string` — The request path (server side) or URL (client side).
 

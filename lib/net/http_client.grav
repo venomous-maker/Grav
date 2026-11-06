@@ -1,0 +1,326 @@
+// lib/net/http_client.grav — an HTTP/1.1 client for http:// and https://.
+//
+//   let r = HttpClient.fetch("https://example.com/")
+//   print(r.status)                                    // 200
+//
+//   let api = new HttpClient()
+//   api.setBearerToken(token)
+//   let created = api.postJson("https://api.example.com/items", Json.object().set("name", "x"))
+//   print(created.json()["id"].asInt())
+//   api.close()                                        // drops pooled connections
+//
+// Connections are kept alive and reused for later requests to the same server
+// (one client can be shared by many threads). https:// verifies the server's
+// certificate against the system's trusted authorities; set `tls` to a
+// TlsContext to trust others. Redirects are followed (up to maxRedirects), and
+// credentials are not sent on to a different server.
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../core/exception.grav"
+import "../io/fs.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "../data/bytes.grav"
+import "../data/json.grav"
+import "../data/encoding.grav"
+import "../concurrency/async.grav"
+import "../sys/time.grav"
+import "tcp.grav"
+import "tls.grav"
+import "url.grav"
+import "http.grav"
+
+namespace std.net {
+
+    // An HTTP/1.1 client with a connection pool.
+    class HttpClient {
+        // Give up on connecting or waiting for data after this long (0 = never).
+        public timeoutMs: int
+        // Sent with every request.
+        public headers: Headers
+        // Follow 301/302/303/307/308 redirects up to this many times (0 = never).
+        public maxRedirects: int
+        // Reuse connections between requests (on by default).
+        public keepAlive: bool
+        // Idle connections kept per server.
+        public maxIdlePerHost: int
+        // Responses larger than this many bytes throw NetError.
+        public maxResponseBytes: int
+        // The TLS settings for https:// (null: verify against the system's CAs).
+        public tls: TlsContext
+        private pool: HashMap<string, Array<TcpStream>>
+        private poolLock: Mutex
+        private jar: HashMap<string, HashMap<string, string>>
+        private jarLock: Mutex
+        private useJar: bool
+        private auth: string
+
+        constructor() {
+            self.timeoutMs = 30000;
+            self.headers = new Headers();
+            self.maxRedirects = 5;
+            self.keepAlive = true;
+            self.maxIdlePerHost = 8;
+            self.maxResponseBytes = 512 * 1024 * 1024;
+            self.tls = null;
+            self.pool = new HashMap<string, Array<TcpStream>>();
+            self.poolLock = new Mutex();
+            self.jar = new HashMap<string, HashMap<string, string>>();
+            self.jarLock = new Mutex();
+            self.useJar = false;
+            self.auth = "";
+        }
+        destructor() { self.close(); }
+
+        // One-off GET with default settings.
+        static fn fetch(url: string) -> HttpResponse {
+            let c = new HttpClient();
+            c.keepAlive = false;
+            return c.get(url);
+        }
+
+        // ── settings ───────────────────────────────────────────────────────────
+        // Sends "Authorization: Basic ..." with every request; returns this client.
+        public fn setBasicAuth(user: string, password: string) -> HttpClient {
+            self.auth = "Basic " + Base64.encode(user + ":" + password);
+            return self;
+        }
+        // Sends "Authorization: Bearer <token>" with every request; returns this client.
+        public fn setBearerToken(token: string) -> HttpClient { self.auth = "Bearer " + token; return self; }
+        // Remembers cookies servers set and sends them back (per host), like a
+        // browser session; returns this client.
+        public fn useCookies(on: bool) -> HttpClient { self.useJar = on; return self; }
+        // The cookies remembered for `host` (name -> value).
+        public fn cookiesFor(host: string) -> HashMap<string, string> {
+            self.jarLock.lock();
+            let out = new HashMap<string, string>();
+            let m = self.jar.getOr(Str.lower(host), null);
+            if (m != null) { m.forEach(fn(k: string, v: string) { out.put(k, v); }); }
+            self.jarLock.unlock();
+            return out;
+        }
+        // Trusts servers verified by `ctx` for https:// (e.g. one that trusts a
+        // private CA); returns this client.
+        public fn withTls(ctx: TlsContext) -> HttpClient { self.tls = ctx; return self; }
+        // Closes the pooled idle connections.
+        public fn close() {
+            self.poolLock.lock();
+            let all = self.pool;
+            self.pool = new HashMap<string, Array<TcpStream>>();
+            self.poolLock.unlock();
+            all.forEach(fn(k: string, list: Array<TcpStream>) { for (c in list) { c.close(); } });
+        }
+        // Idle connections held for reuse, across all servers.
+        public fn idleConnections() -> int {
+            self.poolLock.lock();
+            let n = 0;
+            for (k in self.pool.keys()) { n += self.pool.get(k).size(); }
+            self.poolLock.unlock();
+            return n;
+        }
+
+        // ── requests ───────────────────────────────────────────────────────────
+        // Sends a GET request.
+        public fn get(url: string) -> HttpResponse { return self.send("GET", url, null, "", null); }
+        // Sends a GET request and parses the body as JSON; NetError for a non-2xx status.
+        public fn getJson(url: string) -> JsonValue { return self.get(url).ensureOk().json(); }
+        // Sends a GET request and returns the body; NetError for a non-2xx status.
+        public fn getText(url: string) -> string { return self.get(url).ensureOk().body(); }
+        // Sends a HEAD request (headers only).
+        public fn head(url: string) -> HttpResponse { return self.send("HEAD", url, null, "", null); }
+        // Sends an OPTIONS request (what a server allows; CORS preflights).
+        public fn options(url: string) -> HttpResponse { return self.send("OPTIONS", url, null, "", null); }
+        // Sends a DELETE request.
+        public fn delete(url: string) -> HttpResponse { return self.send("DELETE", url, null, "", null); }
+        // Sends a POST request with a body of the given Content-Type.
+        public fn post(url: string, body: string, contentType: string) -> HttpResponse {
+            return self.send("POST", url, Bytes.fromString(body), contentType, null);
+        }
+        // Sends a PUT request with a body of the given Content-Type.
+        public fn put(url: string, body: string, contentType: string) -> HttpResponse {
+            return self.send("PUT", url, Bytes.fromString(body), contentType, null);
+        }
+        // Sends a PATCH request with a body of the given Content-Type.
+        public fn patch(url: string, body: string, contentType: string) -> HttpResponse {
+            return self.send("PATCH", url, Bytes.fromString(body), contentType, null);
+        }
+        // Sends a POST request with a JSON body.
+        public fn postJson(url: string, value: JsonValue) -> HttpResponse { return self.post(url, value.toJson(), "application/json"); }
+        // Sends a PUT request with a JSON body.
+        public fn putJson(url: string, value: JsonValue) -> HttpResponse { return self.put(url, value.toJson(), "application/json"); }
+        // Sends a PATCH request with a JSON body.
+        public fn patchJson(url: string, value: JsonValue) -> HttpResponse { return self.patch(url, value.toJson(), "application/json"); }
+        // Sends a POST request with form fields (application/x-www-form-urlencoded).
+        public fn postForm(url: string, fields: HashMap<string, string>) -> HttpResponse {
+            return self.post(url, Url.buildQuery(fields), "application/x-www-form-urlencoded");
+        }
+        // Sends a form: multipart/form-data when it has files, else url-encoded.
+        public fn postForm(url: string, form: FormData) -> HttpResponse {
+            if (form.hasFiles()) { return self.send("POST", url, form.body(), form.contentType(), null); }
+            return self.post(url, form.urlEncoded(), "application/x-www-form-urlencoded");
+        }
+        // Downloads `url` into the file at `path`; NetError for a non-2xx status.
+        // Returns the number of bytes written.
+        public fn download(url: string, path: string) -> int {
+            let r = self.get(url).ensureOk();
+            new File(path).writeBinary(r.bodyBytes.toBinary());
+            return r.bodyBytes.size();
+        }
+        // Sends a request with a text body ("" for none).
+        public fn request(method: string, url: string, body: string, contentType: string) -> HttpResponse {
+            return self.send(method, url, body == "" ? null : Bytes.fromString(body), contentType, null);
+        }
+        // Sends a request: any method, an optional body (null for none) and extra
+        // headers for this request only (null for none). Follows redirects. Throws
+        // NetError (or TimeoutError) when the server cannot be reached or answers
+        // garbage; any status, including 4xx and 5xx, is returned as a response.
+        public fn send(method: string, url: string, body: Bytes, contentType: string, extra: Headers) -> HttpResponse {
+            let target = Url.parse(url);
+            let m = Str.upper(method);
+            let b = body;
+            let started = Time.monotonicMs();
+            let hops = 0;
+            let originalOrigin = target.origin();
+            while (true) {
+                let res = self.once(m, target, b, contentType, extra, target.origin() == originalOrigin);
+                let code = res.status;
+                let loc = res.headers.get("Location");
+                if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) && loc != "" &&
+                    hops < self.maxRedirects) {
+                    hops += 1;
+                    target = target.resolve(loc);
+                    if (code == 303 || ((code == 301 || code == 302) && m == "POST")) {
+                        if (m != "HEAD") { m = "GET"; }
+                        b = null;
+                    }
+                    continue;
+                }
+                res.elapsedMs = Time.monotonicMs() - started;
+                return res;
+            }
+        }
+
+        // ── one exchange ───────────────────────────────────────────────────────
+        private fn once(method: string, url: Url, body: Bytes, contentType: string, extra: Headers,
+                        sameOrigin: bool) -> HttpResponse {
+            if (url.scheme != "http" && url.scheme != "https") {
+                throw new NetError("HttpClient speaks http:// and https://, not " + url.scheme + "://");
+            }
+            let key = url.origin();
+            let h = self.requestHeaders(method, url, body, contentType, extra, sameOrigin);
+            let first = method + " " + url.path + " HTTP/1.1";
+            let payload = body == null ? new Bytes() : body;
+            let attempt = 0;
+            while (true) {
+                attempt += 1;
+                let conn = self.keepAlive ? self.takeIdle(key) : null;
+                let reused = conn != null;
+                if (conn == null) { conn = self.open(url); }
+                let gotStatus = false;
+                try {
+                    Http.writeMessage(conn, first, h, payload);
+                    let status = conn.readLine(Http.maxLineBytes());
+                    if (status == "" && conn.eof()) { throw new NetError("the server closed the connection without answering (" + key + ")"); }
+                    gotStatus = true;
+                    let parts = Str.split(status, " ");
+                    if (parts.size() < 2 || !Str.startsWith(parts.get(0), "HTTP/1.")) {
+                        throw new NetError("not an HTTP response from " + key + ": " + Str.truncate(status, 80));
+                    }
+                    let res = new HttpResponse(Format.toIntOr(parts.get(1), 0));
+                    Http.readHeaders(conn, res.headers);
+                    while (res.status >= 100 && res.status < 200 && res.status != 101) {   // 100 Continue, 103 hints
+                        let next = conn.readLine(Http.maxLineBytes());
+                        res = new HttpResponse(Format.toIntOr(Str.split(next, " ").getOr(1, "0"), 0));
+                        Http.readHeaders(conn, res.headers);
+                    }
+                    let noBody = method == "HEAD" || res.status == 204 || res.status == 304 || res.status < 200;
+                    let sized = noBody || res.headers.has("Content-Length") || res.headers.hasToken("Transfer-Encoding", "chunked");
+                    if (!noBody) { res.bodyBytes = Http.readBody(conn, res.headers, true, self.maxResponseBytes); }
+                    let reusable = self.keepAlive && sized && !res.headers.hasToken("Connection", "close") &&
+                                   (parts.get(0) == "HTTP/1.1" || res.headers.hasToken("Connection", "keep-alive"));
+                    if (reusable) { self.giveBack(key, conn); } else { conn.close(); }
+                    if (self.useJar) { self.remember(url.host, res); }
+                    return res;
+                } catch (e: Exception) {
+                    conn.close();
+                    // A pooled connection the server had already closed: try once more on a new one.
+                    if (reused && !gotStatus && attempt < 3) { continue; }
+                    throw e;
+                }
+            }
+        }
+        private fn requestHeaders(method: string, url: Url, body: Bytes, contentType: string, extra: Headers,
+                                  sameOrigin: bool) -> Headers {
+            let h = new Headers();
+            h.set("Host", url.hostHeader());
+            h.set("User-Agent", "grav-http/1.1");
+            h.set("Accept", "*/*");
+            h.set("Connection", self.keepAlive ? "keep-alive" : "close");
+            for (i in 0..self.headers.size()) { h.set(self.headers.nameAt(i), self.headers.valueAt(i)); }
+            if (extra != null) { for (i in 0..extra.size()) { h.set(extra.nameAt(i), extra.valueAt(i)); } }
+            if (sameOrigin) {
+                if (url.user != "") { h.set("Authorization", "Basic " + Base64.encode(url.user + ":" + url.password)); }
+                else if (self.auth != "" && !h.has("Authorization")) { h.set("Authorization", self.auth); }
+            } else {
+                h.remove("Authorization");             // credentials stay with the server they were meant for
+            }
+            if (self.useJar) {
+                let cookies = self.cookiesFor(url.host);
+                if (cookies.size() > 0) {
+                    let pairs = new Array<string>();
+                    cookies.forEach(fn(k: string, v: string) { pairs.push(k + "=" + v); });
+                    h.set("Cookie", Str.join(pairs, "; "));
+                }
+            }
+            let n = body == null ? 0 : body.size();
+            if (n > 0 || method == "POST" || method == "PUT" || method == "PATCH") {
+                h.set("Content-Length", "${n}");
+                if (contentType != "" && n > 0) { h.set("Content-Type", contentType); }
+            }
+            return h;
+        }
+        private fn open(url: Url) -> TcpStream {
+            let ms = self.timeoutMs > 0 ? self.timeoutMs : -1;
+            if (url.scheme == "https") {
+                let secure = Tls.connect(url.host, url.port, self.tls, ms);
+                secure.setNoDelay(true);       // a request's last TLS record must not wait for an ACK
+                return secure;
+            }
+            let conn = TcpStream.connect(url.host, url.port, ms);
+            conn.setTimeoutMs(self.timeoutMs);
+            conn.setNoDelay(true);
+            return conn;
+        }
+        private fn takeIdle(key: string) -> TcpStream {
+            self.poolLock.lock();
+            let list = self.pool.getOr(key, null);
+            let c: TcpStream = null;
+            if (list != null && list.size() > 0) { c = list.pop(); }
+            self.poolLock.unlock();
+            return c;
+        }
+        private fn giveBack(key: string, conn: TcpStream) {
+            self.poolLock.lock();
+            if (!self.pool.containsKey(key)) { self.pool.put(key, new Array<TcpStream>()); }
+            let list = self.pool.get(key);
+            let keep = list.size() < self.maxIdlePerHost;
+            if (keep) { list.push(conn); }
+            self.poolLock.unlock();
+            if (!keep) { conn.close(); }
+        }
+        private fn remember(host: string, res: HttpResponse) {
+            let set = res.headers.getAll("Set-Cookie");
+            if (set.isEmpty()) { return; }
+            self.jarLock.lock();
+            let k = Str.lower(host);
+            if (!self.jar.containsKey(k)) { self.jar.put(k, new HashMap<string, string>()); }
+            let m = self.jar.get(k);
+            for (line in set) {
+                let c = Cookie.parse(line);
+                if (c.name == "") { continue; }
+                if (c.maxAgeSeconds == 0) { m.remove(c.name); } else { m.put(c.name, c.value); }
+            }
+            self.jarLock.unlock();
+        }
+    }
+}

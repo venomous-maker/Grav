@@ -345,6 +345,14 @@ namespace std.net {
             if (status < 0) { self.failed("read"); }
             return line;
         }
+        // The next line, at most `maxLen` bytes long (NetError for a longer one).
+        public fn readLine(maxLen: int) -> string {
+            self.ensureOpen();
+            let status = 0;
+            let line = %{ grav_sock_readline((GravSock*)self->s, maxLen, &status) %} as string;
+            if (status < 0) { self.failed("read"); }
+            return line;
+        }
         // True once the peer has closed its side and every buffered byte was read.
         public fn eof() -> bool {
             return %{ ((GravSock*)self->s)->eof && ((GravSock*)self->s)->pos >= ((GravSock*)self->s)->len %} as bool;

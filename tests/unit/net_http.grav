@@ -1,0 +1,280 @@
+// HTTP: methods, OPTIONS and CORS, conditional and range requests, streaming,
+// uploads, cookies, auth, redirects, limits, keep-alive and HTTPS (local only).
+import "std"
+import "std/net"
+
+fn app() -> HttpServer {
+    let s = new HttpServer()
+    s.get("/hello", fn(req: HttpRequest) => HttpResponse.text("hello " + req.query("name")))
+    s.post("/echo", fn(req: HttpRequest) => HttpResponse.text(req.body()).header("X-Method", req.method))
+    s.put("/echo", fn(req: HttpRequest) => HttpResponse.text("put " + req.body()))
+    s.patch("/echo", fn(req: HttpRequest) => HttpResponse.text("patch " + req.body()))
+    s.delete("/items/:id", fn(req: HttpRequest) => HttpResponse.text("deleted ${req.paramInt("id", -1)}"))
+    s.get("/doc", fn(req: HttpRequest) => HttpResponse.text("0123456789").etag("v1"))
+    s.get("/events", fn(req: HttpRequest) => HttpResponse.eventStream(fn(ev: EventStream) {
+        for (i in 0..3) { ev.send("tick", "n=${i}") }
+    }))
+    s.get("/stream", fn(req: HttpRequest) => HttpResponse.stream("text/plain", fn(w: ResponseWriter) {
+        for (i in 0..1000) { w.write("line ${i}\n") }
+    }))
+    s.post("/upload", fn(req: HttpRequest) -> HttpResponse {
+        let f = req.file("doc")
+        return HttpResponse.json(Json.object()
+            .set("title", req.formValue("title"))
+            .set("file", f == null ? "" : f.filename)
+            .set("size", (f == null ? 0 : f.size()) as long)
+            .set("type", f == null ? "" : f.contentType))
+    })
+    s.post("/login", fn(req: HttpRequest) => HttpResponse.text("ok").setCookie(new Cookie("sid", "s3cret").maxAge(60)))
+    s.get("/whoami", fn(req: HttpRequest) => HttpResponse.text("sid=" + req.cookie("sid")))
+    s.get("/private", fn(req: HttpRequest) -> HttpResponse {
+        let cred = req.basicAuth()
+        if (cred == null || cred.get(0) != "ada" || cred.get(1) != "pw") { return HttpResponse.unauthorized("test") }
+        return HttpResponse.text("welcome " + cred.get(0))
+    })
+    s.get("/token", fn(req: HttpRequest) => HttpResponse.text("token=" + req.bearerToken()))
+    s.post("/moved", fn(req: HttpRequest) => HttpResponse.redirect("/echo", 307))
+    s.get("/old", fn(req: HttpRequest) => HttpResponse.redirect("/hello?name=redirected", 301))
+    s.get("/info", fn(req: HttpRequest) => HttpResponse.json(Json.object()
+        .set("secure", req.isSecure()).set("ip", req.ip()).set("tags", Str.join(req.queryAll("tag"), ","))
+        .set("json", req.accepts("application/json")).set("agent", Str.startsWith(req.userAgent(), "grav-http"))))
+    s.get("/boom", fn(req: HttpRequest) -> HttpResponse { throw new StateError("kaput") })
+    s.onError(fn(req: HttpRequest, why: string) => HttpResponse.error(500, "custom: " + why))
+    s.onNotFound(fn(req: HttpRequest) => HttpResponse.error(404, "nothing at " + req.path))
+    return s
+}
+
+test "every method, and OPTIONS answered from the routes" {
+    let s = app().start(0)
+    let c = new HttpClient()
+    let base = s.baseUrl()
+    assertEq(c.get(base + "/hello?name=ada").body(), "hello ada")
+    let posted = c.post(base + "/echo", "data", "text/plain")
+    assertEq(posted.body(), "data")
+    assertEq(posted.getHeader("X-Method"), "POST")
+    assertEq(c.put(base + "/echo", "x", "text/plain").body(), "put x")
+    assertEq(c.patch(base + "/echo", "y", "text/plain").body(), "patch y")
+    assertEq(c.delete(base + "/items/7").body(), "deleted 7")
+    let head = c.head(base + "/hello")
+    assertEq(head.status, 200)
+    assertEq(head.body(), "")
+    assertEq(head.getHeader("Content-Length"), "6")
+    let opts = c.options(base + "/echo")
+    assertEq(opts.status, 204)
+    assertEq(opts.getHeader("Allow"), "POST, PUT, PATCH, OPTIONS")
+    let wrong = c.get(base + "/echo")
+    assertEq(wrong.status, 405)
+    assertEq(wrong.getHeader("Allow"), "POST, PUT, PATCH, OPTIONS")
+    assertEq(c.get(base + "/nope").json()["error"].asString(), "nothing at /nope")
+    assertEq(c.get(base + "/boom").json()["error"].asString(), "custom: StateError: kaput")
+    assert(c.get(base + "/hello").getHeader("Date") != "")
+    c.close()
+    s.stop()
+}
+
+test "CORS: preflight and response headers" {
+    let s = app()
+    s.cors(Cors.allowOrigins(["https://app.example"]).allowCredentials(true).exposeHeaderNames("X-Method"))
+    s.start(0)
+    let c = new HttpClient()
+    let pre = new Headers()
+    pre.set("Origin", "https://app.example").set("Access-Control-Request-Method", "PUT")
+       .set("Access-Control-Request-Headers", "Content-Type, X-Token")
+    let p = c.send("OPTIONS", s.baseUrl() + "/echo", null, "", pre)
+    assertEq(p.status, 204)
+    assertEq(p.getHeader("Access-Control-Allow-Origin"), "https://app.example")
+    assertEq(p.getHeader("Access-Control-Allow-Headers"), "Content-Type, X-Token")
+    assertEq(p.getHeader("Access-Control-Allow-Credentials"), "true")
+    assert(Str.contains(p.getHeader("Access-Control-Allow-Methods"), "PUT"))
+    let simple = new Headers()
+    simple.set("Origin", "https://app.example")
+    let r = c.send("POST", s.baseUrl() + "/echo", Bytes.fromString("hi"), "text/plain", simple)
+    assertEq(r.getHeader("Access-Control-Allow-Origin"), "https://app.example")
+    assertEq(r.getHeader("Access-Control-Expose-Headers"), "X-Method")
+    assertEq(r.getHeader("Vary"), "Origin")
+    let other = new Headers()
+    other.set("Origin", "https://evil.example")
+    assertEq(c.send("GET", s.baseUrl() + "/hello", null, "", other).getHeader("Access-Control-Allow-Origin"), "")
+    c.close()
+    s.stop()
+}
+
+test "ETags answer 304, and byte ranges 206 or 416" {
+    let s = app().start(0)
+    let c = new HttpClient()
+    let first = c.get(s.baseUrl() + "/doc")
+    assertEq(first.getHeader("ETag"), "\"v1\"")
+    let h = new Headers()
+    h.set("If-None-Match", "\"v1\"")
+    let again = c.send("GET", s.baseUrl() + "/doc", null, "", h)
+    assertEq(again.status, 304)
+    assertEq(again.body(), "")
+    let r = new Headers()
+    r.set("Range", "bytes=2-5")
+    let part = c.send("GET", s.baseUrl() + "/doc", null, "", r)
+    assertEq(part.status, 206)
+    assertEq(part.body(), "2345")
+    assertEq(part.getHeader("Content-Range"), "bytes 2-5/10")
+    r.set("Range", "bytes=-3")
+    assertEq(c.send("GET", s.baseUrl() + "/doc", null, "", r).body(), "789")
+    r.set("Range", "bytes=50-")
+    assertEq(c.send("GET", s.baseUrl() + "/doc", null, "", r).status, 416)
+    c.close()
+    s.stop()
+}
+
+test "streamed bodies and server-sent events" {
+    let s = app().start(0)
+    let c = new HttpClient()
+    let ev = c.get(s.baseUrl() + "/events")
+    assertEq(ev.mediaType(), "text/event-stream")
+    assertEq(ev.getHeader("Transfer-Encoding"), "chunked")
+    assertEq(ev.body(), "event: tick\ndata: n=0\n\nevent: tick\ndata: n=1\n\nevent: tick\ndata: n=2\n\n")
+    let big = c.get(s.baseUrl() + "/stream")
+    assertEq(Str.split(Str.trim(big.body()), "\n").size(), 1000)
+    assertEq(c.get(s.baseUrl() + "/hello?name=after").body(), "hello after")   // the connection stays usable
+    c.close()
+    s.stop()
+}
+
+test "multipart uploads and form fields" {
+    let s = app().start(0)
+    let c = new HttpClient()
+    let data = new Bytes()
+    for (i in 0..256) { data.appendByte(i) }               // every byte value, including CR and LF
+    let form = new FormData().add("title", "a report").addFile("doc", "data.bin", "application/octet-stream", data)
+    let r = c.postForm(s.baseUrl() + "/upload", form).json()
+    assertEq(r["title"].asString(), "a report")
+    assertEq(r["file"].asString(), "data.bin")
+    assertEq(r["size"].asInt(), 256)
+    assertEq(r["type"].asString(), "application/octet-stream")
+    let parts = FormData.parse(form.contentType(), form.body())
+    assertEq(parts.size(), 2)
+    assertEq(parts.get(1).data.get(13), 13)
+    let fields = new HashMap<string, string>()
+    fields["title"] = "plain form"
+    assertEq(c.postForm(s.baseUrl() + "/upload", fields).json()["title"].asString(), "plain form")
+    c.close()
+    s.stop()
+}
+
+test "cookies, credentials, redirects and request details" {
+    let s = app().start(0)
+    let c = new HttpClient().useCookies(true)
+    let login = c.post(s.baseUrl() + "/login", "", "")
+    assertEq(login.cookies().get(0).maxAgeSeconds, 60)
+    assertEq(c.get(s.baseUrl() + "/whoami").body(), "sid=s3cret")
+    assertEq(c.get(s.baseUrl() + "/private").status, 401)
+    let withUrl = Url.parse(s.baseUrl()); withUrl.user = "ada"; withUrl.password = "pw"
+    assertEq(c.get(withUrl.toString() + "private").body(), "welcome ada")
+    assertEq(new HttpClient().setBasicAuth("ada", "pw").get(s.baseUrl() + "/private").body(), "welcome ada")
+    assertEq(new HttpClient().setBearerToken("t0k").get(s.baseUrl() + "/token").body(), "token=t0k")
+    let moved = c.post(s.baseUrl() + "/moved", "kept", "text/plain")
+    assertEq(moved.body(), "kept")                         // 307 repeats the POST with its body
+    assertEq(c.get(s.baseUrl() + "/old").body(), "hello redirected")
+    let info = c.get(s.baseUrl() + "/info?tag=a&tag=b").json()
+    assertEq(info["secure"].asBool(), false)
+    assertEq(info["ip"].asString(), "127.0.0.1")
+    assertEq(info["tags"].asString(), "a,b")
+    assert(info["json"].asBool())
+    assert(info["agent"].asBool())
+    c.close()
+    s.stop()
+}
+
+test "keep-alive reuses connections across requests and threads" {
+    let s = app().start(0)
+    let c = new HttpClient()
+    for (i in 0..50) { assertEq(c.get(s.baseUrl() + "/hello?name=${i}").body(), "hello ${i}") }
+    assertEq(c.idleConnections(), 1)
+    let done = new AtomicInt(0)
+    let workers = new Array<Thread>()
+    for (t in 0..4) {
+        workers.push(Thread.spawn(fn() {
+            for (i in 0..25) { if (c.get(s.baseUrl() + "/hello?name=t").ok()) { done.increment() } }
+        }))
+    }
+    for (w in workers) { w.join() }
+    assertEq(done.get(), 100)
+    assert(c.idleConnections() <= 4)
+    assert(s.requestsServed() >= 150)
+    c.close()
+    assertEq(c.idleConnections(), 0)
+    s.stop()
+}
+
+test "limits: big bodies, long headers, too many connections" {
+    let s = app()
+    s.maxBodyBytes = 1000
+    s.start(0)
+    let c = new HttpClient()
+    assertEq(c.post(s.baseUrl() + "/echo", Str.repeat("x", 5000), "text/plain").status, 413)
+    let h = new Headers()
+    h.set("X-Huge", Str.repeat("y", 40000))
+    assertEq(c.send("GET", s.baseUrl() + "/hello", null, "", h).status, 431)
+    let bad = false
+    try { h.set("X-Bad", "a\r\nInjected: yes") } catch (e: ValueError) { bad = true }
+    assert(bad)                                            // no header smuggling
+    c.close()
+    s.stop()
+    let tiny = app()
+    tiny.maxConnections = 1
+    tiny.start(0)
+    let hold = TcpStream.connect("127.0.0.1", tiny.port())   // occupies the only slot
+    Time.sleepMs(50)
+    let refused = new HttpClient().get(tiny.baseUrl() + "/hello")
+    assertEq(refused.status, 503)
+    hold.close()
+    tiny.stop()
+}
+
+test "HTTPS and wss with a self-signed certificate" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let s = app()
+    WebSocket.route(s, "/ws", fn(ws: WebSocket) { ws.messages(fn(m: WsMessage) { ws.send("echo " + m.text()) }) })
+    s.startTls(0, ctx)
+    assert(s.isTls())
+    let trust = TlsContext.client().trustPem(ctx.certificatePem())
+    let c = new HttpClient().withTls(trust)
+    let url = "https://localhost:${s.port()}"
+    assertEq(c.get(url + "/hello?name=tls").body(), "hello tls")
+    assertEq(c.get(url + "/info").json()["secure"].asBool(), true)
+    for (i in 0..20) { assertEq(c.post(url + "/echo", "n${i}", "text/plain").body(), "n${i}") }
+    assertEq(c.idleConnections(), 1)
+    let refused = false
+    try { new HttpClient().get(url + "/hello") } catch (e: NetError) { refused = Str.contains(e.message(), "self-signed") }
+    assert(refused)                                        // the default client checks certificates
+    let ws = WebSocket.connect("wss://localhost:${s.port()}/ws", 5000, trust)
+    ws.send("over tls")
+    assertEq(ws.receive().text(), "echo over tls")
+    ws.close()
+    c.close()
+    s.stop()
+}
+
+test "URLs: parts, building and resolving links" {
+    let u = Url.parse("https://ada:p%40ss@Example.com:8443/docs/guide/intro.html?q=a+b&n=1#top")
+    assertEq(u.scheme, "https")
+    assertEq(u.host, "example.com")
+    assertEq(u.port, 8443)
+    assertEq(u.user, "ada")
+    assertEq(u.password, "p@ss")
+    assertEq(u.pathOnly(), "/docs/guide/intro.html")
+    assertEq(u.query(), "q=a+b&n=1")
+    assertEq(u.queryValue("q"), "a b")
+    assertEq(u.fragment, "top")
+    assertEq(u.origin(), "https://example.com:8443")
+    assertEq(u.resolve("../img/logo.png").toString(), "https://ada:p%40ss@example.com:8443/docs/img/logo.png")
+    assertEq(u.resolve("/abs").path, "/abs")
+    assertEq(u.resolve("?page=2").path, "/docs/guide/intro.html?page=2")
+    assertEq(u.resolve("//cdn.example.com/x.js").toString(), "https://cdn.example.com/x.js")
+    assertEq(u.resolve("http://other.example/").host, "other.example")
+    assertEq(Url.parse("http://[::1]:8080/x").hostHeader(), "[::1]:8080")
+    assertEq(Url.parse("http://h/a").withParam("k", "v w").path, "/a?k=v%20w")
+    assertEq(Url.encodePath("/a b/c+d"), "/a%20b/c%2Bd")
+    assertEq(Url.decodePath("/a%20b+c"), "/a b+c")
+    assert(Url.isValid("ws://x/y"))
+    assert(!Url.isValid("not a url"))
+    assertEq(Url.parseQueryAll("t=1&t=2&u=3").get("t").size(), 2)
+}

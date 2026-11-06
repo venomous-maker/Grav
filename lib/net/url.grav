@@ -1,0 +1,318 @@
+// lib/net/url.grav — URLs: parsing, building, resolving links, percent-encoding.
+//
+//   let u = Url.parse("https://ada:pw@example.com:8443/docs/a b?q=grav&x=1#top")
+//   print(u.host)                // example.com
+//   print(u.query())             // q=grav&x=1
+//   print(u.queryValue("q"))     // grav
+//   print(u.resolve("../img/logo.png").toString())   // https://example.com:8443/img/logo.png
+//   print(Url.encode("a b&c"))   // a%20b%26c
+//
+// `path` is the request target as sent on the wire: the path and its query
+// string ("/search?q=x"); pathOnly() and query() give the two parts. Fragments
+// ("#top") are kept in `fragment` and never sent to servers.
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+
+namespace std.net {
+
+    %{
+    #include <ctype.h>
+    #include <stdlib.h>
+    #include <string.h>
+    /* Percent-encodes every byte except unreserved characters (RFC 3986) and
+       the ones in `keep`. */
+    static const char* grav_url_encode_keep(const char* s, const char* keep) {
+        static const char* hex = "0123456789ABCDEF";
+        size_t n = strlen(s), o = 0;
+        char* out = grav_str_alloc(n * 3 + 1);
+        if (!out) abort();
+        for (size_t i = 0; i < n; i++) {
+            unsigned char c = (unsigned char)s[i];
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~' || (c && strchr(keep, c))) out[o++] = (char)c;
+            else { out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 15]; }
+        }
+        out[o] = 0;
+        return out;
+    }
+    static const char* grav_url_encode(const char* s) { return grav_url_encode_keep(s, ""); }
+    static int grav_hexval(int c) {
+        return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    }
+    /* Decodes %XX escapes; with `plus`, '+' is a space (form encoding). */
+    static const char* grav_url_decode_as(const char* s, int plus) {
+        size_t n = strlen(s), o = 0;
+        char* out = grav_str_alloc(n + 1);
+        if (!out) abort();
+        for (size_t i = 0; i < n; i++) {
+            if (s[i] == '%' && i + 2 < n + 1 && grav_hexval((unsigned char)s[i + 1]) >= 0 &&
+                grav_hexval((unsigned char)s[i + 2]) >= 0) {
+                out[o++] = (char)(grav_hexval((unsigned char)s[i + 1]) * 16 + grav_hexval((unsigned char)s[i + 2]));
+                i += 2;
+            } else out[o++] = (plus && s[i] == '+') ? ' ' : s[i];
+        }
+        out[o] = 0;
+        return out;
+    }
+    static const char* grav_url_decode(const char* s) { return grav_url_decode_as(s, 1); }
+    %}
+
+    // A parsed URL: scheme://user:password@host:port/path?query#fragment.
+    class Url {
+        // "http", "https", "ws", ... (lower case).
+        public scheme: string
+        // The host name or address (an IPv6 address without its brackets).
+        public host: string
+        // The port: the given one, else the scheme's default (80, 443, ...).
+        public port: int
+        // The request target: path and query string ("/search?q=x"), "/" at least.
+        public path: string
+        // The part after '#' ("" when absent); never sent to a server.
+        public fragment: string
+        // The user name before '@' ("" when absent), decoded.
+        public user: string
+        // The password after "user:" ("" when absent), decoded.
+        public password: string
+
+        constructor(scheme: string, host: string, port: int, path: string) {
+            self.scheme = scheme; self.host = host; self.port = port; self.path = path;
+            self.fragment = ""; self.user = ""; self.password = "";
+        }
+
+        // Parses "scheme://[user[:password]@]host[:port][/path][?query][#fragment]".
+        // Without a scheme, "http" is assumed. ValueError when there is no host.
+        static fn parse(text: string) -> Url {
+            let rest = Str.trim(text);
+            let fragment = "";
+            let hash = Str.indexOf(rest, "#");
+            if (hash >= 0) { fragment = rest[hash + 1..]; rest = rest[..hash]; }
+            let scheme = "http";
+            let sep = Str.indexOf(rest, "://");
+            if (sep >= 0) {
+                scheme = Str.lower(rest[..sep]);
+                rest = rest[sep + 3..];
+            } else if (Str.startsWith(rest, "//")) {
+                rest = rest[2..];
+            }
+            let cut = Url.authorityEnd(rest);
+            let authority = rest[..cut];
+            let path = cut < rest.length ? rest[cut..] : "/";
+            if (Str.startsWith(path, "?")) { path = "/" + path; }
+            let user = "";
+            let password = "";
+            let at = Str.lastIndexOf(authority, "@");
+            if (at >= 0) {
+                let info = authority[..at];
+                authority = authority[at + 1..];
+                let colon = Str.indexOf(info, ":");
+                user = Url.decodePath(colon >= 0 ? info[..colon] : info);
+                password = colon >= 0 ? Url.decodePath(info[colon + 1..]) : "";
+            }
+            let port = Url.defaultPort(scheme);
+            let host = authority;
+            if (Str.startsWith(authority, "[")) {                 // [::1]:8080
+                let close = Str.indexOf(authority, "]");
+                if (close < 0) { throw new ValueError("URL has an unclosed IPv6 address: " + text); }
+                host = authority[1..close];
+                if (close + 1 < authority.length && authority[close + 1] == ':') {
+                    port = Url.portOf(authority[close + 2..], port, text);
+                }
+            } else {
+                let colon = Str.lastIndexOf(authority, ":");
+                if (colon >= 0) {
+                    host = authority[..colon];
+                    port = Url.portOf(authority[colon + 1..], port, text);
+                }
+            }
+            if (host == "") { throw new ValueError("URL has no host: " + text); }
+            let u = new Url(scheme, Str.lower(host), port, path);
+            u.fragment = fragment;
+            u.user = user;
+            u.password = password;
+            return u;
+        }
+        // Whether `text` parses as a URL with a scheme and a host.
+        static fn isValid(text: string) -> bool {
+            if (!Str.contains(text, "://")) { return false; }
+            try { Url.parse(text); return true; } catch (e: ValueError) { return false; }
+        }
+        private static fn authorityEnd(s: string) -> int {
+            for (i in 0..s.length) {
+                let c = s[i];
+                if (c == '/' || c == '?') { return i; }
+            }
+            return s.length;
+        }
+        private static fn portOf(text: string, fallback: int, url: string) -> int {
+            if (text == "") { return fallback; }
+            let p = Format.toIntOr(text, -1);
+            if (p < 0 || p > 65535) { throw new ValueError("URL has a bad port '" + text + "': " + url); }
+            return p;
+        }
+        // The usual port for a scheme: 80 for http and ws, 443 for https and wss,
+        // 21 ftp, 25 smtp, 465 smtps; 80 otherwise.
+        static fn defaultPort(scheme: string) -> int {
+            switch (Str.lower(scheme)) {
+                case "https", "wss": return 443
+                case "ftp": return 21
+                case "smtp": return 25
+                case "smtps": return 465
+                default: return 80
+            }
+        }
+
+        // ── parts ──────────────────────────────────────────────────────────────
+        // Whether the scheme is a TLS one (https, wss, smtps).
+        public fn isSecure() -> bool { return self.scheme == "https" || self.scheme == "wss" || self.scheme == "smtps"; }
+        // The path without the query string ("/search").
+        public fn pathOnly() -> string {
+            let q = Str.indexOf(self.path, "?");
+            return q >= 0 ? self.path[..q] : self.path;
+        }
+        // The query string without '?' ("q=x&n=2"), "" when there is none.
+        public fn query() -> string {
+            let q = Str.indexOf(self.path, "?");
+            return q >= 0 ? self.path[q + 1..] : "";
+        }
+        // The query string's fields, decoded (the last value wins for repeats).
+        public fn queryParams() -> HashMap<string, string> { return Url.parseQuery(self.query()); }
+        // One query field ("" when absent).
+        public fn queryValue(name: string) -> string { return self.queryParams().getOr(name, ""); }
+        // The host as written in a URL: IPv6 addresses in brackets.
+        public fn hostText() -> string { return Str.contains(self.host, ":") ? "[" + self.host + "]" : self.host; }
+        // The Host header value: host, plus ":port" unless it is the default.
+        public fn hostHeader() -> string {
+            return self.port == Url.defaultPort(self.scheme) ? self.hostText() : self.hostText() + ":${self.port}";
+        }
+        // "scheme://host[:port]", the part that decides which server is talked to.
+        public fn origin() -> string { return self.scheme + "://" + self.hostHeader(); }
+
+        // ── building ───────────────────────────────────────────────────────────
+        // This URL with `fields` added to its query string (URL-encoded).
+        public fn withQuery(fields: HashMap<string, string>) -> Url {
+            let extra = Url.buildQuery(fields);
+            let u = self.copy();
+            if (extra != "") { u.path = self.path + (Str.contains(self.path, "?") ? "&" : "?") + extra; }
+            return u;
+        }
+        // This URL with one more query field.
+        public fn withParam(name: string, value: string) -> Url {
+            let u = self.copy();
+            let pair = Url.encode(name) + "=" + Url.encode(value);
+            u.path = self.path + (Str.contains(self.path, "?") ? "&" : "?") + pair;
+            return u;
+        }
+        // This URL with a different path (and query): "/v2/items?page=3".
+        public fn withPath(target: string) -> Url {
+            let u = self.copy();
+            u.path = Str.startsWith(target, "/") ? target : "/" + target;
+            return u;
+        }
+        // A copy of this URL.
+        public fn copy() -> Url {
+            let u = new Url(self.scheme, self.host, self.port, self.path);
+            u.fragment = self.fragment; u.user = self.user; u.password = self.password;
+            return u;
+        }
+        // The URL a link `ref` on this page points to (RFC 3986): an absolute URL,
+        // "//host/x", "/abs/path", "rel/path", "../up", "?query" or "#frag".
+        public fn resolve(ref: string) -> Url {
+            if (Str.contains(ref, "://")) { return Url.parse(ref); }
+            if (Str.startsWith(ref, "//")) { return Url.parse(self.scheme + ":" + ref); }
+            let u = self.copy();
+            u.fragment = "";
+            let r = ref;
+            let hash = Str.indexOf(r, "#");
+            if (hash >= 0) { u.fragment = r[hash + 1..]; r = r[..hash]; }
+            if (r == "") { u.fragment = hash >= 0 ? u.fragment : self.fragment; return u; }
+            if (Str.startsWith(r, "?")) { u.path = self.pathOnly() + r; return u; }
+            let q = Str.indexOf(r, "?");
+            let refPath = q >= 0 ? r[..q] : r;
+            let refQuery = q >= 0 ? r[q..] : "";
+            let merged = "";
+            if (Str.startsWith(refPath, "/")) { merged = refPath; }
+            else {
+                let base = self.pathOnly();
+                let slash = Str.lastIndexOf(base, "/");
+                merged = (slash >= 0 ? base[..slash + 1] : "/") + refPath;
+            }
+            u.path = Url.removeDots(merged) + refQuery;
+            return u;
+        }
+        // "/a/./b/../c" -> "/a/c".
+        private static fn removeDots(path: string) -> string {
+            let out = new Array<string>();
+            let segs = Str.split(path, "/");
+            for (i, s in segs) {
+                if (s == ".") { continue; }
+                if (s == "..") { if (out.size() > 1) { out.pop(); } continue; }
+                out.push(s);
+            }
+            let last = segs.size() > 0 ? segs.get(segs.size() - 1) : "";
+            if ((last == "." || last == "..") && (out.size() == 0 || out.get(out.size() - 1) != "")) { out.push(""); }
+            let joined = Str.join(out, "/");
+            return Str.startsWith(joined, "/") ? joined : "/" + joined;
+        }
+        // The URL as text (the port is left out when it is the scheme's default;
+        // the password is kept, so take care when logging).
+        fn toString() -> string {
+            let info = "";
+            if (self.user != "") {
+                info = Url.encode(self.user) + (self.password != "" ? ":" + Url.encode(self.password) : "") + "@";
+            }
+            let frag = self.fragment != "" ? "#" + self.fragment : "";
+            return self.scheme + "://" + info + self.hostHeader() + self.path + frag;
+        }
+
+        // ── encoding ───────────────────────────────────────────────────────────
+        // Percent-encodes everything except unreserved characters (RFC 3986): for
+        // query values and path segments.
+        static fn encode(s: string) -> string { return %{ grav_url_encode(s) %} as string; }
+        // Percent-encodes a whole path, keeping its '/' separators.
+        static fn encodePath(s: string) -> string { return %{ grav_url_encode_keep(s, "/") %} as string; }
+        // Decodes %XX escapes and '+' as a space (query strings and forms).
+        static fn decode(s: string) -> string { return %{ grav_url_decode(s) %} as string; }
+        // Decodes %XX escapes only ('+' stays): for paths.
+        static fn decodePath(s: string) -> string { return %{ grav_url_decode_as(s, 0) %} as string; }
+        // "a=1&b=x%20y": the fields URL-encoded and joined with &, in key order.
+        static fn buildQuery(fields: HashMap<string, string>) -> string {
+            let keys = fields.keys();
+            keys.sortBy(fn(a, b) => Str.compare(a, b));
+            let parts = new Array<string>();
+            for (k in keys) { parts.push(Url.encode(k) + "=" + Url.encode(fields[k])); }
+            return Str.join(parts, "&");
+        }
+        // "a=1&b=two" -> {a: "1", b: "two"} (decoded; the last of repeated names wins).
+        static fn parseQuery(q: string) -> HashMap<string, string> {
+            let out = new HashMap<string, string>();
+            for (pair in Url.pairs(q)) { out.put(pair.get(0), pair.get(1)); }
+            return out;
+        }
+        // Every value of every name: "tag=a&tag=b" -> {tag: ["a", "b"]}.
+        static fn parseQueryAll(q: string) -> HashMap<string, Array<string>> {
+            let out = new HashMap<string, Array<string>>();
+            for (pair in Url.pairs(q)) {
+                let name = pair.get(0);
+                if (!out.containsKey(name)) { out.put(name, new Array<string>()); }
+                out.get(name).push(pair.get(1));
+            }
+            return out;
+        }
+        // The decoded [name, value] pairs of a query string, in order.
+        static fn pairs(q: string) -> Array<Array<string>> {
+            let out = new Array<Array<string>>();
+            if (q == "") { return out; }
+            for (part in Str.split(q, "&")) {
+                if (part == "") { continue; }
+                let eq = Str.indexOf(part, "=");
+                let pair = new Array<string>();
+                pair.push(Url.decode(eq < 0 ? part : part[..eq]));
+                pair.push(eq < 0 ? "" : Url.decode(part[eq + 1..]));
+                out.push(pair);
+            }
+            return out;
+        }
+    }
+}

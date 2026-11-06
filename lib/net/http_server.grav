@@ -1,0 +1,606 @@
+// lib/net/http_server.grav — an HTTP/1.1 server with routing, CORS and TLS.
+//
+//   let app = new HttpServer()
+//   app.get("/", fn(req: HttpRequest) => HttpResponse.text("hello"))
+//   app.get("/users/:id", fn(req: HttpRequest) => HttpResponse.json(
+//       Json.object().set("id", req.param("id"))))
+//   app.post("/echo", fn(req: HttpRequest) => HttpResponse.text(req.body()))
+//   app.cors(Cors.allowAll())                // browsers on other origins may call it
+//   app.listen(8080)                         // blocks; app.start(8080) runs in the background
+//   // app.listenTls(8443, TlsContext.server("cert.pem", "key.pem")) for https
+//
+// Routes match by method and path: `:name` captures one segment (req.param), a
+// trailing `*` captures the rest. Each connection is served on its own thread
+// with keep-alive. OPTIONS is answered from the routes (with an Allow header),
+// HEAD runs the GET route without sending the body, and a handler that throws or
+// panics produces a 500 while the server keeps running.
+import "../collections/array.grav"
+import "../core/panic.grav"
+import "../io/io.grav"
+import "../io/fs.grav"
+import "../io/path.grav"
+import "../text/string.grav"
+import "../text/strbuf.grav"
+import "../data/bytes.grav"
+import "../data/json.grav"
+import "../concurrency/thread.grav"
+import "../concurrency/async.grav"
+import "../sys/time.grav"
+import "tcp.grav"
+import "tls.grav"
+import "url.grav"
+import "http.grav"
+
+namespace std.net {
+
+    // The outcome of dispatching one request (filled in inside a recovery point).
+    class Dispatch {
+        // The response to send (null after an upgrade).
+        public res: HttpResponse
+        // Whether an upgrade handler took the connection.
+        public upgraded: bool
+        constructor() { self.res = null; self.upgraded = false; }
+    }
+
+    // One route: method + path pattern -> handler.
+    class Route {
+        // The method it answers ("*" for any).
+        public method: string
+        // The pattern's path segments.
+        public parts: Array<string>
+        // The handler of an ordinary route.
+        public handler: fn(HttpRequest) -> HttpResponse
+        // The handler of an upgrade route (gets the connection).
+        public upgrader: fn(HttpRequest, TcpStream)
+        // Whether this is an upgrade route.
+        public isUpgrade: bool
+        constructor(method: string, pattern: string) {
+            self.method = method;
+            self.parts = Route.split(pattern);
+            self.isUpgrade = false;
+        }
+        // The non-empty segments of a path ("/a/b/" gives "a", "b").
+        static fn split(path: string) -> Array<string> {
+            return Str.split(path, "/").filter(fn(s: string) => s != "");
+        }
+        // Does `segs` match? Captures go into `req`.
+        public fn matches(segs: Array<string>, req: HttpRequest) -> bool {
+            let n = self.parts.size();
+            for (i in 0..n) {
+                let p = self.parts.get(i);
+                if (p == "*") {
+                    if (req != null) { req.setParam("*", Str.join(segs.slice(i, segs.size()), "/")); }
+                    return true;
+                }
+                if (i >= segs.size()) { return false; }
+                if (Str.startsWith(p, ":")) {
+                    if (req != null) { req.setParam(p[1..], segs.get(i)); }
+                } else if (p != segs.get(i)) {
+                    return false;
+                }
+            }
+            return n == segs.size();
+        }
+        // Whether this route answers `method` (a GET route also answers HEAD).
+        public fn allows(method: string) -> bool {
+            return self.method == "*" || self.method == method || (self.method == "GET" && method == "HEAD");
+        }
+    }
+
+    // Cross-origin resource sharing: which other sites' pages may call this server
+    // from a browser. HttpServer.cors(...) answers preflight OPTIONS requests and
+    // adds the Access-Control headers to responses.
+    class Cors {
+        // Allowed origins ("https://app.example.com"); "*" allows any.
+        public origins: Array<string>
+        // The methods allowed in preflight answers.
+        public methods: string
+        // Request headers allowed ("" = whatever the preflight asks for).
+        public allowHeaders: string
+        // Response headers scripts may read.
+        public exposeHeaders: string
+        // Whether browsers may send cookies and credentials (needs explicit origins).
+        public credentials: bool
+        // How long browsers may cache a preflight answer (seconds).
+        public maxAgeSeconds: int
+
+        constructor() {
+            self.origins = new Array<string>();
+            self.methods = "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS";
+            self.allowHeaders = "";
+            self.exposeHeaders = "";
+            self.credentials = false;
+            self.maxAgeSeconds = 600;
+        }
+        // Any origin, without credentials (a public API).
+        static fn allowAll() -> Cors { return new Cors().allowOrigin("*"); }
+        // Only these origins.
+        static fn allowOrigins(list: Array<string>) -> Cors {
+            let c = new Cors();
+            for (o in list) { c.allowOrigin(o); }
+            return c;
+        }
+        // Adds an allowed origin ("*" for any); returns this policy.
+        public fn allowOrigin(origin: string) -> Cors {
+            self.origins.push(Str.endsWith(origin, "/") ? origin[..origin.length - 1] : origin);
+            return self;
+        }
+        // The allowed methods ("GET, POST"); returns this policy.
+        public fn allowMethods(list: string) -> Cors { self.methods = list; return self; }
+        // Request headers browsers may send ("Content-Type, Authorization"); by
+        // default whatever a preflight asks for is allowed.
+        public fn allowHeaderNames(list: string) -> Cors { self.allowHeaders = list; return self; }
+        // Response headers scripts may read ("X-Total-Count").
+        public fn exposeHeaderNames(list: string) -> Cors { self.exposeHeaders = list; return self; }
+        // Lets browsers send cookies; returns this policy.
+        public fn allowCredentials(on: bool) -> Cors { self.credentials = on; return self; }
+        // How long a preflight answer may be cached; returns this policy.
+        public fn maxAge(seconds: int) -> Cors { self.maxAgeSeconds = seconds; return self; }
+        // Whether a request from `origin` is allowed.
+        public fn allows(origin: string) -> bool {
+            if (origin == "") { return false; }
+            for (o in self.origins) { if (o == "*" || Str.equalsIgnoreCase(o, origin)) { return true; } }
+            return false;
+        }
+        // Whether `req` is a CORS preflight (OPTIONS with Access-Control-Request-Method).
+        static fn isPreflight(req: HttpRequest) -> bool {
+            return req.method == "OPTIONS" && req.origin() != "" && req.headers.has("Access-Control-Request-Method");
+        }
+        // The answer to a preflight request.
+        public fn preflight(req: HttpRequest) -> HttpResponse {
+            let res = HttpResponse.noContent();
+            if (!self.allows(req.origin())) { return res; }
+            self.decorate(req, res);
+            res.headers.set("Access-Control-Allow-Methods", self.methods);
+            let asked = req.header("Access-Control-Request-Headers");
+            let headers = self.allowHeaders != "" ? self.allowHeaders : asked;
+            if (headers != "") { res.headers.set("Access-Control-Allow-Headers", headers); }
+            res.headers.set("Access-Control-Max-Age", "${self.maxAgeSeconds}");
+            return res;
+        }
+        // Adds the response headers for an allowed origin.
+        public fn decorate(req: HttpRequest, res: HttpResponse) {
+            let origin = req.origin();
+            if (!self.allows(origin)) { return; }
+            let any = self.origins.contains("*") && !self.credentials;
+            res.headers.set("Access-Control-Allow-Origin", any ? "*" : origin);
+            if (!any) { res.headers.add("Vary", "Origin"); }
+            if (self.credentials) { res.headers.set("Access-Control-Allow-Credentials", "true"); }
+            if (self.exposeHeaders != "") { res.headers.set("Access-Control-Expose-Headers", self.exposeHeaders); }
+        }
+    }
+
+    // An HTTP/1.1 server with a router.
+    class HttpServer {
+        private routes: Array<Route>
+        private middleware: Array<fn(HttpRequest) -> HttpResponse>
+        private afterware: Array<fn(HttpRequest, HttpResponse)>
+        private listener: TcpListener
+        private acceptThread: Thread
+        private running: AtomicInt
+        private active: AtomicInt
+        private served: AtomicInt
+        private log: bool
+        private logLock: Mutex
+        private tls: TlsContext
+        private corsPolicy: Cors
+        private notFoundHandler: fn(HttpRequest) -> HttpResponse
+        private errorHandler: fn(HttpRequest, string) -> HttpResponse
+        // Largest request body accepted (bytes); larger ones get 413.
+        public maxBodyBytes: int
+        // Idle keep-alive connections are closed after this many milliseconds.
+        public idleTimeoutMs: int
+        // At most this many connections at once; more are answered 503 and closed.
+        public maxConnections: int
+        // Requests served on one connection before it is closed (0 = no limit).
+        public maxRequestsPerConnection: int
+        // A panic in a handler (or middleware, or WebSocket handler) is recovered:
+        // the client gets a 500, the panic is logged, and the server keeps running.
+        // false: panics on this server's connection threads stop the program.
+        // Panic.setRecovery(false) turns recovery off everywhere.
+        public recoverPanics: bool
+
+        constructor() {
+            self.routes = new Array<Route>();
+            self.middleware = new Array<fn(HttpRequest) -> HttpResponse>();
+            self.afterware = new Array<fn(HttpRequest, HttpResponse)>();
+            self.listener = null;
+            self.acceptThread = null;
+            self.running = new AtomicInt(0);
+            self.active = new AtomicInt(0);
+            self.served = new AtomicInt(0);
+            self.log = false;
+            self.logLock = new Mutex();
+            self.tls = null;
+            self.corsPolicy = null;
+            self.notFoundHandler = null;
+            self.errorHandler = null;
+            self.maxBodyBytes = 10 * 1024 * 1024;
+            self.idleTimeoutMs = 15000;
+            self.maxConnections = 1024;
+            self.maxRequestsPerConnection = 0;
+            self.recoverPanics = true;
+        }
+
+        // ── routes ─────────────────────────────────────────────────────────────
+        // Adds a handler for requests with this method whose path matches `pattern` (`:name` captures a segment); returns this server.
+        public fn route(method: string, pattern: string, handler: fn(HttpRequest) -> HttpResponse) -> HttpServer {
+            let r = new Route(Str.upper(method), pattern);
+            r.handler = handler;
+            self.routes.push(r);
+            return self;
+        }
+        // Handles GET (and HEAD) requests matching `pattern`; returns this server.
+        public fn get(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("GET", pattern, h); }
+        // Handles POST requests matching `pattern`; returns this server.
+        public fn post(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("POST", pattern, h); }
+        // Handles PUT requests matching `pattern`; returns this server.
+        public fn put(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("PUT", pattern, h); }
+        // Handles PATCH requests matching `pattern`; returns this server.
+        public fn patch(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("PATCH", pattern, h); }
+        // Handles DELETE requests matching `pattern`; returns this server.
+        public fn delete(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("DELETE", pattern, h); }
+        // Handles HEAD requests matching `pattern` itself (else the GET route answers them).
+        public fn head(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("HEAD", pattern, h); }
+        // Handles OPTIONS requests matching `pattern` itself (else they are answered
+        // from the routes, with an Allow header).
+        public fn options(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("OPTIONS", pattern, h); }
+        // Any method.
+        public fn any(pattern: string, h: fn(HttpRequest) -> HttpResponse) -> HttpServer { return self.route("*", pattern, h); }
+        // Hand the raw connection to `handler` when a request for `pattern` asks to
+        // upgrade the protocol (lib/net/websocket.grav uses this).
+        public fn upgrade(pattern: string, handler: fn(HttpRequest, TcpStream)) -> HttpServer {
+            let r = new Route("GET", pattern);
+            r.upgrader = handler;
+            r.isUpgrade = true;
+            self.routes.push(r);
+            return self;
+        }
+        // Runs before routing; return a response to answer immediately, or null to continue.
+        public fn use(f: fn(HttpRequest) -> HttpResponse) -> HttpServer { self.middleware.push(f); return self; }
+        // Runs after a handler, and may change its response (add headers, log, ...).
+        public fn after(f: fn(HttpRequest, HttpResponse)) -> HttpServer { self.afterware.push(f); return self; }
+        // Answers requests no route matches (instead of a plain 404).
+        public fn onNotFound(h: fn(HttpRequest) -> HttpResponse) -> HttpServer { self.notFoundHandler = h; return self; }
+        // Builds the response when a handler throws (gets the error's description).
+        public fn onError(h: fn(HttpRequest, string) -> HttpResponse) -> HttpServer { self.errorHandler = h; return self; }
+        // Applies a CORS policy to every route; returns this server.
+        public fn cors(policy: Cors) -> HttpServer { self.corsPolicy = policy; return self; }
+        // Serves the files under `dir` at URLs starting with `prefix` ("/static" maps
+        // /static/css/site.css to dir/css/site.css; a folder serves its index.html).
+        // Paths that try to leave `dir` (with "..") get 404. Files get an ETag, so
+        // repeat visits are answered 304 Not Modified, and Range requests work.
+        public fn serveDir(prefix: string, dir: string) -> HttpServer {
+            let base = Str.endsWith(prefix, "/") ? prefix : prefix + "/";
+            return self.get(base + "*", fn(req: HttpRequest) -> HttpResponse {
+                let rest = req.param("*");
+                for (seg in Str.split(rest, "/")) { if (seg == ".." || Str.contains(seg, "\\")) { return HttpResponse.notFound(); } }
+                let path = rest == "" ? dir : Path.combine(dir, rest);
+                if (Dir.exists(path)) { path = Path.combine(path, "index.html"); }
+                let f = new File(path);
+                if (!f.exists()) { return HttpResponse.notFound(); }
+                let res = HttpResponse.file(path);
+                res.etag("${f.size()}-${f.modified()}");
+                return res;
+            });
+        }
+        // Print one line per request ("GET /path -> 200 (1.2 ms)").
+        public fn logRequests(on: bool) -> HttpServer { self.log = on; return self; }
+        // Whether a panic in a handler is answered with a 500 instead of stopping the server (on by default).
+        public fn withPanicRecovery(on: bool) -> HttpServer { self.recoverPanics = on; return self; }
+
+        // ── running ────────────────────────────────────────────────────────────
+        // Serve on host:port, blocking until stop().
+        public fn listen(host: string, port: int) {
+            self.bind(host, port);
+            self.acceptLoop();
+        }
+        // Serves on every interface at `port`, blocking until stop().
+        public fn listen(port: int) { self.listen("*", port); }
+        // Serves https on every interface at `port` with `ctx`'s certificate, blocking.
+        public fn listenTls(port: int, ctx: TlsContext) { self.listenTls("*", port, ctx); }
+        // Serves https on host:port, blocking until stop().
+        public fn listenTls(host: string, port: int, ctx: TlsContext) {
+            self.useTls(ctx);
+            self.listen(host, port);
+        }
+        // Serve on a background thread and return at once (port 0 picks a free port).
+        public fn start(host: string, port: int) -> HttpServer {
+            self.bind(host, port);
+            self.acceptThread = Thread.spawn("http-accept", fn() { self.acceptLoop(); });
+            return self;
+        }
+        // Serves on 127.0.0.1:port on a background thread and returns at once (port 0 picks a free port).
+        public fn start(port: int) -> HttpServer { return self.start("127.0.0.1", port); }
+        // Serves https on 127.0.0.1:port in the background.
+        public fn startTls(port: int, ctx: TlsContext) -> HttpServer { return self.startTls("127.0.0.1", port, ctx); }
+        // Serves https on host:port in the background.
+        public fn startTls(host: string, port: int, ctx: TlsContext) -> HttpServer {
+            self.useTls(ctx);
+            return self.start(host, port);
+        }
+        private fn useTls(ctx: TlsContext) {
+            if (!ctx.isServer()) { throw new StateError("HTTPS needs a server context (TlsContext.server or selfSigned)"); }
+            self.tls = ctx;
+        }
+        // The port being served.
+        public fn port() -> int { return self.listener == null ? 0 : self.listener.port(); }
+        // Whether this server uses TLS.
+        public fn isTls() -> bool { return self.tls != null; }
+        // "http://127.0.0.1:8080" (or https) for the address being served.
+        public fn baseUrl() -> string { return (self.tls != null ? "https" : "http") + "://127.0.0.1:${self.port()}"; }
+        // Connections open now.
+        public fn activeConnections() -> int { return self.active.get() as int; }
+        // Requests answered so far.
+        public fn requestsServed() -> long { return self.served.get(); }
+        // Stop accepting connections (in-flight requests finish on their threads).
+        public fn stop() {
+            self.running.set(0);
+            if (self.listener != null) { self.listener.close(); }
+            if (self.acceptThread != null) { self.acceptThread.join(); self.acceptThread = null; }
+        }
+        // Stops, then waits up to `ms` for open connections to finish; returns
+        // whether they all did.
+        public fn stopAndWait(ms: int) -> bool {
+            self.stop();
+            let waited = 0;
+            while (self.active.get() > 0 && waited < ms) { Time.sleepMs(10); waited += 10; }
+            return self.active.get() == 0;
+        }
+
+        private fn bind(host: string, port: int) {
+            if (self.running.get() == 1) { throw new StateError("HttpServer is already running"); }
+            self.listener = TcpListener.bind(host, port);
+            self.running.set(1);
+        }
+        private fn acceptLoop() {
+            while (self.running.get() == 1) {
+                let conn: TcpStream = null;
+                try {
+                    conn = self.listener.accept();
+                } catch (e: NetError) {
+                    if (self.running.get() == 0) { break; }
+                    continue;
+                }
+                if (self.active.get() >= self.maxConnections) {
+                    // Over the limit: a short answer, without a thread of its own.
+                    try {
+                        if (self.tls == null) { conn.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\nRetry-After: 1\r\n\r\n"); }
+                    } catch (e: Exception) {}
+                    conn.close();
+                    continue;
+                }
+                self.active.increment();
+                let c = conn;
+                Thread.spawn("http-conn", fn() {
+                    try { self.serveConnection(c); } catch (e: Exception) { c.close(); }
+                    self.active.decrement();
+                }).detach();
+            }
+        }
+
+        // Requests on one connection, until it closes or asks not to be kept alive.
+        private fn serveConnection(conn: TcpStream) {
+            if (!self.recoverPanics) { Panic.setThreadRecovery(false); }
+            conn.setNoDelay(true);
+            conn.setTimeoutMs(self.idleTimeoutMs);
+            if (self.tls != null) {
+                try { Tls.startServer(conn, self.tls); } catch (e: Exception) { conn.close(); return; }
+            }
+            let keepOpen = true;
+            let count = 0;
+            while (keepOpen) {
+                let req: HttpRequest = null;
+                try {
+                    req = self.readRequest(conn);
+                } catch (e: Exception) {
+                    if (!conn.isClosed() && !conn.eof()) {
+                        let msg = e.message();
+                        let code = Str.contains(msg, "larger than") ? 413 : Str.contains(msg, "Message too long") ? 431 : 400;
+                        try { self.send(conn, HttpResponse.text(code, msg), false, "GET"); } catch (e2: Exception) {}
+                    }
+                    break;
+                }
+                if (req == null) { break; }
+                let started = Time.monotonicNs();
+                count += 1;
+                req.remote = conn.peerAddress();
+                if (conn.isTls()) { req.scheme = "https"; }
+                // Each request runs as a recovery point: a panic in its handler
+                // becomes a 500 instead of stopping the server.
+                let d = new Dispatch();
+                let r = req;
+                let failure = Panic.recover(fn() { d.res = self.dispatch(r, conn, d); });
+                if (failure != "") {
+                    IO.eprint("grav http: " + req.method + " " + req.target + ": " + failure + " (recovered)");
+                    if (d.upgraded) { conn.close(); return; }   // the connection is no longer HTTP
+                    d.res = HttpResponse.text(500, "internal error: " + failure);
+                }
+                let res = d.res;
+                if (res == null) { return; }   // an upgrade handler now owns the connection
+                self.finishResponse(req, res);
+                keepOpen = req.keepAlive() && !res.headers.hasToken("Connection", "close") && self.running.get() == 1 &&
+                           (self.maxRequestsPerConnection == 0 || count < self.maxRequestsPerConnection);
+                try {
+                    self.send(conn, res, keepOpen, req.method);
+                } catch (e: Exception) {
+                    keepOpen = false;
+                }
+                self.served.increment();
+                if (self.log) {
+                    let ms = (Time.monotonicNs() - started) / 1000;
+                    let line = req.method + " " + req.target + " -> ${res.status} (${ms / 1000}.${(ms % 1000) / 100} ms)";
+                    self.logLock.withLock(fn() { print(line); });
+                }
+            }
+            conn.close();
+        }
+
+        private fn readRequest(conn: TcpStream) -> HttpRequest {
+            let line = conn.readLine(Http.maxLineBytes());
+            while (line == "" && !conn.eof()) { line = conn.readLine(Http.maxLineBytes()); }  // tolerate stray CRLFs
+            if (line == "" && conn.eof()) { return null; }
+            let parts = Str.split(line, " ");
+            if (parts.size() != 3 || !Str.startsWith(parts.get(2), "HTTP/1.")) {
+                throw new NetError("malformed request line: " + Str.truncate(line, 80));
+            }
+            let req = new HttpRequest(Str.upper(parts.get(0)), parts.get(1), parts.get(2));
+            Http.readHeaders(conn, req.headers);
+            if (req.version == "HTTP/1.1" && !req.headers.has("Host")) { throw new NetError("an HTTP/1.1 request needs a Host header"); }
+            if (Str.equalsIgnoreCase(req.headers.get("Expect"), "100-continue")) {
+                if (req.contentLength() > self.maxBodyBytes) { throw new NetError("body is larger than ${self.maxBodyBytes} bytes"); }
+                conn.write(req.version + " 100 Continue\r\n\r\n");
+            }
+            req.bodyBytes = Http.readBody(conn, req.headers, false, self.maxBodyBytes);
+            return req;
+        }
+
+        // The methods the routes for `segs` answer, for Allow headers.
+        private fn allowedMethods(segs: Array<string>) -> string {
+            let list = new Array<string>();
+            for (r in self.routes) {
+                if (r.isUpgrade || !r.matches(segs, null)) { continue; }
+                let ms = r.method == "*" ? Str.split("GET POST PUT PATCH DELETE", " ") : Str.split(r.method, " ");
+                for (m in ms) {
+                    if (!list.contains(m)) { list.push(m); }
+                    if (m == "GET" && !list.contains("HEAD")) { list.push("HEAD"); }
+                }
+            }
+            if (list.size() > 0 && !list.contains("OPTIONS")) { list.push("OPTIONS"); }
+            return Str.join(list, ", ");
+        }
+
+        // The response for `req`, or null when an upgrade handler took the connection.
+        private fn dispatch(req: HttpRequest, conn: TcpStream, d: Dispatch) -> HttpResponse {
+            if (self.corsPolicy != null && Cors.isPreflight(req)) { return self.corsPolicy.preflight(req); }
+            for (m in self.middleware) {
+                try {
+                    let early = m(req);
+                    if (early != null) { return early; }
+                } catch (e: Exception) {
+                    return self.failed(req, e.describe());
+                }
+            }
+            let segs = Route.split(req.path);
+            let pathMatched = false;
+            for (r in self.routes) {
+                if (!r.matches(segs, null)) { continue; }
+                pathMatched = true;
+                if (!r.allows(req.method)) { continue; }
+                r.matches(segs, req);                     // capture the parameters
+                if (r.isUpgrade) {
+                    if (req.headers.get("Upgrade") == "") { continue; }
+                    d.upgraded = true;
+                    r.upgrader(req, conn);
+                    return null;
+                }
+                try {
+                    let res = r.handler(req);
+                    return res == null ? HttpResponse.noContent() : res;
+                } catch (e: Exception) {
+                    return self.failed(req, e.describe());
+                }
+            }
+            if (pathMatched) {
+                let allow = self.allowedMethods(segs);
+                if (req.method == "OPTIONS") { return HttpResponse.noContent().header("Allow", allow); }
+                return HttpResponse.methodNotAllowed(allow);
+            }
+            if (req.method == "OPTIONS" && req.target == "*") { return HttpResponse.noContent().header("Allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS"); }
+            if (self.notFoundHandler != null) { return self.notFoundHandler(req); }
+            return HttpResponse.notFound();
+        }
+        private fn failed(req: HttpRequest, why: string) -> HttpResponse {
+            if (self.errorHandler != null) {
+                try { return self.errorHandler(req, why); } catch (e: Exception) {}
+            }
+            return HttpResponse.text(500, "internal error: " + why);
+        }
+
+        // CORS headers, after-hooks, conditional GET (ETag) and byte ranges.
+        private fn finishResponse(req: HttpRequest, res: HttpResponse) {
+            if (self.corsPolicy != null) { self.corsPolicy.decorate(req, res); }
+            for (f in self.afterware) {
+                try { f(req, res); } catch (e: Exception) {}
+            }
+            let isGet = req.method == "GET" || req.method == "HEAD";
+            if (!isGet || res.status != 200 || res.streamer != null) { return; }
+            let tag = res.headers.get("ETag");
+            if (tag != "" && HttpServer.etagMatches(req.header("If-None-Match"), tag)) {
+                res.status = 304;
+                res.bodyBytes = new Bytes();
+                res.headers.remove("Content-Type");
+                return;
+            }
+            let range = req.header("Range");
+            if (range != "" && req.method == "GET") { HttpServer.applyRange(range, res); }
+            else if (res.headers.has("ETag")) { res.headers.setDefault("Accept-Ranges", "bytes"); }
+        }
+        private static fn etagMatches(ifNoneMatch: string, tag: string) -> bool {
+            if (ifNoneMatch == "") { return false; }
+            if (Str.trim(ifNoneMatch) == "*") { return true; }
+            let bare = Str.startsWith(tag, "W/") ? tag[2..] : tag;
+            for (t in Str.split(ifNoneMatch, ",")) {
+                let x = Str.trim(t);
+                if (Str.startsWith(x, "W/")) { x = x[2..]; }
+                if (x == bare) { return true; }
+            }
+            return false;
+        }
+        // "bytes=start-end" (one range): 206 with that slice, or 416.
+        private static fn applyRange(range: string, res: HttpResponse) {
+            let total = res.bodyBytes.size();
+            if (!Str.startsWith(range, "bytes=") || Str.contains(range, ",")) { return; }
+            let spec = Str.trim(range[6..]);
+            let dash = Str.indexOf(spec, "-");
+            if (dash < 0) { return; }
+            let a = Str.trim(spec[..dash]);
+            let b = Str.trim(spec[dash + 1..]);
+            let start = 0;
+            let end = total - 1;
+            if (a == "") {                                   // the last b bytes
+                let n = Format.toIntOr(b, -1);
+                if (n <= 0) { return; }
+                start = total - n < 0 ? 0 : total - n;
+            } else {
+                start = Format.toIntOr(a, -1);
+                if (b != "") { end = Format.toIntOr(b, -1); }
+                if (start < 0 || end < 0) { return; }
+            }
+            if (end >= total) { end = total - 1; }
+            if (start >= total || start > end) {
+                res.status = 416;
+                res.headers.set("Content-Range", "bytes */${total}");
+                res.bodyBytes = new Bytes();
+                return;
+            }
+            res.status = 206;
+            res.headers.set("Content-Range", "bytes ${start}-${end}/${total}");
+            res.bodyBytes = res.bodyBytes.slice(start, end + 1);
+        }
+
+        private fn send(conn: TcpStream, res: HttpResponse, keepOpen: bool, method: string) {
+            let h = res.headers;
+            let noBody = method == "HEAD" || res.status == 204 || res.status == 304 || res.status < 200;
+            if (res.streamer != null && !noBody) {
+                h.remove("Content-Length");
+                h.set("Transfer-Encoding", "chunked");
+            } else if (res.status != 204 && res.status != 304 && res.status >= 200) {
+                h.set("Content-Length", "${res.bodyBytes.size()}");
+            }
+            if (!h.has("Content-Type") && res.bodyBytes.size() > 0) { h.set("Content-Type", "text/plain; charset=utf-8"); }
+            h.set("Connection", keepOpen ? "keep-alive" : "close");
+            h.setDefault("Date", Http.date());
+            h.setDefault("Server", "grav");
+            let first = "HTTP/1.1 ${res.status} " + HttpResponse.reason(res.status);
+            if (res.streamer != null && !noBody) {
+                Http.writeHead(conn, first, h);
+                let w = new ResponseWriter(conn);
+                res.streamer(w);
+                w.finish();
+                return;
+            }
+            Http.writeMessage(conn, first, h, noBody ? new Bytes() : res.bodyBytes);
+        }
+    }
+}

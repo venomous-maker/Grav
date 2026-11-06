@@ -1,0 +1,161 @@
+// HTTP stress test: throughput and memory of the server and client, over plain
+// TCP and TLS. Not part of tests/run.sh (it takes a while); run it with
+//
+//   grav tests/stress/http_stress.grav --run             (or --release for best numbers)
+//   grav tests/stress/http_stress.grav --run -- quick    (a shorter run)
+//
+// Every phase is repeated; the heap in use after the later rounds must stay near
+// the second round's, or the run fails (a leak). The program exits 1 on any
+// failed request or leak.
+import "std"
+import "std/net"
+
+%{
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+%}
+// Heap bytes in use (KiB), after handing freed memory back to the system: a
+// leak shows here, allocator caching does not.
+fn heapKb() -> long {
+    return %{ ({ long long grav_h = -1;
+    #ifdef __GLIBC__
+                 malloc_trim(0); struct mallinfo2 grav_mi = mallinfo2(); grav_h = (long long)(grav_mi.uordblks / 1024);
+    #endif
+                 grav_h; }) %} as long
+}
+fn rssKb() -> long {
+    return %{ ({ long grav_p = 0, grav_r = 0; FILE* grav_f = fopen("/proc/self/statm", "r");
+                 if (grav_f) { if (fscanf(grav_f, "%ld %ld", &grav_p, &grav_r) != 2) grav_r = 0; fclose(grav_f); }
+                 (long long)grav_r * 4; }) %} as long
+}
+
+class Stats {
+    static failures: int = 0
+    static phase: string = ""
+}
+
+fn app() -> HttpServer {
+    let s = new HttpServer()
+    let big = Str.repeat("0123456789abcdef", 65536)            // 1 MiB
+    s.get("/small", fn(req: HttpRequest) => HttpResponse.text("ok"))
+    s.get("/json", fn(req: HttpRequest) -> HttpResponse {
+        let items = Json.array()
+        for (i in 0..100) { items.push(Json.object().set("id", i as long).set("name", "item ${i}").set("ok", i % 2 == 0)) }
+        return HttpResponse.json(Json.object().set("items", items))
+    })
+    s.post("/echo", fn(req: HttpRequest) => HttpResponse.bytes("application/octet-stream", req.bodyBytes))
+    s.get("/big", fn(req: HttpRequest) => HttpResponse.text(big))
+    s.get("/events", fn(req: HttpRequest) => HttpResponse.eventStream(fn(ev: EventStream) {
+        for (i in 0..200) { ev.data("event ${i}") }
+    }))
+    s.maxBodyBytes = 4 * 1024 * 1024
+    return s
+}
+
+fn check(ok: bool) {
+    if (ok) { return }
+    Stats.failures += 1
+    if (Stats.failures <= 5) { print("  FAILED in " + Stats.phase) }
+}
+
+// Runs `n` requests of `f` and prints the rate.
+fn phase(label: string, n: int, unit: string, f: fn(int)) {
+    Stats.phase = label
+    let t0 = Time.monotonicMs()
+    for (i in 0..n) { f(i) }
+    let ms = Time.monotonicMs() - t0
+    let rate = ms > 0 ? (n * 1000.0) / ms : 0.0
+    print("  " + Str.padRight(label, 34, " ") + Str.padLeft("${n}", 7, " ") + " in " + Str.padLeft("${ms}", 6, " ") + " ms  " +
+          Str.padLeft(Format.fixed(rate, 0), 8, " ") + " " + unit + "/s")
+}
+
+// The same as phase, with `threads` threads sharing the work.
+fn parallel(label: string, threads: int, each: int, f: fn(int)) {
+    Stats.phase = label
+    let t0 = Time.monotonicMs()
+    let ts = new Array<Thread>()
+    for (t in 0..threads) {
+        ts.push(Thread.spawn(fn() { for (i in 0..each) { f(i) } }))
+    }
+    for (t in ts) { t.join() }
+    let ms = Time.monotonicMs() - t0
+    let n = threads * each
+    let rate = ms > 0 ? (n * 1000.0) / ms : 0.0
+    print("  " + Str.padRight(label, 34, " ") + Str.padLeft("${n}", 7, " ") + " in " + Str.padLeft("${ms}", 6, " ") + " ms  " +
+          Str.padLeft(Format.fixed(rate, 0), 8, " ") + " req/s")
+}
+
+fn round(base: string, client: HttpClient, scale: int) {
+    phase("small, one keep-alive client", 4000 * scale, "req", fn(i: int) { check(client.get(base + "/small").body() == "ok") })
+    phase("JSON (100 items), keep-alive", 1000 * scale, "req", fn(i: int) {
+        check(client.get(base + "/json").json()["items"].size() == 100)
+    })
+    parallel("small, 8 threads share a client", 8, 500 * scale, fn(i: int) { check(client.get(base + "/small").ok()) })
+    let fresh = new HttpClient()
+    fresh.keepAlive = false
+    fresh.tls = client.tls
+    phase("small, new connection each", 300 * scale, "req", fn(i: int) { check(fresh.get(base + "/small").ok()) })
+    phase("1 MiB downloads", 30 * scale, "MiB", fn(i: int) { check(client.get(base + "/big").bodyBytes.size() == 1048576) })
+    let payload = Bytes.fromString(Str.repeat("x", 65536))
+    phase("64 KiB uploads echoed", 300 * scale, "req", fn(i: int) {
+        check(client.send("POST", base + "/echo", payload, "application/octet-stream", null).bodyBytes.size() == 65536)
+    })
+    phase("server-sent events (200 each)", 50 * scale, "stream", fn(i: int) {
+        check(Str.split(Str.trim(client.get(base + "/events").body()), "\n\n").size() == 200)
+    })
+}
+
+fn run(name: string, s: HttpServer, client: HttpClient, rounds: int, scale: int) -> bool {
+    print(name + " (" + s.baseUrl() + ")")
+    let base = s.isTls() ? "https://localhost:${s.port()}" : s.baseUrl()
+    let rss = new Array<long>()
+    for (r in 0..rounds) {
+        print(" round ${r + 1}")
+        round(base, client, scale)
+        GC.collect()
+        let heap = heapKb()
+        rss.push(heap >= 0 ? heap : rssKb())
+        print("  heap in use: ${heap / 1024} MiB, resident ${rssKb() / 1024} MiB, open connections ${s.activeConnections()}, idle in client ${client.idleConnections()}")
+    }
+    // Rounds after the second must not keep growing (allocator caches settle in the first two).
+    let settled = rss.get(rounds > 2 ? 1 : 0)
+    let last = rss.get(rounds - 1)
+    let grew = last - settled
+    let ok = grew < 8 * 1024 && grew * 10 < settled
+    print("  heap after round 2 -> last: ${settled} -> ${last} KiB " + (ok ? "(steady)" : "(GROWING: leak?)"))
+    return ok
+}
+
+fn main() {
+    // One malloc arena, so heapKb() counts what every thread holds.
+    %{
+    #ifdef __GLIBC__
+        mallopt(M_ARENA_MAX, 1);
+    #endif
+    %};
+    let quick = Process.args().contains("quick")
+    let rounds = quick ? 3 : 4
+    let scale = quick ? 1 : 3
+    let start = rssKb()
+    print("HTTP stress: ${rounds} rounds, scale ${scale}, starting at ${start / 1024} MiB")
+    let plain = app().start(0)
+    let c = new HttpClient()
+    let okPlain = run("plain HTTP", plain, c, rounds, scale)
+    c.close()
+    plain.stopAndWait(2000)
+    let okTls = true
+    if (Tls.available()) {
+        let ctx = TlsContext.selfSigned("localhost")
+        let secure = app().startTls(0, ctx)
+        let tc = new HttpClient().withTls(TlsContext.client().trustPem(ctx.certificatePem()))
+        okTls = run("HTTPS (TLS)", secure, tc, rounds, scale)
+        tc.close()
+        secure.stopAndWait(2000)
+    } else {
+        print("HTTPS skipped: " + Tls.unavailableReason())
+    }
+    print("failed requests: ${Stats.failures}")
+    if (Stats.failures > 0 || !okPlain || !okTls) { Process.exit(1) }
+    print("stress test passed")
+}

@@ -89,6 +89,7 @@ One TCP connection.
 - `fn writeLine(text: string)` — Sends text followed by "\n".
 - `fn writeBytes(data: Bytes)` — Sends raw bytes.
 - `fn readLine() -> string` — The next line (without "\n" or "\r\n"); "" at end of input, with eof() true.
+- `fn readLine(maxLen: int) -> string` — The next line, at most `maxLen` bytes long (NetError for a longer one).
 - `fn eof() -> bool` — True once the peer has closed its side and every buffered byte was read.
 - `fn read(max: int) -> string` — Up to `max` bytes as text, waiting for at least one; "" at end of input.
 - `fn readBytes(max: int) -> Bytes` — Up to `max` bytes, waiting for at least one; empty at end of input.
