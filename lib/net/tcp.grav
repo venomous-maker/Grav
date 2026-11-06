@@ -41,7 +41,17 @@ namespace std.net {
     #include <sys/types.h>
     #include <unistd.h>
 
-    typedef struct { int fd; char* buf; int len, pos, cap; int eof; int timedOut; } GravSock;
+    /* A connection: the socket, its read buffer, and (after a TLS handshake,
+       lib/net/tls.grav) the session its reads and writes go through. */
+    typedef struct GravSock {
+        int fd; char* buf; int len, pos, cap; int eof; int timedOut;
+        void* tls;                                            /* SSL*, or 0 for plain TCP */
+        int (*tlsRead)(struct GravSock*, char*, int);         /* > 0 bytes, 0 end, -1 error */
+        int (*tlsWrite)(struct GravSock*, const char*, int);  /* bytes written, or -1 */
+        void (*tlsClose)(struct GravSock*);
+        char tlsVersion[16];
+        char err[256];                                        /* a TLS failure's reason, else "" */
+    } GravSock;
 
     static GravSock* grav_sock_new(int fd) {
         GravSock* s = (GravSock*)calloc(1, sizeof(GravSock));
@@ -62,6 +72,18 @@ namespace std.net {
         if (!c) abort();
         snprintf(c, n, "%s: %s", what, detail);
         return c;
+    }
+    static const char* grav_net_copy(const char* m) {
+        char* c = grav_str_alloc(strlen(m) + 1);
+        if (!c) abort();
+        strcpy(c, m);
+        return c;
+    }
+    /* The pending TLS failure reason ("" if none), cleared. */
+    static const char* grav_net_take_err(GravSock* s) {
+        const char* m = grav_net_copy(s->err);
+        s->err[0] = 0;
+        return m;
     }
     static void grav_net_init(void) {
         static int done = 0;
@@ -190,7 +212,8 @@ namespace std.net {
             }
         }
         ssize_t n;
-        do { n = recv(s->fd, s->buf + s->len, (size_t)(s->cap - s->len), 0); } while (n < 0 && errno == EINTR);
+        if (s->tls) n = s->tlsRead(s, s->buf + s->len, s->cap - s->len);
+        else do { n = recv(s->fd, s->buf + s->len, (size_t)(s->cap - s->len), 0); } while (n < 0 && errno == EINTR);
         if (n > 0) { s->len += (int)n; return 1; }
         if (n == 0) { s->eof = 1; return 0; }
         if (errno == EAGAIN || errno == EWOULDBLOCK) s->timedOut = 1;
@@ -199,7 +222,14 @@ namespace std.net {
     /* Write everything; 0 on success, else errno. */
     static int grav_sock_write(GravSock* s, const char* p, long long n) {
         while (n > 0) {
-            ssize_t w = send(s->fd, p, (size_t)n, MSG_NOSIGNAL);
+            ssize_t w;
+            if (s->tls) {
+                w = s->tlsWrite(s, p, n > (1 << 30) ? (1 << 30) : (int)n);
+                if (w < 0) return errno ? errno : EPROTO;
+                p += w; n -= w;
+                continue;
+            }
+            w = send(s->fd, p, (size_t)n, MSG_NOSIGNAL);
             if (w < 0) {
                 if (errno == EINTR) continue;
                 if (errno == EAGAIN || errno == EWOULDBLOCK) s->timedOut = 1;
@@ -277,7 +307,8 @@ namespace std.net {
                 %{ ((GravSock*)self->s)->timedOut = 0; %};
                 throw new TimeoutError(what + " timed out (" + self.peer + ")");
             }
-            let why = %{ grav_net_errstr(errno) %} as string;
+            let tlsWhy = %{ grav_net_take_err((GravSock*)self->s) %} as string;
+            let why = tlsWhy != "" ? tlsWhy : %{ grav_net_errstr(errno) %} as string;
             throw new NetError(what + " failed: " + why + " (" + self.peer + ")");
         }
         private fn ensureOpen() {
@@ -388,8 +419,18 @@ namespace std.net {
         public fn close() {
             if (self.closed) { return; }
             self.closed = true;
-            %{ close(((GravSock*)self->s)->fd); %};
+            %{
+                GravSock* gs = (GravSock*)self->s;
+                if (gs->tls) gs->tlsClose(gs);     /* close_notify, then free the session */
+                close(gs->fd);
+            %};
         }
+        // The connection's internal state, for lib/net code (TLS).
+        public fn handle() -> byte* { return self.s; }
+        // Whether the connection is encrypted with TLS (see lib/net/tls.grav).
+        public fn isTls() -> bool { return %{ ((GravSock*)self->s)->tls != 0 %} as bool; }
+        // The TLS protocol in use ("TLSv1.3"), or "" for a plain connection.
+        public fn tlsVersion() -> string { return %{ grav_net_copy(((GravSock*)self->s)->tlsVersion) %} as string; }
         // Whether close() was called.
         public fn isClosed() -> bool { return self.closed; }
     }

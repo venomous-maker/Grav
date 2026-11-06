@@ -1,0 +1,556 @@
+// lib/net/tls.grav — TLS (the encryption behind https:// and wss://), using the
+// system's OpenSSL.
+//
+//   let conn = Tls.connect("example.com", 443)          // verified against the system's CAs
+//   conn.write("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+//   print(conn.readLine())                              // HTTP/1.1 200 OK
+//
+//   // a server: a certificate and key from files, or a throwaway one for development
+//   let ctx = TlsContext.selfSigned("localhost")
+//   let listener = TcpListener.bind("127.0.0.1", 8443)
+//   let c = listener.accept()
+//   Tls.startServer(c, ctx)                             // then read and write as usual
+//
+// A TLS stream is an ordinary TcpStream: readLine, readBytes, write and the rest
+// work unchanged, and isTls() / tlsVersion() tell it apart. OpenSSL (libssl 3 or
+// 1.1) is loaded the first time TLS is used, so programs that never use it do not
+// depend on it; when it is missing, TLS calls throw NetError and Tls.available()
+// is false. Clients verify the server's certificate chain and host name and
+// refuse TLS older than 1.2.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../io/fs.grav"
+import "tcp.grav"
+
+namespace std.net {
+
+    %{
+    #include <arpa/inet.h>
+    #include <dlfcn.h>
+    #include <errno.h>
+    #include <pthread.h>
+    #include <stdint.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    /* The OpenSSL functions used, looked up at run time (no headers or link flags
+       needed). Types are opaque pointers; constants come from the OpenSSL ABI. */
+    typedef struct {
+        const void* (*TLS_client_method)(void);
+        const void* (*TLS_server_method)(void);
+        void* (*SSL_CTX_new)(const void*);
+        void (*SSL_CTX_free)(void*);
+        long (*SSL_CTX_ctrl)(void*, int, long, void*);
+        uint64_t (*SSL_CTX_set_options)(void*, uint64_t);
+        void (*SSL_CTX_set_verify)(void*, int, void*);
+        int (*SSL_CTX_set_default_verify_paths)(void*);
+        int (*SSL_CTX_load_verify_locations)(void*, const char*, const char*);
+        int (*SSL_CTX_use_certificate)(void*, void*);
+        int (*SSL_CTX_use_PrivateKey)(void*, void*);
+        int (*SSL_CTX_check_private_key)(const void*);
+        void* (*SSL_CTX_get_cert_store)(const void*);
+        void* (*SSL_new)(void*);
+        void (*SSL_free)(void*);
+        int (*SSL_set_fd)(void*, int);
+        long (*SSL_ctrl)(void*, int, long, void*);
+        int (*SSL_set1_host)(void*, const char*);
+        void* (*SSL_get0_param)(void*);
+        int (*SSL_connect)(void*);
+        int (*SSL_accept)(void*);
+        int (*SSL_read)(void*, void*, int);
+        int (*SSL_write)(void*, const void*, int);
+        int (*SSL_shutdown)(void*);
+        int (*SSL_get_error)(const void*, int);
+        long (*SSL_get_verify_result)(const void*);
+        const char* (*SSL_get_version)(const void*);
+        int (*X509_VERIFY_PARAM_set1_ip_asc)(void*, const char*);
+        const char* (*X509_verify_cert_error_string)(long);
+        unsigned long (*ERR_get_error)(void);
+        void (*ERR_error_string_n)(unsigned long, char*, size_t);
+        void (*ERR_clear_error)(void);
+        const char* (*OpenSSL_version)(int);
+        void* (*EVP_PKEY_Q_keygen)(void*, const char*, const char*, ...);
+        void (*EVP_PKEY_free)(void*);
+        void* (*X509_new)(void);
+        void (*X509_free)(void*);
+        int (*X509_set_version)(void*, long);
+        void* (*X509_get_serialNumber)(void*);
+        int (*ASN1_INTEGER_set)(void*, long);
+        void* (*X509_getm_notBefore)(const void*);
+        void* (*X509_getm_notAfter)(const void*);
+        void* (*X509_gmtime_adj)(void*, long);
+        int (*X509_set_pubkey)(void*, void*);
+        void* (*X509_get_subject_name)(const void*);
+        int (*X509_NAME_add_entry_by_txt)(void*, const char*, int, const unsigned char*, int, int, int);
+        int (*X509_set_issuer_name)(void*, const void*);
+        void* (*X509V3_EXT_nconf_nid)(void*, void*, int, const char*);
+        int (*X509_add_ext)(void*, void*, int);
+        void (*X509_EXTENSION_free)(void*);
+        int (*X509_sign)(void*, void*, const void*);
+        const void* (*EVP_sha256)(void);
+        void* (*BIO_new)(const void*);
+        const void* (*BIO_s_mem)(void);
+        void* (*BIO_new_mem_buf)(const void*, int);
+        long (*BIO_ctrl)(void*, int, long, void*);
+        int (*BIO_free)(void*);
+        int (*PEM_write_bio_X509)(void*, void*);
+        int (*PEM_write_bio_PrivateKey)(void*, const void*, const void*, const unsigned char*, int, void*, void*);
+        void* (*PEM_read_bio_X509)(void*, void**, void*, void*);
+        void* (*PEM_read_bio_PrivateKey)(void*, void**, void*, void*);
+        int (*X509_STORE_add_cert)(void*, void*);
+    } GravSsl;
+    static GravSsl grav_ssl;
+    static int grav_ssl_ok = 0;
+    static char grav_ssl_why[256];
+    static pthread_once_t grav_ssl_once = PTHREAD_ONCE_INIT;
+
+    enum { GRAV_SSL_ERROR_SSL = 1, GRAV_SSL_WANT_READ = 2, GRAV_SSL_WANT_WRITE = 3, GRAV_SSL_SYSCALL = 5,
+           GRAV_SSL_ZERO_RETURN = 6 };
+
+    static void* grav_ssl_open(const char* const* names) {
+        for (int i = 0; names[i]; i++) {
+            void* h = dlopen(names[i], RTLD_NOW | RTLD_GLOBAL);
+            if (h) return h;
+        }
+        return 0;
+    }
+    static void grav_ssl_load(void) {
+        static const char* const crypto[] = { "libcrypto.so.3", "libcrypto.so", "libcrypto.3.dylib",
+                                              "libcrypto.dylib", "libcrypto.so.1.1", 0 };
+        static const char* const ssl[] = { "libssl.so.3", "libssl.so", "libssl.3.dylib", "libssl.dylib",
+                                           "libssl.so.1.1", 0 };
+        void* hc = grav_ssl_open(crypto);
+        void* hs = hc ? grav_ssl_open(ssl) : 0;
+        if (!hs) {
+            snprintf(grav_ssl_why, sizeof grav_ssl_why, "TLS needs OpenSSL (libssl), which could not be loaded: %s",
+                     dlerror() ? dlerror() : "not found");
+            return;
+        }
+        int missing = 0;
+        const char* first = 0;
+    #define GRAV_SSL_FN(h, name) do { *(void**)(&grav_ssl.name) = dlsym(h, #name); \
+            if (!grav_ssl.name) { missing++; if (!first) first = #name; } } while (0)
+        GRAV_SSL_FN(hs, TLS_client_method); GRAV_SSL_FN(hs, TLS_server_method);
+        GRAV_SSL_FN(hs, SSL_CTX_new); GRAV_SSL_FN(hs, SSL_CTX_free); GRAV_SSL_FN(hs, SSL_CTX_ctrl);
+        GRAV_SSL_FN(hs, SSL_CTX_set_verify); GRAV_SSL_FN(hs, SSL_CTX_set_default_verify_paths);
+        GRAV_SSL_FN(hs, SSL_CTX_load_verify_locations); GRAV_SSL_FN(hs, SSL_CTX_use_certificate);
+        GRAV_SSL_FN(hs, SSL_CTX_use_PrivateKey); GRAV_SSL_FN(hs, SSL_CTX_check_private_key);
+        GRAV_SSL_FN(hs, SSL_CTX_get_cert_store); GRAV_SSL_FN(hs, SSL_new); GRAV_SSL_FN(hs, SSL_free);
+        GRAV_SSL_FN(hs, SSL_set_fd); GRAV_SSL_FN(hs, SSL_ctrl); GRAV_SSL_FN(hs, SSL_set1_host);
+        GRAV_SSL_FN(hs, SSL_get0_param); GRAV_SSL_FN(hs, SSL_connect); GRAV_SSL_FN(hs, SSL_accept);
+        GRAV_SSL_FN(hs, SSL_read); GRAV_SSL_FN(hs, SSL_write); GRAV_SSL_FN(hs, SSL_shutdown);
+        GRAV_SSL_FN(hs, SSL_get_error); GRAV_SSL_FN(hs, SSL_get_verify_result); GRAV_SSL_FN(hs, SSL_get_version);
+        GRAV_SSL_FN(hc, X509_VERIFY_PARAM_set1_ip_asc); GRAV_SSL_FN(hc, X509_verify_cert_error_string);
+        GRAV_SSL_FN(hc, ERR_get_error); GRAV_SSL_FN(hc, ERR_error_string_n); GRAV_SSL_FN(hc, ERR_clear_error);
+        GRAV_SSL_FN(hc, OpenSSL_version); GRAV_SSL_FN(hc, EVP_PKEY_free);
+        GRAV_SSL_FN(hc, X509_new); GRAV_SSL_FN(hc, X509_free); GRAV_SSL_FN(hc, X509_set_version);
+        GRAV_SSL_FN(hc, X509_get_serialNumber); GRAV_SSL_FN(hc, ASN1_INTEGER_set);
+        GRAV_SSL_FN(hc, X509_getm_notBefore); GRAV_SSL_FN(hc, X509_getm_notAfter); GRAV_SSL_FN(hc, X509_gmtime_adj);
+        GRAV_SSL_FN(hc, X509_set_pubkey); GRAV_SSL_FN(hc, X509_get_subject_name);
+        GRAV_SSL_FN(hc, X509_NAME_add_entry_by_txt); GRAV_SSL_FN(hc, X509_set_issuer_name);
+        GRAV_SSL_FN(hc, X509V3_EXT_nconf_nid); GRAV_SSL_FN(hc, X509_add_ext); GRAV_SSL_FN(hc, X509_EXTENSION_free);
+        GRAV_SSL_FN(hc, X509_sign); GRAV_SSL_FN(hc, EVP_sha256); GRAV_SSL_FN(hc, BIO_new); GRAV_SSL_FN(hc, BIO_s_mem);
+        GRAV_SSL_FN(hc, BIO_new_mem_buf); GRAV_SSL_FN(hc, BIO_ctrl); GRAV_SSL_FN(hc, BIO_free);
+        GRAV_SSL_FN(hc, PEM_write_bio_X509); GRAV_SSL_FN(hc, PEM_write_bio_PrivateKey);
+        GRAV_SSL_FN(hc, PEM_read_bio_X509); GRAV_SSL_FN(hc, PEM_read_bio_PrivateKey);
+        GRAV_SSL_FN(hc, X509_STORE_add_cert);
+    #undef GRAV_SSL_FN
+        /* Only in OpenSSL 3: key generation in one call, and options as a function. */
+        *(void**)(&grav_ssl.EVP_PKEY_Q_keygen) = dlsym(hc, "EVP_PKEY_Q_keygen");
+        *(void**)(&grav_ssl.SSL_CTX_set_options) = dlsym(hs, "SSL_CTX_set_options");
+        if (missing) {
+            snprintf(grav_ssl_why, sizeof grav_ssl_why, "the OpenSSL found is too old or incomplete (no %s)", first);
+            return;
+        }
+        grav_ssl_ok = 1;
+    }
+    /* 1 when OpenSSL is usable; else 0 with *why set. */
+    static int grav_ssl_ready(const char** why) {
+        pthread_once(&grav_ssl_once, grav_ssl_load);
+        if (!grav_ssl_ok && why) *why = grav_net_copy(grav_ssl_why);
+        return grav_ssl_ok;
+    }
+    /* OpenSSL's queued errors as one line (or `fallback`), the queue cleared. */
+    static const char* grav_ssl_errors(const char* fallback) {
+        char line[512] = "", one[256];
+        unsigned long e;
+        while ((e = grav_ssl.ERR_get_error()) != 0) {
+            grav_ssl.ERR_error_string_n(e, one, sizeof one);
+            if (line[0]) strncat(line, "; ", sizeof line - strlen(line) - 1);
+            strncat(line, one, sizeof line - strlen(line) - 1);
+        }
+        return grav_net_copy(line[0] ? line : fallback);
+    }
+
+    /* ---- reading and writing through a session (GravSock hooks) ---- */
+    static int grav_tls_io_failed(GravSock* s, int r, const char* what) {
+        int e = grav_ssl.SSL_get_error(s->tls, r);
+        if (e == GRAV_SSL_ZERO_RETURN) return 0;
+        if (e == GRAV_SSL_SYSCALL || e == GRAV_SSL_WANT_READ || e == GRAV_SSL_WANT_WRITE) {
+            if (errno == EINTR) return 1;                       /* retry */
+            if (errno == EAGAIN || errno == EWOULDBLOCK) { s->timedOut = 1; return -1; }
+            if (e == GRAV_SSL_SYSCALL && errno == 0) return 0;  /* the peer closed without close_notify */
+            if (e != GRAV_SSL_SYSCALL) return 1;
+            return -1;
+        }
+        const char* m = grav_ssl_errors("TLS protocol error");
+        snprintf(s->err, sizeof s->err, "TLS %s: %s", what, m);
+        grav_str_release(m);
+        errno = EPROTO;
+        return -1;
+    }
+    static int grav_tls_read(GravSock* s, char* p, int n) {
+        for (;;) {
+            errno = 0;
+            int r = grav_ssl.SSL_read(s->tls, p, n);
+            if (r > 0) return r;
+            int f = grav_tls_io_failed(s, r, "read");
+            if (f == 1) continue;
+            if (f == 0) s->eof = 1;
+            return f;
+        }
+    }
+    static int grav_tls_write(GravSock* s, const char* p, int n) {
+        for (;;) {
+            errno = 0;
+            int r = grav_ssl.SSL_write(s->tls, p, n);
+            if (r > 0) return r;
+            int f = grav_tls_io_failed(s, r, "write");
+            if (f == 1) continue;
+            if (f == 0) errno = EPIPE;
+            return -1;
+        }
+    }
+    static void grav_tls_close(GravSock* s) {
+        if (!s->tls) return;
+        grav_ssl.SSL_shutdown(s->tls);                          /* close_notify; no waiting for the reply */
+        grav_ssl.SSL_free(s->tls);
+        s->tls = 0;
+    }
+
+    /* ---- contexts ---- */
+    #define GRAV_TLS_VERIFY_PEER 1
+    #define GRAV_TLS_FILETYPE_PEM 1
+    #define GRAV_TLS_CTRL_SET_MIN_PROTO 123
+    #define GRAV_TLS_CTRL_SET_HOSTNAME 55
+    #define GRAV_TLS1_2 0x0303
+    #define GRAV_TLS_OP_IGNORE_UNEXPECTED_EOF (1ULL << 7)
+    #define GRAV_NID_SUBJECT_ALT_NAME 85
+
+    /* A new SSL_CTX for a client (verify: check the server) or a server. */
+    static void* grav_tls_ctx_new(int server, int verify, const char** err) {
+        if (!grav_ssl_ready(err)) return 0;
+        void* ctx = grav_ssl.SSL_CTX_new(server ? grav_ssl.TLS_server_method() : grav_ssl.TLS_client_method());
+        if (!ctx) { *err = grav_ssl_errors("cannot create a TLS context"); return 0; }
+        grav_ssl.SSL_CTX_ctrl(ctx, GRAV_TLS_CTRL_SET_MIN_PROTO, GRAV_TLS1_2, 0);
+        if (grav_ssl.SSL_CTX_set_options) grav_ssl.SSL_CTX_set_options(ctx, GRAV_TLS_OP_IGNORE_UNEXPECTED_EOF);
+        if (!server) {
+            grav_ssl.SSL_CTX_set_verify(ctx, verify ? GRAV_TLS_VERIFY_PEER : 0, 0);
+            if (verify) grav_ssl.SSL_CTX_set_default_verify_paths(ctx);
+        }
+        return ctx;
+    }
+    static void* grav_tls_bio_text(const char* text) { return grav_ssl.BIO_new_mem_buf(text, (int)strlen(text)); }
+    /* PEM text of a certificate (cert = 1) or a private key. */
+    static const char* grav_tls_pem(void* obj, int cert) {
+        void* bio = grav_ssl.BIO_new(grav_ssl.BIO_s_mem());
+        if (cert) grav_ssl.PEM_write_bio_X509(bio, obj);
+        else grav_ssl.PEM_write_bio_PrivateKey(bio, obj, 0, 0, 0, 0, 0);
+        char* data = 0;
+        long n = grav_ssl.BIO_ctrl(bio, 3 /* BIO_CTRL_INFO */, 0, &data);
+        char* out = grav_str_alloc((size_t)n + 1);
+        if (!out) abort();
+        memcpy(out, data, (size_t)n);
+        out[n] = 0;
+        grav_ssl.BIO_free(bio);
+        return out;
+    }
+    /* Installs a certificate chain and key given as PEM text. 0 on success, else *err. */
+    static int grav_tls_use_pem(void* ctx, const char* certPem, const char* keyPem, const char** err) {
+        void* cb = grav_tls_bio_text(certPem);
+        void* cert = grav_ssl.PEM_read_bio_X509(cb, 0, 0, 0);
+        int rc = -1;
+        if (!cert) { *err = grav_ssl_errors("the certificate is not valid PEM"); goto done; }
+        if (grav_ssl.SSL_CTX_use_certificate(ctx, cert) != 1) { *err = grav_ssl_errors("the certificate was refused"); goto done; }
+        /* Further certificates in the text form the chain. */
+        for (;;) {
+            void* extra = grav_ssl.PEM_read_bio_X509(cb, 0, 0, 0);
+            if (!extra) { grav_ssl.ERR_clear_error(); break; }
+            grav_ssl.SSL_CTX_ctrl(ctx, 14 /* SSL_CTRL_EXTRA_CHAIN_CERT */, 0, extra);
+        }
+        void* kb = grav_tls_bio_text(keyPem);
+        void* key = grav_ssl.PEM_read_bio_PrivateKey(kb, 0, 0, 0);
+        grav_ssl.BIO_free(kb);
+        if (!key) { *err = grav_ssl_errors("the private key is not valid PEM"); goto done; }
+        if (grav_ssl.SSL_CTX_use_PrivateKey(ctx, key) != 1 || grav_ssl.SSL_CTX_check_private_key(ctx) != 1) {
+            *err = grav_ssl_errors("the private key does not match the certificate");
+            grav_ssl.EVP_PKEY_free(key);
+            goto done;
+        }
+        grav_ssl.EVP_PKEY_free(key);
+        rc = 0;
+    done:
+        if (cert) grav_ssl.X509_free(cert);
+        grav_ssl.BIO_free(cb);
+        return rc;
+    }
+    /* Trusts the certificate(s) in PEM text (client contexts). Returns how many. */
+    static int grav_tls_trust_pem(void* ctx, const char* pem) {
+        void* bio = grav_tls_bio_text(pem);
+        void* store = grav_ssl.SSL_CTX_get_cert_store(ctx);
+        int n = 0;
+        for (;;) {
+            void* cert = grav_ssl.PEM_read_bio_X509(bio, 0, 0, 0);
+            if (!cert) { grav_ssl.ERR_clear_error(); break; }
+            if (grav_ssl.X509_STORE_add_cert(store, cert) == 1) n++;
+            grav_ssl.X509_free(cert);
+        }
+        grav_ssl.BIO_free(bio);
+        return n;
+    }
+    static int grav_tls_is_ip(const char* host) {
+        unsigned char buf[16];
+        return inet_pton(AF_INET, host, buf) == 1 || inet_pton(AF_INET6, host, buf) == 1;
+    }
+    /* A new P-256 key and a certificate for `host` signed by it, valid `days`.
+       Returns 0 and the two PEM texts, else -1 with *err. */
+    static int grav_tls_self_signed(const char* host, int days, const char** certPem, const char** keyPem,
+                                    const char** err) {
+        if (!grav_ssl_ready(err)) return -1;
+        if (!grav_ssl.EVP_PKEY_Q_keygen) { *err = grav_net_copy("making certificates needs OpenSSL 3"); return -1; }
+        void* key = grav_ssl.EVP_PKEY_Q_keygen(0, 0, "EC", "P-256");
+        if (!key) { *err = grav_ssl_errors("cannot generate a key"); return -1; }
+        void* x = grav_ssl.X509_new();
+        grav_ssl.X509_set_version(x, 2);
+        unsigned char rnd[4] = {1, 2, 3, 4};
+        FILE* ur = fopen("/dev/urandom", "rb");
+        if (ur) { if (fread(rnd, 1, sizeof rnd, ur) != sizeof rnd) {} fclose(ur); }
+        grav_ssl.ASN1_INTEGER_set(grav_ssl.X509_get_serialNumber(x),
+                                  (long)(((rnd[0] & 0x7f) << 24) | (rnd[1] << 16) | (rnd[2] << 8) | rnd[3]) + 1);
+        grav_ssl.X509_gmtime_adj(grav_ssl.X509_getm_notBefore(x), -3600);
+        grav_ssl.X509_gmtime_adj(grav_ssl.X509_getm_notAfter(x), (long)days * 86400L);
+        grav_ssl.X509_set_pubkey(x, key);
+        void* name = grav_ssl.X509_get_subject_name(x);
+        grav_ssl.X509_NAME_add_entry_by_txt(name, "CN", 0x1001 /* MBSTRING_ASC */, (const unsigned char*)host, -1, -1, 0);
+        grav_ssl.X509_set_issuer_name(x, name);
+        char san[600];
+        if (grav_tls_is_ip(host)) snprintf(san, sizeof san, "IP:%s", host);
+        else if (strcmp(host, "localhost") == 0) snprintf(san, sizeof san, "DNS:localhost,IP:127.0.0.1,IP:::1");
+        else snprintf(san, sizeof san, "DNS:%s", host);
+        void* ext = grav_ssl.X509V3_EXT_nconf_nid(0, 0, GRAV_NID_SUBJECT_ALT_NAME, san);
+        if (ext) { grav_ssl.X509_add_ext(x, ext, -1); grav_ssl.X509_EXTENSION_free(ext); }
+        int ok = grav_ssl.X509_sign(x, key, grav_ssl.EVP_sha256()) > 0;
+        if (ok) { *certPem = grav_tls_pem(x, 1); *keyPem = grav_tls_pem(key, 0); }
+        else *err = grav_ssl_errors("cannot sign the certificate");
+        grav_ssl.X509_free(x);
+        grav_ssl.EVP_PKEY_free(key);
+        return ok ? 0 : -1;
+    }
+
+    /* ---- handshakes ---- */
+    /* Client (server = 0, host checked unless verify is off) or server handshake on
+       an open connection. 0 on success, else -1 with the reason in s->err. */
+    static int grav_tls_handshake(GravSock* s, void* ctx, int server, const char* host) {
+        if (s->tls) { snprintf(s->err, sizeof s->err, "the connection already uses TLS"); return -1; }
+        void* ssl = grav_ssl.SSL_new(ctx);
+        if (!ssl) {
+            const char* m = grav_ssl_errors("cannot start TLS");
+            snprintf(s->err, sizeof s->err, "%s", m); grav_str_release(m);
+            return -1;
+        }
+        grav_ssl.SSL_set_fd(ssl, s->fd);
+        if (!server && host && host[0]) {
+            if (grav_tls_is_ip(host)) grav_ssl.X509_VERIFY_PARAM_set1_ip_asc(grav_ssl.SSL_get0_param(ssl), host);
+            else {
+                grav_ssl.SSL_ctrl(ssl, GRAV_TLS_CTRL_SET_HOSTNAME, 0 /* host_name */, (void*)host);  /* SNI */
+                grav_ssl.SSL_set1_host(ssl, host);
+            }
+        }
+        grav_ssl.ERR_clear_error();
+        int r;
+        do { errno = 0; r = server ? grav_ssl.SSL_accept(ssl) : grav_ssl.SSL_connect(ssl); }
+        while (r <= 0 && errno == EINTR);
+        if (r != 1) {
+            long v = grav_ssl.SSL_get_verify_result(ssl);
+            int e = grav_ssl.SSL_get_error(ssl, r);
+            if (!server && v != 0)
+                snprintf(s->err, sizeof s->err, "TLS handshake: the server's certificate was not accepted: %s",
+                         grav_ssl.X509_verify_cert_error_string(v));
+            else if (e == GRAV_SSL_SYSCALL || e == GRAV_SSL_WANT_READ || e == GRAV_SSL_WANT_WRITE) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) { s->timedOut = 1; snprintf(s->err, sizeof s->err, "TLS handshake timed out"); }
+                else snprintf(s->err, sizeof s->err, "TLS handshake: the connection was closed (%s)",
+                              errno ? strerror(errno) : "the peer may not speak TLS");
+            } else {
+                const char* m = grav_ssl_errors("protocol error");
+                snprintf(s->err, sizeof s->err, "TLS handshake: %s", m); grav_str_release(m);
+            }
+            grav_ssl.ERR_clear_error();
+            grav_ssl.SSL_free(ssl);
+            return -1;
+        }
+        s->tls = ssl;
+        s->tlsRead = grav_tls_read;
+        s->tlsWrite = grav_tls_write;
+        s->tlsClose = grav_tls_close;
+        snprintf(s->tlsVersion, sizeof s->tlsVersion, "%s", grav_ssl.SSL_get_version(ssl));
+        return 0;
+    }
+    /* The process-wide verifying client context (made once). */
+    static void* grav_tls_default_ctx = 0;
+    static const char* grav_tls_default_err = 0;
+    static pthread_once_t grav_tls_default_once = PTHREAD_ONCE_INIT;
+    static void grav_tls_make_default(void) { grav_tls_default_ctx = grav_tls_ctx_new(0, 1, &grav_tls_default_err); }
+    static void* grav_tls_default_client(const char** err) {
+        pthread_once(&grav_tls_default_once, grav_tls_make_default);
+        if (!grav_tls_default_ctx) *err = grav_net_copy(grav_tls_default_err ? grav_tls_default_err : "TLS is not available");
+        return grav_tls_default_ctx;
+    }
+    %}
+
+    // What TLS connections made with it trust and present: a client context checks
+    // servers, a server context holds the certificate and key it shows clients.
+    // One context can be shared by any number of connections and threads.
+    class TlsContext {
+        private ctx: byte*
+        private server: bool
+        private verifying: bool
+        private certText: string
+        private keyText: string
+
+        // Use the static constructors (client, server, selfSigned, ...).
+        constructor(server: bool, verify: bool) {
+            let err = "";
+            self.ctx = %{ (unsigned char*)grav_tls_ctx_new(server, verify, &err) %} as byte*;
+            if (self.ctx == null) { throw new NetError(err); }
+            self.server = server;
+            self.verifying = verify && !server;
+            self.certText = "";
+            self.keyText = "";
+        }
+        destructor() { %{ if (self->ctx) grav_ssl.SSL_CTX_free(self->ctx); %}; }
+
+        // A client context that checks servers against the system's trusted
+        // certificate authorities and their host names (what browsers do).
+        static fn client() -> TlsContext { return new TlsContext(false, true); }
+        // A client context that accepts any server certificate. Encrypted, but with
+        // no protection against an impostor: for tests and machines you control.
+        static fn insecureClient() -> TlsContext { return new TlsContext(false, false); }
+        // A server context with the certificate chain and private key in PEM files.
+        static fn server(certFile: string, keyFile: string) -> TlsContext {
+            if (!new File(certFile).exists()) { throw new NetError("certificate file not found: " + certFile); }
+            if (!new File(keyFile).exists()) { throw new NetError("key file not found: " + keyFile); }
+            return TlsContext.serverPem(new File(certFile).read(), new File(keyFile).read());
+        }
+        // A server context from PEM text: the certificate (then any chain
+        // certificates) and its private key.
+        static fn serverPem(certPem: string, keyPem: string) -> TlsContext {
+            let c = new TlsContext(true, false);
+            let err = "";
+            if (%{ grav_tls_use_pem(c->ctx, certPem, keyPem, &err) %} as int != 0) { throw new NetError(err); }
+            c.certText = certPem;
+            c.keyText = keyPem;
+            return c;
+        }
+        // A server context with a new self-signed certificate for `host` (a name or
+        // an address; "localhost" also covers 127.0.0.1 and ::1), valid for a year.
+        // Browsers warn about it; clients trust it with trustPem(certificatePem()).
+        static fn selfSigned(host: string) -> TlsContext { return TlsContext.selfSigned(host, 365); }
+        // A self-signed server context valid for `days` days.
+        static fn selfSigned(host: string, days: int) -> TlsContext {
+            let cert = "";
+            let key = "";
+            let err = "";
+            if (%{ grav_tls_self_signed(host, days, &cert, &key, &err) %} as int != 0) { throw new NetError(err); }
+            return TlsContext.serverPem(cert, key);
+        }
+
+        // Also trusts the certificate(s) in PEM text (a private CA, or a
+        // self-signed server); returns this context.
+        public fn trustPem(pem: string) -> TlsContext {
+            self.requireClient("trustPem");
+            if (%{ grav_tls_trust_pem(self->ctx, pem) %} as int == 0) { throw new NetError("no certificate found in the PEM text"); }
+            return self;
+        }
+        // Also trusts the certificate(s) in a PEM file; returns this context.
+        public fn trustFile(path: string) -> TlsContext {
+            if (!new File(path).exists()) { throw new NetError("certificate file not found: " + path); }
+            return self.trustPem(new File(path).read());
+        }
+        // The certificate a server context presents, as PEM ("" for a client context).
+        public fn certificatePem() -> string { return self.certText; }
+        // The private key of a server context, as PEM ("" for a client context).
+        public fn privateKeyPem() -> string { return self.keyText; }
+        // Whether this is a server context.
+        public fn isServer() -> bool { return self.server; }
+        // Whether a client context checks the server's certificate.
+        public fn verifies() -> bool { return self.verifying; }
+        // The OpenSSL context, for lib/net code.
+        public fn handle() -> byte* { return self.ctx; }
+        private fn requireClient(what: string) {
+            if (self.server) { throw new StateError(what + " is for client contexts"); }
+        }
+    }
+
+    // TLS connections.
+    class Tls {
+        // Whether OpenSSL could be loaded (TLS works).
+        static fn available() -> bool { return %{ grav_ssl_ready(0) %} as bool; }
+        // Why TLS is unavailable ("" when it works).
+        static fn unavailableReason() -> string {
+            let why = "";
+            if (%{ grav_ssl_ready(&why) %} as bool) { return ""; }
+            return why;
+        }
+        // The OpenSSL version in use ("OpenSSL 3.0.13 30 Jan 2024"); "" without TLS.
+        static fn libraryVersion() -> string {
+            if (!Tls.available()) { return ""; }
+            return %{ grav_net_copy(grav_ssl.OpenSSL_version(0)) %} as string;
+        }
+
+        // Connects to host:port and completes a TLS handshake, verifying the server
+        // against the system's trusted certificates. NetError when the certificate
+        // is not accepted.
+        static fn connect(host: string, port: int) -> TcpStream { return Tls.connect(host, port, null, 30000); }
+        // Connects with the given client context (null: the system default) and
+        // timeout for connecting and the handshake.
+        static fn connect(host: string, port: int, ctx: TlsContext, timeoutMs: int) -> TcpStream {
+            let conn = TcpStream.connect(host, port, timeoutMs);
+            try {
+                conn.setTimeoutMs(timeoutMs > 0 ? timeoutMs : 0);
+                Tls.startClient(conn, host, ctx);
+            } catch (e: Exception) {
+                conn.close();
+                throw e;
+            }
+            return conn;
+        }
+        // Starts TLS as a client on a connected stream (for protocols that switch
+        // to TLS part way, like SMTP's STARTTLS). `host` is checked against the
+        // server's certificate; ctx null means the system default.
+        static fn startClient(conn: TcpStream, host: string, ctx: TlsContext) {
+            let err = "";
+            let c = ctx == null ? %{ (unsigned char*)grav_tls_default_client(&err) %} as byte* : ctx.handle();
+            if (c == null) { throw new NetError(err); }
+            if (ctx != null && ctx.isServer()) { throw new StateError("startClient needs a client context"); }
+            Tls.handshake(conn, c, false, host);
+        }
+        // Answers a client's TLS handshake on an accepted stream with the server
+        // context's certificate.
+        static fn startServer(conn: TcpStream, ctx: TlsContext) {
+            if (!ctx.isServer()) { throw new StateError("startServer needs a server context (TlsContext.server)"); }
+            Tls.handshake(conn, ctx.handle(), true, "");
+        }
+        private static fn handshake(conn: TcpStream, ctx: byte*, server: bool, host: string) {
+            let s = conn.handle();
+            if (%{ grav_tls_handshake((GravSock*)s, ctx, server, host) %} as int != 0) {
+                let why = %{ grav_net_take_err((GravSock*)s) %} as string;
+                if (%{ ((GravSock*)s)->timedOut %} as bool) {
+                    %{ ((GravSock*)s)->timedOut = 0; %};
+                    throw new TimeoutError(why + " (" + conn.peerAddress() + ")");
+                }
+                throw new NetError(why + " (" + conn.peerAddress() + ")");
+            }
+        }
+    }
+}

@@ -1,0 +1,115 @@
+// TLS: handshakes, certificate checks and encrypted reads and writes (local only).
+import "std"
+import "std/net"
+
+// A TLS echo server on a free local port that serves `rounds` connections.
+class EchoServer {
+    public listener: TcpListener
+    public thread: Thread
+    public failures: Array<string>
+    constructor(ctx: TlsContext, rounds: int) {
+        self.listener = TcpListener.bind("127.0.0.1", 0)
+        self.failures = new Array<string>()
+        let l = self.listener
+        let f = self.failures
+        self.thread = Thread.spawn("tls-echo", fn() {
+            for (i in 0..rounds) {
+                let c = l.accept()
+                try {
+                    Tls.startServer(c, ctx)
+                    c.setTimeoutMs(5000)
+                    c.lines(fn(line: string) { c.writeLine("echo " + line) })
+                } catch (e: Exception) { f.push(e.message()) }
+                c.close()
+            }
+        })
+    }
+    public fn port() -> int { return self.listener.port() }
+    public fn finish() { self.thread.join(); self.listener.close() }
+}
+
+test "a trusted self-signed server: handshake, lines and bytes" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    assert(Str.startsWith(ctx.certificatePem(), "-----BEGIN CERTIFICATE-----"))
+    assert(Str.contains(ctx.privateKeyPem(), "PRIVATE KEY"))
+    let server = new EchoServer(ctx, 1)
+    let c = Tls.connect("localhost", server.port(), TlsContext.client().trustPem(ctx.certificatePem()), 5000)
+    assert(c.isTls())
+    assert(Str.startsWith(c.tlsVersion(), "TLSv1."))
+    c.writeLine("one")
+    assertEq(c.readLine(), "echo one")
+    let big = Str.repeat("x", 300000)                  // larger than a TLS record
+    c.writeLine(big)
+    assertEq(c.readLine().length, 300005)
+    c.shutdownWrite()
+    assertEq(c.readLine(), "")
+    assert(c.eof())
+    c.close()
+    server.finish()
+    assertEq(server.failures.size(), 0)
+}
+
+test "certificate checks refuse untrusted and mismatched servers" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let other = TlsContext.selfSigned("other.test")
+    let server = new EchoServer(ctx, 2)
+    let refused = ""
+    try { Tls.connect("localhost", server.port(), TlsContext.client(), 5000) } catch (e: NetError) { refused = e.message() }
+    assert(Str.contains(refused, "self-signed certificate"))
+    let wrongName = ""
+    try { Tls.connect("localhost", server.port(), TlsContext.client().trustPem(other.certificatePem()), 5000) }
+    catch (e: NetError) { wrongName = e.message() }
+    assert(Str.contains(wrongName, "certificate was not accepted"))
+    server.finish()
+}
+
+test "an insecure client connects; address names are checked too" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let server = new EchoServer(ctx, 2)
+    let c = Tls.connect("127.0.0.1", server.port(), TlsContext.insecureClient(), 5000)
+    c.writeLine("insecure")
+    assertEq(c.readLine(), "echo insecure")
+    c.close()
+    let byIp = Tls.connect("127.0.0.1", server.port(), TlsContext.client().trustPem(ctx.certificatePem()), 5000)
+    byIp.writeLine("by address")
+    assertEq(byIp.readLine(), "echo by address")
+    byIp.close()
+    server.finish()
+}
+
+test "a plain client and a TLS server do not mix" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let server = new EchoServer(ctx, 1)
+    let plain = TcpStream.connect("127.0.0.1", server.port())
+    plain.setTimeoutMs(5000)
+    plain.writeLine("GET / HTTP/1.1")
+    let failed = false
+    try { plain.readLine(); failed = plain.eof() } catch (e: NetError) { failed = true }
+    assert(failed)
+    plain.close()
+    server.finish()
+    assertEq(server.failures.size(), 1)
+}
+
+test "contexts reject bad input" {
+    if (!Tls.available()) { return }
+    let threw = false
+    try { TlsContext.serverPem("not a certificate", "nor a key") } catch (e: NetError) { threw = true }
+    assert(threw)
+    threw = false
+    try { TlsContext.client().trustPem("nothing here") } catch (e: NetError) { threw = true }
+    assert(threw)
+    threw = false
+    try { TlsContext.server("/no/such/cert.pem", "/no/such/key.pem") } catch (e: NetError) { threw = true }
+    assert(threw)
+    let a = TlsContext.selfSigned("localhost")
+    let b = TlsContext.selfSigned("localhost")
+    threw = false
+    try { TlsContext.serverPem(a.certificatePem(), b.privateKeyPem()) } catch (e: NetError) { threw = true }
+    assert(threw)                                      // the key does not match the certificate
+    assert(Tls.libraryVersion() != "")
+}

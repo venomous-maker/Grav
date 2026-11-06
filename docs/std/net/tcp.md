@@ -101,6 +101,9 @@ One TCP connection.
 - `fn localPort() -> int` — The local port of this connection.
 - `fn shutdownWrite()` — Stop sending (the peer sees end of input) but keep reading.
 - `fn close()` — Closes the connection (a second close does nothing).
+- `fn handle() -> byte*` — The connection's internal state, for lib/net code (TLS).
+- `fn isTls() -> bool` — Whether the connection is encrypted with TLS (see lib/net/tls.grav).
+- `fn tlsVersion() -> string` — The TLS protocol in use ("TLSv1.3"), or "" for a plain connection.
 - `fn isClosed() -> bool` — Whether close() was called.
 
 ### class TcpListener

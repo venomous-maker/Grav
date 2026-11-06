@@ -105,6 +105,7 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | Module | Contents |
 |--------|----------|
 | [tcp](net/tcp.md) | `TcpStream`, `TcpListener`, `Net`: TCP clients and servers |
+| [tls](net/tls.md) | `Tls`, `TlsContext`: encrypted connections (OpenSSL), certificates |
 | [udp](net/udp.md) | `UdpSocket`, `UdpPacket`: datagrams |
 | [http](net/http.md) | `HttpServer` (routing, static files, cookies), `HttpClient`, `HttpRequest`, `HttpResponse`, `Url` |
 | [websocket](net/websocket.md) | `WebSocket`: two-way connections over HTTP |
