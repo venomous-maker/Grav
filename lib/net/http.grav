@@ -625,6 +625,8 @@ namespace std.net {
         public streamer: fn(ResponseWriter)
         // Milliseconds the request took (set by HttpClient).
         public elapsedMs: long
+        // Whether HttpClient decompressed the body (it came gzip- or deflate-encoded).
+        public wasCompressed: bool
 
         constructor(status: int) {
             self.status = status;
@@ -632,6 +634,7 @@ namespace std.net {
             self.bodyBytes = new Bytes();
             self.streamer = null;
             self.elapsedMs = 0;
+            self.wasCompressed = false;
         }
         // ── builders ───────────────────────────────────────────────────────────
         // A 200 response with a plain-text body.
@@ -974,6 +977,21 @@ namespace std.net {
             }
             conn.write(head);
             conn.writeBytes(body);
+        }
+        // Whether a Content-Type is worth compressing (text, JSON, JavaScript, XML, SVG, WASM).
+        static fn isCompressible(contentType: string) -> bool {
+            let t = Headers.mainValue(contentType);
+            return Str.startsWith(t, "text/") || t == "application/json" || t == "application/javascript" ||
+                   t == "application/xml" || t == "image/svg+xml" || t == "application/wasm" ||
+                   Str.endsWith(t, "+json") || Str.endsWith(t, "+xml");
+        }
+        // Whether an Accept-Encoding value allows `coding` ("gzip"), honouring q=0.
+        static fn acceptsEncoding(acceptEncoding: string, coding: string) -> bool {
+            for (part in Str.split(acceptEncoding, ",")) {
+                let t = Headers.mainValue(part);
+                if (t == coding || t == "*") { return Headers.param(part, "q") != "0" && Headers.param(part, "q") != "0.0"; }
+            }
+            return false;
         }
         // Today's date in HTTP format ("Tue, 15 Nov 1994 08:12:31 GMT").
         static fn date() -> string { return %{ grav_http_date() %} as string; }

@@ -396,6 +396,7 @@ A response: built by server handlers, or returned by HttpClient.
 - `bodyBytes: Bytes` — The body.
 - `streamer: fn(ResponseWriter)` — For a streamed body (see stream): called to write it, chunk by chunk.
 - `elapsedMs: long` — Milliseconds the request took (set by HttpClient).
+- `wasCompressed: bool` — Whether HttpClient decompressed the body (it came gzip- or deflate-encoded).
 
 **Methods**
 
@@ -436,6 +437,8 @@ Reading and writing HTTP messages on a TcpStream (shared by server and client).
 - `static fn head(firstLine: string, headers: Headers) -> string` — The request or status line and headers as one block of text.
 - `static fn writeHead(conn: TcpStream, firstLine: string, headers: Headers)` — Writes a request or status line and the headers to the connection.
 - `static fn writeMessage(conn: TcpStream, firstLine: string, headers: Headers, body: Bytes)` — Writes the head and a body in one go (one packet for small messages).
+- `static fn isCompressible(contentType: string) -> bool` — Whether a Content-Type is worth compressing (text, JSON, JavaScript, XML, SVG, WASM).
+- `static fn acceptsEncoding(acceptEncoding: string, coding: string) -> bool` — Whether an Accept-Encoding value allows `coding` ("gzip"), honouring q=0.
 - `static fn date() -> string` — Today's date in HTTP format ("Tue, 15 Nov 1994 08:12:31 GMT").
 
 <!-- api:end -->

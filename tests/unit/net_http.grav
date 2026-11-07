@@ -253,6 +253,48 @@ test "HTTPS and wss with a self-signed certificate" {
     s.stop()
 }
 
+test "gzip responses for clients that ask, decoded by the client" {
+    if (!Compress.available()) { return }
+    let s = new HttpServer()
+    let doc = Str.repeat("a fairly repetitive document ", 400)
+    s.get("/doc", fn(req: HttpRequest) => HttpResponse.text(doc).etag("v7"))
+    s.get("/small", fn(req: HttpRequest) => HttpResponse.text("tiny"))
+    s.get("/image", fn(req: HttpRequest) => HttpResponse.bytes("image/png", Bytes.fromString(doc)))
+    s.compress(true).start(0)
+    let c = new HttpClient()
+    let r = c.get(s.baseUrl() + "/doc")
+    assert(r.wasCompressed)
+    assertEq(r.body(), doc)
+    assertEq(r.getHeader("Content-Encoding"), "")            // decoded: the header is gone
+    assertEq(r.getHeader("ETag"), "W/\"v7\"")
+    assertEq(r.getHeader("Vary"), "Accept-Encoding")
+    assert(!c.get(s.baseUrl() + "/small").wasCompressed)     // below the size threshold
+    assert(!c.get(s.baseUrl() + "/image").wasCompressed)     // already compressed formats are left alone
+    let raw = new HttpClient()
+    raw.decompress = false
+    assertEq(raw.get(s.baseUrl() + "/doc").bodyBytes.size(), doc.length)   // no Accept-Encoding: plain
+    let h = new Headers()
+    h.set("Accept-Encoding", "gzip")
+    let packed = raw.send("GET", s.baseUrl() + "/doc", null, "", h)
+    assertEq(packed.getHeader("Content-Encoding"), "gzip")
+    assert(packed.bodyBytes.size() * 10 < doc.length)
+    assertEq(Compress.gunzipText(packed.bodyBytes), doc)
+    h.set("Accept-Encoding", "gzip;q=0, identity")
+    assertEq(raw.send("GET", s.baseUrl() + "/doc", null, "", h).getHeader("Content-Encoding"), "")
+    h.set("Accept-Encoding", "gzip")
+    h.set("If-None-Match", "W/\"v7\"")
+    assertEq(raw.send("GET", s.baseUrl() + "/doc", null, "", h).status, 304)
+    let rg = new Headers()
+    rg.set("Accept-Encoding", "gzip")
+    rg.set("Range", "bytes=2-6")
+    let part = raw.send("GET", s.baseUrl() + "/doc", null, "", rg)
+    assertEq(part.status, 206)
+    assertEq(part.body(), "fairl")                           // ranges count the plain bytes
+    c.close()
+    raw.close()
+    s.stop()
+}
+
 test "URLs: parts, building and resolving links" {
     let u = Url.parse("https://ada:p%40ss@Example.com:8443/docs/guide/intro.html?q=a+b&n=1#top")
     assertEq(u.scheme, "https")

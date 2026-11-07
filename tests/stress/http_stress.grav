@@ -3,6 +3,7 @@
 //
 //   grav tests/stress/http_stress.grav --run             (or --release for best numbers)
 //   grav tests/stress/http_stress.grav --run -- quick    (a shorter run)
+//   grav tests/stress/http_stress.grav --run -- rounds=8 (more rounds, to see memory settle)
 //
 // Every phase is repeated; the heap in use after the later rounds must stay near
 // the second round's, or the run fails (a leak). The program exits 1 on any
@@ -32,12 +33,14 @@ fn rssKb() -> long {
 
 class Stats {
     static failures: int = 0
+    static requests: long = 0
     static phase: string = ""
 }
 
 fn app() -> HttpServer {
     let s = new HttpServer()
     let big = Str.repeat("0123456789abcdef", 65536)            // 1 MiB
+    let bigBytes = Bytes.fromString(big)
     s.get("/small", fn(req: HttpRequest) => HttpResponse.text("ok"))
     s.get("/json", fn(req: HttpRequest) -> HttpResponse {
         let items = Json.array()
@@ -45,7 +48,9 @@ fn app() -> HttpServer {
         return HttpResponse.json(Json.object().set("items", items))
     })
     s.post("/echo", fn(req: HttpRequest) => HttpResponse.bytes("application/octet-stream", req.bodyBytes))
-    s.get("/big", fn(req: HttpRequest) => HttpResponse.text(big))
+    s.get("/big", fn(req: HttpRequest) => HttpResponse.bytes("application/octet-stream", bigBytes))
+    s.get("/text", fn(req: HttpRequest) => HttpResponse.text(big))   // compressed for the client
+    s.compress(true)
     s.get("/events", fn(req: HttpRequest) => HttpResponse.eventStream(fn(ev: EventStream) {
         for (i in 0..200) { ev.data("event ${i}") }
     }))
@@ -54,6 +59,7 @@ fn app() -> HttpServer {
 }
 
 fn check(ok: bool) {
+    Stats.requests += 1
     if (ok) { return }
     Stats.failures += 1
     if (Stats.failures <= 5) { print("  FAILED in " + Stats.phase) }
@@ -98,6 +104,10 @@ fn round(base: string, client: HttpClient, scale: int) {
     phase("small, new connection each", 300 * scale, "req", fn(i: int) { check(fresh.get(base + "/small").ok()) })
     phase("1 MiB downloads", 30 * scale, "MiB", fn(i: int) { check(client.get(base + "/big").bodyBytes.size() == 1048576) })
     let payload = Bytes.fromString(Str.repeat("x", 65536))
+    phase("1 MiB text, gzip on the wire", 30 * scale, "MiB", fn(i: int) {
+        let r = client.get(base + "/text")
+        check(r.wasCompressed && r.bodyBytes.size() == 1048576)
+    })
     phase("64 KiB uploads echoed", 300 * scale, "req", fn(i: int) {
         check(client.send("POST", base + "/echo", payload, "application/octet-stream", null).bodyBytes.size() == 65536)
     })
@@ -110,20 +120,25 @@ fn run(name: string, s: HttpServer, client: HttpClient, rounds: int, scale: int)
     print(name + " (" + s.baseUrl() + ")")
     let base = s.isTls() ? "https://localhost:${s.port()}" : s.baseUrl()
     let rss = new Array<long>()
+    let counted = new Array<long>()
     for (r in 0..rounds) {
         print(" round ${r + 1}")
         round(base, client, scale)
         GC.collect()
         let heap = heapKb()
         rss.push(heap >= 0 ? heap : rssKb())
+        counted.push(Stats.requests)
         print("  heap in use: ${heap / 1024} MiB, resident ${rssKb() / 1024} MiB, open connections ${s.activeConnections()}, idle in client ${client.idleConnections()}")
     }
-    // Rounds after the second must not keep growing (allocator caches settle in the first two).
-    let settled = rss.get(rounds > 2 ? 1 : 0)
-    let last = rss.get(rounds - 1)
-    let grew = last - settled
-    let ok = grew < 8 * 1024 && grew * 10 < settled
-    print("  heap after round 2 -> last: ${settled} -> ${last} KiB " + (ok ? "(steady)" : "(GROWING: leak?)"))
+    // After the second round (caches and pools settle in the first two), less
+    // than 2 bytes may stay behind per request; a leak keeps far more.
+    let from = rounds > 2 ? 1 : 0
+    let grew = rss.get(rounds - 1) - rss.get(from)
+    let requests = counted.get(rounds - 1) - counted.get(from)
+    let perRequest = requests > 0 ? (grew * 1024.0) / requests : 0.0
+    let ok = perRequest < 2.0
+    print("  heap after round ${from + 1} -> last: ${rss.get(from)} -> ${rss.get(rounds - 1)} KiB over ${requests} requests, " +
+          Format.fixed(perRequest, 2) + " bytes each " + (ok ? "(steady)" : "(GROWING: leak?)"))
     return ok
 }
 
@@ -136,6 +151,7 @@ fn main() {
     %};
     let quick = Process.args().contains("quick")
     let rounds = quick ? 3 : 4
+    for (a in Process.args()) { if (Str.startsWith(a, "rounds=")) { rounds = Format.toIntOr(a[7..], rounds) } }
     let scale = quick ? 1 : 3
     let start = rssKb()
     print("HTTP stress: ${rounds} rounds, scale ${scale}, starting at ${start / 1024} MiB")

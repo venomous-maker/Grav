@@ -24,6 +24,7 @@ import "../data/bytes.grav"
 import "../data/json.grav"
 import "../data/encoding.grav"
 import "../concurrency/async.grav"
+import "../data/compress.grav"
 import "../sys/time.grav"
 import "tcp.grav"
 import "tls.grav"
@@ -48,6 +49,8 @@ namespace std.net {
         public maxResponseBytes: int
         // The TLS settings for https:// (null: verify against the system's CAs).
         public tls: TlsContext
+        // Ask for compressed responses (gzip, deflate) and decompress them (on by default).
+        public decompress: bool
         private pool: HashMap<string, Array<TcpStream>>
         private poolLock: Mutex
         private jar: HashMap<string, HashMap<string, string>>
@@ -63,6 +66,7 @@ namespace std.net {
             self.maxIdlePerHost = 8;
             self.maxResponseBytes = 512 * 1024 * 1024;
             self.tls = null;
+            self.decompress = true;
             self.pool = new HashMap<string, Array<TcpStream>>();
             self.poolLock = new Mutex();
             self.jar = new HashMap<string, HashMap<string, string>>();
@@ -236,6 +240,7 @@ namespace std.net {
                     let noBody = method == "HEAD" || res.status == 204 || res.status == 304 || res.status < 200;
                     let sized = noBody || res.headers.has("Content-Length") || res.headers.hasToken("Transfer-Encoding", "chunked");
                     if (!noBody) { res.bodyBytes = Http.readBody(conn, res.headers, true, self.maxResponseBytes); }
+                    if (self.decompress) { self.decode(res, key); }
                     let reusable = self.keepAlive && sized && !res.headers.hasToken("Connection", "close") &&
                                    (parts.get(0) == "HTTP/1.1" || res.headers.hasToken("Connection", "keep-alive"));
                     if (reusable) { self.giveBack(key, conn); } else { conn.close(); }
@@ -256,6 +261,7 @@ namespace std.net {
             h.set("User-Agent", "grav-http/1.1");
             h.set("Accept", "*/*");
             h.set("Connection", self.keepAlive ? "keep-alive" : "close");
+            if (self.decompress && Compress.available()) { h.set("Accept-Encoding", "gzip, deflate"); }
             for (i in 0..self.headers.size()) { h.set(self.headers.nameAt(i), self.headers.valueAt(i)); }
             if (extra != null) { for (i in 0..extra.size()) { h.set(extra.nameAt(i), extra.valueAt(i)); } }
             if (sameOrigin) {
@@ -278,6 +284,20 @@ namespace std.net {
                 if (contentType != "" && n > 0) { h.set("Content-Type", contentType); }
             }
             return h;
+        }
+        // A gzip- or deflate-encoded body, decoded (within maxResponseBytes).
+        private fn decode(res: HttpResponse, from: string) {
+            let enc = Str.lower(Str.trim(res.headers.get("Content-Encoding")));
+            if (enc != "gzip" && enc != "x-gzip" && enc != "deflate") { return; }
+            if (res.bodyBytes.isEmpty()) { return; }
+            try {
+                res.bodyBytes = Compress.decompress(res.bodyBytes, self.maxResponseBytes);
+            } catch (e: Exception) {
+                throw new NetError("cannot decode the " + enc + " response from " + from + ": " + e.message());
+            }
+            res.headers.remove("Content-Encoding");
+            res.headers.remove("Content-Length");
+            res.wasCompressed = true;
         }
         private fn open(url: Url) -> TcpStream {
             let ms = self.timeoutMs > 0 ? self.timeoutMs : -1;

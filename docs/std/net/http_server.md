@@ -73,6 +73,11 @@ https://app.example
   `206 Partial Content` (or 416), so downloads can resume and media can seek.
 - **Streaming:** `HttpResponse.stream` and `HttpResponse.eventStream` (server-sent
   events) are sent with chunked encoding as they are written.
+- **Compression:** `compress(true)` gzips text, JSON, JavaScript, XML, SVG and
+  WASM responses of 1 KiB or more (`compressMinBytes`) for clients that send
+  `Accept-Encoding: gzip`, with `Vary: Accept-Encoding` and a weak ETag. Ranges
+  and streams are sent uncompressed, and so are images and archives, which are
+  compressed already.
 
 ## Running
 
@@ -181,6 +186,7 @@ An HTTP/1.1 server with a router.
 - `idleTimeoutMs: int` — Idle keep-alive connections are closed after this many milliseconds.
 - `maxConnections: int` — At most this many connections at once; more are answered 503 and closed.
 - `maxRequestsPerConnection: int` — Requests served on one connection before it is closed (0 = no limit).
+- `compressMinBytes: int` — Responses at least this large (bytes) are gzip-compressed for clients that accept it; 0 turns compression off (see compress).
 - `recoverPanics: bool` — A panic in a handler (or middleware, or WebSocket handler) is recovered: the client gets a 500, the panic is logged, and the server keeps running. false: panics on this server's connection threads stop the program. Panic.setRecovery(false) turns recovery off everywhere.
 
 **Methods**
@@ -201,6 +207,7 @@ An HTTP/1.1 server with a router.
 - `fn onError(h: fn(HttpRequest, string) -> HttpResponse) -> HttpServer` — Builds the response when a handler throws (gets the error's description).
 - `fn cors(policy: Cors) -> HttpServer` — Applies a CORS policy to every route; returns this server.
 - `fn serveDir(prefix: string, dir: string) -> HttpServer` — Serves the files under `dir` at URLs starting with `prefix` ("/static" maps /static/css/site.css to dir/css/site.css; a folder serves its index.html). Paths that try to leave `dir` (with "..") get 404. Files get an ETag, so repeat visits are answered 304 Not Modified, and Range requests work.
+- `fn compress(on: bool) -> HttpServer` — gzip-compresses text, JSON and other compressible responses of 1 KiB or more for clients that send Accept-Encoding: gzip; returns this server.
 - `fn logRequests(on: bool) -> HttpServer` — Print one line per request ("GET /path -> 200 (1.2 ms)").
 - `fn withPanicRecovery(on: bool) -> HttpServer` — Whether a panic in a handler is answered with a 500 instead of stopping the server (on by default).
 - `fn listen(host: string, port: int)` — Serve on host:port, blocking until stop().

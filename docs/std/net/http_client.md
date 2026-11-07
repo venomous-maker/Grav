@@ -57,6 +57,11 @@ idle connections: 1
   test server.
 - **Redirects:** 301/302/303 turn a POST into a GET, 307/308 repeat the request
   with its body. Credentials are dropped when a redirect leads to another server.
+- **Compression:** requests say `Accept-Encoding: gzip, deflate`, and compressed
+  responses are decoded before you see them (within `maxResponseBytes`);
+  `wasCompressed` tells which were. Set `decompress = false` to get the raw bytes.
+- **HTTPS reconnects** resume the earlier TLS session with the server, which
+  skips the certificate check and signature of a full handshake.
 - `HttpClient.fetch(url)` is a one-off GET; `close()` closes pooled connections.
 
 ## API
@@ -84,6 +89,7 @@ An HTTP/1.1 client with a connection pool.
 - `maxIdlePerHost: int` — Idle connections kept per server.
 - `maxResponseBytes: int` — Responses larger than this many bytes throw NetError.
 - `tls: TlsContext` — The TLS settings for https:// (null: verify against the system's CAs).
+- `decompress: bool` — Ask for compressed responses (gzip, deflate) and decompress them (on by default).
 
 **Methods**
 

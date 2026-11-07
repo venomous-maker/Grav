@@ -25,6 +25,7 @@ import "../data/bytes.grav"
 import "../data/json.grav"
 import "../concurrency/thread.grav"
 import "../concurrency/async.grav"
+import "../data/compress.grav"
 import "../sys/time.grav"
 import "tcp.grav"
 import "tls.grav"
@@ -194,6 +195,9 @@ namespace std.net {
         public maxConnections: int
         // Requests served on one connection before it is closed (0 = no limit).
         public maxRequestsPerConnection: int
+        // Responses at least this large (bytes) are gzip-compressed for clients
+        // that accept it; 0 turns compression off (see compress).
+        public compressMinBytes: int
         // A panic in a handler (or middleware, or WebSocket handler) is recovered:
         // the client gets a 500, the panic is logged, and the server keeps running.
         // false: panics on this server's connection threads stop the program.
@@ -219,6 +223,7 @@ namespace std.net {
             self.idleTimeoutMs = 15000;
             self.maxConnections = 1024;
             self.maxRequestsPerConnection = 0;
+            self.compressMinBytes = 0;
             self.recoverPanics = true;
         }
 
@@ -284,6 +289,9 @@ namespace std.net {
                 return res;
             });
         }
+        // gzip-compresses text, JSON and other compressible responses of 1 KiB or
+        // more for clients that send Accept-Encoding: gzip; returns this server.
+        public fn compress(on: bool) -> HttpServer { self.compressMinBytes = on ? 1024 : 0; return self; }
         // Print one line per request ("GET /path -> 200 (1.2 ms)").
         public fn logRequests(on: bool) -> HttpServer { self.log = on; return self; }
         // Whether a panic in a handler is answered with a 500 instead of stopping the server (on by default).
@@ -533,8 +541,23 @@ namespace std.net {
                 return;
             }
             let range = req.header("Range");
-            if (range != "" && req.method == "GET") { HttpServer.applyRange(range, res); }
-            else if (res.headers.has("ETag")) { res.headers.setDefault("Accept-Ranges", "bytes"); }
+            if (range != "" && req.method == "GET") { HttpServer.applyRange(range, res); return; }
+            if (res.headers.has("ETag")) { res.headers.setDefault("Accept-Ranges", "bytes"); }
+            self.maybeCompress(req, res);
+        }
+        // gzip for a client that accepts it, when the body is large and compressible.
+        private fn maybeCompress(req: HttpRequest, res: HttpResponse) {
+            if (self.compressMinBytes <= 0 || res.bodyBytes.size() < self.compressMinBytes) { return; }
+            if (res.headers.has("Content-Encoding") || !Http.isCompressible(res.headers.get("Content-Type"))) { return; }
+            if (!Http.acceptsEncoding(req.header("Accept-Encoding"), "gzip") || !Compress.available()) { return; }
+            let packed = Compress.gzip(res.bodyBytes, 5);
+            res.headers.add("Vary", "Accept-Encoding");
+            if (packed.size() >= res.bodyBytes.size()) { return; }   // not worth it
+            res.bodyBytes = packed;
+            res.headers.set("Content-Encoding", "gzip");
+            res.headers.remove("Accept-Ranges");                   // ranges would count compressed bytes
+            let tag = res.headers.get("ETag");
+            if (tag != "" && !Str.startsWith(tag, "W/")) { res.headers.set("ETag", "W/" + tag); }   // a different encoding of the same content
         }
         private static fn etagMatches(ifNoneMatch: string, tag: string) -> bool {
             if (ifNoneMatch == "") { return false; }

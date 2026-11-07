@@ -1,4 +1,4 @@
-running 10 tests
+running 11 tests
   ok    every method, and OPTIONS answered from the routes
   ok    CORS: preflight and response headers
   ok    ETags answer 304, and byte ranges 206 or 416
@@ -8,5 +8,6 @@ running 10 tests
   ok    keep-alive reuses connections across requests and threads
   ok    limits: big bodies, long headers, too many connections
   ok    HTTPS and wss with a self-signed certificate
+  ok    gzip responses for clients that ask, decoded by the client
   ok    URLs: parts, building and resolving links
-result: 10 passed, 0 failed
+result: 11 passed, 0 failed
