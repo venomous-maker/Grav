@@ -52,7 +52,9 @@ true
   and key in PEM files (`serverPem` takes the text). `TlsContext.selfSigned(host)`
   makes a new key and certificate for development; `certificatePem()` and
   `privateKeyPem()` give them out to save or to trust. `Tls.startServer(conn, ctx)`
-  answers the handshake on an accepted connection.
+  answers the handshake on an accepted connection; `Tls.acceptStep(conn, ctx)`
+  does it without waiting for the client, for servers that poll their
+  connections (true once done, false while more must arrive).
 - **Session resumption:** a client context remembers the sessions of servers it
   connected to recently, so the next connection to the same host and port
   resumes instead of running a full handshake (`conn.tlsResumed()` says whether
@@ -116,5 +118,6 @@ TLS connections.
 - `static fn connect(host: string, port: int, ctx: TlsContext, timeoutMs: int) -> TcpStream` — Connects with the given client context (null: the system default) and timeout for connecting and the handshake.
 - `static fn startClient(conn: TcpStream, host: string, ctx: TlsContext)` — Starts TLS as a client on a connected stream (for protocols that switch to TLS part way, like SMTP's STARTTLS). `host` is checked against the server's certificate; ctx null means the system default.
 - `static fn startServer(conn: TcpStream, ctx: TlsContext)` — Answers a client's TLS handshake on an accepted stream with the server context's certificate.
+- `static fn acceptStep(conn: TcpStream, ctx: TlsContext) -> bool` — One step of answering a client's handshake without waiting for the client: true once it is done, false while the client has more to send (step again when the connection is readable). NetError when it fails.
 
 <!-- api:end -->

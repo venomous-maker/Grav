@@ -235,6 +235,7 @@ namespace std.net {
     }
     static int grav_tls_pending(GravSock* s) { return s->tls ? grav_ssl.SSL_pending(s->tls) : 0; }
     static void grav_tls_close(GravSock* s) {
+        if (s->tlsAccepting) { grav_ssl.SSL_free(s->tlsAccepting); s->tlsAccepting = 0; }
         if (!s->tls) return;
         grav_ssl.SSL_shutdown(s->tls);                          /* close_notify; no waiting for the reply */
         grav_ssl.SSL_free(s->tls);
@@ -417,6 +418,15 @@ namespace std.net {
     }
 
     /* ---- handshakes ---- */
+    /* A finished handshake's session becomes the connection's reads and writes. */
+    static void grav_tls_attach(GravSock* s, void* ssl) {
+        s->tls = ssl;
+        s->tlsRead = grav_tls_read;
+        s->tlsWrite = grav_tls_write;
+        s->tlsClose = grav_tls_close;
+        s->tlsPending = grav_tls_pending;
+        snprintf(s->tlsVersion, sizeof s->tlsVersion, "%s", grav_ssl.SSL_get_version(ssl));
+    }
     /* Client (server = 0, host checked unless verify is off) or server handshake on
        an open connection. 0 on success, else -1 with the reason in s->err. */
     static int grav_tls_handshake(GravSock* s, void* ctx, int server, const char* host, int resume) {
@@ -469,14 +479,62 @@ namespace std.net {
             grav_ssl.SSL_free(ssl);
             return -1;
         }
-        s->tls = ssl;
+        grav_tls_attach(s, ssl);
         s->tlsResumed = !server && grav_ssl.SSL_session_reused(ssl);
-        s->tlsRead = grav_tls_read;
-        s->tlsWrite = grav_tls_write;
-        s->tlsClose = grav_tls_close;
-        s->tlsPending = grav_tls_pending;
-        snprintf(s->tlsVersion, sizeof s->tlsVersion, "%s", grav_ssl.SSL_get_version(ssl));
         return 0;
+    }
+    /* One step of a server handshake that never waits for the client: 1 done, 0
+       the client has more to send (step again when it has), -1 failed (the
+       reason in s->err). */
+    static int grav_tls_accept_step(GravSock* s, void* ctx) {
+        if (s->tls) { snprintf(s->err, sizeof s->err, "the connection already uses TLS"); return -1; }
+        void* ssl = s->tlsAccepting;
+        if (!ssl) {
+            ssl = grav_ssl.SSL_new(ctx);
+            if (!ssl) {
+                const char* m = grav_ssl_errors("cannot start TLS");
+                snprintf(s->err, sizeof s->err, "%s", m); grav_str_release(m);
+                return -1;
+            }
+            grav_ssl.SSL_set_fd(ssl, s->fd);
+            s->tlsAccepting = ssl;
+            s->tlsClose = grav_tls_close;
+            s->tlsKey[0] = 0;
+            s->tlsResumed = 0;
+        }
+        int flags = fcntl(s->fd, F_GETFL, 0);
+        fcntl(s->fd, F_SETFL, flags | O_NONBLOCK);
+        grav_ssl.ERR_clear_error();
+        int r, e = 0;
+        for (;;) {
+            errno = 0;
+            r = grav_ssl.SSL_accept(ssl);
+            if (r == 1) break;
+            e = grav_ssl.SSL_get_error(ssl, r);
+            if (e == GRAV_SSL_WANT_READ) { fcntl(s->fd, F_SETFL, flags); return 0; }
+            if (e == GRAV_SSL_WANT_WRITE) {                     /* our reply waits for room to send */
+                struct pollfd p = { s->fd, POLLOUT, 0 };
+                if (poll(&p, 1, 5000) > 0) continue;
+            } else if (e == GRAV_SSL_SYSCALL && errno == EINTR) continue;
+            break;
+        }
+        fcntl(s->fd, F_SETFL, flags);
+        if (r != 1) {
+            if (e == GRAV_SSL_SYSCALL || e == GRAV_SSL_WANT_WRITE)
+                snprintf(s->err, sizeof s->err, "TLS handshake: the connection was closed (%s)",
+                         errno ? strerror(errno) : "the peer may not speak TLS");
+            else {
+                const char* m = grav_ssl_errors("protocol error");
+                snprintf(s->err, sizeof s->err, "TLS handshake: %s", m); grav_str_release(m);
+            }
+            grav_ssl.ERR_clear_error();
+            grav_ssl.SSL_free(ssl);
+            s->tlsAccepting = 0;
+            return -1;
+        }
+        s->tlsAccepting = 0;
+        grav_tls_attach(s, ssl);
+        return 1;
     }
     /* The process-wide verifying client context (made once). */
     static void* grav_tls_default_ctx = 0;
@@ -630,6 +688,20 @@ namespace std.net {
         static fn startServer(conn: TcpStream, ctx: TlsContext) {
             if (!ctx.isServer()) { throw new StateError("startServer needs a server context (TlsContext.server)"); }
             Tls.handshake(conn, ctx.handle(), true, "", false);
+        }
+        // One step of answering a client's handshake without waiting for the
+        // client: true once it is done, false while the client has more to send
+        // (step again when the connection is readable). NetError when it fails.
+        static fn acceptStep(conn: TcpStream, ctx: TlsContext) -> bool {
+            if (!ctx.isServer()) { throw new StateError("acceptStep needs a server context (TlsContext.server)"); }
+            let s = conn.handle();
+            let c = ctx.handle();
+            let r = %{ grav_tls_accept_step((GravSock*)s, c) %} as int;
+            if (r < 0) {
+                let why = %{ grav_net_take_err((GravSock*)s) %} as string;
+                throw new NetError(why + " (" + conn.peerAddress() + ")");
+            }
+            return r == 1;
         }
         private static fn handshake(conn: TcpStream, ctx: byte*, server: bool, host: string, resume: bool) {
             let s = conn.handle();
