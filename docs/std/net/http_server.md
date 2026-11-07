@@ -90,19 +90,22 @@ https://app.example
 - `stop()` stops accepting; `stopAndWait(ms)` also waits for open connections.
   `activeConnections()` and `requestsServed()` report the load.
 - Limits: `maxBodyBytes` (413 above it), `maxConnections` (503 above it),
-  `idleTimeoutMs` for idle keep-alive connections, `maxRequestsPerConnection`.
-  Header lines longer than 16 KiB are refused with 431.
+  `idleTimeoutMs` for idle keep-alive connections (and bodies that stop
+  arriving), `headerTimeoutMs` for a request's line and headers (408 when they
+  take longer), `maxRequestsPerConnection`. Header lines longer than 16 KiB are
+  refused with 431.
 - `logRequests(true)` prints one line per request with its status and time.
 - Connections: `workers` sets the number of worker threads (default 4 per CPU,
-  at least 16). A worker reads one request, answers it, serves any pipelined
-  requests that came with it, and hands the connection back to the poller.
-  WebSocket and other upgraded connections and streamed responses
-  (`HttpResponse.stream`, `eventStream`) get threads of their own, so they never
-  hold a worker. Handlers that block for long (on other servers, say) need more
-  workers, and so does a server whose clients send requests slowly, since a
-  partly arrived request keeps its worker until it is complete or
-  `idleTimeoutMs` passes. Where readiness polling is not available (outside
-  Linux), each connection gets its own thread instead.
+  at least 16). A worker takes a connection only when input has arrived on it,
+  reads just what is there, answers each request that is complete (pipelined
+  ones too), and hands the connection back to the poller. A request still on
+  its way (a slow client, a big upload, an https handshake) waits in the
+  poller, so slow clients never tie up workers; `Expect: 100-continue` is
+  answered there too. WebSocket and other upgraded connections and streamed
+  responses (`HttpResponse.stream`, `eventStream`) get threads of their own.
+  Handlers that block for long (on other servers, say) need more workers.
+  Where readiness polling is not available (outside Linux), each connection
+  gets its own thread instead.
 
 ## API
 
@@ -138,6 +141,8 @@ A connection in the worker pool: idle in the poller, or being served.
 - `busy: bool` — Whether a worker has it now.
 - `requests: int` — Requests served on it so far.
 - `handshaken: bool` — Whether its TLS handshake is done.
+- `headSince: long` — When the head of the request (or the handshake) now arriving began (0: none is).
+- `continued: bool` — Whether "100 Continue" went out for the request now arriving.
 
 ### class Route
 
@@ -213,7 +218,8 @@ An HTTP/1.1 server with a router.
 
 - `workers: int` — Threads that serve requests (0: 4 per CPU, at least 16). Idle connections wait in a poller, not on a thread, so a few workers serve thousands of keep-alive clients; long handlers need more of them.
 - `maxBodyBytes: int` — Largest request body accepted (bytes); larger ones get 413.
-- `idleTimeoutMs: int` — Idle keep-alive connections are closed after this many milliseconds.
+- `idleTimeoutMs: int` — Idle keep-alive connections are closed after this many milliseconds (and so are connections whose request body stops arriving for as long).
+- `headerTimeoutMs: int` — A request's line and headers (and an https connection's handshake) must arrive within this many milliseconds of their first byte; slower ones are answered 408 and closed.
 - `maxConnections: int` — At most this many connections at once; more are answered 503 and closed.
 - `maxRequestsPerConnection: int` — Requests served on one connection before it is closed (0 = no limit).
 - `compressMinBytes: int` — Responses at least this large (bytes) are gzip-compressed for clients that accept it; 0 turns compression off (see compress).

@@ -35,6 +35,7 @@ import "http.grav"
 namespace std.net {
 
     %{
+    #include <strings.h>
     #include <unistd.h>
     #ifdef __linux__
     #include <sys/epoll.h>
@@ -73,6 +74,83 @@ namespace std.net {
     #endif
     }
     static int grav_http_cpus(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 4; }
+
+    /* Whether `word` appears in p[0..n), ignoring case. */
+    static int grav_http_has_ci(const char* p, long n, const char* word) {
+        long w = (long)strlen(word);
+        for (long i = 0; i + w <= n; i++) if (strncasecmp(p + i, word, (size_t)w) == 0) return 1;
+        return 0;
+    }
+    /* How much of a request the read buffer holds, so that a worker only reads
+       what has arrived: 0 the head is not complete, 1 the whole request is there,
+       2 the head asks "Expect: 100-continue" and the body is still to come, 3 the
+       head is there and the body is still arriving. 1 also when what is there is
+       already bad (a line too long, too many headers, a body over maxBody), so
+       the reader reports it at once. */
+    static int grav_http_request_ready(GravSock* s, long long maxBody, long maxLine) {
+        const char* p = s->buf + s->pos;
+        const char* end = s->buf + s->len;
+        while (p < end && (*p == '\r' || *p == '\n')) p++;      /* stray CRLFs before a request */
+        if (p == end) return 0;
+        long long clen = 0;
+        int chunked = 0, expect = 0, lines = 0;
+        for (;;) {                                               /* the request line, then headers */
+            const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+            if (!nl) return end - p > maxLine ? 1 : 0;
+            if (nl - p > maxLine) return 1;
+            const char* le = nl > p && nl[-1] == '\r' ? nl - 1 : nl;
+            if (le == p) { p = nl + 1; break; }                  /* the blank line ending the head */
+            if (lines > 0) {
+                const char* colon = (const char*)memchr(p, ':', (size_t)(le - p));
+                if (!colon) return 1;
+                long nameLen = (long)(colon - p);
+                const char* v = colon + 1;
+                long vn = (long)(le - v);
+                if (nameLen == 14 && strncasecmp(p, "content-length", 14) == 0) {
+                    while (vn > 0 && (*v == ' ' || *v == '\t')) { v++; vn--; }
+                    char* stop;
+                    clen = strtoll(v, &stop, 10);
+                    while (stop < le && (*stop == ' ' || *stop == '\t')) stop++;
+                    if (stop == v || stop != le || clen < 0) return 1;
+                } else if (nameLen == 17 && strncasecmp(p, "transfer-encoding", 17) == 0) {
+                    if (grav_http_has_ci(v, vn, "chunked")) chunked = 1;
+                } else if (nameLen == 6 && strncasecmp(p, "expect", 6) == 0) {
+                    if (grav_http_has_ci(v, vn, "100-continue")) expect = 1;
+                }
+            }
+            if (++lines > 201) return 1;
+            p = nl + 1;
+        }
+        int waiting = expect ? 2 : 3;
+        if (chunked) {
+            long long total = 0;
+            for (;;) {
+                const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+                if (!nl) return end - p > maxLine ? 1 : waiting;
+                char* stop;
+                long long n = strtoll(p, &stop, 16);
+                if (stop == p || n < 0) return 1;
+                p = nl + 1;
+                if (n == 0) {                                    /* trailers, up to a blank line */
+                    for (;;) {
+                        nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+                        if (!nl) return end - p > maxLine ? 1 : waiting;
+                        if (nl == p || (nl == p + 1 && *p == '\r')) return 1;
+                        p = nl + 1;
+                    }
+                }
+                total += n;
+                if (total > maxBody) return 1;
+                if (end - p < n + 1) return waiting;
+                p += n;
+                nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+                if (!nl) return waiting;
+                p = nl + 1;
+            }
+        }
+        if (clen > maxBody) return 1;
+        return end - p >= clen ? 1 : waiting;
+    }
     %}
 
     // The outcome of dispatching one request (filled in inside a recovery point).
@@ -100,9 +178,13 @@ namespace std.net {
         public requests: int
         // Whether its TLS handshake is done.
         public handshaken: bool
+        // When the head of the request (or the handshake) now arriving began (0: none is).
+        public headSince: long
+        // Whether "100 Continue" went out for the request now arriving.
+        public continued: bool
         constructor(stream: TcpStream) {
             self.stream = stream; self.fd = stream.fileno(); self.lastActive = Time.monotonicMs();
-            self.busy = false; self.requests = 0; self.handshaken = false;
+            self.busy = false; self.requests = 0; self.handshaken = false; self.headSince = 0; self.continued = false;
         }
     }
 
@@ -261,8 +343,13 @@ namespace std.net {
         public workers: int
         // Largest request body accepted (bytes); larger ones get 413.
         public maxBodyBytes: int
-        // Idle keep-alive connections are closed after this many milliseconds.
+        // Idle keep-alive connections are closed after this many milliseconds (and
+        // so are connections whose request body stops arriving for as long).
         public idleTimeoutMs: int
+        // A request's line and headers (and an https connection's handshake) must
+        // arrive within this many milliseconds of their first byte; slower ones
+        // are answered 408 and closed.
+        public headerTimeoutMs: int
         // At most this many connections at once; more are answered 503 and closed.
         public maxConnections: int
         // Requests served on one connection before it is closed (0 = no limit).
@@ -293,6 +380,7 @@ namespace std.net {
             self.errorHandler = null;
             self.maxBodyBytes = 10 * 1024 * 1024;
             self.idleTimeoutMs = 15000;
+            self.headerTimeoutMs = 20000;
             self.maxConnections = 1024;
             self.maxRequestsPerConnection = 0;
             self.poll = -1;
@@ -534,15 +622,24 @@ namespace std.net {
             let fd = c.fd;
             %{ grav_http_poll_ctl(ep, fd, 1, 1); %};
         }
-        // Closes connections nobody has used for idleTimeoutMs.
+        // Closes connections idle for idleTimeoutMs, and those whose request head
+        // has taken longer than headerTimeoutMs (answering 408).
         private fn sweep(now: long) {
             let gone = new Array<PoolConn>();
             self.connLock.lock();
             for (c in self.conns.values()) {
-                if (!c.busy && now - c.lastActive > self.idleTimeoutMs) { gone.push(c); self.conns.remove(c.fd); }
+                if (c.busy) { continue; }
+                let late = c.headSince > 0 ? now - c.headSince > self.headerTimeoutMs : now - c.lastActive > self.idleTimeoutMs;
+                if (late) { gone.push(c); self.conns.remove(c.fd); }
             }
             self.connLock.unlock();
-            for (c in gone) { c.stream.close(); self.active.decrement(); }
+            for (c in gone) {
+                if (c.stream.bufferedBytes() > 0 && (self.tls == null || c.handshaken)) {
+                    try { c.stream.write("HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); } catch (e: Exception) {}
+                }
+                c.stream.close();
+                self.active.decrement();
+            }
         }
         // Forgets a pooled connection (closing it unless another thread now owns it).
         private fn drop(c: PoolConn, close: bool) {
@@ -552,9 +649,17 @@ namespace std.net {
             if (close) { c.stream.close(); }
             self.active.decrement();
         }
-        // Hands a served connection back to the poller.
-        private fn rearm(c: PoolConn) {
-            c.lastActive = Time.monotonicMs();
+        // Hands a connection back to the poller until more input arrives.
+        // `waiting`: 0 nothing (idle), 1 part of a request's head or of the TLS
+        // handshake (headerTimeoutMs runs from its start), 2 part of a body.
+        private fn park(c: PoolConn, waiting: int) {
+            let now = Time.monotonicMs();
+            if (waiting == 1) {
+                if (c.headSince == 0) { c.headSince = now; }
+            } else {
+                c.headSince = 0;
+            }
+            c.lastActive = now;
             self.connLock.lock();
             c.busy = false;
             self.connLock.unlock();
@@ -562,22 +667,47 @@ namespace std.net {
             let fd = c.fd;
             %{ grav_http_poll_ctl(ep, fd, 0, 1); %};
         }
-        // A worker's turn with a ready connection: the requests that have arrived,
-        // then back to the poller.
+        // A worker's turn with a connection that has input: it reads only what has
+        // arrived, serves the requests that are complete, and hands the rest back
+        // to the poller, so a slow client never keeps a worker waiting.
         private fn servePooled(c: PoolConn) {
             let conn = c.stream;
             if (self.tls != null && !c.handshaken) {
-                try { Tls.startServer(conn, self.tls); } catch (e: Exception) { self.drop(c, true); return; }
+                let done = false;
+                try { done = Tls.acceptStep(conn, self.tls); } catch (e: Exception) { self.drop(c, true); return; }
+                if (!done) { self.park(c, 1); return; }
                 c.handshaken = true;
+                c.headSince = 0;
             }
+            let h = conn.handle();
+            let maxBody = self.maxBodyBytes as long;
+            let limit = maxBody + 1048576;
+            let fresh = true;                                     // the poller saw input: read it
             while (true) {
-                c.requests += 1;
-                let outcome = self.serveOne(conn, c, c.requests);
-                if (outcome == 0) { self.drop(c, true); return; }
-                if (outcome == 2) { return; }                     // another thread has it now
-                if (!conn.hasBufferedInput()) { break; }           // pipelined requests: serve them now
+                let state = %{ grav_http_request_ready((GravSock*)h, maxBody, 16384) %} as int;
+                let open = 1;
+                if (state != 1 && fresh) {
+                    open = conn.readAvailable(limit);
+                    state = %{ grav_http_request_ready((GravSock*)h, maxBody, 16384) %} as int;
+                }
+                fresh = false;
+                if (state == 1) {
+                    c.requests += 1;
+                    let outcome = self.serveOne(conn, c, c.requests);
+                    c.continued = false;
+                    c.headSince = 0;
+                    if (outcome == 0) { self.drop(c, true); return; }
+                    if (outcome == 2) { return; }                 // another thread has it now
+                    continue;                                     // pipelined requests: serve them now
+                }
+                if (open <= 0) { self.drop(c, true); return; }    // closed between requests, or part way
+                if (state == 2 && !c.continued) {                 // the client waits for this to send its body
+                    try { conn.write("HTTP/1.1 100 Continue\r\n\r\n"); } catch (e: Exception) { self.drop(c, true); return; }
+                    c.continued = true;
+                }
+                self.park(c, state == 0 ? (conn.bufferedBytes() > 0 ? 1 : 0) : 2);
+                return;
             }
-            self.rearm(c);
         }
 
         // ── a thread per connection (no readiness polling) ─────────────────────
@@ -624,7 +754,7 @@ namespace std.net {
         private fn serveOne(conn: TcpStream, pooled: PoolConn, count: int) -> int {
             let req: HttpRequest = null;
             try {
-                req = self.readRequest(conn);
+                req = self.readRequest(conn, pooled != null && pooled.continued);
             } catch (e: Exception) {
                 if (!conn.isClosed() && !conn.eof()) {
                     let msg = e.message();
@@ -669,7 +799,7 @@ namespace std.net {
                     let ok = keepOpen;
                     try { self.send(conn, res, keepOpen, r.method); } catch (e: Exception) { ok = false; }
                     self.served.increment();
-                    if (ok) { self.rearm(pooled); } else { self.drop(pooled, true); }
+                    if (ok) { self.park(pooled, 0); } else { self.drop(pooled, true); }
                 }).detach();
                 return 2;
             }
@@ -693,7 +823,9 @@ namespace std.net {
             conn.close();
         }
 
-        private fn readRequest(conn: TcpStream) -> HttpRequest {
+        // The next request on `conn` (null when it closes first). `continued`: the
+        // pool already sent "100 Continue" for it.
+        private fn readRequest(conn: TcpStream, continued: bool) -> HttpRequest {
             let line = conn.readLine(Http.maxLineBytes());
             while (line == "" && !conn.eof()) { line = conn.readLine(Http.maxLineBytes()); }  // tolerate stray CRLFs
             if (line == "" && conn.eof()) { return null; }
@@ -706,7 +838,7 @@ namespace std.net {
             if (req.version == "HTTP/1.1" && !req.headers.has("Host")) { throw new NetError("an HTTP/1.1 request needs a Host header"); }
             if (Str.equalsIgnoreCase(req.headers.get("Expect"), "100-continue")) {
                 if (req.contentLength() > self.maxBodyBytes) { throw new NetError("body is larger than ${self.maxBodyBytes} bytes"); }
-                conn.write(req.version + " 100 Continue\r\n\r\n");
+                if (!continued) { conn.write(req.version + " 100 Continue\r\n\r\n"); }
             }
             req.bodyBytes = Http.readBody(conn, req.headers, false, self.maxBodyBytes);
             return req;
