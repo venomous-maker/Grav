@@ -22,7 +22,13 @@ namespace std.text {
         *cap = nc;
         return nb;
     }
-    static const char* grav_sb_ll(long long n) { static _Thread_local char b[32]; snprintf(b, sizeof b, "%lld", n); return b; }
+    static const char* grav_sb_ll(long long n) {
+        static _Thread_local char b[32];
+        char* d = grav_udigits(n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n, b + sizeof b - 1);
+        b[sizeof b - 1] = 0;
+        if (n < 0) *--d = '-';
+        return d;
+    }
     static const char* grav_sb_g(double f) { static _Thread_local char b[48]; return grav_dtoa(f, b); }
     static const char* grav_sb_dup(const unsigned char* buf, int len) {
         char* r = grav_str_alloc((size_t)len + 1);
@@ -50,7 +56,7 @@ namespace std.text {
         }
 
         // Appends text; returns this builder (calls chain).
-        public fn append(s: string) -> StringBuilder { self.put(s, %{ (int)strlen(s) %} as int); return self; }
+        public fn append(s: string) -> StringBuilder { self.put(s, %{ (int)grav_str_len(s) %} as int); return self; }
         // Appends text and a newline; returns this builder.
         public fn appendLine(s: string) -> StringBuilder { self.append(s); self.put("\n", 1); return self; }
         // Appends a number; returns this builder.

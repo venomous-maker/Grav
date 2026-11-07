@@ -333,7 +333,8 @@ static GRAV_UNUSED void grav_uw_iface(void* p) { grav_iface_release(*(struct Gra
    which spills to a shared list when it grows large. */
 /* len caches strlen (-1 until first asked, or past 2 GiB): strings never change once
    Grav code holds them, so `s.length` and `s[i]` cost O(1) instead of a scan. */
-typedef struct GravStrHdr { int rc; int len; unsigned long long meta; } GravStrHdr;
+/* hash caches the string's hash for hash maps (high bit set once computed). */
+typedef struct GravStrHdr { int rc; int len; unsigned int meta; unsigned int hash; } GravStrHdr;
 #define GRAV_SCLASSES 34
 static size_t grav_ssize[GRAV_SCLASSES];
 static char* grav_sbase = 0;            /* reserved range [grav_sbase, grav_slimit) */
@@ -367,8 +368,11 @@ static void grav_sinit(void) {
     }
     pthread_mutex_unlock(&grav_slock);
 }
-static inline unsigned long long grav_smeta(const GravStrHdr* h, int cls) {
-    return ((((unsigned long long)(uintptr_t)h) ^ grav_skey) << 8) | (unsigned long long)cls;
+/* The check word: 24 bits derived from the header's address and a per-process
+   key, then the size class. */
+static inline unsigned int grav_smeta(const GravStrHdr* h, int cls) {
+    unsigned long long x = (((unsigned long long)(uintptr_t)h) ^ grav_skey) * 0x9E3779B97F4A7C15ULL;
+    return ((unsigned int)(x >> 40) << 8) | (unsigned int)cls;
 }
 static inline GravStrHdr* grav_shdr(const char* s) {
     /* The range only grows (under grav_slock); a string reaching this thread came
@@ -381,6 +385,46 @@ static inline GravStrHdr* grav_shdr(const char* s) {
     if (cls >= GRAV_SCLASSES || h->meta != grav_smeta(h, cls)) return 0;
     return h;
 }
+/* Fills this thread's empty cache for `cls` with a batch of blocks under one
+   lock: up to 32 from the shared free list, else a run of fresh blocks carved
+   from the range (small classes; one block for large ones). */
+static void grav_srefill(int cls) {
+    int want = cls < 8 ? 32 : cls < 14 ? 8 : 1;
+    pthread_mutex_lock(&grav_slock);
+    for (int k = 0; k < want && grav_sshared[cls]; k++) {
+        void* h = grav_sshared[cls];
+        grav_sshared[cls] = *(void**)((GravStrHdr*)h + 1);
+        *(void**)((GravStrHdr*)h + 1) = grav_scache[cls];
+        grav_scache[cls] = h;
+        grav_scache_n[cls]++;
+    }
+    if (!grav_scache[cls]) {
+        size_t size = grav_ssize[cls];
+        size_t room = (size_t)(grav_slimit - grav_sbump) / size;
+        int n = (size_t)want < room ? want : (int)room;
+        if (n > 0) {
+            char* end = grav_sbump + (size_t)n * size;
+            if (end > grav_scommit) {          /* commit in 4 MiB steps (or the whole run) */
+                size_t step = (size_t)(end - grav_scommit);
+                if (step < ((size_t)4 << 20)) step = (size_t)4 << 20;
+                step = (step + 4095) & ~(size_t)4095;     /* whole pages: mprotect needs an aligned start next time */
+                if ((size_t)(grav_slimit - grav_scommit) < step) step = (size_t)(grav_slimit - grav_scommit);
+                if (mprotect(grav_scommit, step, PROT_READ | PROT_WRITE) == 0) grav_scommit += step;
+            }
+            if (end > grav_scommit) n = (int)((size_t)(grav_scommit - grav_sbump) / size);
+            char* first = grav_sbump;
+            if (n > 0) __atomic_store_n(&grav_sbump, first + (size_t)n * size, __ATOMIC_RELEASE);
+            for (int k = n - 1; k >= 0; k--) {     /* in address order once popped */
+                GravStrHdr* h = (GravStrHdr*)(first + (size_t)k * size);
+                h->meta = 0;                       /* not a string until handed out */
+                *(void**)(h + 1) = grav_scache[cls];
+                grav_scache[cls] = h;
+                grav_scache_n[cls]++;
+            }
+        }
+    }
+    pthread_mutex_unlock(&grav_slock);
+}
 /* A fresh counted string with room for n bytes plus a terminator (count 1). Falls
    back to malloc (a permanent string) if the reserved range is unavailable. */
 static char* grav_str_new(size_t n) {
@@ -390,27 +434,11 @@ static char* grav_str_new(size_t n) {
     while (cls < GRAV_SCLASSES && grav_ssize[cls] < need) cls++;
     GravStrHdr* h = 0;
     if (cls < GRAV_SCLASSES && grav_sbase) {
+        if (!grav_scache[cls]) grav_srefill(cls);
         if (grav_scache[cls]) {
             h = (GravStrHdr*)grav_scache[cls];
             grav_scache[cls] = *(void**)(h + 1);
             grav_scache_n[cls]--;
-        } else {
-            pthread_mutex_lock(&grav_slock);
-            if (grav_sshared[cls]) {
-                h = (GravStrHdr*)grav_sshared[cls];
-                grav_sshared[cls] = *(void**)(h + 1);
-            } else if ((size_t)(grav_slimit - grav_sbump) >= grav_ssize[cls]) {
-                char* end = grav_sbump + grav_ssize[cls];
-                if (end > grav_scommit) {          /* commit in 4 MiB steps (or the whole block) */
-                    size_t step = (size_t)(end - grav_scommit);
-                    if (step < ((size_t)4 << 20)) step = (size_t)4 << 20;
-                    step = (step + 4095) & ~(size_t)4095;     /* whole pages: mprotect needs an aligned start next time */
-                    if ((size_t)(grav_slimit - grav_scommit) < step) step = (size_t)(grav_slimit - grav_scommit);
-                    if (mprotect(grav_scommit, step, PROT_READ | PROT_WRITE) == 0) grav_scommit += step;
-                }
-                if (end <= grav_scommit) { h = (GravStrHdr*)grav_sbump; __atomic_store_n(&grav_sbump, end, __ATOMIC_RELEASE); }
-            }
-            pthread_mutex_unlock(&grav_slock);
         }
     }
     if (!h) {
@@ -421,7 +449,9 @@ static char* grav_str_new(size_t n) {
     h->rc = 1;
     h->len = -1;
     h->meta = grav_smeta(h, cls);
-    __atomic_add_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
+    h->hash = 0;
+    if (GRAV_LIKELY(!grav_mt)) grav_str_nlive++;
+    else __atomic_add_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
     char* s = (char*)(h + 1);
     s[0] = 0;
     return s;
@@ -438,7 +468,8 @@ void __asan_poison_memory_region(void const volatile* addr, size_t size);
 #endif
 static void grav_sblock_free(GravStrHdr* h) {
     int cls = (int)(h->meta & 0xff);
-    __atomic_sub_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
+    if (GRAV_LIKELY(!grav_mt)) grav_str_nlive--;
+    else __atomic_sub_fetch(&grav_str_nlive, 1, __ATOMIC_RELAXED);
     h->meta = 0;                                  /* no longer a valid string */
 #ifdef GRAV_STR_ASAN
     /* --sanitize: never reuse a freed string, and make any later access an error */
@@ -459,9 +490,19 @@ static void grav_sblock_free(GravStrHdr* h) {
         grav_scache_n[cls]++;
         return;
     }
+    /* The cache is full: hand it and half its blocks to the shared list in one lock. */
+    *(void**)(h + 1) = grav_scache[cls];
+    grav_scache[cls] = h;
+    grav_scache_n[cls]++;
+    void* first = grav_scache[cls];
+    void* last = first;
+    int moved = 1;
+    while (moved < 128 && *(void**)((GravStrHdr*)last + 1)) { last = *(void**)((GravStrHdr*)last + 1); moved++; }
+    grav_scache[cls] = *(void**)((GravStrHdr*)last + 1);
+    grav_scache_n[cls] -= moved;
     pthread_mutex_lock(&grav_slock);
-    *(void**)(h + 1) = grav_sshared[cls];
-    grav_sshared[cls] = h;
+    *(void**)((GravStrHdr*)last + 1) = grav_sshared[cls];
+    grav_sshared[cls] = first;
     pthread_mutex_unlock(&grav_slock);
 }
 /* For C helpers in libraries: a buffer of `bytes` bytes (terminator included)
@@ -478,12 +519,27 @@ static void grav_str_free(const char* s) {
 static char* grav_str_realloc(char* s, size_t n) {
     if (!s) return grav_str_new(n);
     GravStrHdr* h = grav_shdr(s);
-    if (h && grav_ssize[h->meta & 0xff] >= n + 1 + sizeof(GravStrHdr)) { h->len = -1; return s; }
+    if (h && grav_ssize[h->meta & 0xff] >= n + 1 + sizeof(GravStrHdr)) { h->len = -1; h->hash = 0; return s; }
     char* r = grav_str_new(n);
     size_t old = h ? grav_ssize[h->meta & 0xff] - sizeof(GravStrHdr) : strlen(s) + 1;
     memcpy(r, s, old < n + 1 ? old : n + 1);
     if (h) grav_sblock_free(h);
     return r;
+}
+/* A string's hash for hash maps (FNV-1a, 31 bits): cached in a counted string's
+   header after the first call, so a key is hashed once however often it is looked
+   up or rehashed. */
+static inline long long grav_str_hash(const char* s) {
+    GravStrHdr* h = grav_shdr(s);
+    if (h) {
+        unsigned int c = __atomic_load_n(&h->hash, __ATOMIC_RELAXED);
+        if (c & 0x80000000u) return (long long)(c & 0x7fffffffu);
+    }
+    unsigned long long v = 1469598103934665603ULL;
+    for (const unsigned char* p = (const unsigned char*)s; *p; p++) { v ^= *p; v *= 1099511628211ULL; }
+    unsigned int r = (unsigned int)(v & 0x7fffffffu);
+    if (h) __atomic_store_n(&h->hash, r | 0x80000000u, __ATOMIC_RELAXED);
+    return (long long)r;
 }
 /* The length of a string in bytes: cached in a counted string's header after the
    first call; a scan for literals and C strings. */
@@ -530,32 +586,44 @@ static GRAV_UNUSED void grav_uw_str(void* p) { grav_str_release(*(const char**)p
 static _Thread_local void** grav_pool = 0;
 static _Thread_local size_t grav_pool_top = 0;
 static _Thread_local size_t grav_pool_cap = 0;
-static void* grav_autorelease(void* o) {
+static void grav_pool_grow(void) {
+    grav_pool_cap = grav_pool_cap ? grav_pool_cap * 2 : 64;
+    grav_pool = (void**)realloc(grav_pool, grav_pool_cap * sizeof(void*));
+    if (!grav_pool) abort();
+}
+static inline void* grav_autorelease(void* o) {
     if (!o) return o;
-    if (grav_pool_top == grav_pool_cap) {
-        grav_pool_cap = grav_pool_cap ? grav_pool_cap * 2 : 64;
-        grav_pool = (void**)realloc(grav_pool, grav_pool_cap * sizeof(void*));
-        if (!grav_pool) abort();
-    }
+    if (GRAV_UNLIKELY(grav_pool_top == grav_pool_cap)) grav_pool_grow();
     grav_pool[grav_pool_top++] = o;
     return o;
 }
-/* Release-list entries: an object, a string (tag 1), or a boxed copy of a value
-   struct with references (tag 2: its release function and bytes). */
+/* Releases a string whose header was validated when it was put on the list. */
+static inline void grav_str_release_hdr(GravStrHdr* h) {
+    long long v;
+    if (GRAV_LIKELY(!grav_mt)) v = --h->rc;
+    else v = __atomic_sub_fetch(&h->rc, 1, __ATOMIC_ACQ_REL);
+    if (v == 0) grav_sblock_free(h);
+}
+/* Release-list entries: an object, a string's header (tag 1), or a boxed copy of
+   a value struct with references (tag 2: its release function and bytes). */
 typedef struct GravBox { void (*rel)(void*); long long data[]; } GravBox;
 static size_t grav_gc_collect(void);
-static void grav_pool_drain(size_t mark) {
+static void grav_pool_drain_slow(size_t mark) {
     if (GRAV_UNLIKELY(grav_gc_nroots >= grav_gc_threshold)) grav_gc_collect();
     while (grav_pool_top > mark) {
         void* p = grav_pool[--grav_pool_top];
         uintptr_t tag = (uintptr_t)p & 3;
-        if (tag == 1) grav_str_release((const char*)((uintptr_t)p & ~(uintptr_t)3));
+        if (tag == 1) grav_str_release_hdr((GravStrHdr*)((uintptr_t)p & ~(uintptr_t)3));
         else if (tag == 2) {
             GravBox* b = (GravBox*)((uintptr_t)p & ~(uintptr_t)3);
             b->rel(b->data);
             free(b);
         } else grav_release(p);
     }
+}
+/* After each statement: usually there is nothing to release. */
+static inline void grav_pool_drain(size_t mark) {
+    if (grav_pool_top > mark || GRAV_UNLIKELY(grav_gc_nroots >= grav_gc_threshold)) grav_pool_drain_slow(mark);
 }
 /* ---- Cycle collector (trial deletion, after Bacon & Rajan) -------------------
    Reference counting alone never frees objects that refer to each other. From
@@ -691,7 +759,8 @@ static void grav_thread_end(void) {
     pthread_mutex_unlock(&grav_slock);
 }
 static inline const char* grav_str_autorelease(const char* s) {
-    if (s && grav_shdr(s)) grav_autorelease((void*)((uintptr_t)s | 1));
+    GravStrHdr* h = s ? grav_shdr(s) : 0;
+    if (h) grav_autorelease((void*)((uintptr_t)h | 1));
     return s;
 }
 static inline GravFn grav_fn_autorelease(GravFn f) { grav_autorelease(f.env); return f; }
@@ -754,16 +823,78 @@ static const char* grav_concatn(int n, ...) {
     *w = 0; return r;
 }
 /* printf-style formatting into a fresh heap string (one pass when it fits 256B). */
+/* Records the length of a string just built (so `.length` needs no scan). */
+static inline void grav_str_set_len(char* s, size_t n) {
+    GravStrHdr* h = grav_shdr(s);
+    if (h && n < 0x7fffffff) h->len = (int)n;
+}
+/* Decimal digits of v, written backwards ending at `end`; returns the first. */
+static inline char* grav_udigits(unsigned long long v, char* end) {
+    do { *--end = (char)('0' + v % 10); v /= 10; } while (v);
+    return end;
+}
+/* Interpolation: a format of literal text with %s, %lld and %llu (and %% for a
+   percent sign), which is all the compiler emits. Built directly, without the
+   printf machinery; anything else falls back to vsnprintf. */
 static const char* grav_fmt(const char* fmt, ...) {
-    char buf[256]; va_list ap, ap2;
-    va_start(ap, fmt); va_copy(ap2, ap);
-    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    char stack[512];
+    char* buf = stack;
+    size_t len = 0, cap = sizeof stack;
+    va_list ap;
+    va_start(ap, fmt);
+    for (const char* f = fmt; *f;) {
+        const char* piece;
+        size_t n;
+        char num[24];
+        if (*f != '%') {
+            const char* q = f;
+            while (*q && *q != '%') q++;
+            piece = f; n = (size_t)(q - f); f = q;
+        } else if (f[1] == '%') {
+            piece = "%"; n = 1; f += 2;
+        } else if (f[1] == 's') {
+            piece = va_arg(ap, const char*);
+            n = (size_t)grav_str_len(piece); f += 2;
+        } else if (f[1] == 'l' && f[2] == 'l' && f[3] == 'd') {
+            long long v = va_arg(ap, long long);
+            char* d = grav_udigits(v < 0 ? 0ULL - (unsigned long long)v : (unsigned long long)v, num + sizeof num);
+            if (v < 0) *--d = '-';
+            piece = d; n = (size_t)(num + sizeof num - d); f += 4;
+        } else if (f[1] == 'l' && f[2] == 'l' && f[3] == 'u') {
+            char* d = grav_udigits(va_arg(ap, unsigned long long), num + sizeof num);
+            piece = d; n = (size_t)(num + sizeof num - d); f += 4;
+        } else {                                       /* not one of ours: let printf do all of it */
+            va_end(ap);
+            if (buf != stack) free(buf);
+            va_start(ap, fmt);
+            va_list ap2; va_copy(ap2, ap);
+            int m = vsnprintf(0, 0, fmt, ap);
+            va_end(ap);
+            char* r = grav_str_new((size_t)(m < 0 ? 0 : m));
+            if (m > 0) vsnprintf(r, (size_t)m + 1, fmt, ap2);
+            va_end(ap2);
+            return r;
+        }
+        if (len + n + 1 > cap) {
+            size_t nc = cap * 2;
+            while (nc < len + n + 1) nc *= 2;
+            char* nb = (char*)malloc(nc);
+            if (!nb) abort();
+            memcpy(nb, buf, len);
+            if (buf != stack) free(buf);
+            buf = nb; cap = nc;
+        }
+        if (n <= 16) { for (size_t k = 0; k < n; k++) buf[len + k] = piece[k]; }   /* short pieces: no libc call */
+        else memcpy(buf + len, piece, n);
+        len += n;
+    }
     va_end(ap);
-    if (n < 0) n = 0;
-    char* r = grav_str_new((size_t)n);
-    if ((size_t)n < sizeof buf) memcpy(r, buf, (size_t)n + 1);
-    else vsnprintf(r, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
+    char* r = grav_str_new(len);
+    if (len <= 32) { for (size_t k = 0; k < len; k++) r[k] = buf[k]; }
+    else memcpy(r, buf, len);
+    r[len] = 0;
+    if (buf != stack) free(buf);
+    grav_str_set_len(r, len);
     return r;
 }
 /* Integer power by squaring (`a ** b` on ints; negative exponents yield 0). */
@@ -793,10 +924,17 @@ static bool grav_is_instance(const void* obj, const GravTypeInfo* want) {
 
 /* Value-to-string helpers (used by str()). */
 static const char* grav_int_to_str(long long v) {
-    char* b = grav_str_new(23); snprintf(b, 24, "%lld", v); return b;
+    char num[24];
+    char* d = grav_udigits(v < 0 ? 0ULL - (unsigned long long)v : (unsigned long long)v, num + sizeof num);
+    if (v < 0) *--d = '-';
+    size_t n = (size_t)(num + sizeof num - d);
+    char* b = grav_str_new(n); memcpy(b, d, n); b[n] = 0; return b;
 }
 static const char* grav_uint_to_str(unsigned long long v) {
-    char* b = grav_str_new(23); snprintf(b, 24, "%llu", v); return b;
+    char num[24];
+    char* d = grav_udigits(v, num + sizeof num);
+    size_t n = (size_t)(num + sizeof num - d);
+    char* b = grav_str_new(n); memcpy(b, d, n); b[n] = 0; return b;
 }
 /* Floats print in the shortest form that reads back as the same value: 2.5 is
    2.5, 0.1 + 0.2 is 0.30000000000000004, 1e21 is 1e+21. `b` holds 32 bytes. */
