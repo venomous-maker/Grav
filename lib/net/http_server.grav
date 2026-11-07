@@ -598,14 +598,16 @@ namespace std.net {
             q.close();
             for (t in threads) { t.join(); }
             self.workerIds.clear();
-            // Close what is still waiting idle.
+            // Close what is still waiting idle (a stream still being sent is its
+            // thread's to finish), and stop parking connections.
             self.connLock.lock();
-            let idle = self.conns.values();
-            self.conns.clear();
+            let idle = new Array<PoolConn>();
+            for (c in self.conns.values()) { if (!c.busy) { idle.push(c); } }
+            for (c in idle) { self.conns.remove(c.fd); }
+            self.poll = -1;
             self.connLock.unlock();
             for (c in idle) { c.stream.close(); self.active.decrement(); }
             %{ free(ready); close(ep); %};
-            self.poll = -1;
         }
         private fn acceptOne() {
             let conn: TcpStream = null;
@@ -644,10 +646,11 @@ namespace std.net {
         // Forgets a pooled connection (closing it unless another thread now owns it).
         private fn drop(c: PoolConn, close: bool) {
             self.connLock.lock();
-            self.conns.remove(c.fd);
+            let mine = self.conns.getOr(c.fd, null) == c;
+            if (mine) { self.conns.remove(c.fd); }
             self.connLock.unlock();
             if (close) { c.stream.close(); }
-            self.active.decrement();
+            if (mine) { self.active.decrement(); }
         }
         // Hands a connection back to the poller until more input arrives.
         // `waiting`: 0 nothing (idle), 1 part of a request's head or of the TLS
@@ -661,11 +664,20 @@ namespace std.net {
             }
             c.lastActive = now;
             self.connLock.lock();
-            c.busy = false;
-            self.connLock.unlock();
             let ep = self.poll;
-            let fd = c.fd;
-            %{ grav_http_poll_ctl(ep, fd, 0, 1); %};
+            if (ep >= 0) {                                        // (under the lock: the poller may be closing it)
+                c.busy = false;
+                let fd = c.fd;
+                %{ grav_http_poll_ctl(ep, fd, 0, 1); %};
+            }
+            self.connLock.unlock();
+            if (ep < 0) { self.drop(c, true); }                   // the server has stopped
+        }
+        // A connection whose next input is already buffered (after a streamed
+        // response) goes straight to a worker: the poller would not see it.
+        private fn resume(c: PoolConn) {
+            c.lastActive = Time.monotonicMs();
+            if (!self.queue.send(c)) { self.drop(c, true); }      // the server has stopped
         }
         // A worker's turn with a connection that has input: it reads only what has
         // arrived, serves the requests that are complete, and hands the rest back
@@ -799,7 +811,9 @@ namespace std.net {
                     let ok = keepOpen;
                     try { self.send(conn, res, keepOpen, r.method); } catch (e: Exception) { ok = false; }
                     self.served.increment();
-                    if (ok) { self.park(pooled, 0); } else { self.drop(pooled, true); }
+                    if (!ok) { self.drop(pooled, true); }
+                    else if (conn.bufferedBytes() > 0) { self.resume(pooled); }   // pipelined behind the stream
+                    else { self.park(pooled, 0); }
                 }).detach();
                 return 2;
             }
