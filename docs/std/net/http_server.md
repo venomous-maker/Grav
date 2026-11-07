@@ -3,8 +3,9 @@
 `import "std/net"` (not included in `import "std"`) · namespace `std.net`
 
 `HttpServer` answers HTTP/1.1 requests by routing them to handler functions.
-Each connection is served on its own thread with keep-alive, so a slow client
-never holds up the others. The same server speaks HTTPS when given a
+Requests are served by a pool of worker threads, and idle keep-alive
+connections wait in a poller rather than on a thread, so a few workers keep up
+with thousands of clients. The same server speaks HTTPS when given a
 [`TlsContext`](tls.md).
 
 ```grav
@@ -92,6 +93,16 @@ https://app.example
   `idleTimeoutMs` for idle keep-alive connections, `maxRequestsPerConnection`.
   Header lines longer than 16 KiB are refused with 431.
 - `logRequests(true)` prints one line per request with its status and time.
+- Connections: `workers` sets the number of worker threads (default 4 per CPU,
+  at least 16). A worker reads one request, answers it, serves any pipelined
+  requests that came with it, and hands the connection back to the poller.
+  WebSocket and other upgraded connections and streamed responses
+  (`HttpResponse.stream`, `eventStream`) get threads of their own, so they never
+  hold a worker. Handlers that block for long (on other servers, say) need more
+  workers, and so does a server whose clients send requests slowly, since a
+  partly arrived request keeps its worker until it is complete or
+  `idleTimeoutMs` passes. Where readiness polling is not available (outside
+  Linux), each connection gets its own thread instead.
 
 ## API
 
@@ -109,6 +120,24 @@ The outcome of dispatching one request (filled in inside a recovery point).
 
 - `res: HttpResponse` — The response to send (null after an upgrade).
 - `upgraded: bool` — Whether an upgrade handler took the connection.
+- `upgrade: Route` — The upgrade route that wants the connection (run by the caller).
+
+### class PoolConn
+
+A connection in the worker pool: idle in the poller, or being served.
+
+**Constructors**
+
+- `new PoolConn(stream: TcpStream)`
+
+**Fields**
+
+- `stream: TcpStream` — The connection.
+- `fd: int` — Its socket descriptor (the poller's key for it).
+- `lastActive: long` — When it last finished a request (monotonic ms), for the idle timeout.
+- `busy: bool` — Whether a worker has it now.
+- `requests: int` — Requests served on it so far.
+- `handshaken: bool` — Whether its TLS handshake is done.
 
 ### class Route
 
@@ -182,12 +211,13 @@ An HTTP/1.1 server with a router.
 
 **Fields**
 
+- `workers: int` — Threads that serve requests (0: 4 per CPU, at least 16). Idle connections wait in a poller, not on a thread, so a few workers serve thousands of keep-alive clients; long handlers need more of them.
 - `maxBodyBytes: int` — Largest request body accepted (bytes); larger ones get 413.
 - `idleTimeoutMs: int` — Idle keep-alive connections are closed after this many milliseconds.
 - `maxConnections: int` — At most this many connections at once; more are answered 503 and closed.
 - `maxRequestsPerConnection: int` — Requests served on one connection before it is closed (0 = no limit).
 - `compressMinBytes: int` — Responses at least this large (bytes) are gzip-compressed for clients that accept it; 0 turns compression off (see compress).
-- `recoverPanics: bool` — A panic in a handler (or middleware, or WebSocket handler) is recovered: the client gets a 500, the panic is logged, and the server keeps running. false: panics on this server's connection threads stop the program. Panic.setRecovery(false) turns recovery off everywhere.
+- `recoverPanics: bool` — A panic in a handler (or middleware, or WebSocket handler) is recovered: the client gets a 500, the panic is logged, and the server keeps running. false: panics on this server's threads stop the program. Panic.setRecovery(false) turns recovery off everywhere.
 
 **Methods**
 
@@ -223,7 +253,7 @@ An HTTP/1.1 server with a router.
 - `fn baseUrl() -> string` — "http://127.0.0.1:8080" (or https) for the address being served.
 - `fn activeConnections() -> int` — Connections open now.
 - `fn requestsServed() -> long` — Requests answered so far.
-- `fn stop()` — Stop accepting connections (in-flight requests finish on their threads).
+- `fn stop()` — Stop accepting connections; requests being served are finished first (except when a handler calls this: then it returns at once, and the server winds down after that handler's request).
 - `fn stopAndWait(ms: int) -> bool` — Stops, then waits up to `ms` for open connections to finish; returns whether they all did.
 
 <!-- api:end -->

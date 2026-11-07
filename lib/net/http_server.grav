@@ -34,13 +34,76 @@ import "http.grav"
 
 namespace std.net {
 
+    %{
+    #include <unistd.h>
+    #ifdef __linux__
+    #include <sys/epoll.h>
+    #define GRAV_HTTP_POLL 1
+    #endif
+    /* Readiness polling for the connection pool (Linux epoll). Connections are
+       registered one-shot: after an event the connection is a worker's until it
+       is re-armed, so two workers never serve the same connection. */
+    static int grav_http_poll_open(void) {
+    #ifdef GRAV_HTTP_POLL
+        return epoll_create1(EPOLL_CLOEXEC);
+    #else
+        return -1;
+    #endif
+    }
+    static int grav_http_poll_ctl(int ep, int fd, int add, int oneshot) {
+    #ifdef GRAV_HTTP_POLL
+        struct epoll_event e;
+        memset(&e, 0, sizeof e);
+        e.events = EPOLLIN | (oneshot ? (EPOLLONESHOT | EPOLLRDHUP) : 0);
+        e.data.fd = fd;
+        return epoll_ctl(ep, add ? EPOLL_CTL_ADD : EPOLL_CTL_MOD, fd, &e);
+    #else
+        (void)ep; (void)fd; (void)add; (void)oneshot; return -1;
+    #endif
+    }
+    /* Waits up to ms for ready descriptors; writes them to fds. */
+    static int grav_http_poll_wait(int ep, int* fds, int max, int ms) {
+    #ifdef GRAV_HTTP_POLL
+        struct epoll_event ev[256];
+        int n = epoll_wait(ep, ev, max < 256 ? max : 256, ms);
+        for (int i = 0; i < n; i++) fds[i] = ev[i].data.fd;
+        return n < 0 ? 0 : n;
+    #else
+        (void)ep; (void)fds; (void)max; (void)ms; return 0;
+    #endif
+    }
+    static int grav_http_cpus(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 4; }
+    %}
+
     // The outcome of dispatching one request (filled in inside a recovery point).
     class Dispatch {
         // The response to send (null after an upgrade).
         public res: HttpResponse
         // Whether an upgrade handler took the connection.
         public upgraded: bool
-        constructor() { self.res = null; self.upgraded = false; }
+        // The upgrade route that wants the connection (run by the caller).
+        public upgrade: Route
+        constructor() { self.res = null; self.upgraded = false; self.upgrade = null; }
+    }
+
+    // A connection in the worker pool: idle in the poller, or being served.
+    class PoolConn {
+        // The connection.
+        public stream: TcpStream
+        // Its socket descriptor (the poller's key for it).
+        public fd: int
+        // When it last finished a request (monotonic ms), for the idle timeout.
+        public lastActive: long
+        // Whether a worker has it now.
+        public busy: bool
+        // Requests served on it so far.
+        public requests: int
+        // Whether its TLS handshake is done.
+        public handshaken: bool
+        constructor(stream: TcpStream) {
+            self.stream = stream; self.fd = stream.fileno(); self.lastActive = Time.monotonicMs();
+            self.busy = false; self.requests = 0; self.handshaken = false;
+        }
     }
 
     // One route: method + path pattern -> handler.
@@ -177,7 +240,7 @@ namespace std.net {
         private middleware: Array<fn(HttpRequest) -> HttpResponse>
         private afterware: Array<fn(HttpRequest, HttpResponse)>
         private listener: TcpListener
-        private acceptThread: Thread
+        private pollThread: Thread
         private running: AtomicInt
         private active: AtomicInt
         private served: AtomicInt
@@ -187,6 +250,15 @@ namespace std.net {
         private corsPolicy: Cors
         private notFoundHandler: fn(HttpRequest) -> HttpResponse
         private errorHandler: fn(HttpRequest, string) -> HttpResponse
+        private poll: int                         // epoll descriptor, or -1 (thread per connection)
+        private queue: Channel<PoolConn>
+        private conns: HashMap<int, PoolConn>
+        private connLock: Mutex
+        private workerIds: Array<long>            // the pool's threads (Thread.currentId), under connLock
+        // Threads that serve requests (0: 4 per CPU, at least 16). Idle
+        // connections wait in a poller, not on a thread, so a few workers serve
+        // thousands of keep-alive clients; long handlers need more of them.
+        public workers: int
         // Largest request body accepted (bytes); larger ones get 413.
         public maxBodyBytes: int
         // Idle keep-alive connections are closed after this many milliseconds.
@@ -200,7 +272,7 @@ namespace std.net {
         public compressMinBytes: int
         // A panic in a handler (or middleware, or WebSocket handler) is recovered:
         // the client gets a 500, the panic is logged, and the server keeps running.
-        // false: panics on this server's connection threads stop the program.
+        // false: panics on this server's threads stop the program.
         // Panic.setRecovery(false) turns recovery off everywhere.
         public recoverPanics: bool
 
@@ -209,7 +281,7 @@ namespace std.net {
             self.middleware = new Array<fn(HttpRequest) -> HttpResponse>();
             self.afterware = new Array<fn(HttpRequest, HttpResponse)>();
             self.listener = null;
-            self.acceptThread = null;
+            self.pollThread = null;
             self.running = new AtomicInt(0);
             self.active = new AtomicInt(0);
             self.served = new AtomicInt(0);
@@ -223,6 +295,12 @@ namespace std.net {
             self.idleTimeoutMs = 15000;
             self.maxConnections = 1024;
             self.maxRequestsPerConnection = 0;
+            self.poll = -1;
+            self.queue = null;
+            self.conns = new HashMap<int, PoolConn>();
+            self.connLock = new Mutex();
+            self.workerIds = new Array<long>();
+            self.workers = 0;
             self.compressMinBytes = 0;
             self.recoverPanics = true;
         }
@@ -301,7 +379,7 @@ namespace std.net {
         // Serve on host:port, blocking until stop().
         public fn listen(host: string, port: int) {
             self.bind(host, port);
-            self.acceptLoop();
+            self.run();
         }
         // Serves on every interface at `port`, blocking until stop().
         public fn listen(port: int) { self.listen("*", port); }
@@ -315,7 +393,7 @@ namespace std.net {
         // Serve on a background thread and return at once (port 0 picks a free port).
         public fn start(host: string, port: int) -> HttpServer {
             self.bind(host, port);
-            self.acceptThread = Thread.spawn("http-accept", fn() { self.acceptLoop(); });
+            self.pollThread = Thread.spawn("http-accept", fn() { self.run(); });
             return self;
         }
         // Serves on 127.0.0.1:port on a background thread and returns at once (port 0 picks a free port).
@@ -341,11 +419,24 @@ namespace std.net {
         public fn activeConnections() -> int { return self.active.get() as int; }
         // Requests answered so far.
         public fn requestsServed() -> long { return self.served.get(); }
-        // Stop accepting connections (in-flight requests finish on their threads).
+        // Stop accepting connections; requests being served are finished first
+        // (except when a handler calls this: then it returns at once, and the
+        // server winds down after that handler's request).
         public fn stop() {
             self.running.set(0);
             if (self.listener != null) { self.listener.close(); }
-            if (self.acceptThread != null) { self.acceptThread.join(); self.acceptThread = null; }
+            if (self.pollThread == null || self.onServerThread()) { return; }
+            self.pollThread.join();
+            self.pollThread = null;
+        }
+        // Whether the caller is one of the pool's threads (joining the pool there would wait forever).
+        private fn onServerThread() -> bool {
+            let me = Thread.currentId();
+            self.connLock.lock();
+            let found = false;
+            for (id in self.workerIds) { if (id == me) { found = true; } }
+            self.connLock.unlock();
+            return found;
         }
         // Stops, then waits up to `ms` for open connections to finish; returns
         // whether they all did.
@@ -361,6 +452,135 @@ namespace std.net {
             self.listener = TcpListener.bind(host, port);
             self.running.set(1);
         }
+        // A connection over maxConnections: a short answer, then closed.
+        private fn refuse(conn: TcpStream) {
+            try {
+                if (self.tls == null) { conn.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\nRetry-After: 1\r\n\r\n"); }
+            } catch (e: Exception) {}
+            conn.close();
+        }
+        // Serves with the worker pool where readiness polling is available,
+        // else with a thread per connection.
+        private fn run() {
+            self.poll = %{ grav_http_poll_open() %} as int;
+            if (self.poll < 0) { self.acceptLoop(); return; }
+            self.pollLoop();
+        }
+
+        // ── the worker pool ────────────────────────────────────────────────────
+        // Accepts connections and watches the idle ones; ready connections go to
+        // the workers, and connections idle past idleTimeoutMs are closed.
+        private fn pollLoop() {
+            let ep = self.poll;
+            let lfd = self.listener.fileno();
+            %{ grav_http_poll_ctl(ep, lfd, 1, 0); %};
+            let n = self.workers > 0 ? self.workers : %{ grav_http_cpus() * 4 < 16 ? 16 : grav_http_cpus() * 4 %} as int;
+            self.queue = new Channel<PoolConn>(n * 4);
+            let q = self.queue;
+            let threads = new Array<Thread>();
+            for (w in 0..n) {
+                threads.push(Thread.spawn("http-worker", fn() {
+                    if (!self.recoverPanics) { Panic.setThreadRecovery(false); }
+                    self.connLock.lock();
+                    self.workerIds.push(Thread.currentId());
+                    self.connLock.unlock();
+                    while (true) {
+                        let c = q.receiveOr(null);
+                        if (c == null) { break; }
+                        try { self.servePooled(c); } catch (e: Exception) { self.drop(c, true); }
+                    }
+                }));
+            }
+            let ready = %{ (int*)malloc(256 * sizeof(int)) %} as int*;
+            let lastSweep = Time.monotonicMs();
+            while (self.running.get() == 1) {
+                let got = %{ grav_http_poll_wait(ep, ready, 256, 250) %} as int;
+                for (k in 0..got) {
+                    let fd = ready[k];
+                    if (fd == lfd) { self.acceptOne(); continue; }
+                    self.connLock.lock();
+                    let c = self.conns.getOr(fd, null);
+                    if (c != null) { c.busy = true; }
+                    self.connLock.unlock();
+                    if (c != null) { q.send(c); }
+                }
+                let now = Time.monotonicMs();
+                if (now - lastSweep >= 250) { self.sweep(now); lastSweep = now; }
+            }
+            q.close();
+            for (t in threads) { t.join(); }
+            self.workerIds.clear();
+            // Close what is still waiting idle.
+            self.connLock.lock();
+            let idle = self.conns.values();
+            self.conns.clear();
+            self.connLock.unlock();
+            for (c in idle) { c.stream.close(); self.active.decrement(); }
+            %{ free(ready); close(ep); %};
+            self.poll = -1;
+        }
+        private fn acceptOne() {
+            let conn: TcpStream = null;
+            try { conn = self.listener.accept(); } catch (e: NetError) { return; }
+            if (self.active.get() >= self.maxConnections) { self.refuse(conn); return; }
+            conn.setNoDelay(true);
+            conn.setTimeoutMs(self.idleTimeoutMs);
+            let c = new PoolConn(conn);
+            self.active.increment();
+            self.connLock.lock();
+            self.conns.put(c.fd, c);
+            self.connLock.unlock();
+            let ep = self.poll;
+            let fd = c.fd;
+            %{ grav_http_poll_ctl(ep, fd, 1, 1); %};
+        }
+        // Closes connections nobody has used for idleTimeoutMs.
+        private fn sweep(now: long) {
+            let gone = new Array<PoolConn>();
+            self.connLock.lock();
+            for (c in self.conns.values()) {
+                if (!c.busy && now - c.lastActive > self.idleTimeoutMs) { gone.push(c); self.conns.remove(c.fd); }
+            }
+            self.connLock.unlock();
+            for (c in gone) { c.stream.close(); self.active.decrement(); }
+        }
+        // Forgets a pooled connection (closing it unless another thread now owns it).
+        private fn drop(c: PoolConn, close: bool) {
+            self.connLock.lock();
+            self.conns.remove(c.fd);
+            self.connLock.unlock();
+            if (close) { c.stream.close(); }
+            self.active.decrement();
+        }
+        // Hands a served connection back to the poller.
+        private fn rearm(c: PoolConn) {
+            c.lastActive = Time.monotonicMs();
+            self.connLock.lock();
+            c.busy = false;
+            self.connLock.unlock();
+            let ep = self.poll;
+            let fd = c.fd;
+            %{ grav_http_poll_ctl(ep, fd, 0, 1); %};
+        }
+        // A worker's turn with a ready connection: the requests that have arrived,
+        // then back to the poller.
+        private fn servePooled(c: PoolConn) {
+            let conn = c.stream;
+            if (self.tls != null && !c.handshaken) {
+                try { Tls.startServer(conn, self.tls); } catch (e: Exception) { self.drop(c, true); return; }
+                c.handshaken = true;
+            }
+            while (true) {
+                c.requests += 1;
+                let outcome = self.serveOne(conn, c, c.requests);
+                if (outcome == 0) { self.drop(c, true); return; }
+                if (outcome == 2) { return; }                     // another thread has it now
+                if (!conn.hasBufferedInput()) { break; }           // pipelined requests: serve them now
+            }
+            self.rearm(c);
+        }
+
+        // ── a thread per connection (no readiness polling) ─────────────────────
         private fn acceptLoop() {
             while (self.running.get() == 1) {
                 let conn: TcpStream = null;
@@ -370,14 +590,7 @@ namespace std.net {
                     if (self.running.get() == 0) { break; }
                     continue;
                 }
-                if (self.active.get() >= self.maxConnections) {
-                    // Over the limit: a short answer, without a thread of its own.
-                    try {
-                        if (self.tls == null) { conn.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\nRetry-After: 1\r\n\r\n"); }
-                    } catch (e: Exception) {}
-                    conn.close();
-                    continue;
-                }
+                if (self.active.get() >= self.maxConnections) { self.refuse(conn); continue; }
                 self.active.increment();
                 let c = conn;
                 Thread.spawn("http-conn", fn() {
@@ -386,7 +599,6 @@ namespace std.net {
                 }).detach();
             }
         }
-
         // Requests on one connection, until it closes or asks not to be kept alive.
         private fn serveConnection(conn: TcpStream) {
             if (!self.recoverPanics) { Panic.setThreadRecovery(false); }
@@ -395,52 +607,89 @@ namespace std.net {
             if (self.tls != null) {
                 try { Tls.startServer(conn, self.tls); } catch (e: Exception) { conn.close(); return; }
             }
-            let keepOpen = true;
             let count = 0;
-            while (keepOpen) {
-                let req: HttpRequest = null;
-                try {
-                    req = self.readRequest(conn);
-                } catch (e: Exception) {
-                    if (!conn.isClosed() && !conn.eof()) {
-                        let msg = e.message();
-                        let code = Str.contains(msg, "larger than") ? 413 : Str.contains(msg, "Message too long") ? 431 : 400;
-                        try { self.send(conn, HttpResponse.text(code, msg), false, "GET"); } catch (e2: Exception) {}
-                    }
-                    break;
-                }
-                if (req == null) { break; }
-                let started = Time.monotonicNs();
+            while (true) {
                 count += 1;
-                req.remote = conn.peerAddress();
-                if (conn.isTls()) { req.scheme = "https"; }
-                // Each request runs as a recovery point: a panic in its handler
-                // becomes a 500 instead of stopping the server.
-                let d = new Dispatch();
-                let r = req;
-                let failure = Panic.recover(fn() { d.res = self.dispatch(r, conn, d); });
-                if (failure != "") {
-                    IO.eprint("grav http: " + req.method + " " + req.target + ": " + failure + " (recovered)");
-                    if (d.upgraded) { conn.close(); return; }   // the connection is no longer HTTP
-                    d.res = HttpResponse.text(500, "internal error: " + failure);
-                }
-                let res = d.res;
-                if (res == null) { return; }   // an upgrade handler now owns the connection
-                self.finishResponse(req, res);
-                keepOpen = req.keepAlive() && !res.headers.hasToken("Connection", "close") && self.running.get() == 1 &&
-                           (self.maxRequestsPerConnection == 0 || count < self.maxRequestsPerConnection);
-                try {
-                    self.send(conn, res, keepOpen, req.method);
-                } catch (e: Exception) {
-                    keepOpen = false;
-                }
-                self.served.increment();
-                if (self.log) {
-                    let ms = (Time.monotonicNs() - started) / 1000;
-                    let line = req.method + " " + req.target + " -> ${res.status} (${ms / 1000}.${(ms % 1000) / 100} ms)";
-                    self.logLock.withLock(fn() { print(line); });
-                }
+                let outcome = self.serveOne(conn, null, count);
+                if (outcome == 2) { return; }
+                if (outcome == 0) { break; }
             }
+            conn.close();
+        }
+
+        // ── one request ────────────────────────────────────────────────────────
+        // Reads, dispatches and answers one request: 1 keep the connection, 0 close
+        // it, 2 another thread owns it now (an upgrade, or a streamed response in
+        // the pool). `pooled` is the pool's record of the connection (null without one).
+        private fn serveOne(conn: TcpStream, pooled: PoolConn, count: int) -> int {
+            let req: HttpRequest = null;
+            try {
+                req = self.readRequest(conn);
+            } catch (e: Exception) {
+                if (!conn.isClosed() && !conn.eof()) {
+                    let msg = e.message();
+                    let code = Str.contains(msg, "larger than") ? 413 : Str.contains(msg, "Message too long") ? 431 : 400;
+                    try { self.send(conn, HttpResponse.text(code, msg), false, "GET"); } catch (e2: Exception) {}
+                }
+                return 0;
+            }
+            if (req == null) { return 0; }
+            let started = Time.monotonicNs();
+            req.remote = conn.peerAddress();
+            if (conn.isTls()) { req.scheme = "https"; }
+            // Each request runs as a recovery point: a panic in its handler
+            // becomes a 500 instead of stopping the server.
+            let d = new Dispatch();
+            let r = req;
+            let failure = Panic.recover(fn() { d.res = self.dispatch(r, conn, d); });
+            if (failure != "") {
+                IO.eprint("grav http: " + req.method + " " + req.target + ": " + failure + " (recovered)");
+                d.res = HttpResponse.text(500, "internal error: " + failure);
+            }
+            if (d.upgrade != null) {                              // the connection stops being HTTP
+                let route = d.upgrade;
+                if (pooled == null) { self.runUpgrade(route, req, conn); return 2; }
+                self.drop(pooled, false);
+                self.active.increment();                          // counted by its own thread now
+                Thread.spawn("http-upgrade", fn() {
+                    if (!self.recoverPanics) { Panic.setThreadRecovery(false); }
+                    self.runUpgrade(route, r, conn);
+                    self.active.decrement();
+                }).detach();
+                return 2;
+            }
+            let res = d.res;
+            self.finishResponse(req, res);
+            let keepOpen = req.keepAlive() && !res.headers.hasToken("Connection", "close") && self.running.get() == 1 &&
+                           (self.maxRequestsPerConnection == 0 || count < self.maxRequestsPerConnection);
+            if (res.streamer != null && pooled != null) {
+                // A stream may run for long: not on a worker.
+                Thread.spawn("http-stream", fn() {
+                    if (!self.recoverPanics) { Panic.setThreadRecovery(false); }
+                    let ok = keepOpen;
+                    try { self.send(conn, res, keepOpen, r.method); } catch (e: Exception) { ok = false; }
+                    self.served.increment();
+                    if (ok) { self.rearm(pooled); } else { self.drop(pooled, true); }
+                }).detach();
+                return 2;
+            }
+            try {
+                self.send(conn, res, keepOpen, req.method);
+            } catch (e: Exception) {
+                keepOpen = false;
+            }
+            self.served.increment();
+            if (self.log) {
+                let ms = (Time.monotonicNs() - started) / 1000;
+                let line = req.method + " " + req.target + " -> ${res.status} (${ms / 1000}.${(ms % 1000) / 100} ms)";
+                self.logLock.withLock(fn() { print(line); });
+            }
+            return keepOpen ? 1 : 0;
+        }
+        // Runs an upgrade handler, which owns the connection from now on.
+        private fn runUpgrade(route: Route, req: HttpRequest, conn: TcpStream) {
+            let failure = Panic.recover(fn() { route.upgrader(req, conn); });
+            if (failure != "") { IO.eprint("grav http: upgrade " + req.target + ": " + failure + " (recovered)"); }
             conn.close();
         }
 
@@ -499,7 +748,7 @@ namespace std.net {
                 if (r.isUpgrade) {
                     if (req.headers.get("Upgrade") == "") { continue; }
                     d.upgraded = true;
-                    r.upgrader(req, conn);
+                    d.upgrade = r;                        // run by serveOne, which picks the thread
                     return null;
                 }
                 try {
