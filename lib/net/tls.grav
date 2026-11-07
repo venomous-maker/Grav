@@ -62,6 +62,7 @@ namespace std.net {
         int (*SSL_write)(void*, const void*, int);
         int (*SSL_shutdown)(void*);
         int (*SSL_get_error)(const void*, int);
+        int (*SSL_pending)(const void*);
         long (*SSL_get_verify_result)(const void*);
         const char* (*SSL_get_version)(const void*);
         int (*X509_VERIFY_PARAM_set1_ip_asc)(void*, const char*);
@@ -147,7 +148,7 @@ namespace std.net {
         GRAV_SSL_FN(hs, SSL_set_fd); GRAV_SSL_FN(hs, SSL_ctrl); GRAV_SSL_FN(hs, SSL_set1_host);
         GRAV_SSL_FN(hs, SSL_get0_param); GRAV_SSL_FN(hs, SSL_connect); GRAV_SSL_FN(hs, SSL_accept);
         GRAV_SSL_FN(hs, SSL_read); GRAV_SSL_FN(hs, SSL_write); GRAV_SSL_FN(hs, SSL_shutdown);
-        GRAV_SSL_FN(hs, SSL_get_error); GRAV_SSL_FN(hs, SSL_get_verify_result); GRAV_SSL_FN(hs, SSL_get_version);
+        GRAV_SSL_FN(hs, SSL_get_error); GRAV_SSL_FN(hs, SSL_pending); GRAV_SSL_FN(hs, SSL_get_verify_result); GRAV_SSL_FN(hs, SSL_get_version);
         GRAV_SSL_FN(hc, X509_VERIFY_PARAM_set1_ip_asc); GRAV_SSL_FN(hc, X509_verify_cert_error_string);
         GRAV_SSL_FN(hc, ERR_get_error); GRAV_SSL_FN(hc, ERR_error_string_n); GRAV_SSL_FN(hc, ERR_clear_error);
         GRAV_SSL_FN(hc, OpenSSL_version); GRAV_SSL_FN(hc, EVP_PKEY_free);
@@ -232,6 +233,7 @@ namespace std.net {
             return -1;
         }
     }
+    static int grav_tls_pending(GravSock* s) { return s->tls ? grav_ssl.SSL_pending(s->tls) : 0; }
     static void grav_tls_close(GravSock* s) {
         if (!s->tls) return;
         grav_ssl.SSL_shutdown(s->tls);                          /* close_notify; no waiting for the reply */
@@ -472,6 +474,7 @@ namespace std.net {
         s->tlsRead = grav_tls_read;
         s->tlsWrite = grav_tls_write;
         s->tlsClose = grav_tls_close;
+        s->tlsPending = grav_tls_pending;
         snprintf(s->tlsVersion, sizeof s->tlsVersion, "%s", grav_ssl.SSL_get_version(ssl));
         return 0;
     }

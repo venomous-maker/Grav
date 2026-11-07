@@ -103,6 +103,8 @@ One TCP connection.
 - `fn shutdownWrite()` — Stop sending (the peer sees end of input) but keep reading.
 - `fn close()` — Closes the connection (a second close does nothing).
 - `fn handle() -> byte*` — The connection's internal state, for lib/net code (TLS).
+- `fn fileno() -> int` — The socket's file descriptor (for polling it).
+- `fn hasBufferedInput() -> bool` — Whether input has already arrived that a read would return without waiting (bytes in the buffer, or decrypted TLS data).
 - `fn isTls() -> bool` — Whether the connection is encrypted with TLS (see lib/net/tls.grav).
 - `fn tlsResumed() -> bool` — Whether the TLS handshake resumed an earlier session (no full handshake).
 - `fn tlsVersion() -> string` — The TLS protocol in use ("TLSv1.3"), or "" for a plain connection.
@@ -123,6 +125,7 @@ A listening socket that accepts TCP connections.
 
 **Methods**
 
+- `fn fileno() -> int` — The listening socket's file descriptor (for polling it).
 - `fn port() -> int` — The port actually listened on (useful after binding port 0).
 - `fn address() -> string` — "host:port" this listener is bound to.
 - `fn accept() -> TcpStream` — Wait for the next connection. Throws NetError once the listener is closed.

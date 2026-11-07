@@ -50,6 +50,7 @@ namespace std.net {
         int (*tlsRead)(struct GravSock*, char*, int);         /* > 0 bytes, 0 end, -1 error */
         int (*tlsWrite)(struct GravSock*, const char*, int);  /* bytes written, or -1 */
         void (*tlsClose)(struct GravSock*);
+        int (*tlsPending)(struct GravSock*);                  /* decrypted bytes not yet read */
         char tlsVersion[16];
         int tlsResumed;                                       /* the handshake resumed an earlier session */
         char tlsKey[300];                                     /* "host:port" for the client session cache */
@@ -439,6 +440,14 @@ namespace std.net {
         }
         // The connection's internal state, for lib/net code (TLS).
         public fn handle() -> byte* { return self.s; }
+        // The socket's file descriptor (for polling it).
+        public fn fileno() -> int { return %{ ((GravSock*)self->s)->fd %} as int; }
+        // Whether input has already arrived that a read would return without
+        // waiting (bytes in the buffer, or decrypted TLS data).
+        public fn hasBufferedInput() -> bool {
+            return %{ ((GravSock*)self->s)->len > ((GravSock*)self->s)->pos ||
+                      (((GravSock*)self->s)->tls && ((GravSock*)self->s)->tlsPending((GravSock*)self->s) > 0) %} as bool;
+        }
         // Whether the connection is encrypted with TLS (see lib/net/tls.grav).
         public fn isTls() -> bool { return %{ ((GravSock*)self->s)->tls != 0 %} as bool; }
         // Whether the TLS handshake resumed an earlier session (no full handshake).
@@ -469,6 +478,8 @@ namespace std.net {
         // Listens on every interface at `port` (0 picks a free port).
         static fn bind(port: int) -> TcpListener { return TcpListener.bind("*", port); }
 
+        // The listening socket's file descriptor (for polling it).
+        public fn fileno() -> int { return self.fd; }
         // The port actually listened on (useful after binding port 0).
         public fn port() -> int { return %{ grav_sock_port(self->fd) %} as int; }
         // "host:port" this listener is bound to.
