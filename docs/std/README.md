@@ -71,6 +71,7 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [encoding](data/encoding.md) | `Base64`, `Hex`, `Utf8` |
 | [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens) and `Uuid` |
 | [csv](data/csv.md) | `Csv`: reading and writing comma-separated values |
+| [compress](data/compress.md) | `Compress`: gzip, zlib and raw deflate (system zlib) |
 
 ### io
 

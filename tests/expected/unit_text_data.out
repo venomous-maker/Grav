@@ -1,4 +1,4 @@
-running 11 tests
+running 12 tests
   ok    regex: find, groups, replace, split
   ok    Str: splitting, cases, wrapping, distance
   ok    string literals survive C trigraphs
@@ -10,4 +10,5 @@ running 11 tests
   ok    large inputs stay linear
   ok    sorting numbers and strings
   ok    JSON storage: replace, remove, large objects, shared children
-result: 11 passed, 0 failed
+  ok    compression: gzip, zlib and raw deflate round trips and limits
+result: 12 passed, 0 failed

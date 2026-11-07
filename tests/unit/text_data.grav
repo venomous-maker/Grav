@@ -184,3 +184,34 @@ test "JSON storage: replace, remove, large objects, shared children" {
     a.push(Json.of(9 as long))
     assertEq(doc["arr"].size(), 4)
 }
+
+test "compression: gzip, zlib and raw deflate round trips and limits" {
+    if (!Compress.available()) { return }
+    let text = Str.repeat("compressible text ", 2000)
+    let g = Compress.gzipText(text)
+    assert(Compress.isGzip(g))
+    assert(g.size() < text.length / 20)
+    assertEq(Compress.gunzipText(g), text)
+    let z = Compress.deflate(Bytes.fromString(text), 9)
+    assert(Compress.isZlib(z))
+    assertEq(Compress.inflate(z).size(), text.length)
+    let r = Compress.deflateRaw(Bytes.fromString(text))
+    assertEq(Compress.inflateRaw(r).toString(), text)
+    for (packed in [g, z, r]) { assertEq(Compress.decompress(packed, 1000000).size(), text.length) }
+    let all = new Bytes()
+    for (i in 0..70000) { all.appendByte(i % 256) }        // every byte value, more than one buffer
+    assertEq(Compress.gunzip(Compress.gzip(all, 0)).toHex(), all.toHex())
+    assertEq(Compress.gunzip(Compress.gzip(new Bytes())).size(), 0)
+    let bomb = false
+    try { Compress.decompress(Compress.gzipText(Str.repeat("a", 500000)), 1000) } catch (e: ValueError) { bomb = true }
+    assert(bomb)
+    let corrupt = false
+    try { Compress.gunzip(Bytes.fromString("definitely not gzip")) } catch (e: ValueError) { corrupt = true }
+    assert(corrupt)
+    let short = false
+    try { Compress.gunzip(g.slice(0, g.size() / 2)) } catch (e: ValueError) { short = true }
+    assert(short)
+    let badLevel = false
+    try { Compress.gzip(all, 12) } catch (e: ValueError) { badLevel = true }
+    assert(badLevel)
+}

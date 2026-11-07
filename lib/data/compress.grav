@@ -1,0 +1,227 @@
+// lib/data/compress.grav — gzip, zlib and raw deflate compression, using the
+// system's zlib.
+//
+//   let packed = Compress.gzip(Bytes.fromString(Str.repeat("hello ", 1000)))
+//   print(packed.size())                          // a few dozen bytes
+//   print(Compress.gunzip(packed).size())         // 6000
+//
+// zlib is loaded the first time compression is used; without it,
+// Compress.available() is false and the calls throw StateError. Corrupt input
+// throws ValueError. Decompression takes a size limit, so a small malicious
+// input cannot expand into gigabytes.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "bytes.grav"
+
+namespace std.data {
+
+    %{
+    #include <dlfcn.h>
+    #include <pthread.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    /* zlib's z_stream, as laid out by the library (no header needed). */
+    typedef struct {
+        const unsigned char* next_in; unsigned int avail_in; unsigned long total_in;
+        unsigned char* next_out; unsigned int avail_out; unsigned long total_out;
+        const char* msg; void* state;
+        void* zalloc; void* zfree; void* opaque;
+        int data_type; unsigned long adler; unsigned long reserved;
+    } GravZStream;
+    static struct {
+        const char* (*zlibVersion)(void);
+        int (*deflateInit2_)(GravZStream*, int, int, int, int, int, const char*, int);
+        int (*deflate)(GravZStream*, int);
+        int (*deflateEnd)(GravZStream*);
+        int (*inflateInit2_)(GravZStream*, int, const char*, int);
+        int (*inflate)(GravZStream*, int);
+        int (*inflateEnd)(GravZStream*);
+    } grav_z;
+    static int grav_z_ok = 0;
+    static pthread_once_t grav_z_once = PTHREAD_ONCE_INIT;
+    enum { GRAV_Z_OK = 0, GRAV_Z_STREAM_END = 1, GRAV_Z_NEED_DICT = 2, GRAV_Z_BUF_ERROR = -5, GRAV_Z_FINISH = 4 };
+
+    static void grav_z_load(void) {
+        static const char* const names[] = { "libz.so.1", "libz.so", "libz.1.dylib", "libz.dylib", 0 };
+        void* h = 0;
+        for (int i = 0; names[i] && !h; i++) h = dlopen(names[i], RTLD_NOW | RTLD_GLOBAL);
+        if (!h) return;
+    #define GRAV_Z_FN(name) *(void**)(&grav_z.name) = dlsym(h, #name)
+        GRAV_Z_FN(zlibVersion); GRAV_Z_FN(deflateInit2_); GRAV_Z_FN(deflate); GRAV_Z_FN(deflateEnd);
+        GRAV_Z_FN(inflateInit2_); GRAV_Z_FN(inflate); GRAV_Z_FN(inflateEnd);
+    #undef GRAV_Z_FN
+        grav_z_ok = grav_z.zlibVersion && grav_z.deflateInit2_ && grav_z.deflate && grav_z.deflateEnd &&
+                    grav_z.inflateInit2_ && grav_z.inflate && grav_z.inflateEnd;
+    }
+    static int grav_z_ready(void) { pthread_once(&grav_z_once, grav_z_load); return grav_z_ok; }
+
+    /* Compresses n bytes; wbits 31 = gzip, 15 = zlib, -15 = raw deflate. Returns a
+       malloc'd buffer with *outLen, or 0 with *err. */
+    static unsigned char* grav_z_deflate(const unsigned char* in, long long n, int level, int wbits,
+                                         long long* outLen, long long* outCap, const char** err) {
+        GravZStream z;
+        memset(&z, 0, sizeof z);
+        if (grav_z.deflateInit2_(&z, level, 8 /* Z_DEFLATED */, wbits, 8, 0, grav_z.zlibVersion(), (int)sizeof z) != GRAV_Z_OK) {
+            *err = "cannot start compressing";
+            return 0;
+        }
+        size_t cap = (size_t)n + (size_t)n / 1000 + 64;          /* zlib's bound, with room for the gzip header */
+        unsigned char* out = (unsigned char*)malloc(cap);
+        if (!out) abort();
+        z.next_in = in;
+        z.next_out = out;
+        long long left = n;
+        int rc;
+        do {
+            unsigned int chunk = left > (1 << 30) ? (1u << 30) : (unsigned int)left;
+            z.avail_in = chunk;
+            left -= chunk;
+            do {
+                if (z.total_out == cap) {
+                    cap *= 2;
+                    out = (unsigned char*)realloc(out, cap);
+                    if (!out) abort();
+                    z.next_out = out + z.total_out;
+                }
+                z.avail_out = (unsigned int)(cap - z.total_out > (1u << 30) ? (1u << 30) : cap - z.total_out);
+                rc = grav_z.deflate(&z, left == 0 ? GRAV_Z_FINISH : 0);
+            } while (z.avail_out == 0 || (left == 0 && rc == GRAV_Z_OK));
+        } while (left > 0);
+        grav_z.deflateEnd(&z);
+        if (rc != GRAV_Z_STREAM_END) { free(out); *err = "compression failed"; return 0; }
+        *outLen = (long long)z.total_out;
+        *outCap = (long long)cap;
+        return out;
+    }
+    /* Decompresses; wbits 47 = gzip or zlib (detected), -15 = raw. At most `limit`
+       bytes of output. Returns a malloc'd buffer, or 0 with *err. */
+    static unsigned char* grav_z_inflate(const unsigned char* in, long long n, int wbits, long long limit,
+                                         long long* outLen, long long* outCap, const char** err) {
+        GravZStream z;
+        memset(&z, 0, sizeof z);
+        if (grav_z.inflateInit2_(&z, wbits, grav_z.zlibVersion(), (int)sizeof z) != GRAV_Z_OK) {
+            *err = "cannot start decompressing";
+            return 0;
+        }
+        size_t cap = n < 1024 ? 4096 : (size_t)n * 4;
+        if (limit > 0 && cap > (size_t)limit + 1) cap = (size_t)limit + 1;
+        unsigned char* out = (unsigned char*)malloc(cap);
+        if (!out) abort();
+        z.next_in = in;
+        z.avail_in = n > (1LL << 30) ? (1u << 30) : (unsigned int)n;
+        long long fed = z.avail_in;
+        int rc;
+        for (;;) {
+            if (z.total_out == cap) {
+                if (limit > 0 && (long long)cap > limit) { rc = -100; break; }
+                cap *= 2;
+                if (limit > 0 && cap > (size_t)limit + 1) cap = (size_t)limit + 1;
+                out = (unsigned char*)realloc(out, cap);
+                if (!out) abort();
+            }
+            z.next_out = out + z.total_out;
+            z.avail_out = (unsigned int)(cap - z.total_out > (1u << 30) ? (1u << 30) : cap - z.total_out);
+            if (z.avail_in == 0 && fed < n) {
+                long long rest = n - fed;
+                z.avail_in = rest > (1LL << 30) ? (1u << 30) : (unsigned int)rest;
+                fed += z.avail_in;
+            }
+            rc = grav_z.inflate(&z, 0);
+            if (rc == GRAV_Z_STREAM_END) break;
+            if (rc == GRAV_Z_BUF_ERROR && z.avail_in == 0 && fed >= n) { rc = -101; break; }
+            if (rc != GRAV_Z_OK && rc != GRAV_Z_BUF_ERROR) break;
+        }
+        grav_z.inflateEnd(&z);
+        if (rc != GRAV_Z_STREAM_END) {
+            free(out);
+            *err = rc == -100 ? "the data decompresses to more than the limit"
+                 : rc == -101 ? "the compressed data ends too soon"
+                 : rc == GRAV_Z_NEED_DICT ? "the data needs a preset dictionary"
+                 : "the data is not valid compressed data";
+            return 0;
+        }
+        *outLen = (long long)z.total_out;
+        *outCap = (long long)cap;
+        return out;
+    }
+    %}
+
+    // gzip, zlib and raw deflate compression.
+    class Compress {
+        // Whether zlib could be loaded (compression works).
+        static fn available() -> bool { return %{ grav_z_ready() %} as bool; }
+        // The zlib version in use ("1.3.1"), "" without zlib.
+        static fn libraryVersion() -> string {
+            if (!Compress.available()) { return ""; }
+            return %{ grav_z.zlibVersion() %} as string;
+        }
+
+        // gzip-compressed (the .gz and HTTP "gzip" format) at the default level 6.
+        static fn gzip(data: Bytes) -> Bytes { return Compress.pack(data, 6, 31); }
+        // gzip at a level from 1 (fastest) to 9 (smallest); 0 stores without compressing.
+        static fn gzip(data: Bytes, level: int) -> Bytes { return Compress.pack(data, level, 31); }
+        // The bytes of gzip (or zlib) data, at most 1 GiB; ValueError when corrupt.
+        static fn gunzip(data: Bytes) -> Bytes { return Compress.unpack(data, 47, 1 << 30); }
+        // zlib-compressed (the HTTP "deflate" format).
+        static fn deflate(data: Bytes) -> Bytes { return Compress.pack(data, 6, 15); }
+        // zlib at a level from 0 to 9.
+        static fn deflate(data: Bytes, level: int) -> Bytes { return Compress.pack(data, level, 15); }
+        // Raw deflate, with no header or checksum (as in zip files).
+        static fn deflateRaw(data: Bytes) -> Bytes { return Compress.pack(data, 6, -15); }
+        // The bytes of zlib (or gzip) data.
+        static fn inflate(data: Bytes) -> Bytes { return Compress.unpack(data, 47, 1 << 30); }
+        // The bytes of raw deflate data.
+        static fn inflateRaw(data: Bytes) -> Bytes { return Compress.unpack(data, -15, 1 << 30); }
+        // Decompresses gzip, zlib or raw deflate data (whichever it is), producing
+        // at most `maxBytes` bytes (ValueError beyond that).
+        static fn decompress(data: Bytes, maxBytes: int) -> Bytes {
+            if (Compress.isGzip(data) || Compress.isZlib(data)) { return Compress.unpack(data, 47, maxBytes); }
+            return Compress.unpack(data, -15, maxBytes);
+        }
+        // Text gzip-compressed.
+        static fn gzipText(text: string) -> Bytes { return Compress.gzip(Bytes.fromString(text)); }
+        // gzip data decompressed to text.
+        static fn gunzipText(data: Bytes) -> string { return Compress.gunzip(data).toString(); }
+        // Whether the data starts like gzip (1f 8b).
+        static fn isGzip(data: Bytes) -> bool { return data.size() >= 2 && data.get(0) == 0x1f && data.get(1) == 0x8b; }
+        // Whether the data starts like a zlib stream.
+        static fn isZlib(data: Bytes) -> bool {
+            if (data.size() < 2) { return false; }
+            let a = data.get(0);
+            return (a & 0x0f) == 8 && ((a * 256 + data.get(1)) % 31) == 0;
+        }
+
+        private static fn require() {
+            if (!Compress.available()) { throw new StateError("compression needs zlib (libz), which could not be loaded"); }
+        }
+        private static fn pack(data: Bytes, level: int, wbits: int) -> Bytes {
+            Compress.require();
+            if (level < 0 || level > 9) { throw new ValueError("compression level must be 0..9, not ${level}"); }
+            let p = data.rawData();
+            let n = data.size();
+            let out = new Bytes();
+            let err = %{ (const char*)0 %} as byte*;
+            let ok = %{ ({ long long grav_n = 0, grav_c = 0; const char* grav_e = 0;
+                           unsigned char* grav_b = grav_z_deflate(p, n, level, wbits, &grav_n, &grav_c, &grav_e);
+                           if (grav_b) { free(out->data); out->data = grav_b; out->len = (int)grav_n; out->cap = (int)grav_c; }
+                           err = (unsigned char*)grav_e; grav_b != 0; }) %} as bool;
+            if (!ok) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
+            return out;
+        }
+        private static fn unpack(data: Bytes, wbits: int, limit: int) -> Bytes {
+            Compress.require();
+            let p = data.rawData();
+            let n = data.size();
+            let out = new Bytes();
+            let err = %{ (const char*)0 %} as byte*;
+            let ok = %{ ({ long long grav_n = 0, grav_c = 0; const char* grav_e = 0;
+                           unsigned char* grav_b = grav_z_inflate(p, n, wbits, limit, &grav_n, &grav_c, &grav_e);
+                           if (grav_b) { free(out->data); out->data = grav_b; out->len = (int)grav_n; out->cap = (int)grav_c; }
+                           err = (unsigned char*)grav_e; grav_b != 0; }) %} as bool;
+            if (!ok) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
+            return out;
+        }
+    }
+}
