@@ -253,6 +253,7 @@ namespace std.net {
                 int stop = end;
                 if (stop > s->pos && s->buf[stop - 1] == '\r') stop--;
                 int n = stop - s->pos;
+                if (maxLen > 0 && n > maxLen) { errno = EMSGSIZE; *status = -1; return ""; }  /* however it arrived */
                 char* out = grav_str_alloc((size_t)n + 1);
                 if (!out) abort();
                 memcpy(out, s->buf + s->pos, (size_t)n); out[n] = 0;
