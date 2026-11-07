@@ -550,7 +550,8 @@ int main(int argc, char **argv) {
         const char *ccEnv = std::getenv("CC");
         std::string cc = !ccOverride.empty() ? ccOverride : (ccEnv ? ccEnv : "cc");
         // _DEFAULT_SOURCE exposes POSIX (getcwd, popen, usleep, …) under -std=c11.
-        std::string flags = " -std=c11 -D_DEFAULT_SOURCE -pipe";
+        // -fwrapv: signed overflow wraps (two's complement) instead of being UB.
+        std::string flags = " -std=c11 -D_DEFAULT_SOURCE -fwrapv -pipe";
         // Optimize by default; an explicit -O wins, and plain -g means "debug me".
         if (optFlag.empty()) optFlag = release ? "-O3" : (debugFlag.empty() ? "-O2" : "-O0");
         flags += " " + optFlag;

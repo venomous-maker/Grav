@@ -143,9 +143,10 @@ gravc -                       # read source from stdin, write C to stdout
 | `-`                          | Read from stdin and print C to stdout.                         |
 
 For `asm`/`bin`/`both`, `gravc` invokes the system C compiler (`$CC`, default `cc`)
-as `cc -std=c11 -O2 [opts] <file>.c -o <out>`; the intermediate `.c` goes to a unique
-file in the temp directory (use `--keep-c` to keep it next to the source). `--run`
-exits with the program's own exit status.
+as `cc -std=c11 -fwrapv -O2 [opts] <file>.c -o <out>` (`-fwrapv` makes integer
+overflow wrap around); the intermediate `.c` goes to a unique file in the temp
+directory (use `--keep-c` to keep it next to the source). `--run` exits with the
+program's own exit status.
 
 **What the generated C looks like.** Every generated function is `static` (one
 translation unit, so the C compiler can inline and drop freely); vtables and

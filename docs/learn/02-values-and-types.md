@@ -225,8 +225,8 @@ Dividing an integer by zero is an error at run time (an `ArithmeticError`, see
 `nan`, as in C.
 
 Integers have a fixed size. Going past the largest value (*overflow*) is not
-checked and gives meaningless results, so use `long` for values that can grow
-large: totals, timestamps, file sizes.
+checked: the value wraps around, so `2147483647 + 1` is `-2147483648` for an
+`int`. Use `long` for values that can grow large: totals, timestamps, file sizes.
 
 ### Mixing number types
 

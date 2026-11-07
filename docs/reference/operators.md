@@ -48,7 +48,8 @@ side included.
 
 Mixed integer types promote to the wider type, and to unsigned if either side is
 unsigned; integers narrower than `int` compute as `int`. Integer overflow is not
-checked.
+checked: it wraps around (two's complement), so `2147483647 + 1` is
+`-2147483648` as an `int`. Use `long` for values that can grow large.
 
 ## Comparison
 

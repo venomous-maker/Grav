@@ -81,3 +81,23 @@ test "operator results are freed" {
     }
     assertEq(Live.count, 0)
 }
+
+fn grow(x: int, by: int) -> int { return x + by }   // not folded at compile time
+fn growLong(x: long, by: long) -> long { return x + by }
+fn passesMax(x: int) -> bool { return x + 1 < x }   // C compilers may assume false
+
+test "integer overflow wraps around" {
+    assertEq(grow(2147483647, 1), -2147483648)
+    assertEq(grow(-2147483648, -1), 2147483647)
+    assertEq(growLong(9223372036854775807, 1), -9223372036854775807 - 1)
+    assertEq(271183 * grow(7919, 0), -2147469119)  // 2147498177 - 2^32
+    assert(passesMax(2147483647) && !passesMax(0))
+    let big = new Bytes()                           // a loop that overflows still ends
+    let negative = 0
+    for (i in 0..3000000) {
+        big.appendByte((i * 7919) % 251)
+        if (i * 7919 < 0) { negative += 1 }
+    }
+    assertEq(big.size(), 3000000)
+    assert(negative > 0)
+}
