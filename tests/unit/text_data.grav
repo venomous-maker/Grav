@@ -254,3 +254,42 @@ test "JSON: repeated record keys, escaped keys and prefixes parse exactly" {
     assertEq(v[4]["i\"d"].asInt(), 5)
     assertEq(Json.object().set("q", "a\"b\n").set("n", -5 as long).toJson(), "{\"q\":\"a\\\"b\\n\",\"n\":-5}")
 }
+
+class MapItem { public n: int  constructor(n: int) { self.n = n; MapItem.live += 1 }  destructor() { MapItem.live -= 1 }  static live: int = 0 }
+struct Wide { a: long  b: long }                           // 16 bytes: stored next to its key
+struct Odd { a: int  b: int  c: int }                       // 12 bytes: kept in an array of its own
+enum Shade { Light, Dark }
+
+test "hash maps of every layout keep keys, values and counts right" {
+    let wide = new HashMap<string, Wide>()
+    let odd = new HashMap<string, Odd>()
+    let items = new HashMap<string, MapItem>()
+    let bools = new HashMap<long, bool>()
+    for (i in 0..3000) {
+        wide.put("w${i}", Wide { a: i as long, b: (i * 3) as long })
+        odd.put("o${i}", Odd { a: i, b: i + 1, c: i + 2 })
+        items.put("i${i}", new MapItem(i))
+        bools.put((i as long) * 1000003, i % 2 == 0)
+    }
+    for (i in 0..3000) { if (i % 5 == 0) { wide.remove("w${i}"); odd.remove("o${i}"); items.remove("i${i}") } }
+    assertEq(wide.size(), 2400)
+    assertEq(odd.size(), 2400)
+    assertEq(wide.get("w2999").b, 8997)
+    assertEq(odd.get("o2998").c, 3000)
+    assert(!odd.containsKey("o0"))
+    assertEq(items.get("i7").n, 7)
+    assertEq(MapItem.live, 2400)
+    items.put("i7", new MapItem(70))                       // replacing a value releases the old one
+    assertEq(MapItem.live, 2400)
+    assertEq(bools.get((2999 as long) * 1000003), false)
+    let shades = new HashMap<Shade, string>()
+    shades[Shade.Dark] = "night"
+    assertEq(shades[Shade.Dark], "night")
+    let total = 0
+    let want = 0
+    for (k in wide.keys()) { total += wide[k].a as int }
+    for (i in 0..3000) { if (i % 5 != 0) { want += i } }
+    assertEq(total, want)
+    items.clear()
+    assertEq(MapItem.live, 0)
+}

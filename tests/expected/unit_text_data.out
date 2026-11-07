@@ -1,4 +1,4 @@
-running 15 tests
+running 16 tests
   ok    regex: find, groups, replace, split
   ok    Str: splitting, cases, wrapping, distance
   ok    string literals survive C trigraphs
@@ -14,4 +14,5 @@ running 15 tests
   ok    interpolation formats numbers and long pieces exactly
   ok    hash maps: equal strings find each other, removals keep probes intact
   ok    JSON: repeated record keys, escaped keys and prefixes parse exactly
-result: 15 passed, 0 failed
+  ok    hash maps of every layout keep keys, values and counts right
+result: 16 passed, 0 failed
