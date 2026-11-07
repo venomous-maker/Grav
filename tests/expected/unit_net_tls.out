@@ -1,7 +1,8 @@
-running 5 tests
+running 6 tests
   ok    a trusted self-signed server: handshake, lines and bytes
   ok    certificate checks refuse untrusted and mismatched servers
   ok    an insecure client connects; address names are checked too
   ok    a plain client and a TLS server do not mix
   ok    contexts reject bad input
-result: 5 passed, 0 failed
+  ok    client sessions are resumed on later connections
+result: 6 passed, 0 failed

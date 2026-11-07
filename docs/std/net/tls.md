@@ -53,6 +53,11 @@ true
   makes a new key and certificate for development; `certificatePem()` and
   `privateKeyPem()` give them out to save or to trust. `Tls.startServer(conn, ctx)`
   answers the handshake on an accepted connection.
+- **Session resumption:** a client context remembers the sessions of servers it
+  connected to recently, so the next connection to the same host and port
+  resumes instead of running a full handshake (`conn.tlsResumed()` says whether
+  it did). The key exchange still runs, so each connection keeps its own keys.
+  `withSessionResumption(false)` turns it off.
 - **Switching part way:** `Tls.startClient(conn, host, ctx)` starts TLS on a
   connection that is already open, as SMTP's STARTTLS does.
 - **Higher levels:** `HttpServer.startTls`/`listenTls`, `HttpClient` with
@@ -92,6 +97,8 @@ One context can be shared by any number of connections and threads.
 - `fn trustFile(path: string) -> TlsContext` — Also trusts the certificate(s) in a PEM file; returns this context.
 - `fn certificatePem() -> string` — The certificate a server context presents, as PEM ("" for a client context).
 - `fn privateKeyPem() -> string` — The private key of a server context, as PEM ("" for a client context).
+- `fn withSessionResumption(on: bool) -> TlsContext` — Whether new connections to a server this client context has talked to recently resume that session, skipping most of the handshake (on by default); returns this context.
+- `fn resumesSessions() -> bool` — Whether client sessions are resumed.
 - `fn isServer() -> bool` — Whether this is a server context.
 - `fn verifies() -> bool` — Whether a client context checks the server's certificate.
 - `fn handle() -> byte*` — The OpenSSL context, for lib/net code.

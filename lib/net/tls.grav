@@ -99,6 +99,13 @@ namespace std.net {
         void* (*PEM_read_bio_X509)(void*, void**, void*, void*);
         void* (*PEM_read_bio_PrivateKey)(void*, void**, void*, void*);
         int (*X509_STORE_add_cert)(void*, void*);
+        int (*SSL_set_session)(void*, void*);
+        void (*SSL_SESSION_free)(void*);
+        int (*SSL_session_reused)(const void*);
+        void (*SSL_CTX_sess_set_new_cb)(void*, int (*)(void*, void*));
+        int (*SSL_set_ex_data)(void*, int, void*);
+        void* (*SSL_get_ex_data)(const void*, int);
+        void* (*SSL_get_SSL_CTX)(const void*);
     } GravSsl;
     static GravSsl grav_ssl;
     static int grav_ssl_ok = 0;
@@ -155,6 +162,9 @@ namespace std.net {
         GRAV_SSL_FN(hc, PEM_write_bio_X509); GRAV_SSL_FN(hc, PEM_write_bio_PrivateKey);
         GRAV_SSL_FN(hc, PEM_read_bio_X509); GRAV_SSL_FN(hc, PEM_read_bio_PrivateKey);
         GRAV_SSL_FN(hc, X509_STORE_add_cert);
+        GRAV_SSL_FN(hs, SSL_set_session); GRAV_SSL_FN(hs, SSL_SESSION_free); GRAV_SSL_FN(hs, SSL_session_reused);
+        GRAV_SSL_FN(hs, SSL_CTX_sess_set_new_cb); GRAV_SSL_FN(hs, SSL_set_ex_data); GRAV_SSL_FN(hs, SSL_get_ex_data);
+        GRAV_SSL_FN(hs, SSL_get_SSL_CTX);
     #undef GRAV_SSL_FN
         /* Only in OpenSSL 3: key generation in one call, and options as a function. */
         *(void**)(&grav_ssl.EVP_PKEY_Q_keygen) = dlsym(hc, "EVP_PKEY_Q_keygen");
@@ -238,6 +248,60 @@ namespace std.net {
     #define GRAV_TLS_OP_IGNORE_UNEXPECTED_EOF (1ULL << 7)
     #define GRAV_NID_SUBJECT_ALT_NAME 85
 
+    /* ---- client session cache: resumed handshakes skip the key exchange and
+       certificate checks. Sessions are kept per client context and "host:port"
+       (contexts that trust differently never share them), the least recently
+       used dropped when the table is full. Filled from OpenSSL's new-session
+       callback, which also sees TLS 1.3 tickets sent after the handshake. ---- */
+    #define GRAV_TLS_CACHE 64
+    static struct { void* ctx; char key[300]; void* sess; unsigned long long used; } grav_tls_cache[GRAV_TLS_CACHE];
+    static pthread_mutex_t grav_tls_cache_mu = PTHREAD_MUTEX_INITIALIZER;
+    static unsigned long long grav_tls_clock = 0;
+    static int grav_tls_new_session(void* ssl, void* sess) {
+        GravSock* s = (GravSock*)grav_ssl.SSL_get_ex_data(ssl, 0);
+        if (!s || !s->tlsKey[0]) return 0;                   /* not ours to keep: OpenSSL frees it */
+        void* ctx = grav_ssl.SSL_get_SSL_CTX(ssl);
+        pthread_mutex_lock(&grav_tls_cache_mu);
+        int slot = -1, oldest = 0;
+        for (int i = 0; i < GRAV_TLS_CACHE; i++) {
+            if (grav_tls_cache[i].sess && grav_tls_cache[i].ctx == ctx && strcmp(grav_tls_cache[i].key, s->tlsKey) == 0) { slot = i; break; }
+            if (!grav_tls_cache[i].sess) { if (slot < 0) slot = i; continue; }
+            if (grav_tls_cache[i].used < grav_tls_cache[oldest].used || !grav_tls_cache[oldest].sess) oldest = i;
+        }
+        if (slot < 0) slot = oldest;
+        if (grav_tls_cache[slot].sess) grav_ssl.SSL_SESSION_free(grav_tls_cache[slot].sess);
+        grav_tls_cache[slot].ctx = ctx;
+        snprintf(grav_tls_cache[slot].key, sizeof grav_tls_cache[slot].key, "%s", s->tlsKey);
+        grav_tls_cache[slot].sess = sess;                    /* the callback's reference is now ours */
+        grav_tls_cache[slot].used = ++grav_tls_clock;
+        pthread_mutex_unlock(&grav_tls_cache_mu);
+        return 1;
+    }
+    /* Offers the cached session for (ctx, key), if any, on a new connection. */
+    static void grav_tls_offer_session(void* ssl, void* ctx, const char* key) {
+        pthread_mutex_lock(&grav_tls_cache_mu);
+        for (int i = 0; i < GRAV_TLS_CACHE; i++) {
+            if (grav_tls_cache[i].sess && grav_tls_cache[i].ctx == ctx && strcmp(grav_tls_cache[i].key, key) == 0) {
+                grav_ssl.SSL_set_session(ssl, grav_tls_cache[i].sess);   /* takes its own reference */
+                grav_tls_cache[i].used = ++grav_tls_clock;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&grav_tls_cache_mu);
+    }
+    /* Drops the sessions of a context that is going away. */
+    static void grav_tls_forget(void* ctx) {
+        pthread_mutex_lock(&grav_tls_cache_mu);
+        for (int i = 0; i < GRAV_TLS_CACHE; i++) {
+            if (grav_tls_cache[i].sess && grav_tls_cache[i].ctx == ctx) {
+                grav_ssl.SSL_SESSION_free(grav_tls_cache[i].sess);
+                grav_tls_cache[i].sess = 0;
+                grav_tls_cache[i].ctx = 0;
+            }
+        }
+        pthread_mutex_unlock(&grav_tls_cache_mu);
+    }
+
     /* A new SSL_CTX for a client (verify: check the server) or a server. */
     static void* grav_tls_ctx_new(int server, int verify, const char** err) {
         if (!grav_ssl_ready(err)) return 0;
@@ -248,6 +312,8 @@ namespace std.net {
         if (!server) {
             grav_ssl.SSL_CTX_set_verify(ctx, verify ? GRAV_TLS_VERIFY_PEER : 0, 0);
             if (verify) grav_ssl.SSL_CTX_set_default_verify_paths(ctx);
+            grav_ssl.SSL_CTX_ctrl(ctx, 44 /* SSL_CTRL_SET_SESS_CACHE_MODE */, 1 /* SSL_SESS_CACHE_CLIENT */, 0);
+            grav_ssl.SSL_CTX_sess_set_new_cb(ctx, grav_tls_new_session);
         }
         return ctx;
     }
@@ -351,7 +417,7 @@ namespace std.net {
     /* ---- handshakes ---- */
     /* Client (server = 0, host checked unless verify is off) or server handshake on
        an open connection. 0 on success, else -1 with the reason in s->err. */
-    static int grav_tls_handshake(GravSock* s, void* ctx, int server, const char* host) {
+    static int grav_tls_handshake(GravSock* s, void* ctx, int server, const char* host, int resume) {
         if (s->tls) { snprintf(s->err, sizeof s->err, "the connection already uses TLS"); return -1; }
         void* ssl = grav_ssl.SSL_new(ctx);
         if (!ssl) {
@@ -360,6 +426,18 @@ namespace std.net {
             return -1;
         }
         grav_ssl.SSL_set_fd(ssl, s->fd);
+        s->tlsKey[0] = 0;
+        s->tlsResumed = 0;
+        if (!server && resume && host && host[0]) {
+            struct sockaddr_storage peer; socklen_t pl = sizeof peer;
+            int port = 0;
+            if (getpeername(s->fd, (struct sockaddr*)&peer, &pl) == 0)
+                port = peer.ss_family == AF_INET6 ? ntohs(((struct sockaddr_in6*)&peer)->sin6_port)
+                                                  : ntohs(((struct sockaddr_in*)&peer)->sin_port);
+            snprintf(s->tlsKey, sizeof s->tlsKey, "%s:%d", host, port);
+            grav_ssl.SSL_set_ex_data(ssl, 0, s);
+            grav_tls_offer_session(ssl, ctx, s->tlsKey);
+        }
         if (!server && host && host[0]) {
             if (grav_tls_is_ip(host)) grav_ssl.X509_VERIFY_PARAM_set1_ip_asc(grav_ssl.SSL_get0_param(ssl), host);
             else {
@@ -390,6 +468,7 @@ namespace std.net {
             return -1;
         }
         s->tls = ssl;
+        s->tlsResumed = !server && grav_ssl.SSL_session_reused(ssl);
         s->tlsRead = grav_tls_read;
         s->tlsWrite = grav_tls_write;
         s->tlsClose = grav_tls_close;
@@ -417,6 +496,7 @@ namespace std.net {
         private verifying: bool
         private certText: string
         private keyText: string
+        private resume: bool
 
         // Use the static constructors (client, server, selfSigned, ...).
         constructor(server: bool, verify: bool) {
@@ -427,8 +507,9 @@ namespace std.net {
             self.verifying = verify && !server;
             self.certText = "";
             self.keyText = "";
+            self.resume = !server;
         }
-        destructor() { %{ if (self->ctx) grav_ssl.SSL_CTX_free(self->ctx); %}; }
+        destructor() { %{ if (self->ctx) { grav_tls_forget(self->ctx); grav_ssl.SSL_CTX_free(self->ctx); } %}; }
 
         // A client context that checks servers against the system's trusted
         // certificate authorities and their host names (what browsers do).
@@ -481,6 +562,12 @@ namespace std.net {
         public fn certificatePem() -> string { return self.certText; }
         // The private key of a server context, as PEM ("" for a client context).
         public fn privateKeyPem() -> string { return self.keyText; }
+        // Whether new connections to a server this client context has talked to
+        // recently resume that session, skipping most of the handshake (on by
+        // default); returns this context.
+        public fn withSessionResumption(on: bool) -> TlsContext { self.resume = on && !self.server; return self; }
+        // Whether client sessions are resumed.
+        public fn resumesSessions() -> bool { return self.resume; }
         // Whether this is a server context.
         public fn isServer() -> bool { return self.server; }
         // Whether a client context checks the server's certificate.
@@ -533,17 +620,17 @@ namespace std.net {
             let c = ctx == null ? %{ (unsigned char*)grav_tls_default_client(&err) %} as byte* : ctx.handle();
             if (c == null) { throw new NetError(err); }
             if (ctx != null && ctx.isServer()) { throw new StateError("startClient needs a client context"); }
-            Tls.handshake(conn, c, false, host);
+            Tls.handshake(conn, c, false, host, ctx == null || ctx.resumesSessions());
         }
         // Answers a client's TLS handshake on an accepted stream with the server
         // context's certificate.
         static fn startServer(conn: TcpStream, ctx: TlsContext) {
             if (!ctx.isServer()) { throw new StateError("startServer needs a server context (TlsContext.server)"); }
-            Tls.handshake(conn, ctx.handle(), true, "");
+            Tls.handshake(conn, ctx.handle(), true, "", false);
         }
-        private static fn handshake(conn: TcpStream, ctx: byte*, server: bool, host: string) {
+        private static fn handshake(conn: TcpStream, ctx: byte*, server: bool, host: string, resume: bool) {
             let s = conn.handle();
-            if (%{ grav_tls_handshake((GravSock*)s, ctx, server, host) %} as int != 0) {
+            if (%{ grav_tls_handshake((GravSock*)s, ctx, server, host, resume) %} as int != 0) {
                 let why = %{ grav_net_take_err((GravSock*)s) %} as string;
                 if (%{ ((GravSock*)s)->timedOut %} as bool) {
                     %{ ((GravSock*)s)->timedOut = 0; %};

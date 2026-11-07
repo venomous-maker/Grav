@@ -51,6 +51,8 @@ namespace std.net {
         int (*tlsWrite)(struct GravSock*, const char*, int);  /* bytes written, or -1 */
         void (*tlsClose)(struct GravSock*);
         char tlsVersion[16];
+        int tlsResumed;                                       /* the handshake resumed an earlier session */
+        char tlsKey[300];                                     /* "host:port" for the client session cache */
         char err[256];                                        /* a TLS failure's reason, else "" */
     } GravSock;
 
@@ -439,6 +441,8 @@ namespace std.net {
         public fn handle() -> byte* { return self.s; }
         // Whether the connection is encrypted with TLS (see lib/net/tls.grav).
         public fn isTls() -> bool { return %{ ((GravSock*)self->s)->tls != 0 %} as bool; }
+        // Whether the TLS handshake resumed an earlier session (no full handshake).
+        public fn tlsResumed() -> bool { return %{ ((GravSock*)self->s)->tlsResumed != 0 %} as bool; }
         // The TLS protocol in use ("TLSv1.3"), or "" for a plain connection.
         public fn tlsVersion() -> string { return %{ grav_net_copy(((GravSock*)self->s)->tlsVersion) %} as string; }
         // Whether close() was called.

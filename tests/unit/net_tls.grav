@@ -113,3 +113,34 @@ test "contexts reject bad input" {
     assert(threw)                                      // the key does not match the certificate
     assert(Tls.libraryVersion() != "")
 }
+
+test "client sessions are resumed on later connections" {
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let server = new EchoServer(ctx, 6)
+    let trust = TlsContext.client().trustPem(ctx.certificatePem())
+    let resumed = new Array<bool>()
+    for (i in 0..3) {
+        let c = Tls.connect("localhost", server.port(), trust, 5000)
+        c.writeLine("hi")
+        assertEq(c.readLine(), "echo hi")                   // reading takes in the session ticket
+        resumed.push(c.tlsResumed())
+        c.close()
+    }
+    assertEq(resumed.get(0), false)
+    assert(resumed.get(1))
+    assert(resumed.get(2))
+    let other = Tls.connect("localhost", server.port(), TlsContext.insecureClient(), 5000)
+    other.writeLine("x"); other.readLine()
+    assert(!other.tlsResumed())                             // another context does not share sessions
+    other.close()
+    let off = TlsContext.client().trustPem(ctx.certificatePem()).withSessionResumption(false)
+    for (i in 0..2) {
+        let c = Tls.connect("localhost", server.port(), off, 5000)
+        c.writeLine("x"); c.readLine()
+        assert(!c.tlsResumed())
+        c.close()
+    }
+    server.finish()
+    assertEq(server.failures.size(), 0)
+}
