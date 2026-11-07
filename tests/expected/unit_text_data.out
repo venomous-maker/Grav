@@ -1,4 +1,4 @@
-running 12 tests
+running 15 tests
   ok    regex: find, groups, replace, split
   ok    Str: splitting, cases, wrapping, distance
   ok    string literals survive C trigraphs
@@ -11,4 +11,7 @@ running 12 tests
   ok    sorting numbers and strings
   ok    JSON storage: replace, remove, large objects, shared children
   ok    compression: gzip, zlib and raw deflate round trips and limits
-result: 12 passed, 0 failed
+  ok    interpolation formats numbers and long pieces exactly
+  ok    hash maps: equal strings find each other, removals keep probes intact
+  ok    JSON: repeated record keys, escaped keys and prefixes parse exactly
+result: 15 passed, 0 failed

@@ -364,3 +364,51 @@ test "early returns, continue and break leave nothing on the release list" {
     assertEq(poolHeight(), before)
     assertEq(loopExits(h), 6)
 }
+
+// Methods that return `self` hand it back without counting; chains stay correct.
+class Chain {
+    public n: int
+    constructor() { self.n = 0; Live.count += 1 }
+    destructor() { Live.count -= 1 }
+    public fn add(k: int) -> Chain { self.n += k; return self }
+    public fn twice(k: int) -> Chain { if (k > 100) { return self } self.add(k); return self.add(k) }
+}
+class Base2 {
+    constructor() { Live.count += 1 }
+    destructor() { Live.count -= 1 }
+    public fn me() -> Base2 { return self }
+}
+class Derived2 extends Base2 {
+    public fn me() -> Base2 { return new Base2() }          // an override: not borrowed
+}
+interface Fluent { fn step() -> Fluent }
+class Stepper implements Fluent {
+    constructor() { Live.count += 1 }
+    destructor() { Live.count -= 1 }
+    public fn step() -> Fluent { return self }
+}
+
+test "fluent chains on temporaries and locals count correctly" {
+    let base = Live.count
+    assertEq(new Chain().add(1).add(2).twice(3).n, 9)       // a temporary at the head of the chain
+    assertEq(Live.count, base)
+    let c = new Chain()
+    let same = c.add(5).add(6)
+    assertEq(same.n, 11)
+    c = new Chain()                                         // `same` keeps the first one alive
+    assertEq(same.n, 11)
+    assertEq(Live.count, base + 2)
+    same = null
+    assertEq(Live.count, base + 1)
+    let b: Base2 = new Derived2()
+    let other = b.me()                                      // dispatches to the override
+    assertEq(Live.count, base + 3)
+    other = null
+    let f: Fluent = new Stepper()
+    let g = f.step().step()
+    g = null
+    f = null
+    b = null
+    c = null
+    assertEq(Live.count, base)
+}

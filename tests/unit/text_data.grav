@@ -215,3 +215,42 @@ test "compression: gzip, zlib and raw deflate round trips and limits" {
     try { Compress.gzip(all, 12) } catch (e: ValueError) { badLevel = true }
     assert(badLevel)
 }
+
+test "interpolation formats numbers and long pieces exactly" {
+    let min: long = -9223372036854775807 - 1
+    let big: ulong = (9223372036854775807 as ulong) * 2 + 1   // the largest ulong
+    assertEq("a${min}b", "a-9223372036854775808b")
+    assertEq("${big}", "18446744073709551615")
+    assertEq("${0}|${-7}|100%|${3}%", "0|-7|100%|3%")
+    let long1 = Str.repeat("x", 700)
+    let s = "[${long1}:${long1.length}:${long1}]"
+    assertEq(s.length, 700 * 2 + 3 + 3 + 1)
+    assert(Str.startsWith(s, "[xxx") && Str.endsWith(s, "xxx]"))
+    assertEq(str(-12345), "-12345")
+}
+
+test "hash maps: equal strings find each other, removals keep probes intact" {
+    let m = new HashMap<string, int>()
+    for (i in 0..20000) { m.put("k${i}", i) }
+    let probe = "k" + "123"                                // same text, a different string
+    assertEq(m.get(probe), 123)
+    for (i in 0..20000) { if (i % 3 == 0) { m.remove("k${i}") } }
+    let found = 0
+    for (i in 0..20000) { if (m.containsKey("k${i}")) { found += 1; assertEq(m.get("k${i}"), i) } }
+    assertEq(found, 20000 - 6667)
+    assertEq(m.size(), found)
+    m.put("k0", -1)
+    assertEq(m.get("k0"), -1)
+    let ints = new HashMap<long, string>()
+    for (i in 0..5000) { ints.put((i as long) * 1000003, "v${i}") }
+    assertEq(ints.get((4999 as long) * 1000003), "v4999")
+}
+
+test "JSON: repeated record keys, escaped keys and prefixes parse exactly" {
+    let text = "[{\"id\":1,\"name\":\"a\"},{\"idx\":2,\"nam\":\"b\"},{\"id\":3,\"name\":\"c\"},{\"i\\\"d\":4},{\"i\\\"d\":5},{\"id\":9223372036854775807,\"n\":-0,\"f\":2.5e1}]"
+    let v = Json.parse(text)
+    assertEq(v.toJson(), "[{\"id\":1,\"name\":\"a\"},{\"idx\":2,\"nam\":\"b\"},{\"id\":3,\"name\":\"c\"},{\"i\\\"d\":4},{\"i\\\"d\":5},{\"id\":9223372036854775807,\"n\":0,\"f\":25}]")
+    assertEq(v[1]["idx"].asInt(), 2)
+    assertEq(v[4]["i\"d"].asInt(), 5)
+    assertEq(Json.object().set("q", "a\"b\n").set("n", -5 as long).toJson(), "{\"q\":\"a\\\"b\\n\",\"n\":-5}")
+}
