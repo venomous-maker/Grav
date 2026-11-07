@@ -51,6 +51,7 @@ namespace std.net {
         int (*tlsWrite)(struct GravSock*, const char*, int);  /* bytes written, or -1 */
         void (*tlsClose)(struct GravSock*);
         int (*tlsPending)(struct GravSock*);                  /* decrypted bytes not yet read */
+        void* tlsAccepting;                                   /* SSL* while a step-by-step server handshake runs */
         char tlsVersion[16];
         int tlsResumed;                                       /* the handshake resumed an earlier session */
         char tlsKey[300];                                     /* "host:port" for the client session cache */
@@ -202,8 +203,8 @@ namespace std.net {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     }
-    /* Refill the read buffer. 1 = got data, 0 = EOF, -1 = error (errno set). */
-    static int grav_sock_fill(GravSock* s) {
+    /* Makes room at the end of the read buffer (moving its contents down, or growing it). */
+    static void grav_sock_room(GravSock* s) {
         if (s->pos > 0 && s->pos == s->len) { s->pos = s->len = 0; }
         if (s->len == s->cap) {
             if (s->pos > 0) {
@@ -216,6 +217,10 @@ namespace std.net {
                 if (!s->buf) abort();
             }
         }
+    }
+    /* Refill the read buffer. 1 = got data, 0 = EOF, -1 = error (errno set). */
+    static int grav_sock_fill(GravSock* s) {
+        grav_sock_room(s);
         ssize_t n;
         if (s->tls) n = s->tlsRead(s, s->buf + s->len, s->cap - s->len);
         else do { n = recv(s->fd, s->buf + s->len, (size_t)(s->cap - s->len), 0); } while (n < 0 && errno == EINTR);
@@ -223,6 +228,30 @@ namespace std.net {
         if (n == 0) { s->eof = 1; return 0; }
         if (errno == EAGAIN || errno == EWOULDBLOCK) s->timedOut = 1;
         return -1;
+    }
+    /* Buffers what has already arrived, without waiting, until `limit` bytes are
+       buffered: 1 while the connection is open, 0 at its end, -1 on an error. */
+    static int grav_sock_fill_now(GravSock* s, long long limit) {
+        int flags = -1, r = 1;
+        if (s->tls) { flags = fcntl(s->fd, F_GETFL, 0); fcntl(s->fd, F_SETFL, flags | O_NONBLOCK); }
+        while (s->len - s->pos < limit) {
+            grav_sock_room(s);
+            int room = s->cap - s->len;
+            ssize_t n;
+            if (s->tls) n = s->tlsRead(s, s->buf + s->len, room);
+            else do { n = recv(s->fd, s->buf + s->len, (size_t)room, MSG_DONTWAIT); } while (n < 0 && errno == EINTR);
+            if (n > 0) {
+                s->len += (int)n;
+                if (!s->tls && n < room) break;               /* drained (TLS reads a record at a time) */
+                continue;
+            }
+            if (n == 0) { s->eof = 1; r = 0; break; }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) { s->timedOut = 0; break; }
+            r = -1;
+            break;
+        }
+        if (flags != -1) fcntl(s->fd, F_SETFL, flags);
+        return r;
     }
     /* Write everything; 0 on success, else errno. */
     static int grav_sock_write(GravSock* s, const char* p, long long n) {
@@ -435,7 +464,7 @@ namespace std.net {
             self.closed = true;
             %{
                 GravSock* gs = (GravSock*)self->s;
-                if (gs->tls) gs->tlsClose(gs);     /* close_notify, then free the session */
+                if (gs->tls || gs->tlsAccepting) gs->tlsClose(gs);   /* close_notify, then free the session */
                 close(gs->fd);
             %};
         }
@@ -449,6 +478,13 @@ namespace std.net {
             return %{ ((GravSock*)self->s)->len > ((GravSock*)self->s)->pos ||
                       (((GravSock*)self->s)->tls && ((GravSock*)self->s)->tlsPending((GravSock*)self->s) > 0) %} as bool;
         }
+        // Reads whatever has already arrived, without waiting, into the buffer the
+        // read methods take from (until `limit` bytes are buffered): 1 while the
+        // connection is open, 0 once it has ended, -1 after an error. For servers
+        // that poll many connections (lib/net/http_server.grav).
+        public fn readAvailable(limit: long) -> int { return %{ grav_sock_fill_now((GravSock*)self->s, limit) %} as int; }
+        // Bytes received and not read yet.
+        public fn bufferedBytes() -> int { return %{ ((GravSock*)self->s)->len - ((GravSock*)self->s)->pos %} as int; }
         // Whether the connection is encrypted with TLS (see lib/net/tls.grav).
         public fn isTls() -> bool { return %{ ((GravSock*)self->s)->tls != 0 %} as bool; }
         // Whether the TLS handshake resumed an earlier session (no full handshake).
