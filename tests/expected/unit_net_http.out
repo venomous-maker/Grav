@@ -1,4 +1,4 @@
-running 11 tests
+running 12 tests
   ok    every method, and OPTIONS answered from the routes
   ok    CORS: preflight and response headers
   ok    ETags answer 304, and byte ranges 206 or 416
@@ -6,8 +6,9 @@ running 11 tests
   ok    multipart uploads and form fields
   ok    cookies, credentials, redirects and request details
   ok    keep-alive reuses connections across requests and threads
+  ok    the worker pool: idle connections, pipelining, idle timeouts, streams and upgrades
   ok    limits: big bodies, long headers, too many connections
   ok    HTTPS and wss with a self-signed certificate
   ok    gzip responses for clients that ask, decoded by the client
   ok    URLs: parts, building and resolving links
-result: 11 passed, 0 failed
+result: 12 passed, 0 failed

@@ -203,6 +203,64 @@ test "keep-alive reuses connections across requests and threads" {
     s.stop()
 }
 
+test "the worker pool: idle connections, pipelining, idle timeouts, streams and upgrades" {
+    let s = app()
+    s.workers = 2
+    WebSocket.route(s, "/ws", fn(ws: WebSocket) { ws.messages(fn(m: WsMessage) { ws.send("echo " + m.text()) }) })
+    s.start(0)
+    // Idle connections hold no worker: 200 of them, and requests still go through.
+    let idle = new Array<TcpStream>()
+    for (i in 0..200) { idle.push(TcpStream.connect("127.0.0.1", s.port())) }
+    let waited = 0
+    while (s.activeConnections() < 200 && waited < 2000) { Time.sleepMs(10); waited += 10 }
+    assertEq(s.activeConnections(), 200)
+    let c = new HttpClient()
+    for (i in 0..20) { assertEq(c.get(s.baseUrl() + "/hello?name=${i}").body(), "hello ${i}") }
+    for (t in idle) { t.close() }
+    waited = 0
+    while (s.activeConnections() > 1 && waited < 2000) { Time.sleepMs(10); waited += 10 }
+    assertEq(s.activeConnections(), 1)                    // the client's kept-alive one
+    // Pipelined requests in one write are all answered, in order.
+    let raw = TcpStream.connect("127.0.0.1", s.port())
+    raw.write("GET /hello?name=a HTTP/1.1\r\nHost: x\r\n\r\nGET /hello?name=b HTTP/1.1\r\nHost: x\r\n\r\n" +
+              "GET /hello?name=c HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    let all = raw.readAll()
+    raw.close()
+    assertEq(Str.count(all, "HTTP/1.1 200"), 3)
+    assert(Str.indexOf(all, "hello a") < Str.indexOf(all, "hello b") && Str.indexOf(all, "hello b") < Str.indexOf(all, "hello c"))
+    // A streamed response runs off the workers, and the connection is kept after it.
+    assertEq(Str.count(c.get(s.baseUrl() + "/stream").body(), "\n"), 1000)
+    assertEq(c.get(s.baseUrl() + "/hello?name=after").body(), "hello after")
+    assertEq(c.idleConnections(), 1)
+    // Upgraded connections get their own threads: more WebSockets than workers.
+    let sockets = new Array<WebSocket>()
+    for (i in 0..4) { sockets.push(WebSocket.connect("ws://127.0.0.1:${s.port()}/ws", 5000)) }
+    for (i in 0..4) { sockets[i].send("m${i}") }
+    for (i in 0..4) { assertEq(sockets[i].receive().text(), "echo m${i}") }
+    assertEq(c.get(s.baseUrl() + "/hello?name=ws").body(), "hello ws")
+    for (ws in sockets) { ws.close() }
+    c.close()
+    s.stop()
+    // Connections left idle past idleTimeoutMs are closed by the server.
+    let quick = app()
+    quick.idleTimeoutMs = 300
+    quick.start(0)
+    let sleeper = TcpStream.connect("127.0.0.1", quick.port())
+    Time.sleepMs(900)
+    assertEq(sleeper.read(100), "")
+    assert(sleeper.eof())
+    assertEq(quick.activeConnections(), 0)
+    sleeper.close()
+    quick.stop()
+    // A handler may stop its own server.
+    let own = app()
+    own.post("/quit", fn(req: HttpRequest) -> HttpResponse { own.stop(); return HttpResponse.text("bye") })
+    own.start(0)
+    assertEq(new HttpClient().post(own.baseUrl() + "/quit", "", "text/plain").body(), "bye")
+    own.stop()
+    assertEq(own.activeConnections(), 0)
+}
+
 test "limits: big bodies, long headers, too many connections" {
     let s = app()
     s.maxBodyBytes = 1000
