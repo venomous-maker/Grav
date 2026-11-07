@@ -3,6 +3,11 @@
 // `hashOf` overload below: integers, bool, float, string, enums, and objects
 // (by identity). Iteration order is unspecified.
 //
+// Layout: a byte per slot (0 = empty, else 7 hash bits for string keys), and the
+// keys and values side by side in one buffer when both sizes are powers of two,
+// so a lookup reads one tag and one entry. String keys also keep each slot's
+// hash, so growing the table and removing never re-read the key strings.
+//
 //   let ages = new HashMap<string, int>()
 //   ages["ada"] = 36              // operator[]= is put
 //   print(ages["ada"])            // operator[] is get (zero value if missing)
@@ -33,6 +38,17 @@ namespace std.collections {
             default: return grav_hash_u64((unsigned long long)a.v.i);
         }
     }
+    /* Entry layout. When the key and value sizes are both powers of two (strings,
+       numbers, bool, object references: nearly every map), keys and values share
+       one buffer, each entry taking 2*M bytes (M = the larger size) with its key
+       first and its value at offset M. The typed K* and V* then reach entry i at
+       ks[i * KST] and vs[i * VST], so a lookup touches one cache line for both.
+       Other sizes keep two arrays (strides 1). All of it is constant per type. */
+    #define GRAV_HM_POW2(x) ((x) && !((x) & ((x) - 1)) && (x) <= 16)
+    #define GRAV_HM_INTER(m) (GRAV_HM_POW2(sizeof(*(m)->ks)) && GRAV_HM_POW2(sizeof(*(m)->vs)))
+    #define GRAV_HM_M(m) (sizeof(*(m)->ks) > sizeof(*(m)->vs) ? sizeof(*(m)->ks) : sizeof(*(m)->vs))
+    #define GRAV_HM_KST(m) (GRAV_HM_INTER(m) ? (int)(2 * GRAV_HM_M(m) / sizeof(*(m)->ks)) : 1)
+    #define GRAV_HM_VST(m) (GRAV_HM_INTER(m) ? (int)(2 * GRAV_HM_M(m) / sizeof(*(m)->vs)) : 1)
     static void* grav_hm_calloc(int n, size_t elem) {
         void* p = calloc((size_t)n, elem ? elem : 1);
         if (!p) { abort(); }
@@ -64,30 +80,52 @@ namespace std.collections {
         private ks: K*
         private vs: V*
         private used: byte*
+        private hs: int*          // string keys: each slot's hash (31 bits), so growing and removing re-place entries without touching keys
         private cap: int          // always a power of two
         private count: int
         private lastTag: int      // the tag of the key slot() last looked for
+        private lastHash: int     // and its hash
 
         constructor() { self.count = 0; self.alloc(16); }
         // One reference per key and value (reference types).
         // For the cycle collector: the keys and values this map holds.
         private fn __visitRefs() {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             for (i in 0..self.cap) {
-                if (self.used[i] != 0) { __visit(self.ks[i]); __visit(self.vs[i]); }
+                if (self.used[i] != 0) { __visit(self.ks[i * kst]); __visit(self.vs[i * vst]); }
             }
         }
         destructor() {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             for (i in 0..self.cap) {
-                if (self.used[i] != 0) { __release(self.ks[i]); __release(self.vs[i]); }
+                if (self.used[i] != 0) { __release(self.ks[i * kst]); __release(self.vs[i * vst]); }
             }
-            free(self.ks); free(self.vs); free(self.used);
+            self.freeSlots(self.ks, self.vs);
+            free(self.used);
+            free(self.hs);
         }
 
         private fn alloc(n: int) {
             self.cap = n;
-            self.ks = %{ grav_hm_calloc(n, sizeof(*self->ks)) %} as K*;
-            self.vs = %{ grav_hm_calloc(n, sizeof(*self->vs)) %} as V*;
+            %{
+                if (GRAV_HM_INTER(self)) {
+                    unsigned char* grav_b = (unsigned char*)grav_hm_calloc(n, 2 * GRAV_HM_M(self));
+                    self->ks = (__typeof__(self->ks))grav_b;
+                    self->vs = (__typeof__(self->vs))(grav_b + GRAV_HM_M(self));
+                } else {
+                    self->ks = (__typeof__(self->ks))grav_hm_calloc(n, sizeof(*self->ks));
+                    self->vs = (__typeof__(self->vs))grav_hm_calloc(n, sizeof(*self->vs));
+                }
+            %};
             self.used = %{ grav_hm_calloc(n, 1) %} as byte*;
+            // Other keys hash as cheaply as reading a stored hash: no array for them.
+            self.hs = %{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) ? (int*)grav_hm_calloc(n, sizeof(int)) : (int*)0 %} as int*;
+        }
+        // Frees a key/value buffer pair made by alloc.
+        private fn freeSlots(k: K*, v: V*) {
+            %{ free((void*)k); if (!GRAV_HM_INTER(self)) free((void*)v); %};
         }
 
         // The slot holding `key`, or the empty slot where it would go. used[i] is
@@ -95,7 +133,9 @@ namespace std.collections {
         // keys are compared only where the tags agree.
         private fn slot(key: K) -> int {
             let mask = self.cap - 1;
+            let kst = %{ GRAV_HM_KST(self) %} as int;
             let h = hashOf(key);
+            self.lastHash = (h & 2147483647) as int;
             let i = (h & (mask as long)) as int;
             // Tags spare string compares; other keys compare as cheaply as tags,
             // so their slots are just marked 1 (the type test is a C constant).
@@ -103,59 +143,83 @@ namespace std.collections {
                 let tag = (((h >> 24) & 127) | 128) as int;
                 self.lastTag = tag;
                 while (self.used[i] != 0) {
-                    if (self.used[i] == tag && self.ks[i] == key) { return i; }
+                    if (self.used[i] == tag && self.ks[i * kst] == key) { return i; }
                     i = (i + 1) & mask;
                 }
                 return i;
             }
             while (self.used[i] != 0) {
-                if (self.ks[i] == key) { return i; }
+                if (self.ks[i * kst] == key) { return i; }
                 i = (i + 1) & mask;
             }
             return i;
         }
 
 
+        // Doubles the table, placing each entry by its stored hash (keys are unique:
+        // nothing to compare, nothing to read).
         private fn grow() {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let oldK = self.ks;
             let oldV = self.vs;
             let oldU = self.used;
+            let oldH = self.hs;
             let oldCap = self.cap;
             self.alloc(oldCap * 2);
             self.count = 0;
-            for (i in 0..oldCap) { if (oldU[i] != 0) { self.putMoved(oldK[i], oldV[i]); } }
-            free(oldK); free(oldV); free(oldU);
+            let stored = %{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool;
+            for (i in 0..oldCap) {
+                if (oldU[i] != 0) {
+                    let k = oldK[i * kst];
+                    self.place(stored ? oldH[i] : (hashOf(k) & 2147483647) as int, k, oldV[i * vst]);
+                }
+            }
+            self.freeSlots(oldK, oldV);
+            free(oldU);
+            free(oldH);
+        }
+        // Puts an entry the map already owns (no new references) into the first
+        // free slot of its probe run.
+        private fn place(h: int, key: K, value: V) {
+            let mask = self.cap - 1;
+            let i = h & mask;
+            while (self.used[i] != 0) { i = (i + 1) & mask; }
+            if (%{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool) {
+                self.used[i] = ((h >> 24) & 127) | 128;
+                self.hs[i] = h;
+            } else {
+                self.used[i] = 1;
+            }
+            self.ks[i * %{ GRAV_HM_KST(self) %} as int] = key;
+            self.vs[i * %{ GRAV_HM_VST(self) %} as int] = value;
+            self.count += 1;
         }
 
         // Sets the value for `key` (adding the key, or replacing its value).
         public fn put(key: K, value: V) {
             if ((self.count + 1) * 4 > self.cap * 3) { self.grow(); }   // load factor 0.75
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let i = self.slot(key);
             if (self.used[i] == 0) {
                 self.used[i] = %{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool ? self.lastTag : 1;
-                self.ks[i] = __retain(key);
-                self.vs[i] = __retain(value);
+                if (%{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool) { self.hs[i] = self.lastHash; }
+                self.ks[i * kst] = __retain(key);
+                self.vs[i * vst] = __retain(value);
                 self.count += 1;
                 return;
             }
-            let old = self.vs[i];
-            self.vs[i] = __retain(value);
+            let old = self.vs[i * vst];
+            self.vs[i * vst] = __retain(value);
             __release(old);
         }
-        // Re-insert an entry the map already owns (rehashing): moves, no new references.
-        private fn putMoved(key: K, value: V) {
-            let i = self.slot(key);
-            self.used[i] = %{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool ? self.lastTag : 1;
-            self.ks[i] = key;
-            self.vs[i] = value;
-            self.count += 1;
-        }
         // The value for `key`, or the zero value of V when absent.
-        public fn get(key: K) -> V { return self.vs[self.slot(key)]; }
+        public fn get(key: K) -> V { return self.vs[self.slot(key) * %{ GRAV_HM_VST(self) %} as int]; }
         // The value for `key`, or `fallback` when the key is missing.
         public fn getOr(key: K, fallback: V) -> V {
             let i = self.slot(key);
-            return self.used[i] != 0 ? self.vs[i] : fallback;
+            return self.used[i] != 0 ? self.vs[i * %{ GRAV_HM_VST(self) %} as int] : fallback;
         }
         // Whether the map has `key`.
         public fn containsKey(key: K) -> bool { return self.used[self.slot(key)] != 0; }
@@ -166,20 +230,23 @@ namespace std.collections {
 
         // Removes `key`; re-inserts the rest of its probe run so lookups stay correct.
         public fn remove(key: K) -> bool {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let i = self.slot(key);
             if (self.used[i] == 0) { return false; }
-            __release(self.ks[i]);
-            __release(self.vs[i]);
+            __release(self.ks[i * kst]);
+            __release(self.vs[i * vst]);
             self.used[i] = 0;
             self.count -= 1;
             let mask = self.cap - 1;
             let j = (i + 1) & mask;
             while (self.used[j] != 0) {
-                let k = self.ks[j];
-                let v = self.vs[j];
+                let k = self.ks[j * kst];
+                let v = self.vs[j * vst];
+                let h = %{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool ? self.hs[j] : (hashOf(k) & 2147483647) as int;
                 self.used[j] = 0;
                 self.count -= 1;
-                self.putMoved(k, v);
+                self.place(h, k, v);
                 j = (j + 1) & mask;
             }
             return true;
@@ -193,8 +260,10 @@ namespace std.collections {
         public fn isEmpty() -> bool { return self.count == 0; }
         // Removes every key and value.
         public fn clear() {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             for (i in 0..self.cap) {
-                if (self.used[i] != 0) { __release(self.ks[i]); __release(self.vs[i]); }
+                if (self.used[i] != 0) { __release(self.ks[i * kst]); __release(self.vs[i * vst]); }
             }
             let n = self.cap;
             %{ memset(self->used, 0, (size_t)n); %};
@@ -212,46 +281,58 @@ namespace std.collections {
         }
         // The keys, as a new array (in no particular order).
         public fn keys() -> Array<K> {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
             let out = new Array<K>();
-            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.ks[i]); } }
+            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.ks[i * kst]); } }
             return out;
         }
         // Calls f with each key and its value (in no particular order).
         public fn forEach(f: fn(K, V)) {
-            for (i in 0..self.cap) { if (self.used[i] != 0) { f(self.ks[i], self.vs[i]); } }
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
+            for (i in 0..self.cap) { if (self.used[i] != 0) { f(self.ks[i * kst], self.vs[i * vst]); } }
         }
         // The value for `key`, inserting `fallback` first when absent.
         public fn getOrPut(key: K, fallback: V) -> V {
             let i = self.slot(key);
-            if (self.used[i] != 0) { return self.vs[i]; }
+            if (self.used[i] != 0) { return self.vs[i * %{ GRAV_HM_VST(self) %} as int]; }
             self.put(key, fallback);
             return fallback;
         }
         // The values, as a new array (in the same order as keys()).
         public fn values() -> Array<V> {
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let out = new Array<V>();
-            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.vs[i]); } }
+            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.vs[i * vst]); } }
             return out;
         }
         // Every key with its value, as pairs (in no particular order).
         public fn entries() -> Array<Pair<K, V>> {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let out = new Array<Pair<K, V>>();
-            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(new Pair<K, V>(self.ks[i], self.vs[i])); } }
+            for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(new Pair<K, V>(self.ks[i * kst], self.vs[i * vst])); } }
             return out;
         }
         // Copies every entry of `other` into this map (replacing values of shared keys).
         public fn putAll(other: HashMap<K, V>) { other.forEach(fn(k, v) { self.put(k, v) }) }
         // Removes the entries for which f(key, value) holds; returns how many.
         public fn removeWhere(f: fn(K, V) -> bool) -> int {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let gone = new Array<K>();
-            for (i in 0..self.cap) { if (self.used[i] != 0 && f(self.ks[i], self.vs[i])) { gone.push(self.ks[i]); } }
+            for (i in 0..self.cap) { if (self.used[i] != 0 && f(self.ks[i * kst], self.vs[i * vst])) { gone.push(self.ks[i * kst]); } }
             for (k in gone) { self.remove(k); }
             return gone.size();
         }
         // A new map with the entries for which f(key, value) holds.
         public fn filter(f: fn(K, V) -> bool) -> HashMap<K, V> {
+            let kst = %{ GRAV_HM_KST(self) %} as int;
+            let vst = %{ GRAV_HM_VST(self) %} as int;
             let out = new HashMap<K, V>();
-            for (i in 0..self.cap) { if (self.used[i] != 0 && f(self.ks[i], self.vs[i])) { out.put(self.ks[i], self.vs[i]); } }
+            for (i in 0..self.cap) {
+                if (self.used[i] != 0 && f(self.ks[i * kst], self.vs[i * vst])) { out.put(self.ks[i * kst], self.vs[i * vst]); }
+            }
             return out;
         }
     }
