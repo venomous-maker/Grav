@@ -50,6 +50,12 @@ declarations always precede use.
   push entries on a cleanup stack; `return` unwinds all of them (restoring the
   `jmp_buf` stack and emitting finally/deferred code inline), `break`/`continue`
   unwind to the innermost loop.
+- **The release list**: call results and held field/element reads used inside
+  an expression go on a per-thread release list (`grav_autorelease`), drained
+  when their statement ends (`grav_pool_drain`). An early `return`, `break` or
+  `continue` skips the drain of the statements it leaves, so a function or loop
+  where that can happen (`exitSkipsDrain`) records the list's height on entry
+  and drains back to it on every way out.
 - **Unwinding through frames**: an exception is a `longjmp`, which skips the
   releases of every frame between the throw and its handler. So an owned local
   whose scope can still throw (a call, or a fault such as an index out of

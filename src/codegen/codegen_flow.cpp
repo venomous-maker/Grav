@@ -239,6 +239,20 @@ void CodeGen::popLoopLabel(const std::string &id) {
     loopLabels_.pop_back();
 }
 
+// A `for … in` whose body can autorelease releases what each iteration left at
+// the start of the next one and after the loop (see the loops in codegen_stmt).
+void CodeGen::forInMark(const ForInStmt &s) {
+    if (!exitSkipsDrain(s.body, false, true)) { loopMarks_.push_back(""); return; }
+    std::string m = "__lp" + std::to_string(poolCounter_++);
+    line("size_t " + m + " = grav_pool_top;");
+    loopMarks_.push_back(m);
+}
+
+void CodeGen::forInEnd() {
+    if (!loopMarks_.back().empty()) line("grav_pool_drain(" + loopMarks_.back() + ");");
+    loopMarks_.pop_back();
+}
+
 void CodeGen::emitForIn(const ForInStmt &s) {
     std::string labelId = pushLoopLabel(s.label);
     std::string n = std::to_string(switchCounter_++);
@@ -250,6 +264,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         bool constStep = !s.step || constInt(s.step.get(), stepVal);
         std::string lt = s.inclusive ? " <= " : " < ";
         std::string gt = s.inclusive ? " >= " : " > ";
+        forInMark(s);
         std::string head = "for (" + vty + " " + s.var + " = " + emitExpr(*s.lo) + ", " + hi +
                            " = " + emitExpr(*s.hi);
         if (constStep) {
@@ -266,6 +281,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         emitLoopBody(s.body, s.label);
         line("}");
         popLoopLabel(labelId);
+        forInEnd();
         return;
     }
 
@@ -329,6 +345,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             break;
     }
     endTemps(srcTemps);
+    forInMark(s);
     if (s.iterKind == ForInKind::Chars) {
         std::string pos = src + "_p", len = src + "_l";
         line("for (int " + idx + " = 0, " + pos + " = 0, " + len + " = 0; " + src + "[" + pos + "]; " + idx +
@@ -352,6 +369,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     emitLoopBody(s.body, s.label);
     line("}");
     popLoopLabel(labelId); // `break <label>` still releases the iterated collection
+    forInEnd();
     if (ownedSrc) {
         line(cleanups_.back().code);
         cleanups_.pop_back();
@@ -415,6 +433,15 @@ void CodeGen::beginBody(const Block &body) {
     cleanups_.clear();
     curSrcLine_ = 0;
     collectTryAssigned(body, 0);
+    // A return inside a statement that would drain the release list when it
+    // falls through skips that drain, so such a function records the list's
+    // height and drains back to it wherever it returns. Results are +1, so
+    // nothing they need goes.
+    fnPoolMark_.clear();
+    if (exitSkipsDrain(body, false, false)) {
+        fnPoolMark_ = "__fn_ap" + std::to_string(poolCounter_++);
+        line("size_t " + fnPoolMark_ + " = grav_pool_top;");
+    }
 }
 
 // ---------------------------------------------------------------------------

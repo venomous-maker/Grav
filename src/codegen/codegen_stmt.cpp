@@ -116,7 +116,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         return;
     }
     if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
-        bool cleanups = false; // try/finally/defer to run on the way out?
+        bool cleanups = !fnPoolMark_.empty(); // try/finally/defer/a drain to run on the way out?
         for (const auto &c : cleanups_)
             if (c.kind == Cleanup::Try || c.kind == Cleanup::Finally || c.kind == Cleanup::Defer ||
                 c.kind == Cleanup::Code)
@@ -134,6 +134,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
                      emitOwned(*s->value, currentReturnType_) + ";");
                 endTemps(temps);
                 emitUnwind(false);
+                if (!fnPoolMark_.empty()) line("grav_pool_drain(" + fnPoolMark_ + ");");
                 if (trace_) line("grav_leave();");
                 line("return " + rt + ";");
             } else {
@@ -142,6 +143,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             }
         } else {
             emitUnwind(false);
+            if (!fnPoolMark_.empty()) line("grav_pool_drain(" + fnPoolMark_ + ");");
             if (trace_) line("grav_leave();");
             line("return;");
         }
@@ -161,36 +163,42 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         emitIf(*s);
         return;
     }
-    // A loop whose condition can create temporaries releases them at the start
-    // of every iteration (loopMarks_), not only when the whole loop ends.
+    // A loop whose condition or body can create temporaries releases them at
+    // the start of every iteration (loopMarks_; what a `continue` left behind
+    // too) and after the loop (what a `break` left), not only when it ends.
     auto loopMark = [&](bool needed) {
         if (!needed) { loopMarks_.push_back(""); return; }
         std::string m = "__lp" + std::to_string(poolCounter_++);
         line("size_t " + m + " = grav_pool_top;");
         loopMarks_.push_back(m);
     };
+    auto loopEnd = [&]() {
+        if (!loopMarks_.back().empty()) line("grav_pool_drain(" + loopMarks_.back() + ");");
+        loopMarks_.pop_back();
+    };
     if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
-        loopMark(exprMayAutorelease(s->cond.get()));
+        loopMark(exprMayAutorelease(s->cond.get()) || exitSkipsDrain(s->body, false, true));
         std::string id = pushLoopLabel(s->label);
         line("while (" + emitOrdered(*s->cond) + ") {");
         emitLoopBody(s->body, s->label);
         line("}");
         popLoopLabel(id);
-        loopMarks_.pop_back();
+        loopEnd();
         return;
     }
     if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
-        loopMark(exprMayAutorelease(s->cond.get()));
+        loopMark(exprMayAutorelease(s->cond.get()) || exitSkipsDrain(s->body, false, true));
         std::string id = pushLoopLabel(s->label);
         line("do {");
         emitLoopBody(s->body, s->label);
         line("} while (" + emitOrdered(*s->cond) + ");");
         popLoopLabel(id);
-        loopMarks_.pop_back();
+        loopEnd();
         return;
     }
     if (auto *s = dynamic_cast<const ForStmt *>(&stmt)) {
-        loopMark(exprMayAutorelease(s->cond.get()) || (s->update && stmtNeedsDrain(*s->update)));
+        loopMark(exprMayAutorelease(s->cond.get()) || (s->update && stmtNeedsDrain(*s->update)) ||
+                 exitSkipsDrain(s->body, false, true));
         std::string init = inlineSimple(s->init.get());
         std::string cond = s->cond ? emitOrdered(*s->cond) : "";
         std::string upd = inlineSimple(s->update.get());
@@ -199,7 +207,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         emitLoopBody(s->body, s->label);
         line("}");
         popLoopLabel(id);
-        loopMarks_.pop_back();
+        loopEnd();
         return;
     }
     if (auto *s = dynamic_cast<const SwitchStmt *>(&stmt)) {

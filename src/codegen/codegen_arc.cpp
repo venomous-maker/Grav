@@ -335,6 +335,35 @@ bool CodeGen::exprMayAutorelease(const Expr *e) const {
     return found || (w.unstable && exprMayCall(e));
 }
 
+bool CodeGen::exitSkipsDrain(const Block &b, bool under, bool loopExits) const {
+    for (const auto &s : b.statements)
+        if (exitSkipsDrainStmt(*s, under, loopExits)) return true;
+    return false;
+}
+
+bool CodeGen::exitSkipsDrainStmt(const Stmt &s, bool under, bool loopExits) const {
+    if (auto *x = dynamic_cast<const ReturnStmt *>(&s)) return under || exprMayAutorelease(x->value.get());
+    if (dynamic_cast<const BreakStmt *>(&s) || dynamic_cast<const ContinueStmt *>(&s)) return loopExits && under;
+    bool here = under || stmtNeedsDrain(s);              // this statement drains only when it falls through
+    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return exitSkipsDrain(x->block, here, loopExits);
+    if (auto *x = dynamic_cast<const IfStmt *>(&s))
+        return exitSkipsDrain(x->thenBlock, here, loopExits) ||
+               (x->elseStmt && exitSkipsDrainStmt(*x->elseStmt, here, loopExits));
+    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = dynamic_cast<const ForStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = dynamic_cast<const ForInStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+        for (const auto &c : x->cases) if (exitSkipsDrain(c.body, here, loopExits)) return true;
+        return exitSkipsDrain(x->defaultBody, here, loopExits);
+    }
+    if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+        if (exitSkipsDrain(x->tryBlock, here, loopExits) || exitSkipsDrain(x->finallyBlock, here, loopExits)) return true;
+        for (const auto &c : x->catches) if (exitSkipsDrain(c.block, here, loopExits)) return true;
+    }
+    return false;
+}
+
 // Whether a statement's own expressions (not nested blocks, which drain their
 // own statements) can put anything on the release list.
 bool CodeGen::stmtNeedsDrain(const Stmt &s) const {
@@ -486,6 +515,7 @@ std::string CodeGen::emitStable(const Expr &e, const TypeRef &t) const {
 void CodeGen::emitBodyEndCleanups() {
     for (size_t i = cleanups_.size(); i-- > 0;)
         if (cleanups_[i].kind == Cleanup::Code) line(cleanups_[i].code);
+    if (!fnPoolMark_.empty()) line("grav_pool_drain(" + fnPoolMark_ + ");");
 }
 
 } // namespace grav

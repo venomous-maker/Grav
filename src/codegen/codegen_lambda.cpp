@@ -90,13 +90,21 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
         cleanups_.clear();
         emitEnter("<lambda>", lam.line);
         if (trace_) emitLineMark(lam.line);
+        // The body's temporaries are released before returning (the result is +1).
+        std::string mark;
+        if (exprMayAutorelease(lam.exprBody.get())) {
+            mark = "__fn_ap" + std::to_string(poolCounter_++);
+            line("size_t " + mark + " = grav_pool_top;");
+        }
         auto temps = hoistTemps(lam.exprBody.get());
         if (ret.isVoid()) {
             line(emitExpr(*lam.exprBody) + ";");
+            if (!mark.empty()) line("grav_pool_drain(" + mark + ");");
             if (trace_) line("grav_leave();");
-        } else if (trace_) {
+        } else if (trace_ || !mark.empty()) {
             line(cTy(ret) + " grav_r = " + emitOwned(*lam.exprBody, ret) + ";");
-            line("grav_leave();");
+            if (!mark.empty()) line("grav_pool_drain(" + mark + ");");
+            if (trace_) line("grav_leave();");
             line("return grav_r;");
         } else {
             line("return " + emitOwned(*lam.exprBody, ret) + ";");

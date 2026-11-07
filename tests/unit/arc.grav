@@ -336,3 +336,31 @@ test "threads that end give their unwind registry back" {
     let grew = residentKb() - before
     assert(grew < 2048)                                    // was 4 KiB per thread
 }
+
+// Early exits give back what the statements they leave put on the release list.
+class Inner { public n: int  constructor(n: int) { self.n = n }  public fn get() -> int { return self.n } }
+class Holder { public inner: Inner  constructor() { self.inner = new Inner(1) } }
+fn poolHeight() -> long { return %{ (long long)grav_pool_top %} as long }
+fn earlyReturn(h: Holder) -> int {
+    if (h.inner.get() > 0) { return 1 }                    // `h.inner` is held while the call runs
+    return 0
+}
+fn loopExits(h: Holder) -> int {
+    let n = 0
+    for (i in 0..10) {
+        if (h.inner.get() + i == 3) { continue }
+        if (h.inner.get() + i > 7) { break }
+        n += 1
+    }
+    return n
+}
+
+test "early returns, continue and break leave nothing on the release list" {
+    let h = new Holder()
+    let before = poolHeight()
+    for (i in 0..10000) { earlyReturn(h) }                 // a statement that drains nothing itself
+    assertEq(poolHeight(), before)
+    for (i in 0..1000) { loopExits(h) }
+    assertEq(poolHeight(), before)
+    assertEq(loopExits(h), 6)
+}

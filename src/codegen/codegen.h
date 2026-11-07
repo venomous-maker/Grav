@@ -166,6 +166,15 @@ private:
     bool isRefProducer(const Expr &e) const;
     bool exprMayAutorelease(const Expr *e) const;
     bool stmtNeedsDrain(const Stmt &s) const;
+    // Whether a return (or, with loopExits, a break/continue) can leave while a
+    // statement around it still owes a drain of the release list, or returns a
+    // value whose temporaries nobody would drain. Such a function or loop
+    // records the list's height and drains back to it on the way out.
+    bool exitSkipsDrain(const Block &b, bool under, bool loopExits) const;
+    bool exitSkipsDrainStmt(const Stmt &s, bool under, bool loopExits) const;
+    void forInMark(const ForInStmt &s);
+    void forInEnd();
+    std::string fnPoolMark_; // the release-list height at function entry ("" when not needed)
     // The value of `e` converted to `target`, as an owned (+1) reference.
     std::string emitOwned(const Expr &e, const TypeRef &target) const;
     // The C statement storing `value` into the owning place `slot` (an lvalue).

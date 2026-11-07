@@ -1,4 +1,4 @@
-running 20 tests
+running 21 tests
   ok    locals and temporaries are freed at once
   ok    reassignment frees the old object
   ok    a long chain is freed without deep recursion
@@ -19,4 +19,5 @@ running 20 tests
   ok    faults free the locals of the frames they leave
   ok    a recovered panic frees the locals of the frames it leaves
   ok    threads that end give their unwind registry back
-result: 20 passed, 0 failed
+  ok    early returns, continue and break leave nothing on the release list
+result: 21 passed, 0 failed
