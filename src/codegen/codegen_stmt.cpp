@@ -4,6 +4,13 @@
 
 namespace grav {
 
+// The value a `return` hands back: +1 for the caller, except the receiver of a
+// method that returns it borrowed (see returnsSelfBorrowed).
+std::string CodeGen::returnValue(const Expr &value) const {
+    if (curMethodBorrowsSelf_) return emitAs(value, currentReturnType_);
+    return emitOwned(value, currentReturnType_);
+}
+
 void CodeGen::line(const std::string &text) {
     // Every C line of a statement maps to its .grav line, so multi-line
     // expansions (temporaries, trace marks) do not drift.
@@ -131,7 +138,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
             if (cleanups || (trace_ && exprMayCall(s->value.get()))) {
                 std::string rt = "__ret" + std::to_string(throwCounter_++);
                 line(cTy(currentReturnType_) + " " + rt + " = " +
-                     emitOwned(*s->value, currentReturnType_) + ";");
+                     returnValue(*s->value) + ";");
                 endTemps(temps);
                 emitUnwind(false);
                 if (!fnPoolMark_.empty()) line("grav_pool_drain(" + fnPoolMark_ + ");");
@@ -139,7 +146,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
                 line("return " + rt + ";");
             } else {
                 if (trace_) line("grav_leave();");
-                line("return " + emitOwned(*s->value, currentReturnType_) + ";");
+                line("return " + returnValue(*s->value) + ";");
             }
         } else {
             emitUnwind(false);

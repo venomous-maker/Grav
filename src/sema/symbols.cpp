@@ -199,6 +199,13 @@ std::string Registry::findMethodImpl(const std::string &classFq,
     return "";
 }
 
+bool Registry::interfaceDeclares(const std::string &sourceName) const {
+    for (const auto &[fq, ii] : interfaces_)
+        for (const auto &m : ii.methods)
+            if (m.sourceName == sourceName || m.name == sourceName) return true;
+    return false;
+}
+
 bool Registry::isOverridden(const std::string &classFq, const std::string &name) const {
     std::string key = classFq + ':' + name;
     auto it = overrideCache_.find(key);

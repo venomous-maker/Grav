@@ -263,6 +263,7 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     indent_ = 1;
     currentReturnType_ = m.returnType;
     beginBody(m.body);
+    curMethodBorrowsSelf_ = !m.isStatic && returnsSelfBorrowed(cls.fqName, m.name);
     emitEnter(cls.fqName + "." + m.name, m.line);
     ownAssignedParams(m.body, m.params);
     emitBlock(m.body);

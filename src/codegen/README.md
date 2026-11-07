@@ -56,6 +56,12 @@ declarations always precede use.
   `continue` skips the drain of the statements it leaves, so a function or loop
   where that can happen (`exitSkipsDrain`) records the list's height on entry
   and drains back to it on every way out.
+- **Results are +1, except `return self`**: a function's reference result
+  belongs to the caller, which releases it (or puts it on the release list). A
+  method whose every return is `return self`, that overrides nothing, is
+  overridden by nothing and is no interface's method (`returnsSelfBorrowed`)
+  returns its receiver borrowed instead, so fluent chains such as
+  `sb.append(a).append(b)` do no reference counting.
 - **Unwinding through frames**: an exception is a `longjmp`, which skips the
   releases of every frame between the throw and its handler. So an owned local
   whose scope can still throw (a call, or a fault such as an index out of

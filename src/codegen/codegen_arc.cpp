@@ -236,6 +236,65 @@ std::string CodeGen::autoreleaseOf(const TypeRef &t, const std::string &c) const
     }
 }
 
+namespace {
+// Whether every return in a body is `return self` (counting them in `returns`).
+bool onlyReturnsSelf(const Block &b, int &returns);
+bool onlyReturnsSelfStmt(const Stmt *s, int &returns) {
+    if (auto *r = dynamic_cast<const ReturnStmt *>(s)) {
+        if (!r->value || !dynamic_cast<const SelfExpr *>(r->value.get())) return false;
+        returns++;
+        return true;
+    }
+    if (auto *x = dynamic_cast<const BlockStmt *>(s)) return onlyReturnsSelf(x->block, returns);
+    if (auto *x = dynamic_cast<const IfStmt *>(s))
+        return onlyReturnsSelf(x->thenBlock, returns) && (!x->elseStmt || onlyReturnsSelfStmt(x->elseStmt.get(), returns));
+    if (auto *x = dynamic_cast<const WhileStmt *>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = dynamic_cast<const DoWhileStmt *>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = dynamic_cast<const ForStmt *>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = dynamic_cast<const ForInStmt *>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = dynamic_cast<const SwitchStmt *>(s)) {
+        for (const auto &c : x->cases) if (!onlyReturnsSelf(c.body, returns)) return false;
+        return onlyReturnsSelf(x->defaultBody, returns);
+    }
+    // Keep the convention simple around unwinding.
+    if (dynamic_cast<const TryStmt *>(s) || dynamic_cast<const DeferStmt *>(s)) return false;
+    return true;
+}
+bool onlyReturnsSelf(const Block &b, int &returns) {
+    for (const auto &st : b.statements)
+        if (!onlyReturnsSelfStmt(st.get(), returns)) return false;
+    return true;
+}
+} // namespace
+
+// A method that only ever returns `self`, is the one implementation of its name
+// in its class hierarchy and is no interface's method, returns its receiver
+// borrowed: no retain in the method and nothing for the caller to release, so
+// fluent chains (`sb.append(a).append(b)`, `json.set(..).set(..)`) do no counting.
+// The receiver is alive for the whole expression anyway, held by whoever made it.
+bool CodeGen::returnsSelfBorrowed(const std::string &classFq, const std::string &method) const {
+    const MethodInfo *mi = reg_->findMethod(classFq, method);
+    if (!mi || mi->isStatic || !mi->decl || !mi->hasBody) return false;
+    std::string key = mi->definingClass + ":" + method;
+    if (auto it = selfReturnCache_.find(key); it != selfReturnCache_.end()) return it->second;
+    bool ok = refKind(mi->returnType) == RefKind::Obj && !reg_->isOverridden(mi->definingClass, method) &&
+              !reg_->interfaceDeclares(mi->sourceName.empty() ? method : mi->sourceName);
+    if (ok) {
+        if (const ClassInfo *ci = reg_->cls(mi->definingClass)) {
+            std::vector<std::string> bases = ci->extraBases;
+            if (!ci->baseClass.empty()) bases.push_back(ci->baseClass);
+            for (const auto &b : bases)
+                if (reg_->findMethod(b, method)) ok = false;   // it overrides a base method
+        }
+    }
+    if (ok) {
+        int returns = 0;
+        ok = onlyReturnsSelf(mi->decl->body, returns) && returns > 0;
+    }
+    selfReturnCache_[key] = ok;
+    return ok;
+}
+
 bool CodeGen::isRefProducer(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
     if (dynamic_cast<const NewExpr *>(&e)) return true;
@@ -260,6 +319,9 @@ bool CodeGen::isRefProducer(const Expr &e) const {
             // except str(), which emitToString already makes borrowed.
             return refKind(e.type) == RefKind::Str && c->targetName != "str";
         }
+        // A method returning its receiver borrowed hands back nothing new.
+        if (c->kind == CallKind::InstanceMethod && !c->ifaceDispatch && returnsSelfBorrowed(c->ownerClass, c->methodName))
+            return false;
         return true; // functions, methods, closures: the result is the caller's
     }
     if (refKind(e.type) == RefKind::Str) {

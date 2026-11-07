@@ -175,6 +175,11 @@ private:
     void forInMark(const ForInStmt &s);
     void forInEnd();
     std::string fnPoolMark_; // the release-list height at function entry ("" when not needed)
+    // Methods that return their receiver borrowed (see returnsSelfBorrowed).
+    bool returnsSelfBorrowed(const std::string &classFq, const std::string &method) const;
+    mutable std::map<std::string, bool> selfReturnCache_;
+    bool curMethodBorrowsSelf_ = false;
+    std::string returnValue(const Expr &value) const;
     // The value of `e` converted to `target`, as an owned (+1) reference.
     std::string emitOwned(const Expr &e, const TypeRef &target) const;
     // The C statement storing `value` into the owning place `slot` (an lvalue).

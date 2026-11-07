@@ -191,6 +191,8 @@ public:
     // `name` than `classFq` itself resolves to? When not, a call through a
     // `classFq`-typed receiver can be devirtualized into a direct call.
     bool isOverridden(const std::string &classFq, const std::string &name) const;
+    // Whether any interface declares a method named `sourceName` (as written).
+    bool interfaceDeclares(const std::string &sourceName) const;
     // Nearest class at or above `classFq` that declares a destructor ("" if none).
     std::string findDestructor(const std::string &classFq) const;
 

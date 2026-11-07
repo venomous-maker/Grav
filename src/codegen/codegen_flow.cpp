@@ -437,6 +437,7 @@ void CodeGen::beginBody(const Block &body) {
     // falls through skips that drain, so such a function records the list's
     // height and drains back to it wherever it returns. Results are +1, so
     // nothing they need goes.
+    curMethodBorrowsSelf_ = false;
     fnPoolMark_.clear();
     if (exitSkipsDrain(body, false, false)) {
         fnPoolMark_ = "__fn_ap" + std::to_string(poolCounter_++);
