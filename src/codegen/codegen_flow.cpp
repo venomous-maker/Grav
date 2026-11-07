@@ -366,6 +366,10 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     if (varReg) line(unwindPush(s.varType, s.var));
     indent_--;
     if (ownedVar) loopVarRelease_ = ownedRelease(s.varType, s.var, varReg);
+    // A one-byte character is a permanent string (grav_str_slice): nothing to release.
+    if (ownedVar && s.iterKind == ForInKind::Chars)
+        loopVarRelease_ = std::string(varReg ? "grav_uw_top--; " : "") + "if (" + src + "_l > 1) " +
+                          releaseOf(s.varType, s.var);
     emitLoopBody(s.body, s.label);
     line("}");
     popLoopLabel(labelId); // `break <label>` still releases the iterated collection
