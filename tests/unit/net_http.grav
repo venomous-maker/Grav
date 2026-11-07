@@ -228,6 +228,12 @@ test "the worker pool: idle connections, pipelining, idle timeouts, streams and 
     raw.close()
     assertEq(Str.count(all, "HTTP/1.1 200"), 3)
     assert(Str.indexOf(all, "hello a") < Str.indexOf(all, "hello b") && Str.indexOf(all, "hello b") < Str.indexOf(all, "hello c"))
+    // A request pipelined behind a streamed response is answered after it.
+    let behind = TcpStream.connect("127.0.0.1", s.port())
+    behind.write("GET /stream HTTP/1.1\r\nHost: x\r\n\r\nGET /hello?name=next HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    let streamed = behind.readAll()
+    behind.close()
+    assert(Str.contains(streamed, "line 999\n") && Str.endsWith(streamed, "hello next"))
     // A streamed response runs off the workers, and the connection is kept after it.
     assertEq(Str.count(c.get(s.baseUrl() + "/stream").body(), "\n"), 1000)
     assertEq(c.get(s.baseUrl() + "/hello?name=after").body(), "hello after")
@@ -259,6 +265,89 @@ test "the worker pool: idle connections, pipelining, idle timeouts, streams and 
     assertEq(new HttpClient().post(own.baseUrl() + "/quit", "", "text/plain").body(), "bye")
     own.stop()
     assertEq(own.activeConnections(), 0)
+}
+
+test "slow clients wait in the poller, not on a worker" {
+    let s = app()
+    s.workers = 2
+    s.headerTimeoutMs = 400
+    s.start(0)
+    let c = new HttpClient()
+    // Half-sent requests hold no worker: with more of them than workers, others are still served.
+    let slow = new Array<TcpStream>()
+    for (i in 0..6) {
+        let t = TcpStream.connect("127.0.0.1", s.port())
+        t.write("GET /hello?name=slow${i} HTTP/1.1\r\nHo")
+        slow.push(t)
+    }
+    Time.sleepMs(50)
+    let t0 = Time.monotonicMs()
+    for (i in 0..10) { assertEq(c.get(s.baseUrl() + "/hello?name=${i}").body(), "hello ${i}") }
+    assert(Time.monotonicMs() - t0 < 300)
+    // One finishes its request and is answered.
+    slow[0].write("st: x\r\nConnection: close\r\n\r\n")
+    assert(Str.contains(slow[0].readAll(), "hello slow0"))
+    // The rest run out of time: 408, then closed.
+    let late = slow[1].readAll()
+    assert(Str.startsWith(late, "HTTP/1.1 408"))
+    for (t in slow) { t.close() }
+    // A head sent a few bytes at a time, within the limit, is served.
+    let trickle = TcpStream.connect("127.0.0.1", s.port())
+    let head = "GET /hello?name=drip HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+    let i = 0
+    while (i < head.length) {
+        trickle.write(head[i..Math.min(i + 8, head.length)])
+        Time.sleepMs(15)
+        i += 8
+    }
+    assert(Str.contains(trickle.readAll(), "hello drip"))
+    trickle.close()
+    // Bodies arriving in pieces: Content-Length, chunked, and Expect: 100-continue.
+    let piece = TcpStream.connect("127.0.0.1", s.port())
+    piece.write("POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\n\r\nhello")
+    Time.sleepMs(50)
+    piece.write(" world")
+    assertEq(piece.readLine(), "HTTP/1.1 200 OK")
+    piece.write("POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nchu")
+    Time.sleepMs(50)
+    piece.write("nk\r\n6\r\ned!!!!\r\n0\r\n\r\n")
+    let both = piece.readAll()
+    assert(Str.contains(both, "hello world") && Str.contains(both, "chunked!!!!"))
+    piece.close()
+    let ask = TcpStream.connect("127.0.0.1", s.port())
+    ask.write("POST /echo HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 4\r\nConnection: close\r\n\r\n")
+    assertEq(ask.readLine(), "HTTP/1.1 100 Continue")
+    assertEq(ask.readLine(), "")
+    ask.write("ping")
+    let answer = ask.readAll()
+    assert(Str.startsWith(answer, "HTTP/1.1 200") && Str.endsWith(answer, "ping"))
+    assertEq(Str.count(answer, "100 Continue"), 0)        // sent once
+    ask.close()
+    // A big body (many reads) still arrives whole.
+    let big = Str.repeat("0123456789", 50000)
+    assertEq(c.post(s.baseUrl() + "/echo", big, "text/plain").body().length, 500000)
+    c.close()
+    s.stop()
+    // https: a client that stalls in the handshake holds no worker either.
+    if (!Tls.available()) { return }
+    let ctx = TlsContext.selfSigned("localhost")
+    let secure = app()
+    secure.workers = 2
+    secure.headerTimeoutMs = 400
+    secure.startTls(0, ctx)
+    let stalled = new Array<TcpStream>()
+    for (k in 0..4) {
+        let t = TcpStream.connect("127.0.0.1", secure.port())
+        t.write("\u{16}\u{3}\u{1}")                          // the start of a ClientHello, then nothing
+        stalled.push(t)
+    }
+    Time.sleepMs(50)
+    let tc = new HttpClient().withTls(TlsContext.client().trustPem(ctx.certificatePem()))
+    for (k in 0..5) { assertEq(tc.get("https://localhost:${secure.port()}/hello?name=k${k}").body(), "hello k${k}") }
+    assertEq(stalled[0].read(100), "")                     // closed once headerTimeoutMs passed
+    for (t in stalled) { t.close() }
+    tc.close()
+    secure.stop()
 }
 
 test "limits: big bodies, long headers, too many connections" {
