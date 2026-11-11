@@ -185,7 +185,7 @@ void TypeChecker::checkGlobal(GlobalVarDecl &g) {
     TypeRef declared = gi ? gi->type : g.declaredType;
     g.resolvedType = declared;
     pushScope();
-    TypeRef initT = checkExpr(*g.init);
+    TypeRef initT = checkExprExpect(*g.init, declared);     // (so `[1, 2]` can build an Array, `{...}` a map)
     popScope();
     if (!isAssignable(initT, declared))
         error(g.init->line, g.init->col, "cannot initialize global '" + g.name +
@@ -201,7 +201,7 @@ void TypeChecker::checkStaticFields(ClassDecl &cls) {
         const GlobalInfo *gi = reg_->global(cls.fqName + "." + sf.name);
         TypeRef declared = gi ? gi->type : sf.type;
         pushScope();
-        TypeRef initT = checkExpr(*sf.init);
+        TypeRef initT = checkExprExpect(*sf.init, declared);
         popScope();
         if (!isAssignable(initT, declared))
             error(sf.init->line, sf.init->col, "cannot initialize static field '" +
@@ -581,7 +581,8 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     // A lambda assigned to a typed variable/field takes its parameter types from it.
     TypeRef valueType;
     if (dynamic_cast<LambdaExpr *>(s.value.get()) || dynamic_cast<NewExpr *>(s.value.get()) ||
-        (!s.isCompound && dynamic_cast<IntLiteralExpr *>(s.value.get()))) {
+        (!s.isCompound && (dynamic_cast<IntLiteralExpr *>(s.value.get()) ||
+                           dynamic_cast<ArrayLiteralExpr *>(s.value.get())))) {   // (`xs = [1, 2]` builds an Array)
         TypeRef tt = checkExpr(*s.target);
         valueType = checkExprExpect(*s.value, tt);
     } else {
