@@ -667,9 +667,10 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
         }
         case CallKind::StaticMethod: {
             std::vector<TypeRef> params;
-            if (const MethodInfo *mi = reg_->findMethod(call.targetName, call.methodName))
-                params = mi->paramTypes;
-            std::string out = methodCName(call.targetName, call.methodName) + "(";
+            const MethodInfo *mi = reg_->findMethod(call.targetName, call.methodName);
+            if (mi) params = mi->paramTypes;
+            // `Sub.m()` for a static method inherited from a base: the base's function.
+            std::string out = methodCName(mi ? mi->definingClass : call.targetName, call.methodName) + "(";
             emitArgs(out, call, params, false, "", releaseFreeCall(call));   // (fields need no holding for such a method)
             return out + ")";
         }
