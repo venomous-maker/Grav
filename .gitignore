@@ -16,3 +16,6 @@ examples/apps/*
 examples/apps/bank_server/src/main
 examples/apps/bank_server/*.json
 examples/project/main
+
+# tests/docs.sh writes each snippet next to its page while it runs
+.snippet_*.grav
