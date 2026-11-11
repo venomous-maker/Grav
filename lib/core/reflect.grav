@@ -1,0 +1,292 @@
+// lib/core/reflect.grav — reflection: a class's fields, methods and decorators at
+// run time, for code that works with any class (ORMs, serializers, validators).
+//
+//   @Table("users")
+//   class User { @Column("email_address") public email: string; ... }
+//
+//   let info = reflect(User)                   // or ClassInfo.of(someObject)
+//   info.decorator("Table").text(0)            // "users"
+//   for (f in info.fields()) { print(f.name + " = " + str(f.get(user))) }
+//   info.field("email").set(user, "ada@example.com")
+//
+// A class has fields, methods and decorators here when its hierarchy (its root
+// class and everything under it) has a decorator anywhere, or reflect(...) names
+// one of its classes; other classes cost nothing and show only a name and base.
+// A ClassInfo is made once per class and shared, so looking one up is cheap.
+import "exception.grav"
+import "../collections/array.grav"
+import "../text/string.grav"
+
+namespace std.core {
+
+    %{
+    #include <pthread.h>
+    static const GravClassMeta* grav_rf_meta(const unsigned char* t) { return t ? ((const GravTypeInfo*)t)->meta : 0; }
+    /* One ClassInfo per class: in its metadata's slot (one atomic load to find),
+       or, for a class without metadata, in a small table under a lock. */
+    static pthread_mutex_t grav_rf_lock = PTHREAD_MUTEX_INITIALIZER;
+    static struct GravRfEntry { const unsigned char* t; void* info; } *grav_rf_tab = 0;
+    static int grav_rf_n = 0, grav_rf_cap = 0;
+    static void* grav_rf_cached(const unsigned char* t) {
+        GravClassMeta* m = (GravClassMeta*)grav_rf_meta(t);
+        if (m) return __atomic_load_n(&m->info, __ATOMIC_ACQUIRE);
+        void* found = 0;
+        pthread_mutex_lock(&grav_rf_lock);
+        for (int i = 0; i < grav_rf_n; i++) if (grav_rf_tab[i].t == t) { found = grav_rf_tab[i].info; break; }
+        pthread_mutex_unlock(&grav_rf_lock);
+        return found;
+    }
+    /* Keeps `info` for class `t` unless another thread got there first; the one kept (borrowed). */
+    static void* grav_rf_publish(const unsigned char* t, void* info) {
+        GravClassMeta* m = (GravClassMeta*)grav_rf_meta(t);
+        if (m) {
+            void* expected = 0;
+            grav_retain(info);
+            if (__atomic_compare_exchange_n(&m->info, &expected, info, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return info;
+            grav_release(info);
+            return expected;
+        }
+        pthread_mutex_lock(&grav_rf_lock);
+        for (int i = 0; i < grav_rf_n; i++)
+            if (grav_rf_tab[i].t == t) { void* had = grav_rf_tab[i].info; pthread_mutex_unlock(&grav_rf_lock); return had; }
+        if (grav_rf_n == grav_rf_cap) {
+            grav_rf_cap = grav_rf_cap ? grav_rf_cap * 2 : 16;
+            grav_rf_tab = (struct GravRfEntry*)realloc(grav_rf_tab, (size_t)grav_rf_cap * sizeof *grav_rf_tab);
+            if (!grav_rf_tab) abort();
+        }
+        grav_rf_tab[grav_rf_n].t = t;
+        grav_rf_tab[grav_rf_n].info = grav_retain(info);
+        grav_rf_n++;
+        pthread_mutex_unlock(&grav_rf_lock);
+        return info;
+    }
+    static GravAny grav_rf_dec_arg(const unsigned char* d, int i, int k) { return ((const GravDecoMeta*)d)[i].args[k]; }
+    /* A field read or write in one step: 0 done, 1 `obj` is not of the declaring
+       class, 2 the field's type cannot go through an any, 3 the value does not fit. */
+    static int grav_rf_get(const unsigned char* fm, const unsigned char* owner, GravAny obj, GravAny* out) {
+        const GravFieldMeta* f = (const GravFieldMeta*)fm;
+        if (obj.tag != GRAV_ANY_OBJ || !grav_is_instance(obj.v.p, (const GravTypeInfo*)owner)) return 1;
+        if (!f->get) return 2;
+        *out = f->get(obj.v.p);
+        return 0;
+    }
+    static int grav_rf_set(const unsigned char* fm, const unsigned char* owner, GravAny obj, GravAny v) {
+        const GravFieldMeta* f = (const GravFieldMeta*)fm;
+        if (obj.tag != GRAV_ANY_OBJ || !grav_is_instance(obj.v.p, (const GravTypeInfo*)owner)) return 1;
+        if (!f->set) return 2;
+        return f->set(obj.v.p, v) ? 0 : 3;
+    }
+    %}
+
+    // A decorator as written: `@Column("email", 255)` has the name "Column" and
+    // the arguments "email" and 255 (a name argument, `@HasMany(Post)`, is text).
+    class Decorator {
+        public name: string
+        public args: Array<any>
+        constructor(name: string) { self.name = name; self.args = new Array<any>(); }
+        // Argument i, or null when there is no such argument.
+        fn arg(i: int) -> any { return i >= 0 && i < self.args.size() ? self.args[i] : null; }
+        // Argument i as text ("" when missing).
+        fn text(i: int) -> string { return i >= 0 && i < self.args.size() ? "${self.args[i]}" : ""; }
+        // Argument i as a number (`fallback` when missing or not a whole number).
+        fn number(i: int, fallback: long) -> long {
+            let a = self.arg(i);
+            return a is long ? a as long : a is int ? (a as int) as long : fallback;
+        }
+        fn toString() -> string {
+            let parts = new Array<string>();
+            for (a in self.args) { parts.push(a is string ? "\"" + (a as string) + "\"" : "${a}"); }
+            return "@" + self.name + (parts.isEmpty() ? "" : "(" + Str.join(parts, ", ") + ")");
+        }
+        // The decorators of table `d` (C: n GravDecoMeta entries).
+        static fn __listOf(d: byte*, n: int) -> Array<Decorator> {
+            let out = new Array<Decorator>();
+            for (i in 0..n) {
+                let dec = new Decorator(%{ ((const GravDecoMeta*)d)[i].name %} as string);
+                let nargs = %{ ((const GravDecoMeta*)d)[i].nargs %} as int;
+                for (k in 0..nargs) { dec.args.push(%{ grav_rf_dec_arg(d, i, k) %} as any); }
+                out.push(dec);
+            }
+            return out;
+        }
+        // The first decorator called `name` in `list`, or null.
+        static fn __find(list: Array<Decorator>, name: string) -> Decorator {
+            for (d in list) { if (d.name == name) { return d; } }
+            return null;
+        }
+    }
+
+    // One field of a class: its name, type and decorators, and a way to read and
+    // write it on any object of that class.
+    class FieldInfo {
+        private meta: byte*                  // its GravFieldMeta
+        private owner: byte*                 // the GravTypeInfo of the class declaring it
+        // The field's name.
+        public name: string
+        // Its type as written in Grav ("int", "string", "User", ...).
+        public typeName: string
+        // The class that declares it ("app.User").
+        public declaringClass: string
+        // Its decorators, in source order.
+        public decorators: Array<Decorator>
+        private flags: int
+
+        constructor(meta: byte*, owner: byte*) {
+            self.meta = meta;
+            self.owner = owner;
+            self.name = %{ ((const GravFieldMeta*)meta)->name %} as string;
+            self.typeName = %{ ((const GravFieldMeta*)meta)->type %} as string;
+            self.declaringClass = %{ ((const GravTypeInfo*)owner)->name %} as string;
+            self.flags = %{ ((const GravFieldMeta*)meta)->flags %} as int;
+            self.decorators = Decorator.__listOf(%{ (unsigned char*)((const GravFieldMeta*)meta)->decos %} as byte*,
+                %{ ((const GravFieldMeta*)meta)->ndecos %} as int);
+        }
+        fn isReadonly() -> bool { return (self.flags & 1) != 0; }
+        fn isPrivate() -> bool { return (self.flags & 2) != 0; }
+        fn isProtected() -> bool { return (self.flags & 4) != 0; }
+        fn isWeak() -> bool { return (self.flags & 8) != 0; }
+        // Whether get() works for its type (numbers, bools, strings, enums, objects, any, functions, T?).
+        fn canGet() -> bool { return %{ ((const GravFieldMeta*)self->meta)->get != 0 %} as bool; }
+        // Whether set() works for its type (as canGet, but not interfaces or functions).
+        fn canSet() -> bool { return %{ ((const GravFieldMeta*)self->meta)->set != 0 %} as bool; }
+        // Whether it has a decorator called `name`.
+        fn has(name: string) -> bool { return Decorator.__find(self.decorators, name) != null; }
+        // Its first decorator called `name`, or null.
+        fn decorator(name: string) -> Decorator { return Decorator.__find(self.decorators, name); }
+
+        // The field's value in `obj`, an object of the declaring class or a
+        // subclass (ValueError otherwise).
+        fn get(obj: any) -> any {
+            let m = self.meta;
+            let t = self.owner;
+            let out: any = null;
+            let r = %{ grav_rf_get(m, t, obj, &out) %} as int;
+            if (r != 0) { self.fail(r, obj, null); }
+            return out;
+        }
+        // Stores `value` in the field of `obj`. ValueError when the value does not
+        // fit its type: an int field takes whole numbers, a float field any
+        // number, a class field an object of that class or null, a T? field a T or
+        // null. Readonly and private fields are written too.
+        fn set(obj: any, value: any) {
+            let m = self.meta;
+            let t = self.owner;
+            let r = %{ grav_rf_set(m, t, obj, value) %} as int;
+            if (r != 0) { self.fail(r, obj, value); }
+        }
+        private fn fail(why: int, obj: any, value: any) {
+            if (why == 1) { throw new ValueError("field '" + self.name + "' needs a " + self.declaringClass + ", got " + typename(obj)); }
+            if (why == 2) { throw new StateError("field '" + self.name + "' (" + self.typeName + ") cannot go through an any"); }
+            throw new ValueError("field '" + self.name + "' of " + self.declaringClass + " is " + self.typeName + ", not " + typename(value));
+        }
+        fn toString() -> string { return self.name + ": " + self.typeName; }
+    }
+
+    // One method of a class as written: its name, whether it is static, and its decorators.
+    class MethodInfo {
+        public name: string
+        public decorators: Array<Decorator>
+        private flags: int
+        constructor(meta: byte*) {
+            self.name = %{ ((const GravMethodMeta*)meta)->name %} as string;
+            self.flags = %{ ((const GravMethodMeta*)meta)->flags %} as int;
+            self.decorators = Decorator.__listOf(%{ (unsigned char*)((const GravMethodMeta*)meta)->decos %} as byte*,
+                %{ ((const GravMethodMeta*)meta)->ndecos %} as int);
+        }
+        fn isStatic() -> bool { return (self.flags & 16) != 0; }
+        fn isPrivate() -> bool { return (self.flags & 2) != 0; }
+        fn isProtected() -> bool { return (self.flags & 4) != 0; }
+        fn has(name: string) -> bool { return Decorator.__find(self.decorators, name) != null; }
+        fn decorator(name: string) -> Decorator { return Decorator.__find(self.decorators, name); }
+        fn toString() -> string { return self.name; }
+    }
+
+    // What a class is at run time: reflect(User), or ClassInfo.of(anObject).
+    class ClassInfo {
+        private t: byte*                         // its GravTypeInfo
+        // The fully qualified name ("app.User").
+        public name: string
+        private own: Array<FieldInfo>            // made once, shared by every lookup
+        private all: Array<FieldInfo>
+        private methodList: Array<MethodInfo>
+        private decos: Array<Decorator>
+
+        constructor(t: byte*) {
+            self.t = t;
+            self.name = %{ ((const GravTypeInfo*)t)->name %} as string;
+            let meta = %{ (unsigned char*)grav_rf_meta(t) %} as byte*;
+            self.own = new Array<FieldInfo>();
+            self.methodList = new Array<MethodInfo>();
+            if (meta != null) {
+                let nf = %{ ((const GravClassMeta*)meta)->nfields %} as int;
+                for (i in 0..nf) { self.own.push(new FieldInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->fields[i] %} as byte*, t)); }
+                let nm = %{ ((const GravClassMeta*)meta)->nmethods %} as int;
+                for (i in 0..nm) { self.methodList.push(new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->methods[i] %} as byte*)); }
+                self.decos = Decorator.__listOf(%{ (unsigned char*)((const GravClassMeta*)meta)->decos %} as byte*,
+                    %{ ((const GravClassMeta*)meta)->ndecos %} as int);
+            } else {
+                self.decos = new Array<Decorator>();
+            }
+            self.all = self.own;                              // (fromType adds the base classes')
+        }
+        // The ClassInfo for a type descriptor (what reflect(...) calls); one per
+        // class, fully built before it is shared, and never changed after.
+        static fn __fromType(t: byte*) -> ClassInfo {
+            let found = %{ grav_rf_cached(t) %} as ClassInfo;
+            if (found != null) { return found; }
+            let made = new ClassInfo(t);
+            let all = new Array<FieldInfo>();                // base classes' fields first
+            let b = made.base();
+            if (b != null) { for (f in b.fields()) { all.push(f); } }
+            for (f in made.own) { all.push(f); }
+            made.all = all;
+            return %{ grav_rf_publish(t, made) %} as ClassInfo;   // (another thread may have made it meanwhile)
+        }
+        // The class of the object in `value`, or null when it holds no object.
+        static fn of(value: any) -> ClassInfo {
+            if (!(%{ value.tag == GRAV_ANY_OBJ %} as bool)) { return null; }
+            return ClassInfo.__fromType(%{ (unsigned char*)((struct GravObject*)value.v.p)->__type %} as byte*);
+        }
+
+        // The name without its namespace ("User").
+        fn simpleName() -> string {
+            let dot = Str.lastIndexOf(self.name, ".");
+            return dot < 0 ? self.name : self.name[dot + 1..];
+        }
+        // The base class, or null.
+        fn base() -> ClassInfo {
+            let t = self.t;
+            let b = %{ (unsigned char*)((const GravTypeInfo*)t)->base %} as byte*;
+            return b == null ? null : ClassInfo.__fromType(b);
+        }
+        // Whether the compiler recorded fields, methods and decorators for it.
+        fn isReflected() -> bool { let t = self.t; return %{ grav_rf_meta(t) != 0 %} as bool; }
+        // Its own decorators (not its base classes').
+        fn decorators() -> Array<Decorator> { return self.decos; }
+        fn has(name: string) -> bool { return Decorator.__find(self.decos, name) != null; }
+        fn decorator(name: string) -> Decorator { return Decorator.__find(self.decos, name); }
+        // Every field, the base classes' first.
+        fn fields() -> Array<FieldInfo> { return self.all; }
+        // The fields this class declares itself.
+        fn ownFields() -> Array<FieldInfo> { return self.own; }
+        // The field called `name` (its own or a base class's), or null.
+        fn field(name: string) -> FieldInfo {
+            for (f in self.fields()) { if (f.name == name) { return f; } }
+            return null;
+        }
+        // The methods this class declares itself.
+        fn methods() -> Array<MethodInfo> { return self.methodList; }
+        // Whether this class is `other` or extends it.
+        fn isSubclassOf(other: ClassInfo) -> bool {
+            let a = self.t;
+            let b = other.t;
+            return %{ grav_type_is((const GravTypeInfo*)a, (const GravTypeInfo*)b) %} as bool;
+        }
+        // Whether `value` holds an object of this class (or a subclass).
+        fn isInstance(value: any) -> bool {
+            let t = self.t;
+            return %{ value.tag == GRAV_ANY_OBJ && grav_is_instance(value.v.p, (const GravTypeInfo*)t) %} as bool;
+        }
+        fn toString() -> string { return self.name; }
+    }
+}

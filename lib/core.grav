@@ -1,4 +1,4 @@
-// lib/core.grav — `import "std/core"`: exceptions, Math, Random, Result/Option, Optional, Panic, GC, Sort.
+// lib/core.grav — `import "std/core"`: exceptions, Math, Random, Result/Option, Optional, Panic, GC, Sort, reflection.
 import "core/exception.grav"
 import "core/math.grav"
 import "core/random.grav"
@@ -7,3 +7,4 @@ import "core/optional.grav"
 import "core/panic.grav"
 import "core/gc.grav"
 import "core/sort.grav"
+import "core/reflect.grav"
