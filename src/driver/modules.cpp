@@ -271,6 +271,11 @@ fs::path ModuleLoader::resolve(const std::string &spec, const fs::path &fromDir,
     for (const auto &dep : owner.deps) {
         if (dep.name != head) continue;
         fs::path root = installedPackage(owner, dep);
+        if (!root.empty()) {
+            std::error_code rec;
+            std::string r = fs::weakly_canonical(root, rec).string();
+            if (std::find(packageRoots_.begin(), packageRoots_.end(), r) == packageRoots_.end()) packageRoots_.push_back(r);
+        }
         if (root.empty()) {
             tried.push_back(dep.local ? "<local package '" + dep.name + "': no directory " + (owner.root / dep.source).string() + ">"
                                       : "<package '" + dep.name + "' (" + dep.source + ") is not installed; run `grav install`>");
@@ -305,6 +310,14 @@ std::vector<std::string> ModuleLoader::whereIs(const std::string &name) const {
         for (const auto &[n, ns] : mi.names)
             if (n == name && !ns.empty() && std::find(out.begin(), out.end(), ns) == out.end()) out.push_back(ns);
     return out;
+}
+
+std::string ModuleLoader::packageRootOf(const fs::path &p) const {
+    std::error_code ec;
+    std::string s = fs::weakly_canonical(p, ec).string(), best;
+    for (const auto &r : packageRoots_)
+        if (s.size() > r.size() && s.compare(0, r.size(), r) == 0 && s[r.size()] == '/' && r.size() > best.size()) best = r;
+    return best;
 }
 
 bool ModuleLoader::isLibrary(const fs::path &p) const {
@@ -388,8 +401,20 @@ bool ModuleLoader::importUses(const std::string &key, const std::string &spec, c
         return true;
     }
     // Plain `import "std/..."` from a program: bring the library's names into scope.
-    if (isLibrary(key))
+    if (isLibrary(key)) {
         for (const auto &ns : spaces) uses += "use " + ns + ".*; ";
+    } else if (std::string root = packageRootOf(key); !root.empty()) {
+        // A package's: the namespaces its own files declare (not the std ones it imports).
+        std::vector<std::string> own;
+        for (const auto &f : files) {
+            if (packageRootOf(f) != root) continue;
+            auto it = info_.find(f);
+            if (it == info_.end()) continue;
+            for (const auto &ns : it->second.namespaces)
+                if (std::find(own.begin(), own.end(), ns) == own.end()) own.push_back(ns);
+        }
+        for (const auto &ns : own) uses += "use " + ns + ".*; ";
+    }
     return true;
 }
 

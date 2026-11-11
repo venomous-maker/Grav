@@ -100,6 +100,9 @@ private:
         std::vector<std::string> imports;
     };
     bool isLibrary(const std::filesystem::path &p) const; // under the std dir
+    // The root of the package (a dependency) holding `p`, or "" (see packageRoots_).
+    std::string packageRootOf(const std::filesystem::path &p) const;
+    std::vector<std::string> packageRoots_;                // canonical roots of the packages imported so far
     std::vector<std::string> closure(const std::string &key) const;
     // The `use` line an import adds to the importing scope (see load()).
     bool importUses(const std::string &key, const std::string &spec, const std::string &alias,
