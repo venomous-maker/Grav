@@ -320,6 +320,28 @@ void CodeGen::emitAsyncSpawner(const FunctionDecl &fn) {
                    base + "__run, " + (isVoid ? "0" : "&r->result") + ");\n}\n";
 }
 
+// The non-constant initializers of globals and static fields, in declaration order.
+void CodeGen::emitGlobalInits() {
+    if (dynamicGlobals_.empty()) return;
+    defs_ += "static void grav_init_globals(void) {\n";
+    cur_ = &defs_;
+    indent_ = 1;
+    currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
+    Block none;
+    beginBody(none);
+    emitEnter("<static initializers>", dynamicGlobals_.front().line);
+    for (const auto &g : dynamicGlobals_) {
+        defs_ += lineDirective(g.line);
+        std::string mark = "__gi_ap" + std::to_string(poolCounter_++);
+        line("size_t " + mark + " = grav_pool_top;");
+        line(storeOwned(g.cName, g.type, *g.init));
+        line("grav_pool_drain(" + mark + ");");
+    }
+    if (trace_) line("grav_leave();");
+    indent_ = 0;
+    endFunction();
+}
+
 void CodeGen::emitMainWrapper() {
     if (testMode_) {
         // The test runner: each test runs in isolation; a failed assert, panic,
@@ -335,6 +357,7 @@ void CodeGen::emitMainWrapper() {
         defs_ += "int main(int argc, char** argv) {\n";
         defs_ += "    grav_argc = argc; grav_argv = argv;\n";
         defs_ += "    grav_install_faults();\n";
+        if (!dynamicGlobals_.empty()) defs_ += "    grav_init_globals();\n";
         defs_ += "    int rc = grav_run_tests(grav_test_names, grav_test_fns, " +
                  std::to_string(tests_.size()) + ");\n";
         if (!asyncDecls_.empty()) defs_ += "    grav_join_all();\n";
@@ -344,6 +367,7 @@ void CodeGen::emitMainWrapper() {
     defs_ += "int main(int argc, char** argv) {\n";
     defs_ += "    grav_argc = argc; grav_argv = argv;\n";
     defs_ += "    grav_install_faults();\n";
+    if (!dynamicGlobals_.empty()) defs_ += "    grav_init_globals();\n";
     if (hasMain_) defs_ += "    " + funcCName("main") + "();\n";
     if (!asyncDecls_.empty()) defs_ += "    grav_join_all(); /* finish tasks that were never awaited */\n";
     defs_ += "    return 0;\n}\n";

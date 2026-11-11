@@ -102,6 +102,12 @@ private:
     void emitVTableInstances();
     void emitVTableInstance(const ClassInfo &ci);
     void emitTypeInfos();
+    // Globals and static fields whose initializer is not a C constant: set in
+    // grav_init_globals() (declaration order) before main or the tests run.
+    struct DynamicGlobal { std::string cName; TypeRef type; const Expr *init; int line; };
+    std::vector<DynamicGlobal> dynamicGlobals_;
+    bool isStaticInit(const Expr &e) const;
+    void emitGlobalInits();
     // Reflection metadata (std.core.ClassInfo): the `&Class__rmeta` table, or "0"
     // for a class outside every hierarchy that has decorators or is named by reflect().
     std::string emitReflection(const std::string &fq);

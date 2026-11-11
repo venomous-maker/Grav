@@ -33,6 +33,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     emitGlobals();
     emitLambdas(); // lifted closures (their creation sites come later)
     emitDefinitions(program);
+    emitGlobalInits();
     emitFaultRaisers();
     emitMainWrapper();
 
@@ -60,10 +61,48 @@ SourceMapEntry CodeGen::origin(int combinedLine) const {
     return {"<unknown>", combinedLine};
 }
 
+// Whether C can initialize a global with `e` itself: literals, arithmetic on
+// them, enum members, and array or struct literals of those.
+bool CodeGen::isStaticInit(const Expr &e) const {
+    if (dynamic_cast<const IntLiteralExpr *>(&e) || dynamic_cast<const FloatLiteralExpr *>(&e) ||
+        dynamic_cast<const BoolLiteralExpr *>(&e) || dynamic_cast<const NullLiteralExpr *>(&e) ||
+        dynamic_cast<const StringLiteralExpr *>(&e))
+        return true;
+    if (auto *b = dynamic_cast<const BinaryExpr *>(&e))
+        return !b->stringConcat && b->overloadMethod.empty() && refKind(e.type) == RefKind::None &&
+               isStaticInit(*b->left) && isStaticInit(*b->right);
+    if (auto *u = dynamic_cast<const UnaryExpr *>(&e)) return isStaticInit(*u->operand);
+    if (auto *t = dynamic_cast<const TernaryExpr *>(&e))
+        return refKind(e.type) == RefKind::None && isStaticInit(*t->cond) && isStaticInit(*t->thenExpr) && isStaticInit(*t->elseExpr);
+    if (auto *m = dynamic_cast<const MemberExpr *>(&e)) return m->kind == MemberKind::EnumValue;
+    if (auto *a = dynamic_cast<const ArrayLiteralExpr *>(&e)) {
+        if (a->built) return false;
+        for (const auto &x : a->elements) if (!isStaticInit(*x)) return false;
+        return true;
+    }
+    if (auto *s = dynamic_cast<const StructLiteralExpr *>(&e)) {
+        for (const auto &f : s->fields) if (!isStaticInit(*f.value)) return false;
+        return true;
+    }
+    return false;
+}
+
 void CodeGen::emitGlobals() {
-    auto one = [&](const std::string &fq, const Expr *init) {
+    auto one = [&](const std::string &fq, const Expr *init, int line) {
         const GlobalInfo *gi = reg_->global(fq);
         if (!gi) return;
+        if (!isStaticInit(*init)) {
+            // Set at startup (grav_init_globals); until then the type's zero.
+            std::string ct = cTy(gi->type);
+            bool scalar = !ct.empty() && ct.back() == '*';
+            if (gi->type.kind == TypeRef::Kind::Int || gi->type.kind == TypeRef::Kind::Float ||
+                gi->type.kind == TypeRef::Kind::Bool || (gi->type.isNamed() && reg_->isEnum(gi->type.name)))
+                scalar = true;
+            std::string zero = gi->type.kind == TypeRef::Kind::String ? "\"\"" : scalar ? "0" : "{0}";
+            globals_ += "static GRAV_UNUSED " + ct + " " + gi->cName + " = " + zero + ";\n";
+            dynamicGlobals_.push_back({gi->cName, gi->type, init, line});
+            return;
+        }
         // `T const name`: qualifies the object itself (for strings that yields
         // `const char* const`, not the invalid-looking `const const char*`).
         globals_ += "static GRAV_UNUSED " + cTy(gi->type) + (gi->isConst ? " const " : " ") +
@@ -71,10 +110,10 @@ void CodeGen::emitGlobals() {
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *g = dynamic_cast<const GlobalVarDecl *>(declPtr.get())) {
-            one(g->fqName, g->init.get());
+            one(g->fqName, g->init.get(), g->line);
         } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
             for (const auto &sf : c->staticFields)
-                one(c->fqName + "." + sf.name, sf.init.get());
+                one(c->fqName + "." + sf.name, sf.init.get(), sf.line);
         }
     }
     if (!globals_.empty()) globals_ += "\n";
@@ -276,6 +315,13 @@ void CodeGen::collectArrayTypes() {
                 sig(m.params, m.returnType);
                 if (m.hasBody) collectInBlock(m.body);
             }
+            for (const auto &sf : c->staticFields) {        // (initializers may hold lambdas: `= [..]` builds)
+                collectType(sf.type);
+                if (sf.init) collectInExpr(*sf.init);
+            }
+        } else if (auto *g = dynamic_cast<const GlobalVarDecl *>(d)) {
+            collectType(g->resolvedType);
+            if (g->init) collectInExpr(*g->init);
         } else if (auto *t = dynamic_cast<const TestDecl *>(d)) {
             collectInBlock(t->body);
         } else if (auto *fn = dynamic_cast<const FunctionDecl *>(d)) {
