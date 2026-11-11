@@ -1,0 +1,19 @@
+gravc: tests/errors/reflect.grav:5:5: warning: unused variable 'b'
+        let b = reflect(5)               // not a class
+        ^
+gravc: tests/errors/reflect.grav:6:5: warning: unused variable 'c'
+        let c = reflect(Nobody)          // unknown
+        ^
+gravc: tests/errors/reflect.grav:7:5: warning: unused variable 'd'
+        let d = reflect(User, User)      // one class only
+        ^
+gravc: tests/errors/reflect.grav:5:21: type error: reflect expects a class name, as in reflect(User)
+        let b = reflect(5)               // not a class
+                        ^
+gravc: tests/errors/reflect.grav:6:21: type error: reflect: there is no class 'Nobody'
+        let c = reflect(Nobody)          // unknown
+                        ^
+gravc: tests/errors/reflect.grav:7:20: type error: reflect expects one class name, as in reflect(User)
+        let d = reflect(User, User)      // one class only
+                       ^
+gravc: 3 error(s); aborting

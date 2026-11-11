@@ -1,0 +1,6 @@
+running 4 tests
+  ok    decorators and fields of a class hierarchy
+  ok    reading and writing fields through any
+  ok    ClassInfo.of, identity and classes without metadata
+  ok    many threads share each class's ClassInfo
+result: 4 passed, 0 failed

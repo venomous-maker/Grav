@@ -1,0 +1,7 @@
+gravc: tests/errors/reflect_import.grav:2:13: warning: unused variable 'i'
+    fn main() { let i = reflect(Point) }
+                ^
+gravc: tests/errors/reflect_import.grav:2:28: type error: reflect needs the standard library's ClassInfo: import "std"
+    fn main() { let i = reflect(Point) }
+                               ^
+gravc: 1 error(s); aborting

@@ -1,0 +1,2 @@
+class Point { public x: int; constructor() { self.x = 0 } }
+fn main() { let i = reflect(Point) }

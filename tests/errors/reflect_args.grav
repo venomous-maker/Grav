@@ -1,0 +1,6 @@
+class Point {
+    @Range(1 + 2)                    // decorator arguments are literals or names
+    public x: int
+    constructor() { self.x = 0 }
+}
+fn main() {}

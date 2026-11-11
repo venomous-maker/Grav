@@ -1,0 +1,9 @@
+import "std"
+class User { public name: string; constructor() { self.name = "" } }
+fn main() {
+    let a = reflect(User)            // fine
+    let b = reflect(5)               // not a class
+    let c = reflect(Nobody)          // unknown
+    let d = reflect(User, User)      // one class only
+    print(a.name)
+}

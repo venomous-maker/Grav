@@ -1,0 +1,146 @@
+// Reflection: decorators with arguments on classes and members, field reads and
+// writes through `any`, reflect(T) (also as reflect(Self) in static methods),
+// ClassInfo.of(value), and one shared ClassInfo per class across threads.
+import "std"
+
+enum Role { Guest, Member, Admin }
+
+class Model {
+    @Column("id") @PrimaryKey
+    public id: int
+    constructor() { self.id = 0 }
+    // Rows become objects of whichever class the call names.
+    static fn hydrate(row: HashMap<string, any>) -> Self {
+        let m = new Self()
+        for (f in reflect(Self).fields()) {
+            let c = f.decorator("Column")
+            let col = c == null ? f.name : c.text(0)
+            if (row.containsKey(col)) { f.set(m, row[col]) }
+        }
+        return m
+    }
+    static fn table() -> string {
+        let t = reflect(Self).decorator("Table")
+        return t == null ? reflect(Self).simpleName() : t.text(0)
+    }
+}
+
+@Table("users") @SoftDeletes
+class User extends Model {
+    @Column("email_address") @MaxLength(255)
+    public email: string
+    @Column("score")
+    private score: float
+    public role: Role
+    public nick: string?
+    public age: int?
+    public weak manager: User
+    public onSave: fn(int) -> int
+    @Ignore @Weight(-2, 1.5, true)
+    public cache: string
+    constructor() {
+        super(); self.email = ""; self.score = 0.0; self.role = Role.Guest; self.nick = null; self.age = null
+        self.manager = null; self.onSave = fn(x: int) => x; self.cache = ""
+    }
+    @HasMany(Post, "user_id")
+    fn posts() -> int { return 0 }
+    static fn named(n: string) -> User { let u = new User(); u.email = n; return u }
+    fn scoreOf() -> float { return self.score }
+}
+class Admin extends User { constructor() { super() } }
+class Plain { public x: int; constructor() { self.x = 1 } }
+
+test "decorators and fields of a class hierarchy" {
+    let info = reflect(User)
+    assertEq(info.name, "User")
+    assertEq(info.base().name, "Model")
+    assertEq(info.isReflected(), true)
+    assertEq(info.decorator("Table").text(0), "users")
+    assertEq(info.has("SoftDeletes"), true)
+    assertEq(info.has("Nope"), false)
+    let names = new Array<string>()
+    for (f in info.fields()) { names.push(f.declaringClass + "." + f.toString()) }
+    assertEq(Str.join(names, ", "), "Model.id: int, User.email: string, User.score: float, User.role: Role, User.nick: string?, " +
+        "User.age: int?, User.manager: User, User.onSave: fn(int) -> int, User.cache: string")
+    assertEq(info.ownFields().size(), 8)
+    let email = info.field("email")
+    assertEq(email.decorator("MaxLength").number(0, 0), 255 as long)
+    assertEq(email.decorator("Column").toString(), "@Column(\"email_address\")")
+    let w = info.field("cache").decorator("Weight")
+    assertEq(w.number(0, 0), -2 as long)
+    assertEq("${w.arg(1)} ${w.arg(2)} ${w.arg(3) == null}", "1.5 true true")
+    assertEq(info.field("score").isPrivate(), true)
+    assertEq(info.field("manager").isWeak(), true)
+    assertEq(info.field("onSave").canGet() && !info.field("onSave").canSet(), true)
+    assertEq(info.field("missing") == null, true)
+    let rel = new Array<string>()
+    for (m in info.methods()) { for (d in m.decorators) { rel.push(m.name + " " + d.toString()) } }
+    assertEq(Str.join(rel, "; "), "posts @HasMany(\"Post\", \"user_id\")")
+    assertEq(reflect(Admin).fields().size(), 9)                // decorated hierarchy: subclasses too
+    assertEq(reflect(Admin).decorators().size(), 0)            // a class's own decorators only
+}
+
+test "reading and writing fields through any" {
+    let row = new HashMap<string, any>()
+    row["id"] = 7
+    row["email_address"] = "ada@example.com"
+    row["score"] = 12
+    row["role"] = Role.Admin
+    row["age"] = 36
+    let u = User.hydrate(row)
+    assertEq(User.table(), "users")
+    assertEq(Model.table(), "Model")
+    assertEq("${u.id} ${u.email} ${u.scoreOf()} ${u.role} ${u.age} ${u.nick}", "7 ada@example.com 12 Admin 36 null")
+    let info = reflect(User)
+    info.field("nick").set(u, "g")
+    assertEq("${u.nick}", "g")
+    info.field("nick").set(u, null)
+    assertEq(u.nick == null, true)
+    info.field("age").set(u, null)
+    assertEq(u.age == null, true)
+    info.field("role").set(u, 1)
+    assertEq(u.role, Role.Member)
+    let boss = User.named("boss")
+    info.field("manager").set(u, boss)
+    assertEq(u.manager.email, "boss")
+    assertEq((info.field("manager").get(u) as User).email, "boss")
+    assertEq("${info.field("email").get(u)}", "ada@example.com")
+    assertEq(info.field("onSave").get(u) is fn(int) -> int, true)
+    let msgs = new Array<string>()
+    try { info.field("email").set(u, 5) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.field("id").set(new Plain(), 1) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.field("manager").set(u, new Plain()) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.field("onSave").set(u, 1) } catch (e: StateError) { msgs.push(e.message()) }
+    assertEq(Str.join(msgs, " | "), "field 'email' of User is string, not int | field 'id' needs a Model, got Plain | " +
+        "field 'manager' of User is User, not Plain | field 'onSave' (fn(int) -> int) cannot go through an any")
+}
+
+test "ClassInfo.of, identity and classes without metadata" {
+    let u = new Admin()
+    assertEq(ClassInfo.of(u).simpleName(), "Admin")
+    assertEq(ClassInfo.of(u) == reflect(Admin), true)          // one per class
+    assertEq(ClassInfo.of(5) == null, true)
+    let p = ClassInfo.of(new Plain())
+    assertEq("${p.name} ${p.isReflected()} ${p.fields().size()} ${p.methods().size()}", "Plain false 0 0")
+    assertEq(reflect(Admin).isSubclassOf(reflect(Model)), true)
+    assertEq(reflect(Model).isSubclassOf(reflect(Admin)), false)
+    assertEq(reflect(User).isInstance(u), true)
+    assertEq(reflect(Admin).isInstance(new User()), false)
+}
+
+test "many threads share each class's ClassInfo" {
+    let ok = new AtomicInt(0)
+    let threads = new Array<Thread>()
+    for (w in 0..6) {
+        threads.push(Thread.spawn(fn() {
+            for (i in 0..500) {
+                let u = new User()
+                let f = reflect(User).field("age")
+                f.set(u, i)
+                if ((f.get(u) as int) == i && ClassInfo.of(new Plain()) == ClassInfo.of(new Plain())) { ok.increment() }
+            }
+        }))
+    }
+    for (t in threads) { t.join() }
+    assertEq(ok.get(), 3000 as long)
+}

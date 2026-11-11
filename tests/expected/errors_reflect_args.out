@@ -1,0 +1,3 @@
+gravc: tests/errors/reflect_args.grav:2:14: parse error: a decorator argument is a literal (a string, a number, true or false) or a name
+        @Range(1 + 2)                    // decorator arguments are literals or names
+                 ^
