@@ -299,13 +299,16 @@ int runPackageCommand(const std::vector<std::string> &args) {
         fs::path dir = args[1];
         std::error_code ec;
         if (fs::exists(dir / "grav.toml", ec)) { std::cerr << "grav: " << dir.string() << " already has a grav.toml\n"; return 1; }
+        // The project's name: the directory's own (`grav new .` names it after the current one).
+        std::string projectName = fs::weakly_canonical(fs::absolute(dir, ec), ec).filename().string();
+        if (projectName.empty()) projectName = "app";
         fs::create_directories(dir / "src", ec);
         fs::create_directories(dir / "tests", ec);
-        std::ofstream(dir / "grav.toml") << "name = \"" << dir.filename().string() << "\"\n"
+        std::ofstream(dir / "grav.toml") << "name = \"" << projectName << "\"\n"
                                           << "main = \"src/main.grav\"\n\n[dependencies]\n";
         std::ofstream(dir / "src" / "main.grav")
             << "import \"std\"\n\nfn greeting(name: string) -> string { return \"hello, \" + name }\n\n"
-               "fn main() {\n    print(greeting(\"" << dir.filename().string() << "\"))\n}\n\n"
+               "fn main() {\n    print(greeting(\"" << projectName << "\"))\n}\n\n"
                "test \"greeting\" {\n    assertEq(greeting(\"grav\"), \"hello, grav\")\n}\n";
         std::ofstream(dir / ".gitignore") << "/src/main\n*.gen.c\n";
         std::cerr << "grav: created " << dir.string() << " (try: cd " << dir.string() << " && grav run)\n";
