@@ -106,6 +106,7 @@ One TCP connection.
 - `fn fileno() -> int` — The socket's file descriptor (for polling it).
 - `fn hasBufferedInput() -> bool` — Whether input has already arrived that a read would return without waiting (bytes in the buffer, or decrypted TLS data).
 - `fn readAvailable(limit: long) -> int` — Reads whatever has already arrived, without waiting, into the buffer the read methods take from (until `limit` bytes are buffered): 1 while the connection is open, 0 once it has ended, -1 after an error. For servers that poll many connections (lib/net/http_server.grav).
+- `fn writeNow(data: Bytes, from: int) -> int` — Writes as much of `data` (from byte `from` on) as the connection takes without waiting, returning how many bytes went (-1 after an error). TLS connections write it all.
 - `fn bufferedBytes() -> int` — Bytes received and not read yet.
 - `fn isTls() -> bool` — Whether the connection is encrypted with TLS (see lib/net/tls.grav).
 - `fn tlsResumed() -> bool` — Whether the TLS handshake resumed an earlier session (no full handshake).

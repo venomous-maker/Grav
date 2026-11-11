@@ -253,6 +253,23 @@ namespace std.net {
         if (flags != -1) fcntl(s->fd, F_SETFL, flags);
         return r;
     }
+    /* Writes what the socket takes now, without waiting: the bytes written (maybe
+       fewer than n), or -1 on an error. TLS connections write everything. */
+    static int grav_sock_write(GravSock* s, const char* p, long long n);
+    static long long grav_sock_write_now(GravSock* s, const char* p, long long n) {
+        if (s->tls) return grav_sock_write(s, p, n) == 0 ? n : -1;
+        long long done = 0;
+        while (done < n) {
+            ssize_t w = send(s->fd, p + done, (size_t)(n - done), MSG_NOSIGNAL | MSG_DONTWAIT);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                return -1;
+            }
+            done += w;
+        }
+        return done;
+    }
     /* Write everything; 0 on success, else errno. */
     static int grav_sock_write(GravSock* s, const char* p, long long n) {
         while (n > 0) {
@@ -483,6 +500,15 @@ namespace std.net {
         // connection is open, 0 once it has ended, -1 after an error. For servers
         // that poll many connections (lib/net/http_server.grav).
         public fn readAvailable(limit: long) -> int { return %{ grav_sock_fill_now((GravSock*)self->s, limit) %} as int; }
+        // Writes as much of `data` (from byte `from` on) as the connection takes
+        // without waiting, returning how many bytes went (-1 after an error). TLS
+        // connections write it all.
+        public fn writeNow(data: Bytes, from: int) -> int {
+            let p = data.rawData();
+            let n = data.size();
+            if (from >= n) { return 0; }
+            return %{ (int)grav_sock_write_now((GravSock*)self->s, (const char*)p + from, n - from) %} as int;
+        }
         // Bytes received and not read yet.
         public fn bufferedBytes() -> int { return %{ ((GravSock*)self->s)->len - ((GravSock*)self->s)->pos %} as int; }
         // Whether the connection is encrypted with TLS (see lib/net/tls.grav).
