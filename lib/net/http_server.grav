@@ -35,6 +35,7 @@ import "http.grav"
 namespace std.net {
 
     %{
+    #include <ctype.h>
     #include <strings.h>
     #include <unistd.h>
     #ifdef __linux__
@@ -95,6 +96,115 @@ namespace std.net {
     }
     static int grav_http_cpus(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 4; }
 
+    /* Where the parts of the last head grav_http_parse_head took apart lie: for
+       piece k, offs[2k] from the buffer's read position and offs[2k + 1] long
+       (pieces 0-2 the request line's words, then each header's name and value). */
+    static _Thread_local int grav_http_offs[6 + 4 * 200];
+    static _Thread_local int grav_http_head_len;
+    static int grav_http_plain(const char* a, const char* b) {
+        for (; a < b; a++) if ((unsigned char)*a < 0x20 ? *a != '\t' : *a == 0x7f) return 0;
+        return 1;
+    }
+    /* Takes apart a request head that is wholly in the read buffer, when it is
+       the usual kind: a request line of three words ending "HTTP/1.x" and
+       header lines with no control characters, none longer than maxLine, at
+       most maxHeaders of them. Returns how many headers, or -1 for anything
+       else (incomplete, or unusual: the general reader then takes the head,
+       with its errors). */
+    static int grav_http_parse_head(GravSock* s, int maxHeaders, long maxLine) {
+        const char* base = s->buf + s->pos;
+        const char* end = s->buf + s->len;
+        const char* p = base;
+        for (;;) {                                               /* stray CRLFs before a request */
+            if (p < end && *p == '\n') p++;
+            else if (p + 1 < end && p[0] == '\r' && p[1] == '\n') p += 2;
+            else break;
+        }
+        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+        if (!nl) return -1;
+        const char* le = nl > p && nl[-1] == '\r' ? nl - 1 : nl;
+        if (le - p > maxLine) return -1;
+        const char* sp1 = 0; const char* sp2 = 0;
+        for (const char* q = p; q < le; q++) {
+            unsigned char c = (unsigned char)*q;
+            if (c < 0x20 || c == 0x7f) return -1;
+            if (c == ' ') { if (!sp1) sp1 = q; else if (!sp2) sp2 = q; else return -1; }
+        }
+        if (!sp2 || sp1 == p || sp2 == sp1 + 1 || le - (sp2 + 1) < 7 || memcmp(sp2 + 1, "HTTP/1.", 7) != 0) return -1;
+        int* o = grav_http_offs;
+        o[0] = (int)(p - base); o[1] = (int)(sp1 - p);
+        o[2] = (int)(sp1 + 1 - base); o[3] = (int)(sp2 - sp1 - 1);
+        o[4] = (int)(sp2 + 1 - base); o[5] = (int)(le - sp2 - 1);
+        p = nl + 1;
+        int n = 0;
+        for (;;) {
+            nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+            if (!nl) return -1;
+            le = nl > p && nl[-1] == '\r' ? nl - 1 : nl;
+            if (le == p) { p = nl + 1; break; }                  /* the blank line */
+            if (le - p > maxLine || n >= maxHeaders || *p == ' ' || *p == '\t' || !grav_http_plain(p, le)) return -1;
+            const char* colon = (const char*)memchr(p, ':', (size_t)(le - p));
+            if (!colon || colon == p) return -1;
+            const char* ne = colon;
+            while (ne > p && (ne[-1] == ' ' || ne[-1] == '\t')) ne--;
+            for (const char* q = p; q < ne; q++) if (*q == ' ' || *q == '\t') return -1;
+            const char* va = colon + 1; const char* vb = le;
+            while (va < vb && (*va == ' ' || *va == '\t')) va++;
+            while (vb > va && (vb[-1] == ' ' || vb[-1] == '\t')) vb--;
+            int* h = o + 6 + 4 * n;
+            h[0] = (int)(p - base); h[1] = (int)(ne - p);
+            h[2] = (int)(va - base); h[3] = (int)(vb - va);
+            n++;
+            p = nl + 1;
+        }
+        grav_http_head_len = (int)(p - base);
+        return n;
+    }
+    /* Piece k of the head just taken apart, as a string: words and names that
+       are common come back as shared constants (no copy); a method is in upper
+       case, as the general reader gives it. */
+    static const char* grav_http_piece(GravSock* s, int k, int upper) {
+        const char* p = s->buf + s->pos + grav_http_offs[2 * k];
+        int n = grav_http_offs[2 * k + 1];
+        #define GRAV_HTTP_W(s) { s, sizeof s - 1 }
+        static const struct { const char* s; int n; } common[] = {
+            GRAV_HTTP_W("GET"), GRAV_HTTP_W("POST"), GRAV_HTTP_W("PUT"), GRAV_HTTP_W("DELETE"), GRAV_HTTP_W("PATCH"),
+            GRAV_HTTP_W("HEAD"), GRAV_HTTP_W("OPTIONS"), GRAV_HTTP_W("HTTP/1.1"), GRAV_HTTP_W("HTTP/1.0"),
+            GRAV_HTTP_W("Host"), GRAV_HTTP_W("User-Agent"), GRAV_HTTP_W("Accept"), GRAV_HTTP_W("Accept-Encoding"),
+            GRAV_HTTP_W("Accept-Language"), GRAV_HTTP_W("Connection"), GRAV_HTTP_W("Content-Type"),
+            GRAV_HTTP_W("Content-Length"), GRAV_HTTP_W("Cookie"), GRAV_HTTP_W("Authorization"), GRAV_HTTP_W("Origin"),
+            GRAV_HTTP_W("Referer"), GRAV_HTTP_W("Cache-Control"), GRAV_HTTP_W("Upgrade"), GRAV_HTTP_W("Expect"),
+            GRAV_HTTP_W("Transfer-Encoding"), GRAV_HTTP_W("If-None-Match"), GRAV_HTTP_W("Range"),
+            GRAV_HTTP_W("keep-alive"), GRAV_HTTP_W("close"), GRAV_HTTP_W("*/*") };
+        #undef GRAV_HTTP_W
+        char tmp[32];
+        const char* w = p;
+        if (upper && n < (int)sizeof tmp) {
+            for (int i = 0; i < n; i++) tmp[i] = (char)toupper((unsigned char)p[i]);
+            w = tmp;
+        }
+        if (n < 20)
+            for (size_t c = 0; c < sizeof common / sizeof common[0]; c++)
+                if (common[c].n == n && memcmp(common[c].s, w, (size_t)n) == 0) return common[c].s;
+        char* out = grav_str_alloc((size_t)n + 1);
+        if (!out) abort();
+        if (upper) for (int i = 0; i < n; i++) out[i] = (char)toupper((unsigned char)p[i]);
+        else memcpy(out, p, (size_t)n);
+        out[n] = 0;
+        return out;
+    }
+    /* "HTTP/1.1 200 OK" for a status code and its reason phrase. */
+    static const char* grav_http_status_line(int code, const char* reason) {
+        size_t rn = strlen(reason);
+        char* out = grav_str_alloc(24 + rn + 1);
+        if (!out) abort();
+        if (code < 100 || code > 999) { snprintf(out, 24 + rn + 1, "HTTP/1.1 %d %s", code, reason); return out; }
+        memcpy(out, "HTTP/1.1 ", 9);
+        out[9] = (char)('0' + code / 100); out[10] = (char)('0' + code / 10 % 10); out[11] = (char)('0' + code % 10);
+        out[12] = ' ';
+        memcpy(out + 13, reason, rn + 1);
+        return out;
+    }
     /* Whether `word` appears in p[0..n), ignoring case. */
     static int grav_http_has_ci(const char* p, long n, const char* word) {
         long w = (long)strlen(word);
@@ -251,14 +361,26 @@ namespace std.net {
         public upgrader: fn(HttpRequest, TcpStream)
         // Whether this is an upgrade route.
         public isUpgrade: bool
+        // For each part, the parameter it captures (":id" gives "id"), else "".
+        private names: Array<string>
         constructor(method: string, pattern: string) {
             self.method = method;
             self.parts = Route.split(pattern);
             self.isUpgrade = false;
+            self.names = new Array<string>();
+            for (p in self.parts) { self.names.push(Str.startsWith(p, ":") ? p[1..] : ""); }
         }
         // The non-empty segments of a path ("/a/b/" gives "a", "b").
         static fn split(path: string) -> Array<string> {
-            return Str.split(path, "/").filter(fn(s: string) => s != "");
+            let out = new Array<string>();
+            let n = path.length;
+            let i = 0;
+            while (i < n) {
+                let j = %{ (int)(strchrnul(path + i, '/') - path) %} as int;
+                if (j > i) { out.push(path[i..j]); }
+                i = j + 1;
+            }
+            return out;
         }
         // Does `segs` match? Captures go into `req`.
         public fn matches(segs: Array<string>, req: HttpRequest) -> bool {
@@ -270,8 +392,9 @@ namespace std.net {
                     return true;
                 }
                 if (i >= segs.size()) { return false; }
-                if (Str.startsWith(p, ":")) {
-                    if (req != null) { req.setParam(p[1..], segs.get(i)); }
+                let name = self.names.get(i);
+                if (name != "") {
+                    if (req != null) { req.setParam(name, segs.get(i)); }
                 } else if (p != segs.get(i)) {
                     return false;
                 }
@@ -973,15 +1096,18 @@ namespace std.net {
         // The next request on `conn` (null when it closes first). `continued`: the
         // pool already sent "100 Continue" for it.
         private fn readRequest(conn: TcpStream, continued: bool) -> HttpRequest {
-            let line = conn.readLine(Http.maxLineBytes());
-            while (line == "" && !conn.eof()) { line = conn.readLine(Http.maxLineBytes()); }  // tolerate stray CRLFs
-            if (line == "" && conn.eof()) { return null; }
-            let parts = Str.split(line, " ");
-            if (parts.size() != 3 || !Str.startsWith(parts.get(2), "HTTP/1.")) {
-                throw new NetError("malformed request line: " + Str.truncate(line, 80));
+            let req = HttpServer.parseBufferedHead(conn);
+            if (req == null) {
+                let line = conn.readLine(Http.maxLineBytes());
+                while (line == "" && !conn.eof()) { line = conn.readLine(Http.maxLineBytes()); }  // tolerate stray CRLFs
+                if (line == "" && conn.eof()) { return null; }
+                let parts = Str.split(line, " ");
+                if (parts.size() != 3 || !Str.startsWith(parts.get(2), "HTTP/1.")) {
+                    throw new NetError("malformed request line: " + Str.truncate(line, 80));
+                }
+                req = new HttpRequest(Str.upper(parts.get(0)), parts.get(1), parts.get(2));
+                Http.readHeaders(conn, req.headers);
             }
-            let req = new HttpRequest(Str.upper(parts.get(0)), parts.get(1), parts.get(2));
-            Http.readHeaders(conn, req.headers);
             if (req.version == "HTTP/1.1" && !req.headers.has("Host")) { throw new NetError("an HTTP/1.1 request needs a Host header"); }
             if (Str.equalsIgnoreCase(req.headers.get("Expect"), "100-continue")) {
                 if (req.contentLength() > self.maxBodyBytes) { throw new NetError("body is larger than ${self.maxBodyBytes} bytes"); }
@@ -991,6 +1117,23 @@ namespace std.net {
             return req;
         }
 
+        // The request line and headers, when the whole head is already buffered
+        // and of the usual kind (taken apart in one pass); else null, and the
+        // general reader above takes it.
+        private static fn parseBufferedHead(conn: TcpStream) -> HttpRequest {
+            let h = conn.handle();
+            let n = %{ grav_http_parse_head((GravSock*)h, 200, 16384) %} as int;
+            if (n < 0) { return null; }
+            let req = new HttpRequest(%{ grav_http_piece((GravSock*)h, 0, 1) %} as string,
+                                      %{ grav_http_piece((GravSock*)h, 1, 0) %} as string,
+                                      %{ grav_http_piece((GravSock*)h, 2, 0) %} as string);
+            for (i in 0..n) {
+                let k = 3 + 2 * i;
+                req.headers.add(%{ grav_http_piece((GravSock*)h, k, 0) %} as string, %{ grav_http_piece((GravSock*)h, k + 1, 0) %} as string);
+            }
+            %{ ((GravSock*)h)->pos += grav_http_head_len; %};
+            return req;
+        }
         // The methods the routes for `segs` answer, for Allow headers.
         private fn allowedMethods(segs: Array<string>) -> string {
             let list = new Array<string>();
@@ -1145,8 +1288,11 @@ namespace std.net {
         // A (not streamed) response's head and body in one buffer.
         private fn responseBytes(res: HttpResponse, keepOpen: bool, method: string) -> Bytes {
             let first = self.prepare(res, keepOpen, method);
-            let all = Bytes.fromString(Http.head(first, res.headers));
-            if (!HttpServer.bodiless(res, method)) { all.append(res.bodyBytes); }
+            let body = HttpServer.bodiless(res, method) ? 0 : res.bodyBytes.size();
+            let all = new Bytes();
+            all.reserve(512 + body);
+            Http.headInto(all, first, res.headers);
+            if (body > 0) { all.append(res.bodyBytes); }
             return all;
         }
         private static fn bodiless(res: HttpResponse, method: string) -> bool {
@@ -1160,13 +1306,15 @@ namespace std.net {
                 h.remove("Content-Length");
                 h.set("Transfer-Encoding", "chunked");
             } else if (res.status != 204 && res.status != 304 && res.status >= 200) {
-                h.set("Content-Length", "${res.bodyBytes.size()}");
+                h.set("Content-Length", Http.intText(res.bodyBytes.size() as long));
             }
             if (!h.has("Content-Type") && res.bodyBytes.size() > 0) { h.set("Content-Type", "text/plain; charset=utf-8"); }
             h.set("Connection", keepOpen ? "keep-alive" : "close");
             h.setDefault("Date", Http.date());
             h.setDefault("Server", "grav");
-            return "HTTP/1.1 ${res.status} " + HttpResponse.reason(res.status);
+            let reason = HttpResponse.reason(res.status);
+            let code = res.status;
+            return %{ grav_http_status_line(code, reason) %} as string;
         }
     }
 }
