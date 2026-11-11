@@ -1,0 +1,114 @@
+// Self in classes: methods returning their receiver (`-> Self`) keep the
+// caller's own class through chains, and static methods naming Self work for
+// whichever class they are called on (`new Self()`, `Self.other()`).
+import "std"
+
+class Query {
+    public parts: Array<string>
+    constructor() { self.parts = new Array<string>() }
+    fn where(c: string) -> Self { self.parts.push(c); return self }
+    fn orWhere(c: string) -> Self { return self.where("or " + c) }
+    fn first() -> Self { return self.parts.isEmpty() ? null : self }
+    fn text() -> string { return Str.join(self.parts, " ") }
+}
+class UserQuery extends Query {
+    constructor() { super() }
+    fn active() -> Self { return self.where("active = 1") }
+    fn where(c: string) -> Self { return super.where("users." + c) }   // overrides keep returning Self
+}
+
+interface Tagged { fn tag(t: string) -> Self }
+class Note implements Tagged {
+    public tags: Array<string>
+    constructor() { self.tags = new Array<string>() }
+    fn tag(t: string) -> Self { self.tags.push(t); return self }
+}
+class Memo extends Note {
+    constructor() { super() }
+    fn pin() -> string { return "pinned " + Str.join(self.tags, ",") }
+}
+
+class Box<T> {
+    public items: Array<T>
+    constructor() { self.items = new Array<T>() }
+    fn add(x: T) -> Self { self.items.push(x); return self }
+}
+
+class Model {
+    public id: int
+    public name: string
+    constructor() { self.id = 0; self.name = "" }
+    static fn make(id: int, name: string) -> Self {
+        let m = new Self()
+        m.id = id
+        m.name = name
+        return m
+    }
+    static fn find(id: int) -> Self { return id > 0 ? Self.make(id, Self.table() + "#${id}") : null }
+    static fn table() -> string { return "models" }
+    static fn all(n: int) -> Array<Self> {
+        let out = new Array<Self>()
+        for (i in 1..n + 1) { out.push(Self.make(i, "row${i}")) }
+        return out
+    }
+    static fn kind() -> string { return typename(new Self()) }
+    fn save() -> Self { return self }
+}
+class User extends Model {
+    constructor() { super() }
+    static fn table() -> string { return "users" }
+    fn greet() -> string { return "hi " + self.name }
+}
+class Admin extends User {
+    constructor() { super() }
+    fn power() -> string { return "admin " + self.name }
+}
+class Guest extends Model {
+    constructor() { super() }
+    static fn find(id: int) -> Self { return null }         // its own find: no copy of Model's
+}
+
+namespace orm {
+    class Record {
+        public key: string
+        constructor() { self.key = "" }
+        static fn create(k: string) -> Self { let r = new Self(); r.key = k; return r }
+    }
+}
+namespace app {
+    class Order extends orm.Record {
+        constructor() { super() }
+        fn label() -> string { return "order " + self.key }
+    }
+}
+
+test "methods returning Self keep the receiver's class" {
+    let q = new UserQuery().where("age > 18").active().orWhere("vip = 1")
+    assertEq(q.text(), "users.age > 18 users.active = 1 users.or vip = 1")
+    let base: Query = new UserQuery()
+    assertEq(base.where("x").text(), "users.x")          // dispatch still reaches the override
+    assertEq(new Query().first() == null, true)
+    let f = new Query().where("a").first()
+    assertEq(f != null && f.text() == "a", true)
+    assertEq(new Memo().tag("a").tag("b").pin(), "pinned a,b")
+    assertEq(new Box<int>().add(1).add(2).items.size(), 2)
+}
+
+test "static methods naming Self work for the class they are called on" {
+    let u = User.find(7)
+    assertEq(u != null, true)
+    if (u != null) { assertEq(u.greet(), "hi users#7"); assertEq(u.save().greet(), "hi users#7") }
+    let m = Model.find(3)
+    if (m != null) { assertEq(m.name, "models#3") }
+    assertEq(User.find(0) == null, true)
+    let names = new Array<string>()
+    for (x in User.all(2)) { names.push(x.greet()) }
+    assertEq(Str.join(names, ","), "hi row1,hi row2")
+    let a = Admin.find(5)
+    if (a != null) { assertEq(a.power(), "admin users#5") }    // Admin inherits User's table()
+    assertEq(Guest.find(1) == null, true)
+    assertEq(Admin.table(), "users")                         // an inherited static, through a subclass
+    assertEq(User.kind(), "User")
+    assertEq(Model.kind(), "Model")
+    assertEq(app.Order.create("A1").label(), "order A1")
+}

@@ -1,0 +1,4 @@
+gravc: tests/errors/self_instance.grav:3:5: sema error: Self names a class only in a static method; in method 'copy' use self (its return type may still be Self)
+        fn copy() -> Node { return new Self() }               // no class to name in an instance method
+        ^
+gravc: 1 error(s); aborting

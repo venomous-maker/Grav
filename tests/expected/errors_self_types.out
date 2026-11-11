@@ -1,0 +1,16 @@
+gravc: tests/errors/self_types.grav:6:5: sema error: in a class, Self can only be a method's return type, not the type of parameter 'other'
+        fn merge(other: Self) -> int { return 0 }             // Self is only a return type
+        ^
+gravc: tests/errors/self_types.grav:11:5: sema error: override of 'link' must return Self, like the method in 'Node'
+        fn link() -> Leaf { return self }                     // must stay Self
+        ^
+gravc: tests/errors/self_types.grav:5:33: type error: a method returning Self must return self, null, or the result of a Self method called on self
+        fn fresh() -> Self { return new Node() }              // not the receiver
+                                    ^
+gravc: tests/errors/self_types.grav:7:39: type error: in the call to constructor of 'Needy': the argument for 'n' is missing
+        static fn make() -> Self { return new Self() }
+                                          ^
+gravc: tests/errors/self_types.grav:18:6: type error: method 'link' returns Self, which cannot be called through interface 'Chain' yet: call it on a class value
+        c.link()
+         ^
+gravc: 5 error(s); aborting

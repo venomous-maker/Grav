@@ -1,0 +1,20 @@
+interface Chain { fn link() -> Self }
+class Node implements Chain {
+    constructor() {}
+    fn link() -> Self { return self }
+    fn fresh() -> Self { return new Node() }              // not the receiver
+    fn merge(other: Self) -> int { return 0 }             // Self is only a return type
+    static fn make() -> Self { return new Self() }
+}
+class Leaf extends Node {
+    constructor() { super() }
+    fn link() -> Leaf { return self }                     // must stay Self
+}
+class Needy extends Node {
+    constructor(n: int) { super() }
+}
+fn main() {
+    let c: Chain = new Node()
+    c.link()
+    Needy.make()                                          // Needy has no constructor without arguments
+}

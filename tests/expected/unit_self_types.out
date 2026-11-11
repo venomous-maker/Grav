@@ -1,0 +1,4 @@
+running 2 tests
+  ok    methods returning Self keep the receiver's class
+  ok    static methods naming Self work for the class they are called on
+result: 2 passed, 0 failed
