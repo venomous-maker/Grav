@@ -1,4 +1,4 @@
-running 14 tests
+running 15 tests
   ok    every method, and OPTIONS answered from the routes
   ok    CORS: preflight and response headers
   ok    ETags answer 304, and byte ranges 206 or 416
@@ -9,8 +9,9 @@ running 14 tests
   ok    connections: idle ones, pipelining, idle timeouts, streams and upgrades
   ok    slow clients never hold up a loop
   ok    event loops: long handlers, slow readers and floods of pipelined requests
+  ok    unusual requests: case, spacing, folding and bad lines
   ok    limits: big bodies, long headers, too many connections
   ok    HTTPS and wss with a self-signed certificate
   ok    gzip responses for clients that ask, decoded by the client
   ok    URLs: parts, building and resolving links
-result: 14 passed, 0 failed
+result: 15 passed, 0 failed

@@ -408,6 +408,40 @@ test "event loops: long handlers, slow readers and floods of pipelined requests"
     assertEq(s.activeConnections(), 0)
 }
 
+test "unusual requests: case, spacing, folding and bad lines" {
+    let s = new HttpServer()
+    s.any("/show/*", fn(req: HttpRequest) -> HttpResponse {
+        let sb = new StringBuilder()
+        sb.append(req.method + " " + req.path)
+        for (i in 0..req.headers.size()) { sb.append(" [" + req.headers.nameAt(i) + "]=[" + req.headers.valueAt(i) + "]") }
+        sb.append(" keep=${req.keepAlive()}")
+        return HttpResponse.text(sb.toString())
+    })
+    s.start(0)
+    let ask = fn(raw: string) -> string {                   // the status line and body
+        let t = TcpStream.connect("127.0.0.1", s.port())
+        t.write(raw)
+        t.shutdownWrite()
+        let all = t.readAll()
+        t.close()
+        let cut = Str.indexOf(all, "\r\n\r\n")
+        return all[..Str.indexOf(all, "\r\n")] + " | " + all[cut + 4..]
+    }
+    assertEq(ask("get /show/%41%2Fb HTTP/1.1\r\nHost: x\r\n\r\n"), "HTTP/1.1 200 OK | GET /show/A/b [Host]=[x] keep=true")
+    assertEq(ask("GET /show/a HTTP/1.1\r\nHost: x\r\nX-A :  spaced value \r\nX-T:\ttabbed\t\r\n\r\n"),
+             "HTTP/1.1 200 OK | GET /show/a [Host]=[x] [X-A]=[spaced value] [X-T]=[tabbed] keep=true")
+    assertEq(ask("\r\n\nGET /show/a HTTP/1.1\nHost: x\n\n"), "HTTP/1.1 200 OK | GET /show/a [Host]=[x] keep=true")
+    assertEq(ask("GET /show/a HTTP/1.1\r\nHost: x\r\nConnection: foo,  CLOSE \r\n\r\n"),
+             "HTTP/1.1 200 OK | GET /show/a [Host]=[x] [Connection]=[foo,  CLOSE] keep=false")
+    assertEq(ask("GET /show/a HTTP/1.1\r\nHost: x\r\nX-Fold: a\r\n  continued\r\n\r\n"), "HTTP/1.1 400 Bad Request | malformed header line:   continued")
+    assertEq(ask("GET /show/a HTTP/1.1\r\nHost: x\r\nBad Name: v\r\n\r\n"), "HTTP/1.1 400 Bad Request | not a valid header name: 'Bad Name'")
+    assertEq(ask("GET  /show/a HTTP/1.1\r\nHost: x\r\n\r\n"), "HTTP/1.1 400 Bad Request | malformed request line: GET  /show/a HTTP/1.1")
+    assertEq(ask("GET /show/a HTTP/2.0\r\nHost: x\r\n\r\n"), "HTTP/1.1 400 Bad Request | malformed request line: GET /show/a HTTP/2.0")
+    assertEq(ask("GET /show/a HTTP/1.1\r\n\r\n"), "HTTP/1.1 400 Bad Request | an HTTP/1.1 request needs a Host header")
+    assertEq(ask("GET /show/a HTTP/1.1\r\nHost: x\r\n" + Str.repeat("X-Many: 1\r\n", 201) + "\r\n"), "HTTP/1.1 400 Bad Request | too many headers")
+    s.stop()
+}
+
 test "limits: big bodies, long headers, too many connections" {
     let s = app()
     s.maxBodyBytes = 1000
