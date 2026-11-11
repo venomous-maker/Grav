@@ -1,0 +1,22 @@
+gravc: tests/errors/globals.grav:4:39: type error: argument 1 to method 'Array<int>.add(item: int)' expects int, but got string
+        public static nums: Array<int> = ["a", "b"]           // the elements do not fit
+                                          ^
+gravc: tests/errors/globals.grav:4:44: type error: argument 1 to method 'Array<int>.add(item: int)' expects int, but got string
+        public static nums: Array<int> = ["a", "b"]           // the elements do not fit
+                                               ^
+gravc: tests/errors/globals.grav:6:29: type error: argument 1 to method 'Array<string>.add(item: string)' expects string, but got int
+    let words: Array<string> = [1, 2]                         // nor here
+                                ^
+gravc: tests/errors/globals.grav:6:32: type error: argument 1 to method 'Array<string>.add(item: string)' expects string, but got int
+    let words: Array<string> = [1, 2]                         // nor here
+                                   ^
+gravc: tests/errors/globals.grav:8:29: type error: class 'Cache' has no static field 'missing'
+        print(Cache.missing.size())                           // no such static field
+                                ^
+gravc: tests/errors/globals.grav:9:29: type error: unknown function or static method 'Nowhere.thing.size'
+        print(Nowhere.thing.size())                           // no such class or global
+                                ^
+gravc: tests/errors/globals.grav:10:22: type error: type 'HashMap<long, string>' has no method 'nosuch'
+        print(Cache.items.nosuch())                           // a value, but no such method
+                         ^
+gravc: 7 error(s); aborting

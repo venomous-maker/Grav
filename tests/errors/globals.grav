@@ -1,0 +1,11 @@
+import "std"
+class Cache {
+    public static items: HashMap<long, string> = new HashMap<long, string>()
+    public static nums: Array<int> = ["a", "b"]           // the elements do not fit
+}
+let words: Array<string> = [1, 2]                         // nor here
+fn main() {
+    print(Cache.missing.size())                           // no such static field
+    print(Nowhere.thing.size())                           // no such class or global
+    print(Cache.items.nosuch())                           // a value, but no such method
+}

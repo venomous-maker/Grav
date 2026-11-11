@@ -1,0 +1,84 @@
+// Globals and static fields: constant initializers stay C constants; any other
+// (calls, objects, string building, other globals, collection literals) runs once
+// at startup, in declaration order, before main or the tests. Methods can be
+// called on them directly (`Cache.items.size()`).
+import "std"
+
+const BASE: int = 40
+let limit: int = BASE + 2                          // another global: computed at startup
+let greeting: string = "hi " + Str.upper("ada")
+let roots: Array<int> = [1, 4, 9]
+let scores: HashMap<string, int> = {"ada": 3, "bob": 5}
+let order: Array<string> = new Array<string>()    // filled by the initializers below, in order
+let first: int = note("first")
+let second: int = note("second")
+
+fn note(s: string) -> int {
+    order.push(s)
+    return order.size()
+}
+
+namespace app {
+    class Config {
+        public static names: Array<string> = ["a", "b", "c"]
+        public static limits: HashMap<string, int> = {"rps": 100}
+        public static label: string = "cfg-" + "${Config.names.size()}"
+    }
+}
+
+class Box {
+    public inner: Array<string>
+    constructor() { self.inner = ["x"] }
+}
+
+class Cache {
+    public static items: HashMap<long, string> = new HashMap<long, string>()
+    public static lock: Mutex = new Mutex()
+    public static hits: AtomicInt = new AtomicInt(0)
+    public static last: Box = new Box()
+    public static made: long = Time.monotonicNs() > 0 ? 1 : 0
+    private static secret: string = Str.repeat("*", 3)
+    static fn reveal() -> string { return Cache.secret }
+}
+
+test "initializers run before the tests, in order" {
+    assertEq(limit, 42)
+    assertEq(greeting, "hi ADA")
+    assertEq(Str.join(order, ","), "first,second")
+    assertEq("${first} ${second}", "1 2")
+    assertEq(Cache.made, 1 as long)
+    assertEq(Cache.reveal(), "***")
+    assertEq(app.Config.label, "cfg-3")
+}
+
+test "collection literals and methods on statics and globals" {
+    assertEq(roots.size(), 3)
+    assertEq(roots.get(2), 9)
+    assertEq(scores.get("bob"), 5)
+    assertEq(app.Config.names.get(2), "c")
+    assertEq(app.Config.limits.get("rps"), 100)
+    assertEq(Cache.last.inner.size(), 1)
+    Cache.last.inner.push("y")
+    assertEq(Cache.last.inner.size(), 2)
+    let b = new Box()
+    b.inner = ["p", "q"]                                // a literal assigned to a field
+    assertEq(b.inner.size(), 2)
+}
+
+test "objects in static fields are shared by threads" {
+    let threads = new Array<Thread>()
+    for (w in 0..4) {
+        threads.push(Thread.spawn(fn() {
+            for (i in 0..250) {
+                Cache.lock.lock()
+                Cache.items.put((w * 1000 + i) as long, "v${i}")
+                Cache.lock.unlock()
+                Cache.hits.increment()
+            }
+        }))
+    }
+    for (t in threads) { t.join() }
+    assertEq(Cache.items.size(), 1000)
+    assertEq(Cache.hits.get(), 1000 as long)
+    assertEq(Cache.items.get(3249 as long), "v249")
+}

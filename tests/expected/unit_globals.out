@@ -1,0 +1,5 @@
+running 3 tests
+  ok    initializers run before the tests, in order
+  ok    collection literals and methods on statics and globals
+  ok    objects in static fields are shared by threads
+result: 3 passed, 0 failed
