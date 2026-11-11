@@ -568,6 +568,9 @@ std::string CodeGen::hoistIncludes(const std::string &code) const {
 std::string CodeGen::emitCall(const CallExpr &call) const {
     switch (call.kind) {
         case CallKind::Builtin: {
+            if (call.targetName == "reflect") // a fresh ClassInfo, on the release list
+                return "((" + cTy(call.type) + ")grav_autorelease((void*)" + methodCName("std.core.ClassInfo", "__fromType") +
+                       "((unsigned char*)&" + mangle(call.ownerClass) + "_typeinfo)))";
             if (call.targetName == "typename") {
                 if (call.args[0]->type.isAny()) return "grav_any_typename(" + emitExpr(*call.args[0]) + ")";
                 return "grav_typename(" + emitExpr(*call.args[0]) + ")";

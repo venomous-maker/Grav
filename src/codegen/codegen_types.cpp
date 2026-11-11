@@ -556,15 +556,178 @@ void CodeGen::emitTypeInfos() {
             itabs = mangle(fq) + "__itabs";
             vtables_ += "static const GravItab " + itabs + "[" + std::to_string(nitabs) + "];\n";
         }
+        std::string meta = emitReflection(fq);
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
                     std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + ", " +
-                    mangle(fq) + "__arc_fields, " + visit + ", " + itabs + ", " + std::to_string(nitabs) + " };\n";
+                    mangle(fq) + "__arc_fields, " + visit + ", " + itabs + ", " + std::to_string(nitabs) + ", " +
+                    meta + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
     }
     vtables_ += "\n";
+}
+
+namespace {
+bool hasDecorators(const ClassDecl &c) {
+    if (!c.decorators.empty() || !c.constructor.decorators.empty()) return true;
+    for (const auto &f : c.fields) if (!f.decorators.empty()) return true;
+    for (const auto &m : c.methods) if (!m.decorators.empty()) return true;
+    for (const auto &s : c.staticFields) if (!s.decorators.empty()) return true;
+    for (const auto &x : c.extraCtors) if (!x.decorators.empty()) return true;
+    return false;
+}
+} // namespace
+
+// A class has metadata when its hierarchy (everything under its root class) has
+// a decorator anywhere, or one of its classes is named by reflect(...): ORM-style
+// code reads a model's fields through its base class.
+bool CodeGen::reflected(const std::string &fq) const {
+    auto root = [&](std::string c) {
+        for (int g = 0; g < 100; ++g) {
+            const ClassInfo *ci = reg_->cls(c);
+            if (!ci || ci->baseClass.empty()) break;
+            c = ci->baseClass;
+        }
+        return c;
+    };
+    if (!reflectScanned_) {
+        reflectScanned_ = true;
+        for (const auto &d : program_->decls)
+            if (auto *c = dynamic_cast<const ClassDecl *>(d.get()); c && hasDecorators(*c)) reflectRoots_.insert(root(c->fqName));
+        visitExprs(const_cast<Program &>(*program_), [&](Expr &e) {
+            if (auto *c = dynamic_cast<CallExpr *>(&e); c && c->kind == CallKind::Builtin && c->targetName == "reflect")
+                reflectRoots_.insert(root(c->ownerClass));
+        });
+    }
+    return reflectRoots_.count(root(fq)) != 0;
+}
+
+std::string CodeGen::emitReflection(const std::string &fq) {
+    const ClassInfo *ci = reg_->cls(fq);
+    if (!ci || !ci->decl || !reflected(fq)) return "0";
+    const ClassDecl &cd = *ci->decl;
+    const std::string m = mangle(fq), st = structName(fq);
+    int counter = 0;
+    // A decorator list as a static table: its name and "count, array" for the owner's entry.
+    auto decos = [&](const std::vector<Decorator> &ds) -> std::string {
+        if (ds.empty()) return "0, 0";
+        std::string tbl = m + "__rd" + std::to_string(counter++);
+        std::string entries;
+        for (const auto &d : ds) {
+            std::string args = "0";
+            if (!d.args.empty()) {
+                args = m + "__ra" + std::to_string(counter++);
+                std::string vals;
+                for (const auto &a : d.args) {
+                    std::string v;
+                    switch (a.kind) {
+                        case DecoratorArg::Kind::String: case DecoratorArg::Kind::Name:
+                            v = "{ GRAV_ANY_STR, 0, 0, { .s = \"" + escapeC(a.text) + "\" } }"; break;
+                        case DecoratorArg::Kind::Int: v = "{ GRAV_ANY_INT, 0, 0, { .i = " + std::to_string(a.i) + "LL } }"; break;
+                        case DecoratorArg::Kind::Float: {
+                            char buf[64]; std::snprintf(buf, sizeof buf, "%.17g", a.f);
+                            v = "{ GRAV_ANY_FLOAT, 0, 0, { .f = " + std::string(buf) + " } }"; break;
+                        }
+                        case DecoratorArg::Kind::Bool: v = std::string("{ GRAV_ANY_BOOL, 0, 0, { .b = ") + (a.b ? "1" : "0") + " } }"; break;
+                    }
+                    vals += (vals.empty() ? "" : ", ") + v;
+                }
+                vtables_ += "static const GravAny " + args + "[] = { " + vals + " };\n";
+            }
+            entries += (entries.empty() ? "" : ", ") + std::string("{ \"") + escapeC(d.name) + "\", " +
+                       std::to_string(d.args.size()) + ", " + args + " }";
+        }
+        vtables_ += "static const GravDecoMeta " + tbl + "[] = { " + entries + " };\n";
+        return std::to_string(ds.size()) + ", " + tbl;
+    };
+    auto access = [](Access a) { return a == Access::Private ? 2 : a == Access::Protected ? 4 : 0; };
+    // Fields: a reader boxing the value into an `any` (borrowed), and a writer
+    // taking one when its value fits the field (1) or not (0).
+    std::string fields;
+    for (size_t i = 0; i < cd.fields.size(); ++i) {
+        const FieldDecl &f = cd.fields[i];
+        const TypeRef &t = f.type;
+        std::string slot = "o->" + memberCName(f.name);
+        std::string fn = m + "__rf" + std::to_string(i);
+        bool cls = t.isNamed() && reg_->isClass(t.name);
+        bool plain = t.kind == TypeRef::Kind::Int || t.kind == TypeRef::Kind::Float || t.kind == TypeRef::Kind::Bool ||
+                     t.kind == TypeRef::Kind::String || t.kind == TypeRef::Kind::Any || t.isFunction() ||
+                     (t.isNamed() && (reg_->isEnum(t.name) || reg_->isInterface(t.name))) || cls;
+        bool nul = t.isNullable() && t.elem &&
+                   (t.elem->kind == TypeRef::Kind::Int || t.elem->kind == TypeRef::Kind::Float ||
+                    t.elem->kind == TypeRef::Kind::Bool || t.elem->kind == TypeRef::Kind::String ||
+                    (t.elem->isNamed() && reg_->isEnum(t.elem->name)));
+        std::string get = "0", set = "0";
+        if (plain || nul) {
+            std::string read = f.isWeak ? "((" + cTy(t) + ")grav_weak_load((void*)" + slot + "))" : slot;
+            vtables_ += "static GravAny " + fn + "_get(void* o_) { " + st + "* o = (" + st + "*)o_; return " +
+                        boxAnyC(read, t) + "; }\n";
+            get = fn + "_get";
+        }
+        // What an `any` holding v must be to fill a field of type `k`, and the store.
+        auto accept = [&](const TypeRef &k, const std::string &dst) -> std::string {
+            if (k.kind == TypeRef::Kind::Int)
+                return "if (v.tag == GRAV_ANY_INT) " + dst + " = (" + cTy(k) + ")v.v.i; else if (v.tag == GRAV_ANY_UINT) " + dst +
+                       " = (" + cTy(k) + ")v.v.u; else return 0;";
+            if (k.kind == TypeRef::Kind::Float)
+                return "if (v.tag == GRAV_ANY_FLOAT) " + dst + " = (" + cTy(k) + ")v.v.f; else if (v.tag == GRAV_ANY_INT) " + dst +
+                       " = (" + cTy(k) + ")v.v.i; else if (v.tag == GRAV_ANY_UINT) " + dst + " = (" + cTy(k) + ")v.v.u; else return 0;";
+            if (k.kind == TypeRef::Kind::Bool) return "if (v.tag != GRAV_ANY_BOOL) return 0; " + dst + " = v.v.b;";
+            if (k.kind == TypeRef::Kind::String)
+                return "if (v.tag != GRAV_ANY_STR) return 0; { const char* old_ = " + dst + "; " + dst +
+                       " = grav_str_retain(v.v.s); grav_str_release(old_); }";
+            if (k.isNamed() && reg_->isEnum(k.name))
+                return "if (!((v.tag == GRAV_ANY_ENUM && v.tname && strcmp(v.tname, \"" + k.name + "\") == 0) || v.tag == GRAV_ANY_INT)) return 0; " +
+                       dst + " = (" + cTy(k) + ")v.v.i;";
+            return "";
+        };
+        std::string body;
+        if (t.kind == TypeRef::Kind::Any) {
+            body = "{ GravAny old_ = " + slot + "; " + slot + " = grav_any_retain(v); grav_any_release(old_); }";
+        } else if (cls) {
+            std::string ret = f.isWeak ? "grav_weak_retain" : "grav_retain", rel = f.isWeak ? "grav_weak_release" : "grav_release";
+            body = "if (v.tag != GRAV_ANY_NULL && (v.tag != GRAV_ANY_OBJ || !grav_is_instance(v.v.p, &" + mangle(t.name) +
+                   "_typeinfo))) return 0; { void* old_ = (void*)" + slot + "; void* new_ = v.tag == GRAV_ANY_OBJ ? v.v.p : 0; " +
+                   ret + "(new_); " + slot + " = (" + cTy(t) + ")new_; " + rel + "(old_); }";
+        } else if (nul && t.elem->kind == TypeRef::Kind::String) {
+            body = "if (v.tag == GRAV_ANY_NULL) { const char* old_ = " + slot + "; " + slot + " = 0; grav_str_release(old_); return 1; } " +
+                   accept(*t.elem, slot);
+        } else if (nul) {
+            body = "if (v.tag == GRAV_ANY_NULL) { " + slot + ".has = 0; return 1; } " + accept(*t.elem, slot + ".v") + " " +
+                   slot + ".has = 1;";
+        } else {
+            body = accept(t, slot);
+        }
+        if (!body.empty()) {
+            vtables_ += "static int " + fn + "_set(void* o_, GravAny v) { " + st + "* o = (" + st + "*)o_; " + body +
+                        " return 1; }\n";
+            set = fn + "_set";
+        }
+        int flags = (f.isReadonly ? 1 : 0) | access(f.access) | (f.isWeak ? 8 : 0);
+        fields += (fields.empty() ? "" : ",\n    ") + std::string("{ \"") + escapeC(f.name) + "\", \"" +
+                  escapeC(typeRefName(t)) + "\", " + std::to_string(flags) + ", " + decos(f.decorators) + ", " + get + ", " + set + " }";
+    }
+    if (!fields.empty()) vtables_ += "static const GravFieldMeta " + m + "__rfields[] = {\n    " + fields + " };\n";
+    // Methods as written (not the copies the compiler makes: `find$User`, `map$int`).
+    std::string methods;
+    int nmethods = 0;
+    for (const auto &md : cd.methods) {
+        if (md.name.find('$') != std::string::npos) continue;
+        std::string name = md.sourceName.empty() ? md.name : md.sourceName;
+        int flags = access(md.access) | (md.isStatic ? 16 : 0);
+        methods += (methods.empty() ? "" : ",\n    ") + std::string("{ \"") + escapeC(name) + "\", " +
+                   std::to_string(flags) + ", " + decos(md.decorators) + " }";
+        ++nmethods;
+    }
+    if (!methods.empty()) vtables_ += "static const GravMethodMeta " + m + "__rmethods[] = {\n    " + methods + " };\n";
+    std::string own = decos(cd.decorators);
+    // (not const: it keeps the ClassInfo made for it)
+    vtables_ += "static GravClassMeta " + m + "__rmeta = { " + std::to_string(cd.fields.size()) + ", " +
+                (fields.empty() ? "0" : m + "__rfields") + ", " + std::to_string(nmethods) + ", " +
+                (methods.empty() ? "0" : m + "__rmethods") + ", " + own + ", 0 };\n";
+    return "&" + m + "__rmeta";
 }
 
 void CodeGen::emitInterfaceTables() {

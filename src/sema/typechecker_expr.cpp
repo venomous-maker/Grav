@@ -1270,6 +1270,31 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             }
             return TypeRef::prim(TypeRef::Kind::String);
         }
+        if (name->name == "reflect") {
+            // `reflect(User)`: the class's ClassInfo (std.core), for a class named here.
+            e.kind = CallKind::Builtin;
+            e.targetName = "reflect";
+            const std::string info = "std.core.ClassInfo";
+            if (e.args.size() != 1) {
+                error(e.line, e.col, "reflect expects one class name, as in reflect(User)");
+                return TypeRef::prim(TypeRef::Kind::Error);
+            }
+            auto chain = flattenNames(e.args[0].get());
+            std::string fq = chain ? reg_->resolveType(joinDots(*chain, chain->size()), currentNs_) : "";
+            if (fq.empty() || !reg_->isClass(fq)) {
+                std::string written = chain ? joinDots(*chain, chain->size()) : "";
+                error(e.args[0]->line, e.args[0]->col,
+                      chain && fq.empty() ? "reflect: there is no class '" + written + "'"
+                                          : "reflect expects a class name, as in reflect(User)");
+                return TypeRef::prim(TypeRef::Kind::Error);
+            }
+            if (!reg_->isClass(info)) {
+                error(e.line, e.col, "reflect needs the standard library's ClassInfo: import \"std\"");
+                return TypeRef::prim(TypeRef::Kind::Error);
+            }
+            e.ownerClass = fq;
+            return TypeRef::named(info);
+        }
         if (name->name == "typename") {
             e.kind = CallKind::Builtin;
             e.targetName = "typename";

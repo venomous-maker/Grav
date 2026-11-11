@@ -146,6 +146,7 @@ typedef struct GravTypeInfo {
     void (*visit)(void*);                       /* report each object it refers to (cycle collector), or 0 */
     const struct GravItab* itabs;               /* every interface the class implements */
     int nitabs;
+    const struct GravClassMeta* meta;           /* reflection (fields, methods, decorators), or 0 */
 } GravTypeInfo;
 /* An interface a class implements: the interface's marker and the class's table for it. */
 typedef struct GravItab { const char* iface; const void* tbl; } GravItab;
@@ -1026,6 +1027,26 @@ static inline void grav_any_release(GravAny a) {
     else if (a.tag == GRAV_ANY_STR) grav_str_release(a.v.s);
 }
 static GRAV_UNUSED void grav_uw_any(void* p) { grav_any_release(*(GravAny*)p); }
+
+/* Reflection (std.core.ClassInfo): what the compiler records about a class whose
+   hierarchy has decorators or is named by reflect(...). A field's reader boxes its
+   value (borrowed); its writer stores an `any` when it fits (1) or refuses (0).
+   Either is 0 for a type that cannot go through an `any`. */
+typedef struct GravDecoMeta { const char* name; int nargs; const GravAny* args; } GravDecoMeta;
+enum { GRAV_RM_READONLY = 1, GRAV_RM_PRIVATE = 2, GRAV_RM_PROTECTED = 4, GRAV_RM_WEAK = 8, GRAV_RM_STATIC = 16 };
+typedef struct GravFieldMeta {
+    const char* name; const char* type; int flags;
+    int ndecos; const GravDecoMeta* decos;
+    GravAny (*get)(void* obj);
+    int (*set)(void* obj, GravAny v);
+} GravFieldMeta;
+typedef struct GravMethodMeta { const char* name; int flags; int ndecos; const GravDecoMeta* decos; } GravMethodMeta;
+typedef struct GravClassMeta {
+    int nfields; const GravFieldMeta* fields;
+    int nmethods; const GravMethodMeta* methods;
+    int ndecos; const GravDecoMeta* decos;
+    void* info;                               /* its ClassInfo once made (set once, atomically) */
+} GravClassMeta;
 static inline GravAny grav_any_autorelease(GravAny a) {
     if (a.tag == GRAV_ANY_OBJ) grav_autorelease(a.v.p);
     else if (a.tag == GRAV_ANY_FN) grav_autorelease(a.v.fn.env);

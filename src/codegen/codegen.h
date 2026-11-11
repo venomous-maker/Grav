@@ -102,6 +102,12 @@ private:
     void emitVTableInstances();
     void emitVTableInstance(const ClassInfo &ci);
     void emitTypeInfos();
+    // Reflection metadata (std.core.ClassInfo): the `&Class__rmeta` table, or "0"
+    // for a class outside every hierarchy that has decorators or is named by reflect().
+    std::string emitReflection(const std::string &fq);
+    bool reflected(const std::string &fq) const;
+    mutable std::set<std::string> reflectRoots_;
+    mutable bool reflectScanned_ = false;
     void emitInterfaceTables();   // itable types + per-class instances
     // C type spelling, interface-aware (interfaces become a fat pointer struct).
     std::string cTy(const TypeRef &t) const;
