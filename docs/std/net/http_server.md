@@ -3,9 +3,9 @@
 `import "std/net"` (not included in `import "std"`) · namespace `std.net`
 
 `HttpServer` answers HTTP/1.1 requests by routing them to handler functions.
-Requests are served by a pool of worker threads, and idle keep-alive
-connections wait in a poller rather than on a thread, so a few workers keep up
-with thousands of clients. The same server speaks HTTPS when given a
+Requests are served by a few event loops (one per CPU), and an idle
+keep-alive connection costs no thread, so the server keeps up with thousands
+of clients. The same server speaks HTTPS when given a
 [`TlsContext`](tls.md).
 
 ```grav
@@ -95,17 +95,19 @@ https://app.example
   take longer), `maxRequestsPerConnection`. Header lines longer than 16 KiB are
   refused with 431.
 - `logRequests(true)` prints one line per request with its status and time.
-- Connections: `workers` sets the number of worker threads (default 4 per CPU,
-  at least 16). A worker takes a connection only when input has arrived on it,
-  reads just what is there, answers each request that is complete (pipelined
-  ones too), and hands the connection back to the poller. A request still on
-  its way (a slow client, a big upload, an https handshake) waits in the
-  poller, so slow clients never tie up workers; `Expect: 100-continue` is
-  answered there too. WebSocket and other upgraded connections and streamed
-  responses (`HttpResponse.stream`, `eventStream`) get threads of their own.
-  Handlers that block for long (on other servers, say) need more workers.
-  Where readiness polling is not available (outside Linux), each connection
-  gets its own thread instead.
+- Connections: event loops serve the requests, one per CPU unless `workers`
+  says how many, each on its own thread. One thread accepts connections and
+  gives each to the loop with the fewest, passing over a loop stuck in a long
+  handler. A loop reads only what has arrived and answers each complete request
+  on the spot (pipelined ones too). A request still on its way (a slow client,
+  a big upload, an https handshake) waits without holding the loop up, and
+  `Expect: 100-continue` is answered meanwhile. Handlers run on their
+  connection's loop, so one that blocks for long (on another server, say)
+  delays the other connections on that loop: such servers want more
+  `workers`. Streamed responses (`HttpResponse.stream`, `eventStream`), bodies
+  over 64 KiB, answers a slow reader has not taken in yet, and WebSocket and
+  other upgraded connections go to threads of their own. Outside Linux each
+  connection gets its own thread instead.
 
 ## API
 
@@ -125,20 +127,43 @@ The outcome of dispatching one request (filled in inside a recovery point).
 - `upgraded: bool` — Whether an upgrade handler took the connection.
 - `upgrade: Route` — The upgrade route that wants the connection (run by the caller).
 
-### class PoolConn
+### class HttpLoop
 
-A connection in the worker pool: idle in the poller, or being served.
+One event loop: its own readiness set and the connections it serves. Only
+its thread touches `conns`; other threads hand connections back through
+`returning` and a wake-up.
 
 **Constructors**
 
-- `new PoolConn(stream: TcpStream)`
+- `new HttpLoop()`
+
+**Fields**
+
+- `ep: int` — The epoll descriptor.
+- `wake: int` — The eventfd that wakes the loop for handed-back connections.
+- `conns: HashMap<int, PoolConn>` — The connections it watches, by descriptor.
+- `returning: Array<PoolConn>` — Connections other threads hand back (after a stream, say), under `lock`.
+- `lock: Mutex` — Guards `returning` and `open`.
+- `open: bool` — Whether it still runs (handing back to a stopped loop closes the connection).
+- `served: AtomicInt` — Requests it answered.
+- `load: AtomicInt` — Connections given to it and not yet closed (the acceptor balances on this).
+- `busySince: AtomicInt` — When it began its current turn with a connection (monotonic ms; 0 between turns).
+- `threadId: long` — Its thread (Thread.currentId), once running.
+
+### class PoolConn
+
+A connection served by an event loop.
+
+**Constructors**
+
+- `new PoolConn(stream: TcpStream, loop: HttpLoop)`
 
 **Fields**
 
 - `stream: TcpStream` — The connection.
-- `fd: int` — Its socket descriptor (the poller's key for it).
+- `fd: int` — Its socket descriptor (the loop's key for it).
+- `loop: HttpLoop` — The loop that serves it.
 - `lastActive: long` — When it last finished a request (monotonic ms), for the idle timeout.
-- `busy: bool` — Whether a worker has it now.
 - `requests: int` — Requests served on it so far.
 - `handshaken: bool` — Whether its TLS handshake is done.
 - `headSince: long` — When the head of the request (or the handshake) now arriving began (0: none is).
@@ -216,7 +241,7 @@ An HTTP/1.1 server with a router.
 
 **Fields**
 
-- `workers: int` — Threads that serve requests (0: 4 per CPU, at least 16). Idle connections wait in a poller, not on a thread, so a few workers serve thousands of keep-alive clients; long handlers need more of them.
+- `workers: int` — Event loops serving connections, each on its own thread (0: one per CPU). Handlers run on their connection's loop, so handlers that block for long (on other servers, say) want more of them.
 - `maxBodyBytes: int` — Largest request body accepted (bytes); larger ones get 413.
 - `idleTimeoutMs: int` — Idle keep-alive connections are closed after this many milliseconds (and so are connections whose request body stops arriving for as long).
 - `headerTimeoutMs: int` — A request's line and headers (and an https connection's handshake) must arrive within this many milliseconds of their first byte; slower ones are answered 408 and closed.
