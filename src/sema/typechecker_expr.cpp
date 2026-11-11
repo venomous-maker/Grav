@@ -1456,9 +1456,30 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             if (gm != program_->generics.methods.end())
                 return *tryInferCall(e, last, gm->second, expCall);
         }
-        error(e.line, e.col, "unknown function or static method '" +
-                                 joinDots(*chain, chain->size()) + "'");
-        return TypeRef::prim(TypeRef::Kind::Error);
+        // `Cache.items.size()`, `config.limits.get()`: the prefix is a value (a
+        // static field or a global, maybe followed by fields), so this is a
+        // method call on it, checked below like any other.
+        bool onValue = clsFq.empty() && !reg_->resolveGlobal((*chain)[0], currentNs_).empty();
+        std::string noField, noFieldName;               // `Class.missing.m()`: the class and the name it lacks
+        for (size_t k = 1; !onValue && clsFq.empty() && k + 1 < chain->size(); ++k) {
+            std::string owner = joinDots(*chain, k);
+            std::string ofq = reg_->resolveType(owner, currentNs_);
+            if (!ofq.empty() && reg_->isClass(ofq)) {
+                onValue = reg_->global(ofq + "." + (*chain)[k]) != nullptr;
+                if (!onValue) { noField = ofq; noFieldName = (*chain)[k]; }
+            } else if (ofq.empty()) {
+                onValue = !reg_->resolveGlobal(joinDots(*chain, k + 1), currentNs_).empty();
+            }
+            if (!ofq.empty()) break;
+        }
+        if (!onValue) {
+            if (!noField.empty())
+                error(e.line, e.col, "class '" + noField + "' has no static field '" + noFieldName + "'");
+            else
+                error(e.line, e.col, "unknown function or static method '" +
+                                         joinDots(*chain, chain->size()) + "'");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
     }
 
     // Instance method: dispatch on the object's class via its vtable.
