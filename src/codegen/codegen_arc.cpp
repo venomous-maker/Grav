@@ -355,8 +355,8 @@ bool CodeGen::releaseFree(const MethodInfo *mi) const {
         } else if (auto *ix = dynamic_cast<IndexExpr *>(&e)) {
             if (!ix->overloadClass.empty() || ix->isSlice) ok = false;
         } else if (auto *al = dynamic_cast<ArrayLiteralExpr *>(&e)) {
-            if (refKind(al->type) != RefKind::None && !al->type.isArray()) ok = false;
-            else if (al->type.isArray() && al->type.elem && refKind(*al->type.elem) != RefKind::None) ok = false;
+            // only fixed arrays of plain values (a collection literal builds an object)
+            if (al->built || !al->type.isArray() || !al->type.elem || refKind(*al->type.elem) != RefKind::None) ok = false;
         } else if (auto *cb = dynamic_cast<CBlockExpr *>(&e)) {
             if (!cBlockReleaseFree(cb->code)) ok = false;
         } else if (auto *c = dynamic_cast<CallExpr *>(&e)) {
