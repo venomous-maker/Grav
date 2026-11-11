@@ -71,6 +71,23 @@ namespace std.net {
         }
         return -1;
     }
+    /* A message head's size, and the head itself written to `out`: the first
+       line, "name: value" lines, then the blank line. */
+    static long long grav_http_head_size(const char* first, const char* const* names, const char* const* values, int n) {
+        long long size = grav_str_len(first) + 4;
+        for (int i = 0; i < n; i++) size += grav_str_len(names[i]) + grav_str_len(values[i]) + 4;
+        return size;
+    }
+    static long long grav_http_head_write(char* out, const char* first, const char* const* names, const char* const* values, int n) {
+        char* p = out;
+        size_t k = (size_t)grav_str_len(first); memcpy(p, first, k); p += k; *p++ = '\r'; *p++ = '\n';
+        for (int i = 0; i < n; i++) {
+            k = (size_t)grav_str_len(names[i]); memcpy(p, names[i], k); p += k; *p++ = ':'; *p++ = ' ';
+            k = (size_t)grav_str_len(values[i]); memcpy(p, values[i], k); p += k; *p++ = '\r'; *p++ = '\n';
+        }
+        *p++ = '\r'; *p++ = '\n';
+        return (long long)(p - out);
+    }
     /* A number as text, without printf. */
     static const char* grav_http_itoa(long long v) {
         char buf[24]; int i = 24, neg = v < 0;
@@ -1025,15 +1042,10 @@ namespace std.net {
         }
         // The request or status line and headers, appended to `out`.
         static fn headInto(out: Bytes, firstLine: string, headers: Headers) {
-            out.appendString(firstLine);
-            out.appendString("\r\n");
-            for (i in 0..headers.size()) {
-                out.appendString(headers.nameAt(i));
-                out.appendString(": ");
-                out.appendString(headers.valueAt(i));
-                out.appendString("\r\n");
-            }
-            out.appendString("\r\n");
+            let need = %{ (int)grav_http_head_size(firstLine, (const char* const*)headers->names->data, (const char* const*)headers->values->data, headers->names->len) %} as int;
+            out.reserve(out.size() + need);
+            %{ out->len += (int)grav_http_head_write((char*)out->data + out->len, firstLine, (const char* const*)headers->names->data,
+                                                      (const char* const*)headers->values->data, headers->names->len); %};
         }
         // A number as text ("1427"), for header values.
         static fn intText(n: long) -> string { return %{ grav_http_itoa(n) %} as string; }
