@@ -211,10 +211,17 @@ static void grav_obj_destroy(void* o) {
     for (;;) {
         long long v = __atomic_load_n(&((struct GravObject*)o)->__rc, __ATOMIC_ACQUIRE);
         if (!(v & GRAV_RC_DEAD)) grav_obj_teardown(o);
-        /* weak references keep the memory (not the object) until they go */
-        long long old = __atomic_fetch_or(&((struct GravObject*)o)->__rc, GRAV_RC_GONE | GRAV_RC_DEAD, __ATOMIC_ACQ_REL);
-        /* a cycle candidate stays until the collector drops it from its list */
-        if (GRAV_RC_WEAKS(old) == 0 && !(old & GRAV_RC_BUFFERED)) free(o);
+        /* Without weak references (none can appear now: a new one is only ever
+           copied from another) and outside the collector's list, the memory goes
+           at once, with no atomic update. */
+        v = __atomic_load_n(&((struct GravObject*)o)->__rc, __ATOMIC_ACQUIRE);
+        if (GRAV_RC_WEAKS(v) == 0 && !(v & GRAV_RC_BUFFERED)) free(o);
+        else {
+            /* weak references keep the memory (not the object) until they go */
+            long long old = __atomic_fetch_or(&((struct GravObject*)o)->__rc, GRAV_RC_GONE | GRAV_RC_DEAD, __ATOMIC_ACQ_REL);
+            /* a cycle candidate stays until the collector drops it from its list */
+            if (GRAV_RC_WEAKS(old) == 0 && !(old & GRAV_RC_BUFFERED)) free(o);
+        }
         if (grav_dead_n == 0) break;
         o = grav_dead[--grav_dead_n];
     }
