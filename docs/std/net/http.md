@@ -435,6 +435,8 @@ Reading and writing HTTP messages on a TcpStream (shared by server and client).
 - `static fn readHeaders(conn: TcpStream, into: Headers)` — Headers up to the blank line, at most 200 lines. Throws NetError on malformed input.
 - `static fn readBody(conn: TcpStream, headers: Headers, untilClose: bool, limit: int) -> Bytes` — The body described by `headers` (chunked or Content-Length, at most `limit` bytes). With `untilClose`, a body with neither is read until the connection closes.
 - `static fn head(firstLine: string, headers: Headers) -> string` — The request or status line and headers as one block of text.
+- `static fn headInto(out: Bytes, firstLine: string, headers: Headers)` — The request or status line and headers, appended to `out`.
+- `static fn intText(n: long) -> string` — A number as text ("1427"), for header values.
 - `static fn writeHead(conn: TcpStream, firstLine: string, headers: Headers)` — Writes a request or status line and the headers to the connection.
 - `static fn writeMessage(conn: TcpStream, firstLine: string, headers: Headers, body: Bytes)` — Writes the head and a body in one go (one packet for small messages).
 - `static fn isCompressible(contentType: string) -> bool` — Whether a Content-Type is worth compressing (text, JSON, JavaScript, XML, SVG, WASM).

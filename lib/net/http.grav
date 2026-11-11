@@ -28,22 +28,76 @@ import "url.grav"
 
 namespace std.net {
 
+    %{
+    #include <ctype.h>
+    #include <strings.h>
+    #include <time.h>
+    /* 0 when `name: value` may be sent as a header line, 1 when the name is not
+       a header name (empty, or with ':', a space or a line break), 2 when the
+       value has a line break. */
+    static int grav_http_header_bad(const char* name, const char* value) {
+        if (!*name) return 1;
+        for (const char* p = name; *p; p++) if (*p == ':' || *p == ' ' || *p == '\r' || *p == '\n') return 1;
+        for (const char* p = value; *p; p++) if (*p == '\r' || *p == '\n') return 2;
+        return 0;
+    }
+    /* Whether the comma-separated `value` has `token` as one of its items
+       (trimmed, ignoring case). */
+    static int grav_http_has_token(const char* value, const char* token) {
+        size_t tn = strlen(token);
+        const char* p = value;
+        for (;;) {
+            const char* e = strchr(p, ',');
+            const char* end = e ? e : p + strlen(p);
+            const char* a = p; const char* b = end;
+            while (a < b && isspace((unsigned char)*a)) a++;
+            while (b > a && isspace((unsigned char)b[-1])) b--;
+            if ((size_t)(b - a) == tn && strncasecmp(a, token, tn) == 0) return 1;
+            if (!e) return 0;
+            p = e + 1;
+        }
+    }
+    /* The index of the first of names[0..n) equal to `name` ignoring case (as
+       Str.equalsIgnoreCase compares), or -1. */
+    static int grav_http_find_name(const char* const* names, int n, const char* name) {
+        for (int i = 0; i < n; i++) {
+            const unsigned char* a = (const unsigned char*)names[i];
+            const unsigned char* b = (const unsigned char*)name;
+            for (;; a++, b++) {
+                int x = tolower(*a), y = tolower(*b);
+                if (x != y) break;
+                if (!x) return i;
+            }
+        }
+        return -1;
+    }
+    /* A number as text, without printf. */
+    static const char* grav_http_itoa(long long v) {
+        char buf[24]; int i = 24, neg = v < 0;
+        unsigned long long u = neg ? 0ull - (unsigned long long)v : (unsigned long long)v;
+        do { buf[--i] = (char)('0' + u % 10); u /= 10; } while (u);
+        if (neg) buf[--i] = '-';
+        char* out = grav_str_alloc((size_t)(24 - i) + 1);
+        if (!out) abort();
+        memcpy(out, buf + i, (size_t)(24 - i)); out[24 - i] = 0;
+        return out;
+    }
+    %}
+
     // HTTP headers: ordered, case-insensitive names, repeatable.
     class Headers {
         private names: Array<string>
         private values: Array<string>
-        constructor() { self.names = new Array<string>(); self.values = new Array<string>(); }
+        constructor() { self.names = new Array<string>(8); self.values = new Array<string>(8); }
         private fn find(name: string) -> int {
-            for (i, n in self.names) { if (Str.equalsIgnoreCase(n, name)) { return i; } }
-            return -1;
+            return %{ grav_http_find_name((const char* const*)self->names->data, self->names->len, name) %} as int;
         }
         private static fn check(name: string, value: string) {
-            if (name == "" || Str.contains(name, ":") || Str.contains(name, " ") || Headers.hasBreak(name)) {
-                throw new ValueError("not a valid header name: '" + name + "'");
-            }
-            if (Headers.hasBreak(value)) { throw new ValueError("header " + name + " has a line break in its value"); }
+            let bad = %{ grav_http_header_bad(name, value) %} as int;
+            if (bad == 0) { return; }
+            if (bad == 1) { throw new ValueError("not a valid header name: '" + name + "'"); }
+            throw new ValueError("header " + name + " has a line break in its value");
         }
-        private static fn hasBreak(s: string) -> bool { return %{ strpbrk(s, "\r\n") != 0 %} as bool; }
         // The first value of `name`, or "".
         public fn get(name: string) -> string {
             let i = self.find(name);
@@ -62,8 +116,10 @@ namespace std.net {
         // Whether `name` has `token` in its comma-separated value, ignoring case
         // ("Connection: keep-alive, Upgrade" has "upgrade").
         public fn hasToken(name: string, token: string) -> bool {
-            for (v in self.getAll(name)) {
-                for (part in Str.split(v, ",")) { if (Str.equalsIgnoreCase(Str.trim(part), token)) { return true; } }
+            for (i, n in self.names) {
+                if (!Str.equalsIgnoreCase(n, name)) { continue; }
+                let v = self.values.get(i);
+                if (%{ grav_http_has_token(v, token) %} as bool) { return true; }
             }
             return false;
         }
@@ -414,10 +470,11 @@ namespace std.net {
             self.remote = "";
             self.scheme = "http";
             let q = Str.indexOf(target, "?");
-            self.path = Url.decodePath(q >= 0 ? target[..q] : target);
+            let raw = q >= 0 ? target[..q] : target;
+            self.path = Str.contains(raw, "%") ? Url.decodePath(raw) : raw;   // (only escapes change in decoding)
             self.queryText = q >= 0 ? target[q + 1..] : "";
             self.queryMap = null;
-            self.params = new HashMap<string, string>();
+            self.params = null;                                                  // made when a route captures one
             self.formParts = null;
         }
         // The value of header `name` ("" when absent).
@@ -427,11 +484,14 @@ namespace std.net {
         // The body parsed as JSON (throws ValueError when it is not JSON).
         public fn json() -> JsonValue { return Json.parse(self.body()); }
         // A route parameter: for the route "/users/:id", param("id").
-        public fn param(name: string) -> string { return self.params.getOr(name, ""); }
+        public fn param(name: string) -> string { return self.params == null ? "" : self.params.getOr(name, ""); }
         // A route parameter as a number, or `fallback` when it is not one.
         public fn paramInt(name: string, fallback: int) -> int { return Format.toIntOr(self.param(name), fallback); }
         // Sets a path parameter (as a route pattern's `:name` would).
-        public fn setParam(name: string, value: string) { self.params.put(name, value); }
+        public fn setParam(name: string, value: string) {
+            if (self.params == null) { self.params = new HashMap<string, string>(); }
+            self.params.put(name, value);
+        }
         // A query-string value ("" when absent).
         public fn query(name: string) -> string { return self.queryParams().getOr(name, ""); }
         // A query-string value as a number, or `fallback`.
@@ -963,6 +1023,20 @@ namespace std.net {
             sb.append("\r\n");
             return sb.toString();
         }
+        // The request or status line and headers, appended to `out`.
+        static fn headInto(out: Bytes, firstLine: string, headers: Headers) {
+            out.appendString(firstLine);
+            out.appendString("\r\n");
+            for (i in 0..headers.size()) {
+                out.appendString(headers.nameAt(i));
+                out.appendString(": ");
+                out.appendString(headers.valueAt(i));
+                out.appendString("\r\n");
+            }
+            out.appendString("\r\n");
+        }
+        // A number as text ("1427"), for header values.
+        static fn intText(n: long) -> string { return %{ grav_http_itoa(n) %} as string; }
         // Writes a request or status line and the headers to the connection.
         static fn writeHead(conn: TcpStream, firstLine: string, headers: Headers) { conn.write(Http.head(firstLine, headers)); }
         // Writes the head and a body in one go (one packet for small messages).
@@ -1000,14 +1074,18 @@ namespace std.net {
     %{
     #include <time.h>
     static const char* grav_http_date(void) {
-        char buf[64];
+        static _Thread_local time_t last = -1;                  /* formatted once a second per thread */
+        static _Thread_local char buf[64];
         time_t now = time(0);
-        struct tm g;
-        gmtime_r(&now, &g);
-        static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-        static const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-        snprintf(buf, sizeof buf, "%s, %02d %s %04d %02d:%02d:%02d GMT", days[g.tm_wday], g.tm_mday,
-                 months[g.tm_mon], g.tm_year + 1900, g.tm_hour, g.tm_min, g.tm_sec);
+        if (now != last) {
+            struct tm g;
+            gmtime_r(&now, &g);
+            static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+            static const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+            snprintf(buf, sizeof buf, "%s, %02d %s %04d %02d:%02d:%02d GMT", days[g.tm_wday], g.tm_mday,
+                     months[g.tm_mon], g.tm_year + 1900, g.tm_hour, g.tm_min, g.tm_sec);
+            last = now;
+        }
         return grav_net_copy(buf);
     }
     %}
