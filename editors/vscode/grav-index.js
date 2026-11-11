@@ -46,7 +46,7 @@ const KEYWORDS = [
 ];
 const TYPES = [
   "int", "long", "uint", "byte", "float", "float32", "double", "bool", "string", "void",
-  "binary", "any", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+  "binary", "any", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "Self",
 ];
 const BUILTINS = [
   ["print", "print(value)", "Print a value and a newline."],
@@ -65,6 +65,7 @@ const BUILTINS = [
   ["env", "env(name) -> string", "An environment variable (\"\" when unset)."],
   ["cwd", "cwd() -> string", "The working directory."],
   ["isInstance", "isInstance(object, Type) -> bool", "Is the object a Type (or a subclass)?"],
+  ["reflect", "reflect(Class) -> ClassInfo", "Run-time information about a class (import \"std\"): its fields (read and written through any), methods and decorators. In a static method, reflect(Self) is the class the call names."],
   ["int", "int(value) -> int", "Convert a number, bool or enum to an int (floats are truncated)."],
   ["float", "float(value) -> float", "Convert a number or bool to a float."],
   ["bool", "bool(value) -> bool", "Convert a number to a bool (nonzero is true)."],
@@ -97,6 +98,7 @@ const KEYWORD_DOCS = {
   typedef: ["A synonym of `type`: a type alias.", "typedef Grid = int[3]"],
   interface: ["A set of method signatures a class can implement; `is` / `as` check and convert at run time.", "interface Shape { fn area() -> float }"],
   trait: ["An interface whose methods may have default bodies; `Self` is the implementing class.", "trait Comparable { fn compareTo(o: Self) -> int }"],
+  Self: ["As a class method's result type: the receiver's own class, so chains keep a subclass's type (the method returns `self`). In a static method: the class the call names (`new Self()`, `Self.table()`, `Array<Self>`). In a trait: the implementing class.", "fn where(c: string) -> Self { self.parts.push(c); return self }\nstatic fn find(id: int) -> Self { return new Self() }"],
   abstract: ["An abstract class cannot be instantiated; an abstract method has no body and must be overridden.", "abstract class Shape { abstract fn area() -> float }"],
   final: ["A final class cannot be extended; a final method cannot be overridden (calls are direct).", "final class Version { ... }"],
   namespace: ["Groups declarations under a dotted name.", "namespace geo { class Point { ... } }"],

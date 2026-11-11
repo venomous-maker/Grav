@@ -37,7 +37,7 @@ syn keyword gravBoolean true false
 syn keyword gravConstant null self this Self super
 
 " Built-in functions
-syn keyword gravBuiltin print println typename isInstance str input argc argv len
+syn keyword gravBuiltin print println typename isInstance reflect str input argc argv len
 syn keyword gravBuiltin free panic assert assertEq exit cwd env
 
 " Numbers: 42, 1_000_000, 0xff_ff, 0b1010, 2.5, 1e9, 2.5e-3
@@ -70,7 +70,7 @@ endif
 syn region gravCBlock matchgroup=gravCBlockDelim start="%{" end="%}" keepend contains=@gravCSyntax
 
 " Decorators
-syn match gravDecorator "@\w\+"
+syn match gravDecorator "@\w\+\%(\.\w\+\)*"
 
 " Semantic matches. `syn keyword` always wins at its own position, so names
 " after a keyword are matched with a look-behind (the match starts at the name).

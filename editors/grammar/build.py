@@ -92,7 +92,7 @@ repo = {
         "comment": "f(x, name: value) — a named argument (also struct literal fields)",
         "match": r"(?<=[(,{])\s*(" + ID + r")\s*(:)(?!:)",
         "captures": {"1": {"name": "variable.parameter.named.grav"}, "2": {"name": "punctuation.separator.grav"}}},
-    "decorators": {"match": r"(@)(" + ID + r")", "captures": {"1": {"name": "punctuation.definition.decorator.grav"}, "2": {"name": "entity.name.function.decorator.grav"}}},
+    "decorators": {"match": r"(@)(" + ID + r"(?:\." + ID + r")*)", "captures": {"1": {"name": "punctuation.definition.decorator.grav"}, "2": {"name": "entity.name.function.decorator.grav"}}},
     "type-params": {
         "comment": "<T, U: Bound> after a declaration name",
         "begin": r"<", "end": r">",
@@ -177,7 +177,7 @@ repo = {
         {"match": r"\b0[bB][01](?:_?[01])*\b", "name": "constant.numeric.binary.grav"},
         {"match": r"\b\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d+)?\b", "name": "constant.numeric.decimal.grav"},
     ]},
-    "builtins": {"match": r"\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|int|float|bool)\b(?=\s*\()", "name": "support.function.builtin.grav"},
+    "builtins": {"match": r"\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|reflect|int|float|bool)\b(?=\s*\()", "name": "support.function.builtin.grav"},
     "case-pattern": {
         "comment": "case Circle(r, _): / case Shape.Empty:",
         "match": r"\b(case)\s+((?:" + ID + r"\.)*)(" + ID + r")(?=\s*[(:,])",
