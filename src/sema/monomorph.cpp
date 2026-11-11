@@ -277,6 +277,7 @@ MethodDecl cloneMethod(const MethodDecl &m) {
     n.name = m.name; n.params = m.params; n.returnType = m.returnType;
     n.hasBody = m.hasBody; n.isFinal = m.isFinal; n.line = m.line; n.col = m.col;
     n.typeParams = m.typeParams;
+    n.decorators = m.decorators;
     n.body = cloneBlock(m.body);
     return n;
 }
@@ -661,6 +662,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
         if (i < out->interfaceArgs.size())
             rewriteSuper(out->interfaceNames[i], out->interfaceArgs[i], subst,
                          /*isClass=*/false, tpl->line, tpl->col);
+    out->decorators = tpl->decorators;
     out->delegates = tpl->delegates; // `uses field: T` forwarding survives instantiation
     for (auto &d : out->delegates) rewriteType(d.type, subst, tpl->line, tpl->col);
     for (const auto &f : tpl->fields) {

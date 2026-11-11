@@ -446,12 +446,29 @@ struct Param {
     std::shared_ptr<Expr> defaultValue;
 };
 
+// `@Name` or `@Name(args)`: metadata attached to a declaration, read at run time
+// through reflection (std.core.ClassInfo). Arguments are literal values, or
+// names (`@HasMany(Post)`), which are kept as their text.
+struct DecoratorArg {
+    enum class Kind { String, Int, Float, Bool, Name } kind = Kind::String;
+    std::string text; // String, Name, and a Float's spelling
+    long long i = 0;
+    double f = 0;
+    bool b = false;
+};
+struct Decorator {
+    std::string name;
+    std::vector<DecoratorArg> args;
+    int line = 0, col = 0;
+};
+
 struct FieldDecl {
     Access access = Access::Public;
     bool isReadonly = false;
     bool isWeak = false; // `weak parent: Node`: does not keep the object alive
     std::string name;
     TypeRef type;
+    std::vector<Decorator> decorators;
     int line = 0, col = 0;
 };
 
@@ -476,12 +493,14 @@ struct MethodDecl {
     // call gives back the caller's own static type. Set by the registry, which
     // makes `returnType` the defining class.
     bool returnsSelf = false;
+    std::vector<Decorator> decorators;
     int line = 0, col = 0;
 };
 
 struct ConstructorDecl {
     std::vector<Param> params;
     Block body;
+    std::vector<Decorator> decorators;
     bool present = false;
     int line = 0, col = 0;
 };
@@ -497,9 +516,9 @@ struct DestructorDecl {
 struct Decl {
     int line = 0, col = 0;
     std::string fqName; // fully-qualified, filled during parse from namespace
-    // `@Name` decorators and `export` modifier (metadata; no runtime effect —
-    // every top-level name is already visible across modules).
-    std::vector<std::string> decorators;
+    // `@Name(...)` decorators (read through reflection on classes) and the
+    // `export` modifier (documentation: every top-level name is visible).
+    std::vector<Decorator> decorators;
     bool exported = false;
     virtual ~Decl() = default;
 };
@@ -512,6 +531,7 @@ struct StaticFieldDecl {
     std::string name;
     TypeRef type;
     ExprPtr init;
+    std::vector<Decorator> decorators;
     int line = 0, col = 0;
 };
 

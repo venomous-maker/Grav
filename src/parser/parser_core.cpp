@@ -1,6 +1,8 @@
 #include "parser/parser.h"
 
 #include <charconv>
+#include <cstdlib>
+#include <functional>
 #include <unordered_map>
 
 #include "common/diagnostics.h"
@@ -88,15 +90,11 @@ Program Parser::parseProgram() {
 void Parser::parseTopLevel(Program &program) {
     // Optional leading `@Decorator`s and an `export` modifier. These are metadata
     // only (every top-level name is already visible); they attach to the decl.
-    std::vector<std::string> decorators;
+    std::vector<Decorator> decorators;
     bool exported = false;
     while (check(TokenType::At) || check(TokenType::Export)) {
         if (matchToken(TokenType::Export)) { exported = true; continue; }
-        advance(); // '@'
-        decorators.push_back(parseQualifiedName("after '@'"));
-        // Optional decorator argument list, e.g. `@route("/x")` — parsed and
-        // discarded so the syntax is accepted.
-        if (check(TokenType::LParen)) parseArguments();
+        for (auto &d : parseDecorators()) decorators.push_back(std::move(d));
     }
     bool decorated = !decorators.empty() || exported;
 
@@ -564,6 +562,8 @@ DeclPtr Parser::parseClass(bool isAbstract) {
 
     expect(TokenType::LBrace, "to open the class body");
     while (!check(TokenType::RBrace) && !atEnd()) {
+        // Decorators for the member that follows (read through reflection).
+        std::vector<Decorator> decos = parseDecorators();
         // Optional access modifier.
         Access access = Access::Public;
         bool sawAccess = false;
@@ -576,6 +576,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             // A second `constructor(...)` is an overload (resolved by argument types).
             if (cls->constructor.present) cls->extraCtors.push_back(parseConstructor());
             else cls->constructor = parseConstructor();
+            (cls->extraCtors.empty() ? cls->constructor : cls->extraCtors.back()).decorators = std::move(decos);
             continue;
         }
         // `destructor() { ... }` (contextual) — runs when `free(obj)` releases it.
@@ -583,6 +584,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             peekAt(1).type == TokenType::LParen) {
             const Token &dk = advance();
             if (sawAccess) fail(dk, "destructors cannot have an access modifier");
+            if (!decos.empty()) fail(dk, "decorators cannot be applied to a destructor");
             if (cls->destructor.present) fail(dk, "a class can have only one destructor");
             expect(TokenType::LParen, "after 'destructor'");
             expect(TokenType::RParen, "a destructor takes no parameters");
@@ -616,6 +618,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             if (isAbstractMethod && isStatic)
                 fail(peek(), "a method cannot be both 'abstract' and 'static'");
             if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
+            m.decorators = std::move(decos);
             cls->methods.push_back(std::move(m));
         } else if (check(TokenType::Identifier)) {
             if (isStatic) {
@@ -632,6 +635,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                 expect(TokenType::Assign, "a static field requires an initializer");
                 sf.init = parseExpression();
                 matchToken(TokenType::Semicolon);
+                sf.decorators = std::move(decos);
                 cls->staticFields.push_back(std::move(sf));
             } else {
                 // `weak` is contextual: a modifier only when a field name follows.
@@ -642,6 +646,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                 }
                 cls->fields.push_back(parseField(access, isReadonly));
                 cls->fields.back().isWeak = isWeak;
+                cls->fields.back().decorators = std::move(decos);
                 matchToken(TokenType::Semicolon); // `x: int;` is accepted too
             }
         } else {
@@ -652,6 +657,55 @@ DeclPtr Parser::parseClass(bool isAbstract) {
     }
     expect(TokenType::RBrace, "to close the class body");
     return cls;
+}
+
+std::vector<Decorator> Parser::parseDecorators() {
+    std::vector<Decorator> out;
+    while (check(TokenType::At)) {
+        const Token &at = advance();
+        Decorator d;
+        d.line = at.line;
+        d.col = at.col;
+        d.name = parseQualifiedName("after '@'");
+        if (check(TokenType::LParen)) {
+            for (auto &e : parseArguments()) {
+                DecoratorArg a;
+                const Expr *x = e.get();
+                bool neg = false;
+                if (auto *b = dynamic_cast<const BinaryExpr *>(x); b && b->op == BinaryOp::Sub) {
+                    auto *z = dynamic_cast<const IntLiteralExpr *>(b->left.get());
+                    if (z && z->raw == "0") { neg = true; x = b->right.get(); }   // `-5` is parsed as 0 - 5
+                }
+                std::function<std::string(const Expr *)> spelled = [&](const Expr *n) -> std::string {
+                    if (auto *nm = dynamic_cast<const NameExpr *>(n)) return nm->typeArgs.empty() ? nm->name : "";
+                    if (auto *m = dynamic_cast<const MemberExpr *>(n)) {
+                        std::string o = spelled(m->object.get());
+                        return o.empty() ? "" : o + "." + m->member;
+                    }
+                    return "";
+                };
+                if (auto *s = dynamic_cast<const StringLiteralExpr *>(x); s && !neg) {
+                    a.kind = DecoratorArg::Kind::String; a.text = s->value;
+                } else if (auto *i = dynamic_cast<const IntLiteralExpr *>(x)) {
+                    a.kind = DecoratorArg::Kind::Int; a.i = neg ? -i->value : i->value;
+                } else if (auto *f = dynamic_cast<const FloatLiteralExpr *>(x)) {
+                    a.kind = DecoratorArg::Kind::Float; a.text = (neg ? "-" : "") + f->raw; a.f = std::strtod(a.text.c_str(), nullptr);
+                } else if (auto *bl = dynamic_cast<const BoolLiteralExpr *>(x); bl && !neg) {
+                    a.kind = DecoratorArg::Kind::Bool; a.b = bl->value;
+                } else if (std::string n = neg ? "" : spelled(x); !n.empty()) {
+                    a.kind = DecoratorArg::Kind::Name; a.text = n;
+                } else {
+                    Token where = peek();
+                    where.line = e->line;
+                    where.col = e->col;
+                    fail(where, "a decorator argument is a literal (a string, a number, true or false) or a name");
+                }
+                d.args.push_back(std::move(a));
+            }
+        }
+        out.push_back(std::move(d));
+    }
+    return out;
 }
 
 FieldDecl Parser::parseField(Access access, bool readonly) {

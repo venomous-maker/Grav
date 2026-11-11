@@ -58,6 +58,8 @@ private:
     TypeRef parseType(const char *context);
     static const TypeRef *builtinTypeName(const std::string &name);
     std::string parseQualifiedName(const char *context);
+    // `@Name` / `@Name(literal, ...)` decorators before a declaration or member.
+    std::vector<Decorator> parseDecorators();
     // Generics: `<T, U>` param lists on declarations, `<int, string>` argument
     // lists in type/call positions, and the `>`-splitting close that lets
     // `Box<Box<int>>` work despite the `>>` token.
