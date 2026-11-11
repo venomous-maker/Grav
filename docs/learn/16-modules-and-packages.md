@@ -246,7 +246,15 @@ grav packages                                     # list dependencies and where 
   (set `GRAV_PACKAGES` to move it), shared by all your projects.
 - **Importing** a package by name (`import "colors"`) loads its entry file: the
   `lib` named in its own `grav.toml`, or else `colors.grav`, `lib.grav` or
-  `src/lib.grav`.
+  `src/lib.grav`. The names in the package's namespaces are then usable without
+  a prefix, as with the standard library (your own declarations win a clash).
+- **Local packages:** `grav add ../grav-db` uses a package straight from a folder
+  on your machine, before it is published. It writes
+  `grav-db = { path = "../grav-db" }` to `grav.toml`: the folder is read in
+  place, so edits show at once, `grav install` installs the package's own
+  dependencies, and nothing is pinned in `grav.lock`. Publish it, then switch
+  with `grav add github.com/you/grav-db`. (`grav add --git <folder>` clones a
+  local repository's commits instead.)
 
 To publish a package, push a repository with a `grav.toml` (with a `lib = "..."`
 entry) and tag a version: `git tag v1.0.0 && git push --tags`.

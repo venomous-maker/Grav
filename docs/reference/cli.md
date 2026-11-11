@@ -15,6 +15,7 @@ installed, it is `build/gravc`; both behave the same.)
 | `grav env [--json]` | shows where the compiler, standard library and packages are |
 | `grav new <name>` | creates a project folder with `grav.toml` and `src/main.grav` |
 | `grav add <repo>[@version]` | adds a dependency and installs it |
+| `grav add <directory>` | uses a package from a folder on this machine, as it is (`--git` clones its commits instead) |
 | `grav install` | installs the dependencies listed in `grav.lock` / `grav.toml` |
 | `grav update [name]` | moves dependencies to their newest tags |
 | `grav remove <name>` | removes a dependency |
@@ -93,10 +94,12 @@ paths = ["src", "vendor"]     # extra folders to search for imports
 [dependencies]
 colors = "github.com/someone/grav-colors@v1.2.0"
 http2 = { git = "https://gitlab.com/team/http2", version = "v0.3.1" }
+db = { path = "../grav-db" }  # a local folder, used in place (relative to grav.toml)
 ```
 
 `grav.lock` is written by `grav add`, `install` and `update`; it pins every
-dependency (and their dependencies) to an exact commit. Commit it.
+dependency (and their dependencies) to an exact commit. Commit it. A `path`
+dependency is read from its folder each time and is not pinned.
 
 ## Environment variables
 
