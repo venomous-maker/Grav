@@ -32,6 +32,7 @@ struct MethodInfo {
     std::vector<TypeRef> paramTypes; // canonical
     std::vector<std::string> paramNames;
     TypeRef returnType;              // canonical
+    bool returnsSelf = false;        // `-> Self` in a class (returnType is then the defining class)
     std::string definingClass;      // FQ
     MethodDecl *decl = nullptr;      // AST node (for body); null for interface/synthetic
     bool hasBody = false;

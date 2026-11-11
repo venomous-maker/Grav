@@ -214,6 +214,7 @@ void TypeChecker::checkFunction(FunctionDecl &fn) {
     currentClass_.clear();
     currentNs_ = Registry::namespaceOf(fn.fqName);
     currentReturn_ = fn.returnType;
+    currentReturnsSelf_ = false;
     inConstructor_ = false;
     inStatic_ = false;
     inAsync_ = fn.isAsync;
@@ -235,6 +236,7 @@ void TypeChecker::checkClass(ClassDecl &cls) {
     currentNs_ = Registry::namespaceOf(cls.fqName);
     inAsync_ = false; // methods are not async in core v0.2
 
+    currentReturnsSelf_ = false;
     auto checkCtor = [&](ConstructorDecl &ctor) {
         inConstructor_ = true;
         inStatic_ = false;
@@ -262,11 +264,13 @@ void TypeChecker::checkClass(ClassDecl &cls) {
         inConstructor_ = false;
         inStatic_ = m.isStatic;
         currentReturn_ = m.returnType;
+        currentReturnsSelf_ = m.returnsSelf;
         checkDefaults(m.params);
         pushScope();
         for (auto &p : m.params) declareLocal(p.name, p.type, true, false, m.line, m.col);
         checkBlock(m.body);
         popScope();
+        currentReturnsSelf_ = false;
         checkFallthrough(m.body, m.returnType, m.line, m.col,
                          "method '" + cls.fqName + "." + m.name + "'");
     }
@@ -783,11 +787,37 @@ void TypeChecker::checkReturn(ReturnStmt &s) {
             error(s.value->line, s.value->col, "return type mismatch: expected " +
                                                    typeRefName(currentReturn_) +
                                                    ", got " + typeRefName(vt) + nullHint(vt, currentReturn_));
+        } else if (currentReturnsSelf_ && !isSelfValue(*s.value) &&
+                   !dynamic_cast<const NullLiteralExpr *>(s.value.get())) {
+            // Callers type the result as their receiver's class, which only `self`
+            // (or what a Self method returns for it) is sure to be.
+            error(s.value->line, s.value->col, "a method returning Self must return self, null, or the result of "
+                                               "a Self method called on self");
         }
     } else if (!currentReturn_.isVoid()) {
         error(s.line, s.col, "expected a return value of type " +
                                  typeRefName(currentReturn_));
     }
+}
+
+bool TypeChecker::isSelfValue(const Expr &e) const {
+    if (dynamic_cast<const SelfExpr *>(&e)) return true;
+    if (auto *t = dynamic_cast<const TernaryExpr *>(&e)) {
+        auto ok = [&](const Expr *x) { return x && (isSelfValue(*x) || dynamic_cast<const NullLiteralExpr *>(x)); };
+        return ok(t->thenExpr.get()) && ok(t->elseExpr.get()) &&
+               (isSelfValue(*t->thenExpr) || isSelfValue(*t->elseExpr));
+    }
+    auto *c = dynamic_cast<const CallExpr *>(&e);
+    if (!c || c->ifaceDispatch) return false;
+    if (c->kind == CallKind::SuperMethod) {
+        const MethodInfo *mi = reg_->findMethod(c->ownerClass, c->methodName);
+        return mi && mi->returnsSelf;
+    }
+    if (c->kind != CallKind::InstanceMethod) return false;
+    auto *mem = dynamic_cast<const MemberExpr *>(c->callee.get());
+    if (!mem || mem->optional) return false;
+    const MethodInfo *mi = reg_->findMethod(c->ownerClass, c->methodName);
+    return mi && mi->returnsSelf && isSelfValue(*mem->object);
 }
 
 } // namespace grav

@@ -1125,6 +1125,10 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
     e.kind = CallKind::SuperMethod;
     e.methodName = mi->name;
     e.ownerClass = mi->definingClass; // class whose C function we call directly
+    if (mi->returnsSelf) {                // the receiver is self: this class
+        TypeRef own = TypeRef::named(currentClass_);
+        return mi->returnType.isNullable() ? TypeRef::nullable(own) : own;
+    }
     return mi->returnType;
 }
 
@@ -1490,6 +1494,11 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         e.methodName = mem->member;
         if (!resolveMethodOverload({mi}, e.args, e.line, e.col, "method '" + objType.name + "." + mem->member + "'"))
             return TypeRef::prim(TypeRef::Kind::Error);
+        if (mi->returnType.isNamed() && mi->returnType.name == "Self") {
+            error(mem->line, mem->col, "method '" + mem->member + "' returns Self, which cannot be called through "
+                                       "interface '" + objType.name + "' yet: call it on a class value");
+            return TypeRef::prim(TypeRef::Kind::Error);
+        }
         return mi->returnType;
     }
 
@@ -1538,8 +1547,11 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     e.methodName = mi->name;
     e.ownerClass = objType.name;
     e.slotOwner = slotOwner;
-    if (mem->optional) checkOptionalResult(e.line, e.col, mi->returnType, /*allowVoid=*/true);
-    return mi->returnType;
+    // `-> Self`: the receiver's own class (its static type here).
+    TypeRef result = mi->returnType;
+    if (mi->returnsSelf) result = mi->returnType.isNullable() ? TypeRef::nullable(objType) : objType;
+    if (mem->optional) checkOptionalResult(e.line, e.col, result, /*allowVoid=*/true);
+    return result;
 }
 
 void TypeChecker::checkOptionalResult(int line, int col, const TypeRef &t,

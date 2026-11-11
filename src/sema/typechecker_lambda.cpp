@@ -128,6 +128,8 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
     }
     // The body is checked like a fresh function nested in the current scopes.
     TypeRef savedReturn = currentReturn_;
+    bool savedReturnsSelf = currentReturnsSelf_;
+    currentReturnsSelf_ = false; // a lambda's returns are its own
     int savedLoop = loopDepth_;
     bool savedDefer = inDefer_, savedAsync = inAsync_, savedCtor = inConstructor_;
     lambdaStack_.push_back({&e, scopes_.size()});
@@ -167,6 +169,7 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
     popScope();
     lambdaStack_.pop_back();
     currentReturn_ = savedReturn;
+    currentReturnsSelf_ = savedReturnsSelf;
     loopDepth_ = savedLoop;
     inDefer_ = savedDefer;
     inAsync_ = savedAsync;

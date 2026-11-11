@@ -264,6 +264,9 @@ private:
     std::string currentClass_; // FQ, empty in a free function
     std::string currentNs_;    // namespace context
     TypeRef currentReturn_;
+    bool currentReturnsSelf_ = false; // in a method returning Self (see isSelfValue)
+    // `self`, or a Self-returning call on it: what a method returning Self may return.
+    bool isSelfValue(const Expr &e) const;
     // A block lambda without a return type infers it from its `return`s.
     bool inferringReturn_ = false;
     std::vector<TypeRef> inferredReturns_;

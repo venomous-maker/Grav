@@ -843,12 +843,37 @@ void Registry::canonicalize() {
                     error(ci.ctors[b]->line, ci.ctors[b]->col,
                           "duplicate constructor with the same parameter types in class '" + fq + "'");
             }
+        auto isSelf = [](const TypeRef &t) { return t.isNamed() && t.name == "Self" && t.args.empty(); };
+        auto mentionsSelf = [&](const TypeRef &t) {
+            std::function<bool(const TypeRef &)> any = [&](const TypeRef &x) -> bool {
+                if (isSelf(x)) return true;
+                for (const auto &a : x.args) if (any(a)) return true;
+                for (const auto &a : x.fnParams) if (any(a)) return true;
+                return x.elem && any(*x.elem);
+            };
+            return any(t);
+        };
         for (size_t i = 0; i < cd->methods.size(); ++i) {
             MethodDecl &m = cd->methods[i];
             m.returnType = canonType(m.returnType, ns, m.line, m.col);
+            // `-> Self` / `-> Self?`: the method returns its receiver (checked with
+            // its body); calls type it as the receiver's own class.
+            if (!m.isStatic && isSelf(m.returnType)) {
+                m.returnType = TypeRef::named(fq);
+                m.returnsSelf = true;
+            } else if (!m.isStatic && m.returnType.isNullable() && m.returnType.elem && isSelf(*m.returnType.elem)) {
+                m.returnType = TypeRef::nullable(TypeRef::named(fq));
+                m.returnsSelf = true;
+            } else if (mentionsSelf(m.returnType)) {
+                error(m.line, m.col, "in a class, Self can only be the whole return type of a method (-> Self or -> Self?)");
+            }
             ci.methods[i].returnType = m.returnType;
+            ci.methods[i].returnsSelf = m.returnsSelf;
             for (size_t j = 0; j < m.params.size(); ++j) {
                 m.params[j].type = canonType(m.params[j].type, ns, m.line, m.col);
+                if (mentionsSelf(m.params[j].type))
+                    error(m.line, m.col, "in a class, Self can only be a method's return type, not the type of parameter '" +
+                                             m.params[j].name + "'");
                 ci.methods[i].paramTypes[j] = m.params[j].type;
             }
         }
@@ -1026,11 +1051,25 @@ void Registry::checkHierarchies() {
                 error(m.decl->line, m.decl->col,
                       "method '" + m.name + "' overrides final method in '" +
                           base->definingClass + "'");
-            bool ok = base->returnType == m.returnType &&
+            // Methods returning Self return their own class each, so the two
+            // return types differ in name only.
+            // A static method is never dispatched through the base, so its
+            // redefinition may return a subclass (as `static fn find() -> Self` does).
+            bool covariantStatic = m.isStatic && m.returnType.isNamed() && base->returnType.isNamed() &&
+                                   isClass(m.returnType.name) && isSubclass(m.returnType.name, base->returnType.name);
+            bool ok = (base->returnsSelf || m.returnsSelf
+                           ? base->returnsSelf == m.returnsSelf && base->returnType.isNullable() == m.returnType.isNullable()
+                           : base->returnType == m.returnType || covariantStatic) &&
                       base->paramTypes.size() == m.paramTypes.size();
             for (size_t i = 0; ok && i < m.paramTypes.size(); ++i)
                 ok = base->paramTypes[i] == m.paramTypes[i];
-            if (!ok) {
+            if (!ok && base->returnsSelf != m.returnsSelf && m.decl) {
+                error(m.decl->line, m.decl->col,
+                      base->returnsSelf ? "override of '" + m.name + "' must return Self, like the method in '" +
+                                              base->definingClass + "'"
+                                        : "override of '" + m.name + "' returns Self, but the method it overrides in '" +
+                                              base->definingClass + "' does not");
+            } else if (!ok) {
                 error(m.decl->line, m.decl->col,
                       "override of '" + m.name + "' does not match the signature in '" +
                           base->definingClass + "'");

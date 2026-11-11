@@ -472,6 +472,10 @@ struct MethodDecl {
     Block body;
     bool hasBody = true;
     bool isFinal = false; // `final fn`: cannot be overridden
+    // `fn m() -> Self` (or `Self?`) in a class: it returns its receiver, so each
+    // call gives back the caller's own static type. Set by the registry, which
+    // makes `returnType` the defining class.
+    bool returnsSelf = false;
     int line = 0, col = 0;
 };
 

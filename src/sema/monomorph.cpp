@@ -306,6 +306,7 @@ private:
     std::vector<DeclPtr> instances_;
 
     void error(int line, int col, const std::string &m) { errors.emplace_back("generic", line, col, m); }
+    void semaError(int line, int col, const std::string &m) { errors.emplace_back("sema", line, col, m); }
 
     void rewriteType(TypeRef &t, const Subst &subst, int line, int col);
     std::string instantiateStruct(const std::string &name, const std::vector<TypeRef> &args,
@@ -331,6 +332,7 @@ private:
     void walkDeclTypes(Decl *d, const Subst &subst);
     void rewriteParams(std::vector<Param> &ps, const Subst &subst, int line, int col);
     void synthesizeTraits(); // copy interface/trait default methods into implementers
+    void instantiateSelfStatics(); // static methods naming Self, per class they are called on
     // Generic methods: templates (with the owning class's substitution) and the
     // `obj.m::<Args>(...)` requests seen so far; instantiated to a fixed point.
     struct GenericMethod { ClassDecl *owner; MethodDecl tpl; Subst classSubst; std::string ns; };
@@ -996,6 +998,9 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
 }
 
 void Mono::run() {
+    // Static methods naming Self get their copies first, so that generic types
+    // such as Array<Self> are concrete before generics are instantiated.
+    instantiateSelfStatics();
     // 0) Every declared type's fully-qualified name (for qualifying type arguments).
     for (auto &d : program_.decls)
         if (dynamic_cast<ClassDecl *>(d.get()) || dynamic_cast<StructDecl *>(d.get()) ||
@@ -1217,6 +1222,201 @@ void Mono::synthesizeTraits() {
                 c->methods.push_back(std::move(nm));
             }
         }
+    }
+}
+
+// ── Self in static methods ──────────────────────────────────────────────────
+// A static method that names Self (`static fn find(id: int) -> Self? { ...
+// new Self(...) ... }`) works for whichever class it is called on. The class that
+// declares it keeps a copy with Self as itself; each call through a subclass that
+// inherits it (`User.find(1)`) gets its own copy `find$User`, made in the
+// declaring class (so that class's private members stay in reach) with Self as
+// User, and the call is pointed at that copy. Calls inside a copy (`Self.other()`)
+// are followed the same way.
+namespace {
+bool isSelfType(const TypeRef &t) { return t.isNamed() && t.name == "Self" && t.args.empty(); }
+bool typeNamesSelf(const TypeRef &t) {
+    if (isSelfType(t)) return true;
+    for (const auto &a : t.args) if (typeNamesSelf(a)) return true;
+    for (const auto &a : t.fnParams) if (typeNamesSelf(a)) return true;
+    return t.elem && typeNamesSelf(*t.elem);
+}
+void substSelf(TypeRef &t, const std::string &fq) {
+    if (isSelfType(t)) { t = TypeRef::named(fq); return; }
+    for (auto &a : t.args) substSelf(a, fq);
+    for (auto &a : t.fnParams) substSelf(a, fq);
+    if (t.elem && typeNamesSelf(*t.elem)) {            // (copied: the element may be shared)
+        TypeRef e = *t.elem;
+        substSelf(e, fq);
+        t.elem = std::make_shared<TypeRef>(std::move(e));
+    }
+}
+// `a.b.C` for a dotted class name, as the parser would build it.
+ExprPtr classRef(const std::string &fq, int line, int col) {
+    size_t start = 0, dot = fq.find('.');
+    auto head = std::make_unique<NameExpr>();
+    head->name = fq.substr(0, dot);
+    head->line = line; head->col = col;
+    ExprPtr cur = std::move(head);
+    while (dot != std::string::npos) {
+        start = dot + 1;
+        dot = fq.find('.', start);
+        auto m = std::make_unique<MemberExpr>();
+        m->object = std::move(cur);
+        m->member = fq.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+        m->line = line; m->col = col;
+        cur = std::move(m);
+    }
+    return cur;
+}
+// The dotted name an expression spells (`User`, `app.User`), or "".
+std::string spelledName(const Expr *e) {
+    if (auto *n = dynamic_cast<const NameExpr *>(e)) return n->typeArgs.empty() ? n->name : "";
+    if (auto *m = dynamic_cast<const MemberExpr *>(e)) {
+        std::string o = spelledName(m->object.get());
+        return o.empty() ? "" : o + "." + m->member;
+    }
+    return "";
+}
+// Calls `onType` on every type written in a method, and `onName` on every class
+// name written in an expression (`new X`, `X.m()`, `x is X`); `onSlot` on each
+// expression slot.
+void eachTypeIn(MethodDecl &m, const std::function<void(TypeRef &)> &onType,
+                const std::function<void(ExprPtr &)> &onSlot) {
+    for (auto &p : m.params) onType(p.type);
+    onType(m.returnType);
+    for (auto &st : m.body.statements) {
+        visitStmt(*st, [&](Stmt &s) {
+            if (auto *l = dynamic_cast<LetStmt *>(&s)) { if (l->hasDeclaredType) onType(l->declaredType); }
+            else if (auto *f = dynamic_cast<ForInStmt *>(&s)) onType(f->varType);
+            else if (auto *t = dynamic_cast<TryStmt *>(&s)) for (auto &c : t->catches) onType(c.type);
+        }, [&](Expr &e) {
+            if (auto *x = dynamic_cast<AsExpr *>(&e)) onType(x->target);
+            else if (auto *x = dynamic_cast<CastExpr *>(&e)) onType(x->target);
+            else if (auto *x = dynamic_cast<IsExpr *>(&e)) onType(x->target);
+            else if (auto *x = dynamic_cast<SizeofExpr *>(&e)) { if (x->isType) onType(x->target); }
+            else if (auto *x = dynamic_cast<NewExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = dynamic_cast<CallExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = dynamic_cast<NameExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = dynamic_cast<StructLiteralExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = dynamic_cast<LambdaExpr *>(&e)) { for (auto &p : x->params) onType(p.type); onType(x->returnType); }
+        });
+        rewriteStmtExprs(*st, onSlot);
+    }
+}
+bool methodNamesSelf(MethodDecl &m) {
+    bool found = false;
+    eachTypeIn(m, [&](TypeRef &t) { if (typeNamesSelf(t)) found = true; }, [&](ExprPtr &e) {
+        if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self") found = true;
+        else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") found = true;
+        else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") found = true;
+    });
+    return found;
+}
+void bindSelf(MethodDecl &m, const std::string &fq) {
+    eachTypeIn(m, [&](TypeRef &t) { substSelf(t, fq); }, [&](ExprPtr &e) {
+        if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self" && n->typeArgs.empty())
+            e = classRef(fq, n->line, n->col);
+        else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") x->className = fq;
+        else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") x->typeName = fq;
+    });
+}
+} // namespace
+
+void Mono::instantiateSelfStatics() {
+    std::unordered_map<std::string, ClassDecl *> byName;      // simple and qualified names
+    for (auto &d : program_.decls)
+        if (auto *c = dynamic_cast<ClassDecl *>(d.get()); c && c->typeParams.empty()) {
+            byName[c->fqName] = c;
+            byName.emplace(c->name, c);
+        }
+    // The templates: each class's static methods that name Self, before binding.
+    std::unordered_map<std::string, std::vector<MethodDecl>> tpl;   // "Class.method" -> overloads
+    for (auto &[nm, c] : byName) {
+        if (nm != c->fqName) continue;
+        for (auto &m : c->methods) {
+            if (!m.isStatic) continue;
+            if (!methodNamesSelf(m)) continue;
+            tpl[c->fqName + "." + m.name].push_back(cloneMethod(m));
+            bindSelf(m, c->fqName);                                // its own class's copy
+        }
+    }
+    // Self names a class only where the class is known: in a static method's copy.
+    for (auto &[nm, c] : byName) {
+        if (nm != c->fqName) continue;
+        for (auto &m : c->methods) {
+            if (m.isStatic) continue;
+            bool bad = false;
+            for (auto &st : m.body.statements)
+                rewriteStmtExprs(*st, [&](ExprPtr &e) {
+                    if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self") bad = true;
+                    else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") bad = true;
+                });
+            if (bad)
+                semaError(m.line, m.col, "Self names a class only in a static method; in method '" + m.name +
+                                         "' use self (its return type may still be Self)");
+        }
+    }
+    if (tpl.empty()) return;
+    auto declares = [&](ClassDecl *c, const std::string &m) {
+        for (auto &x : c->methods) if (x.name == m) return true;
+        return false;
+    };
+    std::unordered_map<std::string, bool> made;
+    std::vector<MethodDecl *> fresh;                               // copies whose bodies still need a look
+    struct Pending { ClassDecl *owner; std::vector<MethodDecl> copies; };
+    std::vector<Pending> pending;
+    auto onCall = [&](ExprPtr &slot) {
+        auto *call = dynamic_cast<CallExpr *>(slot.get());
+        if (!call) return;
+        auto *mem = dynamic_cast<MemberExpr *>(call->callee.get());
+        if (!mem) return;
+        std::string written = spelledName(mem->object.get());
+        auto cit = written.empty() ? byName.end() : byName.find(written);
+        if (cit == byName.end()) return;
+        ClassDecl *x = cit->second;
+        // The class whose `m` this call reaches: the nearest that declares one.
+        ClassDecl *owner = nullptr;
+        for (ClassDecl *cur = x; cur && !owner;) {
+            if (declares(cur, mem->member)) owner = cur;
+            else {
+                auto b = cur->baseName.empty() ? byName.end() : byName.find(cur->baseName);
+                cur = b == byName.end() ? nullptr : b->second;
+            }
+        }
+        if (!owner || owner == x) return;
+        auto t = tpl.find(owner->fqName + "." + mem->member);
+        if (t == tpl.end()) return;
+        std::string inst = instName(mem->member, {TypeRef::named(x->fqName)});
+        mem->member = inst;
+        std::string key = owner->fqName + "." + inst;
+        if (made[key]) return;
+        made[key] = true;
+        Pending p{owner, {}};
+        for (const auto &m : t->second) {
+            MethodDecl c = cloneMethod(m);
+            c.name = inst;
+            bindSelf(c, x->fqName);
+            p.copies.push_back(std::move(c));
+        }
+        pending.push_back(std::move(p));
+    };
+    rewriteExprs(program_, onCall);
+    // Copies call on (`Self.other()` became `User.other()`): follow them too.
+    while (!pending.empty()) {
+        std::vector<Pending> batch = std::move(pending);
+        pending.clear();
+        std::vector<std::pair<ClassDecl *, size_t>> added;          // (class, index): pointers only once all are in
+        for (auto &p : batch)
+            for (auto &c : p.copies) {
+                p.owner->methods.push_back(std::move(c));
+                added.push_back({p.owner, p.owner->methods.size() - 1});
+            }
+        fresh.clear();
+        for (auto &[c, i] : added) fresh.push_back(&c->methods[i]);
+        // (nothing is added to the methods while they are walked: new copies wait in `pending`)
+        for (MethodDecl *m : fresh)
+            for (auto &st : m->body.statements) rewriteStmtExprs(*st, onCall);
     }
 }
 

@@ -690,7 +690,11 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             std::string args = methodArgs(call.args, params, borrowed);
             std::string obj = mem->optional ? emitExpr(*mem->object)
                             : borrowed ? emitAs(*mem->object, mem->object->type) : emitStable(*mem->object, mem->object->type);
-            if (!mem->optional) return methodCall(obj, recv, call.methodName, args);
+            // `-> Self`: the C function returns its own class; the call is typed as the receiver's.
+            auto asSelf = [&](const std::string &c) {
+                return mi && mi->returnsSelf && !call.ifaceDispatch ? "((" + cTy(call.type) + ")(" + c + "))" : c;
+            };
+            if (!mem->optional) return asSelf(methodCall(obj, recv, call.methodName, args));
             // `a?.m(...)`: a side-effect-free receiver keeps the cheap inline guard
             // (and skips evaluating the arguments); anything else goes through a
             // null-checking thunk so the receiver is evaluated once.
@@ -708,10 +712,10 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                     return methodCall(o, recv, call.methodName, methodArgs(call.args, params), nullSafe);
                 });
             };
-            if (!simple) return render(/*nullSafe=*/true);
+            if (!simple) return asSelf(render(/*nullSafe=*/true));
             bool iface = reg_->isInterface(recv.name);
             std::string guard = iface ? "(" + obj + ").obj != 0" : obj + " != 0";
-            std::string out = render(/*nullSafe=*/false);
+            std::string out = asSelf(render(/*nullSafe=*/false));
             if (call.type.isVoid()) return "(" + guard + " ? (" + out + ", 0) : 0)";
             std::string nul = call.type.kind == TypeRef::Kind::String ? "\"\"" : "0";
             return "(" + guard + " ? " + out + " : " + nul + ")";
@@ -730,11 +734,12 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
         }
         case CallKind::SuperMethod: {
             std::vector<TypeRef> params;
-            if (const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName))
-                params = mi->paramTypes;
+            const MethodInfo *mi = reg_->findMethod(call.ownerClass, call.methodName);
+            if (mi) params = mi->paramTypes;
             std::string self = "(" + structName(call.ownerClass) + "*)self";
             std::string out = methodCName(call.ownerClass, call.methodName) + "(";
             emitArgs(out, call, params, true, self);
+            if (mi && mi->returnsSelf) return "((" + cTy(call.type) + ")(" + out + ")))";   // typed as this class
             return out + ")";
         }
         default:
