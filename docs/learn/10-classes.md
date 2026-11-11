@@ -201,6 +201,33 @@ ID-1
 ID-2
 ```
 
+A static field can hold any value, objects and collections included; like a
+global's, its initializer runs once at start-up when it is not a plain literal.
+Methods can be called on it directly (`Cache.items.size()`), and a lock or
+counter kept there is shared by every thread:
+
+```grav
+import "std"
+
+class Cache {
+    static items: HashMap<string, int> = {"a": 1}
+    static lock: Mutex = new Mutex()
+}
+
+fn main() {
+    Cache.lock.lock()
+    Cache.items.put("b", 2)
+    Cache.lock.unlock()
+    print(Cache.items.size())
+}
+```
+
+Output:
+
+```text
+2
+```
+
 Static methods have no `self`. They are useful for helpers related to a class,
 and for *factory* methods that create objects in a particular way, like
 `Color.gray(128)`. Much of the standard library is static functions grouped in a

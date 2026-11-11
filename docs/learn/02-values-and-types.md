@@ -139,6 +139,32 @@ Output:
 inventory: 2 requests
 ```
 
+A global's value can be anything: a computed value, an object, a list or map
+literal. Literal values are part of the program file; any other value is
+computed once at start-up, before `main` (or the tests) runs, in the order the
+declarations appear (imported modules' globals first), so a global can use
+those declared before it:
+
+```grav
+import "std"
+
+let base: int = 40
+let limit: int = base + 2
+let names: Array<string> = ["ada", "bob"]
+let seen: HashMap<string, int> = new HashMap<string, int>()
+
+fn main() {
+    seen.put("ada", 1)
+    print("${limit} ${names.size()} ${seen.size()}")
+}
+```
+
+Output:
+
+```text
+42 2 1
+```
+
 ## The built-in types
 
 | Type | What it holds | Examples |

@@ -14,7 +14,8 @@ enum Name<T> { Variant(field: T), Other(int, string), Empty,  fn method() { ... 
 interface Name<T> { fn method(x: T) -> R }
 trait Name { fn required(o: Self) -> int  fn provided() -> bool { ... } }
 type Alias<T> = Type          (typedef is a synonym)
-let name: T = value           (a global variable; the type is required)
+let name: T = value           (a global variable; the type is required; a non-literal value is
+                              computed at start-up, before main, in declaration order)
 const NAME: T = value         (a global constant)
 namespace a.b { declarations }
 import "path" | import "path" as alias | import { A, B as C } from "path"
