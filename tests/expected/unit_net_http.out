@@ -1,4 +1,4 @@
-running 13 tests
+running 14 tests
   ok    every method, and OPTIONS answered from the routes
   ok    CORS: preflight and response headers
   ok    ETags answer 304, and byte ranges 206 or 416
@@ -6,10 +6,11 @@ running 13 tests
   ok    multipart uploads and form fields
   ok    cookies, credentials, redirects and request details
   ok    keep-alive reuses connections across requests and threads
-  ok    the worker pool: idle connections, pipelining, idle timeouts, streams and upgrades
-  ok    slow clients wait in the poller, not on a worker
+  ok    connections: idle ones, pipelining, idle timeouts, streams and upgrades
+  ok    slow clients never hold up a loop
+  ok    event loops: long handlers, slow readers and floods of pipelined requests
   ok    limits: big bodies, long headers, too many connections
   ok    HTTPS and wss with a self-signed certificate
   ok    gzip responses for clients that ask, decoded by the client
   ok    URLs: parts, building and resolving links
-result: 13 passed, 0 failed
+result: 14 passed, 0 failed

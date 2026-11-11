@@ -203,12 +203,12 @@ test "keep-alive reuses connections across requests and threads" {
     s.stop()
 }
 
-test "the worker pool: idle connections, pipelining, idle timeouts, streams and upgrades" {
+test "connections: idle ones, pipelining, idle timeouts, streams and upgrades" {
     let s = app()
     s.workers = 2
     WebSocket.route(s, "/ws", fn(ws: WebSocket) { ws.messages(fn(m: WsMessage) { ws.send("echo " + m.text()) }) })
     s.start(0)
-    // Idle connections hold no worker: 200 of them, and requests still go through.
+    // Idle connections cost no thread: 200 of them, and requests still go through.
     let idle = new Array<TcpStream>()
     for (i in 0..200) { idle.push(TcpStream.connect("127.0.0.1", s.port())) }
     let waited = 0
@@ -234,11 +234,11 @@ test "the worker pool: idle connections, pipelining, idle timeouts, streams and 
     let streamed = behind.readAll()
     behind.close()
     assert(Str.contains(streamed, "line 999\n") && Str.endsWith(streamed, "hello next"))
-    // A streamed response runs off the workers, and the connection is kept after it.
+    // A streamed response runs off the loops, and the connection is kept after it.
     assertEq(Str.count(c.get(s.baseUrl() + "/stream").body(), "\n"), 1000)
     assertEq(c.get(s.baseUrl() + "/hello?name=after").body(), "hello after")
     assertEq(c.idleConnections(), 1)
-    // Upgraded connections get their own threads: more WebSockets than workers.
+    // Upgraded connections get their own threads: more WebSockets than loops.
     let sockets = new Array<WebSocket>()
     for (i in 0..4) { sockets.push(WebSocket.connect("ws://127.0.0.1:${s.port()}/ws", 5000)) }
     for (i in 0..4) { sockets[i].send("m${i}") }
@@ -267,13 +267,13 @@ test "the worker pool: idle connections, pipelining, idle timeouts, streams and 
     assertEq(own.activeConnections(), 0)
 }
 
-test "slow clients wait in the poller, not on a worker" {
+test "slow clients never hold up a loop" {
     let s = app()
     s.workers = 2
     s.headerTimeoutMs = 400
     s.start(0)
     let c = new HttpClient()
-    // Half-sent requests hold no worker: with more of them than workers, others are still served.
+    // Half-sent requests hold up no loop: with more of them than loops, others are still served.
     let slow = new Array<TcpStream>()
     for (i in 0..6) {
         let t = TcpStream.connect("127.0.0.1", s.port())
@@ -328,7 +328,7 @@ test "slow clients wait in the poller, not on a worker" {
     assertEq(c.post(s.baseUrl() + "/echo", big, "text/plain").body().length, 500000)
     c.close()
     s.stop()
-    // https: a client that stalls in the handshake holds no worker either.
+    // https: a client that stalls in the handshake holds up no loop either.
     if (!Tls.available()) { return }
     let ctx = TlsContext.selfSigned("localhost")
     let secure = app()
@@ -348,6 +348,64 @@ test "slow clients wait in the poller, not on a worker" {
     for (t in stalled) { t.close() }
     tc.close()
     secure.stop()
+}
+
+test "event loops: long handlers, slow readers and floods of pipelined requests" {
+    let s = new HttpServer()
+    s.workers = 2
+    s.get("/hello", fn(req: HttpRequest) => HttpResponse.text("hello"))
+    s.get("/sleep", fn(req: HttpRequest) -> HttpResponse { Time.sleepMs(600); return HttpResponse.text("slept") })
+    s.get("/big", fn(req: HttpRequest) => HttpResponse.text(Str.repeat("x", 2000000)))
+    s.get("/mid", fn(req: HttpRequest) => HttpResponse.text(Str.repeat("y", 60000)))
+    s.start(0)
+    let url = s.baseUrl()
+    let quick = fn() -> long {                            // ms for 5 requests on new connections
+        let t0 = Time.monotonicMs()
+        for (i in 0..5) {
+            let c = new HttpClient()
+            assertEq(c.get(url + "/hello").body(), "hello")
+            c.close()
+        }
+        return Time.monotonicMs() - t0
+    }
+    // A handler that blocks holds up its own loop only: new connections go to the other.
+    let slept = new Array<string>()
+    let sleeper = Thread.spawn(fn() { slept.push(new HttpClient().get(url + "/sleep").body()) })
+    Time.sleepMs(150)
+    assert(quick() < 300)
+    sleeper.join()
+    assertEq(slept[0], "slept")
+    // A big response to a client that reads slowly is written off the loop; the
+    // connection is kept for its next request.
+    let slow = TcpStream.connect("127.0.0.1", s.port())
+    slow.write("GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+    Time.sleepMs(100)
+    assert(quick() < 300)
+    assertEq(slow.readLine(), "HTTP/1.1 200 OK")
+    let length = 0
+    let line = slow.readLine()
+    while (line != "") {
+        if (Str.startsWith(Str.lower(line), "content-length:")) { length = Format.toIntOr(Str.trim(line[15..]), -1) }
+        line = slow.readLine()
+    }
+    assertEq(length, 2000000)
+    assertEq(slow.readExactly(length).size(), 2000000)
+    slow.write("GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    assert(Str.endsWith(slow.readAll(), "hello"))
+    slow.close()
+    // 100 pipelined requests whose answers fill the socket before the client reads:
+    // the rest are written from another thread, then the loop answers the others.
+    let flood = TcpStream.connect("127.0.0.1", s.port())
+    flood.write(Str.repeat("GET /mid HTTP/1.1\r\nHost: x\r\n\r\n", 100) + "GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    Time.sleepMs(100)
+    assert(quick() < 300)
+    let all = flood.readAll()
+    flood.close()
+    assertEq(Str.count(all, "HTTP/1.1 200 OK"), 101)
+    assert(Str.endsWith(all, "hello"))
+    assert(s.requestsServed() >= 117)
+    s.stop()
+    assertEq(s.activeConnections(), 0)
 }
 
 test "limits: big bodies, long headers, too many connections" {
