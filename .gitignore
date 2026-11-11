@@ -19,3 +19,6 @@ examples/project/main
 
 # tests/docs.sh writes each snippet next to its page while it runs
 .snippet_*.grav
+
+# grav-db: its own repository (github.com/venomous-maker/grav-db), kept here while developing
+/grav-db/
