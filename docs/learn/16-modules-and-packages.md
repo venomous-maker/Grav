@@ -254,9 +254,11 @@ entry) and tag a version: `git tag v1.0.0 && git push --tags`.
 ## export and decorators
 
 `export` marks a declaration as part of a module's public interface, and
-decorators like `@Deprecated("...")` attach notes to declarations. Today both are
-documentation: every top-level declaration is visible to importers, and
-decorators have no effect when the program runs. Tools can read them.
+decorators like `@Deprecated("...")` attach notes to declarations. `export` is
+documentation: every top-level declaration is visible to importers. Decorators
+do nothing by themselves, but on classes and their members they are recorded
+with their arguments, and code reads them at run time through
+[reflection](../std/core/reflect.md) (`@Table("users")`, `@Column("email")`).
 
 ```grav
 @Deprecated("use total()")

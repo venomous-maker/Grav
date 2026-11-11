@@ -34,6 +34,7 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [timsort](core/timsort.md) | `TimSorter`: the sorting algorithm underneath |
 | [panic](core/panic.md) | `Panic`: recovering from panics |
 | [gc](core/gc.md) | `GC`: the cycle collector |
+| [reflect](core/reflect.md) | `ClassInfo`, `FieldInfo`, `MethodInfo`, `Decorator`: classes, fields and decorators at run time |
 
 ### collections
 

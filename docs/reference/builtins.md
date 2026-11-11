@@ -19,6 +19,7 @@ is in the [standard library](../std/README.md).
 | [`assertEq(actual, expected[, message])`](#assert-and-asserteq) | | the same, when the values differ |
 | [`typename(value)`](#typename-and-isinstance) | `string` | the class name of an object, or the type held by an `any` |
 | [`isInstance(object, Type)`](#typename-and-isinstance) | `bool` | the same as `object is Type` |
+| [`reflect(Class)`](../std/core/reflect.md) | `ClassInfo` | a class's fields, methods and decorators at run time (`import "std"`) |
 | [`int(x)`, `long(x)`, `float(x)`, `byte(x)`, ...](#conversions) | | conversions |
 | [`sizeof(T)`](#sizeof) | `int` | a type's size in bytes |
 | [`free(x)`](#free) | | destroys an object now, or frees a pointer |
