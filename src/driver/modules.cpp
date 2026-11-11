@@ -67,6 +67,14 @@ fs::path packagePath(const std::string &source, const std::string &versionOrComm
 
 fs::path installedPackage(const ProjectConfig &project, const Dependency &dep) {
     std::error_code ec;
+    if (dep.local) {                                           // read in place
+        fs::path p = dep.source;
+        if (!p.empty() && p.string()[0] == '~')
+            if (const char *home = std::getenv("HOME")) p = fs::path(home) / p.string().substr(p.string().size() > 1 ? 2 : 1);
+        if (p.is_relative()) p = project.root / p;
+        p = fs::weakly_canonical(p, ec);
+        return fs::is_directory(p, ec) ? p : fs::path();
+    }
     if (const LockEntry *l = project.locked(dep.name); l && l->source == dep.source) {
         fs::path p = packagePath(dep.source, l->version.empty() ? l->commit.substr(0, 12) : l->version);
         if (fs::is_directory(p, ec)) return p;
@@ -106,7 +114,8 @@ Dependency parseDependency(const std::string &name, const std::string &value) {
             auto q = quotedStrings(body.substr(eq + 1));
             size_t q1 = body.find('"', eq), q2 = q1 == std::string::npos ? q1 : body.find('"', q1 + 1);
             std::string val = q.empty() ? "" : q[0];
-            if (key == "git" || key == "source" || key == "path") d.source = val;
+            if (key == "git" || key == "source") d.source = val;
+            else if (key == "path") { d.source = val; d.local = true; }
             else if (key == "version" || key == "tag" || key == "branch" || key == "rev") d.version = val;
             i = q2 == std::string::npos ? body.size() : q2 + 1;
         }
@@ -263,8 +272,8 @@ fs::path ModuleLoader::resolve(const std::string &spec, const fs::path &fromDir,
         if (dep.name != head) continue;
         fs::path root = installedPackage(owner, dep);
         if (root.empty()) {
-            tried.push_back("<package '" + dep.name + "' (" + dep.source +
-                            ") is not installed; run `grav install`>");
+            tried.push_back(dep.local ? "<local package '" + dep.name + "': no directory " + (owner.root / dep.source).string() + ">"
+                                      : "<package '" + dep.name + "' (" + dep.source + ") is not installed; run `grav install`>");
             return {};
         }
         if (spec == head) return attempt(packageEntry(root, head));

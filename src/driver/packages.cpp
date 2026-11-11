@@ -9,8 +9,9 @@
 //   json5 = "github.com/someone/json5@v1.2.0"
 //
 // grav.lock records the commit each dependency resolved to, so `grav install` on
-// another machine gets exactly the same code. The standard library ships with the
-// compiler and is never downloaded.
+// another machine gets exactly the same code. A dependency can also be a local
+// directory, `db = { path = "../grav-db" }`, used in place (handy before it is
+// published). The standard library ships with the compiler and is never downloaded.
 #include "driver/packages.h"
 
 #include <algorithm>
@@ -174,7 +175,8 @@ void setDependency(const fs::path &toml, const std::string &name, const std::str
         if (t == "[dependencies]") start = static_cast<int>(i);
         else if (start >= 0 && !t.empty() && t[0] == '[') { end = static_cast<int>(i); break; }
     }
-    std::string entry = name + " = \"" + value + "\"";
+    // A value already written as an inline table (`{ path = "..." }`) goes in as it is.
+    std::string entry = name + " = " + (!value.empty() && value[0] == '{' ? value : "\"" + value + "\"");
     if (start < 0) {
         if (value.empty()) return;
         if (!lines.empty() && !trimmed(lines.back()).empty()) lines.push_back("");
@@ -227,6 +229,23 @@ ProjectConfig requireProject(bool create, std::string &err) {
 bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLock,
                 std::vector<std::pair<std::string, LockEntry>> &lock, std::set<std::string> &seen,
                 std::string &err) {
+    if (dep.local) {                                            // nothing to fetch: check it, then its dependencies
+        fs::path dir = installedPackage(project, dep);
+        if (dir.empty()) {
+            err = "the local package '" + dep.name + "' is not at " + (project.root / dep.source).string();
+            return false;
+        }
+        if (seen.count(dir.string())) return true;
+        seen.insert(dir.string());
+        lock.erase(std::remove_if(lock.begin(), lock.end(), [&](const auto &p) { return p.first == dep.name; }), lock.end());
+        std::cerr << "grav: " << dep.name << " (local) -> " << dir.string() << "\n";
+        std::string e2;
+        ProjectConfig sub = findProject(dir, e2);
+        if (sub.found && fs::weakly_canonical(sub.root) == fs::weakly_canonical(dir))
+            for (const auto &d : sub.deps)
+                if (!installDep(sub, d, true, lock, seen, err)) return false;
+        return true;
+    }
     if (seen.count(dep.source)) return true;
     seen.insert(dep.source);
     const LockEntry *l = useLock ? project.locked(dep.name) : nullptr;
@@ -254,6 +273,8 @@ int usagePkg() {
                  "  grav new <name>                 create a project (grav.toml, src/main.grav)\n"
                  "  grav add <source>[@version] [--name n]   add a dependency and install it\n"
                  "        source: github.com/owner/repo, gitlab.com/group/repo, a git URL, or a path\n"
+                 "  grav add <dir> [--name n]        use a package from a local directory as it is\n"
+                 "        (--git clones a local repository's commits instead)\n"
                  "  grav install                    install every dependency (exact commits from grav.lock)\n"
                  "  grav update [name]              move dependencies to their newest tag\n"
                  "  grav remove <name>              drop a dependency\n"
@@ -293,12 +314,45 @@ int runPackageCommand(const std::vector<std::string> &args) {
 
     if (cmd == "add") {
         if (args.size() < 2) return usagePkg();
-        std::string spec = args[1], name;
-        for (size_t i = 2; i + 1 < args.size(); ++i) if (args[i] == "--name") name = args[i + 1];
-        Dependency dep = parseDependency(name, "\"" + spec + "\"");
-        if (dep.name.empty()) dep.name = defaultName(dep.source);
+        std::string spec, name;
+        bool asPath = false, asGit = false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "--name" && i + 1 < args.size()) name = args[++i];
+            else if (args[i] == "--path") asPath = true;
+            else if (args[i] == "--git") asGit = true;
+            else if (spec.empty()) spec = args[i];
+        }
+        if (spec.empty()) return usagePkg();
+        std::error_code dec;
+        // A directory on this machine is used in place (edits show at once);
+        // `--git` clones a local repository's commits instead.
+        if (!asGit && fs::is_directory(spec, dec)) asPath = true;
         ProjectConfig project = requireProject(true, err);
         if (!err.empty()) { std::cerr << "grav: " << err << "\n"; return 1; }
+        if (asPath) {
+            fs::path abs = fs::weakly_canonical(fs::absolute(spec, dec), dec);
+            if (!fs::is_directory(abs, dec)) { std::cerr << "grav: no directory " << spec << "\n"; return 1; }
+            Dependency dep;
+            dep.local = true;
+            // Relative to grav.toml (so the pair can move together), unless that path
+            // climbs all the way to the filesystem root: then the absolute one.
+            fs::path root = fs::weakly_canonical(project.root, dec);
+            fs::path rel = fs::relative(abs, root, dec);
+            size_t up = 0, depth = 0;
+            for (const auto &part : rel) if (part == "..") ++up;
+            for (const auto &part : root.relative_path()) { (void)part; ++depth; }
+            dep.source = rel.empty() || up >= depth ? abs.generic_string() : rel.generic_string();
+            dep.name = name.empty() ? abs.filename().string() : name;
+            auto lock = project.lock;
+            std::set<std::string> seen;
+            if (!installDep(project, dep, false, lock, seen, err)) { std::cerr << "grav: " << err << "\n"; return 1; }
+            setDependency(project.root / "grav.toml", dep.name, "{ path = \"" + dep.source + "\" }");
+            writeLock(project.root, lock);
+            std::cerr << "grav: added " << dep.name << " from " << dep.source << " (import \"" << dep.name << "\")\n";
+            return 0;
+        }
+        Dependency dep = parseDependency(name, "\"" + spec + "\"");
+        if (dep.name.empty()) dep.name = defaultName(dep.source);
         auto lock = project.lock;
         std::set<std::string> seen;
         if (!installDep(project, dep, false, lock, seen, err)) { std::cerr << "grav: " << err << "\n"; return 1; }
@@ -324,7 +378,7 @@ int runPackageCommand(const std::vector<std::string> &args) {
             bool useLock = cmd == "install";
             if (cmd == "update") dep.version = ""; // newest tag
             if (!installDep(project, dep, useLock, lock, seen, err)) { std::cerr << "grav: " << err << "\n"; return 1; }
-            if (cmd == "update") {
+            if (cmd == "update" && !dep.local) {
                 for (const auto &[n, e] : lock)
                     if (n == dep.name)
                         setDependency(project.root / "grav.toml", dep.name, dep.source + (e.version.empty() ? "" : "@" + e.version));
@@ -354,6 +408,11 @@ int runPackageCommand(const std::vector<std::string> &args) {
         for (const auto &d : project.deps) {
             fs::path where = installedPackage(project, d);
             const LockEntry *l = project.locked(d.name);
+            if (d.local) {
+                std::cout << d.name << "  path " << d.source << "  (local)\n    "
+                          << (where.empty() ? "missing: no directory there" : where.string()) << "\n";
+                continue;
+            }
             std::cout << d.name << "  " << d.source << (d.version.empty() ? "" : "@" + d.version)
                       << (l ? "  (" + l->commit.substr(0, 12) + ")" : "") << "\n    "
                       << (where.empty() ? "not installed: run `grav install`" : where.string()) << "\n";

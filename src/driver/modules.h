@@ -24,6 +24,9 @@ struct Dependency {
     std::string name;    // what imports use: import "json5" / "json5/parser"
     std::string source;  // "github.com/someone/json5", a URL, or a local path
     std::string version; // tag, branch or commit ("" = newest tag, else the default branch)
+    // `name = { path = "../json5" }`: used in place from that directory (relative to
+    // grav.toml), not cloned: edits show at once, nothing is pinned in grav.lock.
+    bool local = false;
 };
 
 // grav.lock pins each dependency to the commit that was installed.
@@ -38,6 +41,7 @@ struct LockEntry {
 //   paths = ["lib", "vendor"]     # extra import roots (relative to grav.toml)
 //   [dependencies]
 //   json5 = "github.com/someone/json5@v1.2.0"
+//   db = { path = "../grav-db" }   # a package in a local directory, used as it is
 struct ProjectConfig {
     bool found = false;
     std::filesystem::path root; // directory holding grav.toml
