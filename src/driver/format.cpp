@@ -120,6 +120,7 @@ bool endsWithContinuation(const std::string &code) {
         if (o == "*" && t.size() >= 2 && t[t.size() - 2] == '/') return false; // end of /* */
         if (o == "*" && t.size() >= 2 && t[t.size() - 2] != ' ') return false; // T*, use a.*
         if (o == "&" && t.size() >= 2 && t[t.size() - 2] != ' ' && t[t.size() - 2] != '&') return false;
+        if (o == "?" && t.size() >= 2 && t[t.size() - 2] != ' ') return false; // T? (a nullable type), not `c ? a`
         return true;
     }
     return false;
