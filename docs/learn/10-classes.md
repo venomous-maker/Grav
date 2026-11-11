@@ -330,6 +330,9 @@ Output:
 SELECT * FROM users WHERE age > 30
 ```
 
+Declaring the result as `Self` instead of `Query` keeps such chains working in
+subclasses (see [Self](11-inheritance-and-interfaces.md#self-methods-and-statics-that-fit-every-subclass)).
+
 ## final
 
 A `final class` cannot be extended, and a `final fn` cannot be overridden by a

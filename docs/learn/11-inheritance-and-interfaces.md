@@ -73,12 +73,79 @@ Several things are going on:
 Rules worth knowing:
 
 - An override must have the same parameter and result types as the method it
-  overrides.
+  overrides (a method returning `Self` is overridden by one returning `Self`).
 - A subclass that declares no constructor inherits its parent's, which is why
   `Puppy` needs none: `new Puppy("Bit")` uses `Dog`'s.
 - A constructor that does not call `super(...)` first runs the parent's
   constructor without arguments. If the parent has none, the compiler asks you to
   call `super(...)`.
+
+## Self: methods and statics that fit every subclass
+
+A method that returns `self` is usually declared to return its class, so in a
+subclass the chain falls back to the parent type and the subclass's own methods
+are lost. Declaring the result as `Self` keeps the caller's class: each call
+returns the type it was called on. Static methods can name `Self` too, for the
+class they are called through, so one `find` in a base class makes users when
+called as `User.find(...)`:
+
+```grav
+import "std"
+
+class Query {
+    protected parts: Array<string>
+    constructor() { self.parts = new Array<string>() }
+    fn where(cond: string) -> Self { self.parts.push(cond); return self }
+    fn build() -> string { return "WHERE " + Str.join(self.parts, " AND ") }
+}
+
+class UserQuery extends Query {
+    fn active() -> Self { return self.where("active = 1") }
+}
+
+class Model {
+    public id: int
+    constructor() { self.id = 0 }
+    static fn table() -> string { return "models" }
+    static fn find(id: int) -> Self {
+        let m = new Self()
+        m.id = id
+        print("SELECT * FROM " + Self.table() + " WHERE id = ${id}")
+        return m
+    }
+}
+
+class User extends Model {
+    static fn table() -> string { return "users" }
+    fn greet() -> string { return "hi, user ${self.id}" }
+}
+
+fn main() {
+    print(new UserQuery().where("age > 18").active().build())
+    print(User.find(7).greet())
+}
+```
+
+Output:
+
+```text
+WHERE age > 18 AND active = 1
+SELECT * FROM users WHERE id = 7
+hi, user 7
+```
+
+- **In an instance method**, `Self` is only the result type, and the method
+  returns `self` (or `null`, or what another `Self` method returns for `self`),
+  so the caller's type is always right. An override of it returns `Self` too.
+- **In a static method**, `Self` is the class the call names: `new Self(...)`,
+  `Self.table()` and types like `Array<Self>` all mean `User` in `User.find`. The
+  compiler makes a copy of the method for each class it is called through.
+  `Self.table()` therefore reaches `User`'s own `table`, and `new Self()` needs a
+  constructor that every such class has.
+- `Self` is not a parameter type in a class, and an instance method cannot write
+  `new Self()` (it does not know the class at compile time; return `self`
+  instead). A method returning `Self` cannot yet be called through an interface
+  value.
 
 ## Abstract classes
 
@@ -366,6 +433,8 @@ multiple inheritance rarely.
 - `class B extends A` inherits `A`'s members; a `B` can be used as an `A`.
 - Methods are virtual: the object's own override runs. `super(...)` and
   `super.method()` reach the parent.
+- `-> Self` returns the receiver as the caller's own class; in a static method,
+  `Self` is the class the call names (`User.find(1)` makes a `User`).
 - `abstract` classes cannot be created; their `abstract` methods must be implemented.
 - An `interface` lists methods; a class can implement many. A `trait` can provide
   default method bodies.

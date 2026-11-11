@@ -34,7 +34,7 @@ kind of type, how they convert into each other, and what their zero values are.
 | `Future<T>` | the result of an `async` call; `await` it for the `T` |
 | `Name` | a class, struct, enum, interface, trait or alias |
 | `Name<A, B>` | a generic type with type arguments |
-| `Self` | inside a trait: the implementing class |
+| `Self` | inside a trait: the implementing class; a class method's result type: the receiver's own class; in a static method: the class the call names |
 
 Variadic parameters are written `...name: T` and behave like an array of `T`
 inside the function.
