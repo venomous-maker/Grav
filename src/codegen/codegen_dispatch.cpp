@@ -23,11 +23,12 @@ std::string zeroValue(const TypeRef &t, const std::string &cty) {
 } // namespace
 
 std::string CodeGen::methodArgs(const std::vector<ExprPtr> &args,
-                                const std::vector<TypeRef> &params) const {
+                                const std::vector<TypeRef> &params, bool borrowed) const {
     std::string out;
     for (size_t i = 0; i < args.size(); ++i) {
         if (i) out += ", ";
-        out += i < params.size() ? emitStable(*args[i], params[i]) : emitExpr(*args[i]);
+        if (i >= params.size()) out += emitExpr(*args[i]);
+        else out += borrowed ? emitAs(*args[i], params[i]) : emitStable(*args[i], params[i]);
     }
     return out;
 }

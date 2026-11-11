@@ -157,13 +157,13 @@ std::string CodeGen::emitAs(const Expr &expr, const TypeRef &target) const {
 
 void CodeGen::emitArgs(std::string &out, const CallExpr &call,
                        const std::vector<TypeRef> &params, bool leadingSelf,
-                       const std::string &self) const {
+                       const std::string &self, bool borrowed) const {
     bool first = !leadingSelf;
     if (leadingSelf) out += self;
     for (size_t i = 0; i < call.args.size(); ++i) {
         if (!first) out += ", ";
         first = false;
-        if (i < params.size()) out += emitStable(*call.args[i], params[i]);
+        if (i < params.size()) out += borrowed ? emitAs(*call.args[i], params[i]) : emitStable(*call.args[i], params[i]);
         else out += emitExpr(*call.args[i]);
     }
 }
@@ -670,7 +670,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             if (const MethodInfo *mi = reg_->findMethod(call.targetName, call.methodName))
                 params = mi->paramTypes;
             std::string out = methodCName(call.targetName, call.methodName) + "(";
-            emitArgs(out, call, params, false, "");
+            emitArgs(out, call, params, false, "", releaseFreeCall(call));   // (fields need no holding for such a method)
             return out + ")";
         }
         case CallKind::InstanceMethod: {
@@ -683,9 +683,12 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                                        ? reg_->findInterfaceMethod(call.ownerClass, call.methodName)
                                        : reg_->findMethod(call.ownerClass, call.methodName);
             if (mi) params = mi->paramTypes;
-            std::string args = methodArgs(call.args, params);
-            // The receiver is held for the call too (a method may drop its own owner).
-            std::string obj = mem->optional ? emitExpr(*mem->object) : emitStable(*mem->object, mem->object->type);
+            // The receiver and arguments are held for the call (a method may drop
+            // its own owner), unless the method can release nothing.
+            bool borrowed = releaseFreeCall(call);
+            std::string args = methodArgs(call.args, params, borrowed);
+            std::string obj = mem->optional ? emitExpr(*mem->object)
+                            : borrowed ? emitAs(*mem->object, mem->object->type) : emitStable(*mem->object, mem->object->type);
             if (!mem->optional) return methodCall(obj, recv, call.methodName, args);
             // `a?.m(...)`: a side-effect-free receiver keeps the cheap inline guard
             // (and skips evaluating the arguments); anything else goes through a

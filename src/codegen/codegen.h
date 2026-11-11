@@ -189,6 +189,11 @@ private:
     void ownAssignedParams(const Block &body, const std::vector<Param> &params);
     void emitBodyEndCleanups();
     std::string emitStable(const Expr &e, const TypeRef &t) const; // a call argument / receiver
+    // Methods that can drop no reference while they run (see releaseFree): a
+    // receiver or argument read from a field needs no holding for them.
+    bool releaseFree(const MethodInfo *mi) const;
+    bool releaseFreeCall(const CallExpr &call) const;      // the call's target is such a method
+    mutable std::map<const MethodInfo *, int> releaseFreeCache_; // 1 yes, 2 no, 3 being worked out
     mutable const Expr *ownedRoot_ = nullptr; // emitOwned: this producer transfers, no autorelease
     int poolCounter_ = 0;
     std::vector<std::string> loopMarks_;      // release-list depth before each enclosing loop
@@ -251,7 +256,7 @@ private:
                            bool nullSafe = false) const;
     // Converted argument list (no receiver) for a call to `method` of `recvFq`.
     std::string methodArgs(const std::vector<ExprPtr> &args,
-                           const std::vector<TypeRef> &params) const;
+                           const std::vector<TypeRef> &params, bool borrowed = false) const;
     mutable std::map<std::string, std::string> thunks_; // name -> definition
     mutable std::set<std::string> enumNameFns_;          // enums needing a name table
     // One piece of a fused string expression: literal text or a printf conversion.
@@ -319,7 +324,7 @@ private:
     std::string emitAs(const Expr &expr, const TypeRef &target) const;
     void emitArgs(std::string &out, const CallExpr &call,
                   const std::vector<TypeRef> &params, bool leadingSelf,
-                  const std::string &self) const;
+                  const std::string &self, bool borrowed = false) const;
     // Emits args for a variadic call: fixed args, then the trailing count and an
     // element-pointer (a C compound literal, or null when there are none).
     void emitVariadicArgs(std::string &out, const CallExpr &call,

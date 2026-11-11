@@ -20,6 +20,9 @@
 //     a dangling pointer.
 #include "codegen/codegen.h"
 
+#include <cctype>
+#include <set>
+
 #include "codegen/mangle.h"
 
 namespace grav {
@@ -293,6 +296,89 @@ bool CodeGen::returnsSelfBorrowed(const std::string &classFq, const std::string 
     }
     selfReturnCache_[key] = ok;
     return ok;
+}
+
+namespace {
+// Whether inline C can release nothing: it calls only atomics, locks and memory
+// or string helpers (anything else might call into the runtime and release).
+bool cBlockReleaseFree(const std::string &code) {
+    static const std::set<std::string> ok = {
+        "if", "while", "for", "return", "switch", "sizeof", "pthread_mutex_lock", "pthread_mutex_unlock",
+        "pthread_mutex_trylock", "pthread_rwlock_rdlock", "pthread_rwlock_wrlock", "pthread_rwlock_unlock",
+        "pthread_cond_signal", "pthread_cond_broadcast", "memcpy", "memmove", "memcmp", "memchr", "memset",
+        "strlen", "strcmp", "strncmp", "strchr", "grav_str_len", "grav_streq"};
+    for (const char *bad : {"release", "free", "drain", "unwind", "longjmp", "panic", "throw"})
+        if (code.find(bad) != std::string::npos) return false;
+    for (size_t i = 0; i < code.size(); ++i) {
+        if (!(std::isalpha((unsigned char)code[i]) || code[i] == '_')) continue;
+        if (i > 0 && (std::isalnum((unsigned char)code[i - 1]) || code[i - 1] == '_')) continue;
+        size_t j = i;
+        while (j < code.size() && (std::isalnum((unsigned char)code[j]) || code[j] == '_')) ++j;
+        size_t k = j;
+        while (k < code.size() && std::isspace((unsigned char)code[k])) ++k;
+        if (k < code.size() && code[k] == '(') {
+            std::string id = code.substr(i, j - i);
+            if (!ok.count(id) && id.rfind("__atomic_", 0) != 0 && id.rfind("__builtin_", 0) != 0) return false;
+        }
+        i = j - 1;
+    }
+    return true;
+}
+} // namespace
+
+// A method that can drop no reference while it runs: it stores no reference
+// (strings aside: freeing one runs no code), creates no object or closure,
+// throws nothing itself, calls only such methods (directly: not through a
+// function value, an interface or an overridden method) and runs only inline C
+// that cannot release. Everything it can reach then stays held by whatever held
+// it before the call, so a receiver or argument read from a field needs no extra
+// reference for the call (`self.items.size()`, `self.count.increment()`).
+bool CodeGen::releaseFree(const MethodInfo *mi) const {
+    if (!mi || !mi->decl || !mi->hasBody || mi->isAbstract) return false;
+    if (auto it = releaseFreeCache_.find(mi); it != releaseFreeCache_.end()) return it->second != 2;  // (3: assumed, for recursion)
+    releaseFreeCache_[mi] = 3;
+    bool ok = true;
+    auto refStore = [&](const TypeRef &t) { RefKind k = refKind(t); return k != RefKind::None && k != RefKind::Str; };
+    auto onStmt = [&](Stmt &s) {
+        if (!ok) return;
+        if (auto *a = dynamic_cast<AssignStmt *>(&s)) {
+            if (!a->target || refStore(a->target->type) || a->isCompound && refKind(a->target->type) != RefKind::None) ok = false;
+        } else if (dynamic_cast<ThrowStmt *>(&s)) {
+            ok = false;
+        }
+    };
+    auto onExpr = [&](Expr &e) {
+        if (!ok) return;
+        if (dynamic_cast<NewExpr *>(&e) || dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<AwaitExpr *>(&e) ||
+            dynamic_cast<StructLiteralExpr *>(&e) || dynamic_cast<SuperExpr *>(&e)) {
+            ok = false;
+        } else if (auto *ix = dynamic_cast<IndexExpr *>(&e)) {
+            if (!ix->overloadClass.empty() || ix->isSlice) ok = false;
+        } else if (auto *al = dynamic_cast<ArrayLiteralExpr *>(&e)) {
+            if (refKind(al->type) != RefKind::None && !al->type.isArray()) ok = false;
+            else if (al->type.isArray() && al->type.elem && refKind(*al->type.elem) != RefKind::None) ok = false;
+        } else if (auto *cb = dynamic_cast<CBlockExpr *>(&e)) {
+            if (!cBlockReleaseFree(cb->code)) ok = false;
+        } else if (auto *c = dynamic_cast<CallExpr *>(&e)) {
+            if (!releaseFreeCall(*c)) ok = false;
+        }
+    };
+    for (auto &st : mi->decl->body.statements) {
+        visitStmt(*st, onStmt, onExpr);
+        if (!ok) break;
+    }
+    releaseFreeCache_[mi] = ok ? 1 : 2;
+    return ok;
+}
+
+bool CodeGen::releaseFreeCall(const CallExpr &call) const {
+    if (call.kind == CallKind::StaticMethod) return releaseFree(reg_->findMethod(call.targetName, call.methodName));
+    if (call.kind != CallKind::InstanceMethod || call.ifaceDispatch) return false;
+    auto *mem = dynamic_cast<const MemberExpr *>(call.callee.get());
+    if (!mem) return false;
+    std::string recv = mem->object->type.isNamed() && reg_->isClass(mem->object->type.name) ? mem->object->type.name : call.ownerClass;
+    if (!reg_->isClass(recv) || reg_->isOverridden(recv, call.methodName)) return false;
+    return releaseFree(reg_->findMethod(reg_->findMethodImpl(recv, call.methodName), call.methodName));
 }
 
 bool CodeGen::isRefProducer(const Expr &e) const {
