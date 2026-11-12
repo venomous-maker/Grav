@@ -75,6 +75,61 @@ for want in '7: names: Array<string>' '11: sh: Shape' '12: i: int' '13: s: strin
   grep -qxF "$want" "$T/source.txt" || fail "inlay hint from the source: $want"
 done
 grep -q '^14: k' "$T/source.txt" && fail "a type parameter (Array<K>) is not a hint"
+# Methods on built-in values (std/types): `n.toHex()` is `Integer.toHex(n)`.
+cat > "$T/values.grav" <<'EOF'
+import "std"
+fn main() {
+    let n = 255
+    let port: long = 8080
+    let d = 19.99
+    let maybe: int? = null
+    let hex = n.toHex()
+    let money = d as Decimal
+    let back = "42" as int
+    let parts = "a,b".split(",")
+    let or = maybe.orElse(0)
+    let cmp: fn(int, int) -> int = Integer.compare
+    let upper = String.upper
+    let big = Infinity
+    print(hex + "${money}${back}${parts.size()}${or}${cmp(1, 2)}${upper("x")}${big}${port.grouped()}${(-7).abs()}")
+}
+EOF
+"$GRAV" check "$T/values.grav" >/dev/null 2>&1 || fail "values.grav should compile"
+node -e 'const [index, file] = process.argv.slice(1);
+  const ws = new (require(index).Workspace)({ compiler: "/nonexistent/grav" });
+  const text = require("fs").readFileSync(file, "utf8"), lines = text.split("\n");
+  const at = (w, d = 1) => { const l = lines.findIndex((x) => x.includes(w)); return { line: l, character: lines[l].indexOf(w) + d }; };
+  const bad = [];
+  const expect = (what, got, want) => { if (got !== want) bad.push(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); };
+  // completion after `x.` at the end of main
+  const complete = (expr) => { const end = lines.lastIndexOf("}");
+    ws.setDoc(file, [...lines.slice(0, end), "    " + expr, ...lines.slice(end)].join("\n"));
+    const r = ws.completion(file, { line: end, character: 4 + expr.length }); ws.setDoc(file, text); return r; };
+  const item = (expr, label) => complete(expr).find((c) => c.label === label);
+  expect("n. toHex", (item("n.", "toHex") || {}).detail, "toHex() -> string");
+  expect("port. grouped", (item("port.", "grouped") || {}).detail, "grouped() -> string");
+  expect("d. round", !!item("d.", "round"), true);
+  expect("d. no toHex", !!item("d.", "toHex"), false);
+  expect("maybe. orElse", (item("maybe.", "orElse") || {}).detail, "orElse(fallback: int) -> int");
+  expect("\"x\". split", (item("\"x\".", "split") || {}).detail, "split(delim: string) -> Array<string>");
+  expect("hex. upper", !!item("hex.", "upper"), true);
+  expect("(-7). abs", !!item("(-7).", "abs"), true);
+  expect("parts. toMap (Object)", !!item("parts.", "toMap"), true);
+  expect("n.toHex doc", /std\/types/.test((item("n.", "toHex") || {}).documentation || ""), true);
+  // definition, hover, signature help
+  const def = ws.definition(file, at("toHex"));
+  expect("definition of n.toHex", def.length === 1 && /types\/integer\.grav$/.test(def[0].file), true);
+  const h = ws.hover(file, at("toHex"));
+  expect("hover n.toHex", h && h.markdown.includes("`n.toHex()` is `Integer.toHex(n)`"), true);
+  const sig = ws.signature(file, at("orElse(", 7));
+  expect("signature maybe.orElse(", sig && sig.signatures[0].label, "orElse(fallback: int) -> int");
+  // the types of call results, casts and method values, from the source alone
+  const hints = Object.fromEntries(ws.inlayHints(file).map((x) => [lines[x.position.line].trim().split(/\s+/)[1], x.label]));
+  for (const [name, want] of [["hex", ": string"], ["money", ": Decimal"], ["back", ": int"], ["parts", ": Array<string>"],
+                              ["or", ": int"], ["upper", ": fn(string) -> string"], ["big", ": float"]])
+    expect("inlay hint " + name, hints[name], want);
+  if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/values.grav" || fail "methods on built-in values in the editor"
+
 # A compiler older than --types still gives diagnostics.
 printf '#!/bin/sh\nfor a; do [ "$a" = --types ] && { echo "gravc: unknown option '"'"'--types'"'"'" >&2; echo "{\\"diagnostics\\": []}"; exit 2; }; done\nexec "%s" "$@"\n' "$GRAV" > "$T/oldgrav"
 chmod +x "$T/oldgrav"
