@@ -1,4 +1,8 @@
-# Grav
+<p align="center">
+  <img src="docs/assets/grav-logo.svg" width="128" height="128" alt="Grav logo">
+</p>
+
+<h1 align="center">Grav</h1>
 
 **Grav** is a statically typed, compiled, TypeScript-inspired language for backend and
 systems work. It compiles to portable **C** (and, with one flag, straight to a native

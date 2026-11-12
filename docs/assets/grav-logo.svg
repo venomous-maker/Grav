@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Grav">
+  <title>Grav</title>
+  <style>
+    .well { fill: none; stroke: #4338CA; stroke-linecap: round; }
+    .trail { fill: none; stroke: #F59E0B; stroke-linecap: round; stroke-dasharray: 0.5 6; }
+    @media (prefers-color-scheme: dark) { .well { stroke: #A5B4FC; } }
+  </style>
+  <defs>
+    <radialGradient id="mass" cx="0.36" cy="0.3" r="0.78">
+      <stop offset="0" stop-color="#E9E5FF"/>
+      <stop offset="0.35" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#2E1065"/>
+    </radialGradient>
+    <radialGradient id="moon" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#FEF3C7"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </radialGradient>
+  </defs>
+  <!-- space bending into a well: contours narrowing into the dip -->
+  <g class="well">
+    <ellipse cx="60" cy="78" rx="56" ry="16" stroke-width="2.2" opacity="0.3"/>
+    <ellipse cx="60" cy="82" rx="43" ry="12" stroke-width="2.4" opacity="0.45"/>
+    <ellipse cx="60" cy="86" rx="31" ry="8.5" stroke-width="2.6" opacity="0.65"/>
+    <ellipse cx="60" cy="90" rx="20" ry="5.5" stroke-width="2.8" opacity="0.85"/>
+  </g>
+  <!-- a small body pulled in, and the path it came by -->
+  <path class="trail" d="M117 6 Q 110 14 98 22" stroke-width="3"/>
+  <circle cx="91" cy="27" r="6" fill="url(#moon)"/>
+  <!-- the mass, sunk into the well -->
+  <circle cx="60" cy="62" r="26" fill="url(#mass)"/>
+</svg>
