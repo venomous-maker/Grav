@@ -5,7 +5,7 @@
 # node, the editor index (editors/lsp/grav-index.js) must resolve the same imports.
 set -u
 cd "$(dirname "$0")/.."
-INDEX="$(pwd)/editors/lsp/grav-index.js"
+REPO="$(pwd)" INDEX="$(pwd)/editors/lsp/grav-index.js"
 GRAV="${GRAVC:-build/gravc}"
 case "$GRAV" in /*) ;; *) GRAV="$(pwd)/$GRAV" ;; esac
 command -v git >/dev/null || { echo "packages: skipped (no git)"; exit 0; }
@@ -63,6 +63,15 @@ printf 'import "shapes"\nfn main() { print(square(4)) }\n' > src/main.grav
 [ "$("$GRAV" run 2>/dev/null)" = "<16>" ] || fail "import of a local package (and its git dependency)"
 case "$(edef src/main.grav '"shapes"')" in -|"$T/shapes/src/shapes.grav") ;; *) fail "editor: import of a local package";; esac
 case "$(edef src/main.grav 'square(')" in -|"$T/shapes/src/shapes.grav") ;; *) fail "editor: definition in a local package";; esac
+# The MCP server's grav_check: inline code compiled in a project sees its packages.
+mcp_check() { GRAVC="$GRAV" GRAV_DIR="$T/bin" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import server
+print(server.grav_check(source="import \"shapes\"\nfn main() { print(square(2)) }\n", project=sys.argv[2] or None))' \
+  "$REPO/mcp_server" "$1" 2>&1; }
+if command -v python3 >/dev/null; then
+  mcp_check "$T/app2" | grep -q "^ok: no errors" || fail "mcp: inline source checked in a project"
+  ls -A "$T/app2" | grep -q grav-mcp && fail "mcp: the inline source file was left in the project"
+  mcp_check "" | grep -q "pass \`project\`" || fail "mcp: inline source outside a project hints at project"
+fi
 sed -i 's/n \* n/n + n/' "$T/shapes/src/shapes.grav"
 [ "$("$GRAV" run 2>/dev/null)" = "<8>" ] || fail "an edit to a local package shows without reinstalling"
 "$GRAV" packages 2>/dev/null | grep -q "shapes  path ../shapes  (local)" || fail "grav packages lists the local package"
