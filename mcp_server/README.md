@@ -24,7 +24,11 @@ speaking the MCP stdio transport (newline-delimited JSON-RPC 2.0). No
 
 `grav_check`, `grav_run` and `grav_test` take either `source` (Grav text) or
 `path`. A directory path means the project there: its `grav.toml` main file,
-import paths and dependencies apply.
+import paths and dependencies apply. Inline `source` is compiled outside any
+project unless you also pass `project` (a directory): the text is then written to
+a hidden `.grav-mcp-*.grav` file in that directory for the call (and removed
+afterwards), so the project's dependencies (`import "grav-db"`) and relative
+imports resolve.
 
 ## Prerequisites
 

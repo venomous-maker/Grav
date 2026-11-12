@@ -20,6 +20,12 @@ It is a single Python file using only the standard library.
 | `grav_docs` | searches this documentation by topic |
 | `grav_packages` | lists, adds, installs, updates or removes packages, or creates a project |
 
+`grav_check`, `grav_run` and `grav_test` take source text (`source`) or a file or
+project folder (`path`). Source text is compiled on its own, outside any project.
+To use a project's packages and files from it, pass that folder as `project`: the
+text is then compiled as a file in that folder, so `import "grav-db"` and
+relative imports resolve as they do in the project's own files.
+
 ## Setup
 
 Build the compiler first. In this repository, a project-scoped `.mcp.json`
