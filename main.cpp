@@ -8,6 +8,7 @@
 //           type-check -> generate C -> optionally compile to a binary.
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -16,6 +17,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <algorithm>
 #include <vector>
 
@@ -73,6 +75,10 @@ std::string unknownNameHint(const std::string &msg) {
 bool gJson = false;
 struct JsonDiag { std::string file; int line = 0, col = 0; std::string severity, stage, message, note; };
 std::vector<JsonDiag> gJsonDiags;
+// `grav check --json --types`: the type of every local binding in the checked file.
+bool gTypes = false;
+struct JsonType { int line = 0, col = 0; std::string name, type; };
+std::vector<JsonType> gJsonTypes;
 
 std::string jsonEscape(const std::string &s) {
     std::string o;
@@ -104,9 +110,46 @@ struct JsonReport {
                       << d.stage << "\", \"message\": \"" << jsonEscape(d.message) << "\""
                       << (d.note.empty() ? "" : ", \"note\": \"" + jsonEscape(d.note) + "\"") << "}";
         }
-        std::cout << (gJsonDiags.empty() ? "" : "\n") << "], \"errors\": " << errors << ", \"warnings\": " << warnings << "}\n";
+        std::cout << (gJsonDiags.empty() ? "" : "\n") << "], \"errors\": " << errors << ", \"warnings\": " << warnings;
+        if (gTypes) {
+            std::cout << ", \"types\": [";
+            for (size_t i = 0; i < gJsonTypes.size(); ++i) {
+                const auto &t = gJsonTypes[i];
+                std::cout << (i ? ",\n  " : "\n  ") << "{\"line\": " << t.line << ", \"column\": " << t.col
+                          << ", \"name\": \"" << jsonEscape(t.name) << "\", \"type\": \"" << jsonEscape(t.type) << "\"}";
+            }
+            std::cout << (gJsonTypes.empty() ? "" : "\n") << "]";
+        }
+        std::cout << "}\n";
     }
 };
+
+// The bindings the checker declared in `file` (not in what it imports), with
+// readable types. A generic function's body is checked once per instance: a
+// binding whose type differs between instances is left out.
+void collectTypes(const grav::TypeChecker &checker, const std::vector<SrcLoc> &srcMap, const fs::path &file) {
+    std::error_code ec;
+    const std::string want = fs::weakly_canonical(file, ec).string();
+    std::map<std::string, bool> inFile; // srcMap file -> is the checked file
+    std::map<std::tuple<int, int, std::string>, std::string> seen;
+    for (const auto &b : checker.bindings()) {
+        if (b.line < 1 || b.line > (int)srcMap.size() || b.name.rfind("__", 0) == 0 ||
+            b.name.find('$') != std::string::npos || b.type.isError())
+            continue;
+        const SrcLoc &loc = srcMap[b.line - 1];
+        auto it = inFile.find(loc.file);
+        if (it == inFile.end()) it = inFile.emplace(loc.file, fs::weakly_canonical(loc.file, ec).string() == want).first;
+        if (!it->second) continue;
+        std::string type = grav::typeRefName(b.type);
+        auto [pos, fresh] = seen.emplace(std::make_tuple(loc.line, b.col, b.name), type);
+        if (fresh) gJsonTypes.push_back({loc.line, b.col, b.name, type});
+        else if (pos->second != type)
+            for (auto &t : gJsonTypes)
+                if (t.line == loc.line && t.col == b.col && t.name == b.name) t.type.clear();
+    }
+    gJsonTypes.erase(std::remove_if(gJsonTypes.begin(), gJsonTypes.end(), [](const JsonType &t) { return t.type.empty(); }),
+                     gJsonTypes.end());
+}
 
 // A driver-level error ("file:line: message" or plain text).
 void reportError(const std::string &msg) {
@@ -206,7 +249,7 @@ int usage(const char *prog) {
         "       " << prog << " build <file.grav>           build a binary\n"
         "       " << prog << " test <file.grav> [--filter text]   run the file's test blocks\n"
         "       " << prog << " new <name> | add <repo>[@version] | install | update | remove <name> | packages\n"
-        "       " << prog << " check [--json] [file.grav]      type-check only (JSON diagnostics for editors)\n"
+        "       " << prog << " check [--json] [--types] [file.grav]  type-check only (JSON diagnostics, binding types, for editors)\n"
         "       " << prog << " fmt [--check] [paths]           format source files (fmt - : stdin to stdout)\n"
         "       " << prog << " env [--json]                    where the standard library and packages are\n"
         "       " << prog << " -                 read stdin, write C to stdout\n"
@@ -368,6 +411,8 @@ int main(int argc, char **argv) {
             native = true;
         } else if (arg == "--json") {
             gJson = true;
+        } else if (arg == "--types") {
+            gJson = gTypes = true;
         } else if (arg == "--version") {
             std::cout << "grav " << GRAV_VERSION << "\n";
             return 0;
@@ -458,6 +503,7 @@ int main(int argc, char **argv) {
 
             checkerPtr = std::make_unique<grav::TypeChecker>();
             checkerPtr->setInference(&inference);
+            checkerPtr->recordBindings(gTypes);
             inference.added = 0;
             const auto &typeErrors = checkerPtr->check(*programPtr, *registryPtr);
             errors.insert(errors.end(), typeErrors.begin(), typeErrors.end());
@@ -466,6 +512,7 @@ int main(int argc, char **argv) {
         grav::Program &program = *programPtr;
         grav::Registry &registry = *registryPtr;
         grav::TypeChecker &checker = *checkerPtr;
+        if (gTypes && !useStdin) collectTypes(checker, srcMap, inputPath);
 
         // Warnings (e.g. unused variables). With -Werror they are fatal.
         const auto &warnings = checker.warnings();

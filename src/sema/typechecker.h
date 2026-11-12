@@ -38,6 +38,15 @@ public:
     void setInference(InferenceTable *table) { infer_ = table; }
     const std::vector<GravError> &check(Program &program, const Registry &reg);
     const std::vector<GravError> &errors() const { return errors_; }
+    // Every local binding the checker declared (let, for-in, catch, lambda and
+    // function parameters, match bindings) with its type, for `grav check --types`.
+    struct Binding {
+        std::string name;
+        TypeRef type;
+        int line = 0, col = 0; // in the combined source
+    };
+    void recordBindings(bool on) { recordBindings_ = on; }
+    const std::vector<Binding> &bindings() const { return bindings_; }
 
 private:
     // driver (typechecker.cpp)
@@ -259,6 +268,8 @@ private:
     std::vector<GravError> errors_;
     std::vector<GravError> warnings_;
     std::vector<std::unordered_map<std::string, LocalVar>> scopes_;
+    bool recordBindings_ = false;
+    std::vector<Binding> bindings_;
     std::vector<size_t> narrowScopes_; // indices of scopes opened by pushNarrowing
 
     std::string currentClass_; // FQ, empty in a free function
