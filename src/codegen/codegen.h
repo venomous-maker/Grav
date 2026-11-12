@@ -111,6 +111,11 @@ private:
     // Reflection metadata (std.core.ClassInfo): the `&Class__rmeta` table, or "0"
     // for a class outside every hierarchy that has decorators or is named by reflect().
     std::string emitReflection(const std::string &fq);
+    // C converting the `any` named `v` to type `k` into `dst` (reflection's
+    // field writes and calls), running `fail` when it does not fit; `own`: the
+    // destination keeps it (retained) rather than borrowing it. Empty when `k`
+    // cannot come from an any.
+    std::string rfConvert(const TypeRef &k, const std::string &dst, const std::string &fail, bool own) const;
     bool reflected(const std::string &fq) const;
     mutable std::set<std::string> reflectRoots_;
     mutable bool reflectScanned_ = false;
@@ -270,6 +275,7 @@ private:
     std::string methodArgs(const std::vector<ExprPtr> &args,
                            const std::vector<TypeRef> &params, bool borrowed = false) const;
     mutable std::map<std::string, std::string> thunks_; // name -> definition
+    std::string rfDefs_; // reflection's method callers and constructors (they use the thunks)
     mutable std::set<std::string> enumNameFns_;          // enums needing a name table
     // One piece of a fused string expression: literal text or a printf conversion.
     struct FmtPart {

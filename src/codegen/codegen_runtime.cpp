@@ -14,6 +14,8 @@ void CodeGen::emitPrelude() {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <errno.h>
 #include <math.h>
 #include <setjmp.h>
 #include <unistd.h>
@@ -1031,7 +1033,10 @@ static GRAV_UNUSED void grav_uw_any(void* p) { grav_any_release(*(GravAny*)p); }
 /* Reflection (std.core.ClassInfo): what the compiler records about a class whose
    hierarchy has decorators or is named by reflect(...). A field's reader boxes its
    value (borrowed); its writer stores an `any` when it fits (1) or refuses (0).
-   Either is 0 for a type that cannot go through an `any`. */
+   Either is 0 for a type that cannot go through an `any`. A method's or
+   constructor's caller converts its arguments the same way and gives back its
+   result (owned): 0 done, 1 `self` is not of the class, 2 the wrong number of
+   arguments, 3 + i argument i does not fit. */
 typedef struct GravDecoMeta { const char* name; int nargs; const GravAny* args; } GravDecoMeta;
 enum { GRAV_RM_READONLY = 1, GRAV_RM_PRIVATE = 2, GRAV_RM_PROTECTED = 4, GRAV_RM_WEAK = 8, GRAV_RM_STATIC = 16 };
 typedef struct GravFieldMeta {
@@ -1040,13 +1045,90 @@ typedef struct GravFieldMeta {
     GravAny (*get)(void* obj);
     int (*set)(void* obj, GravAny v);
 } GravFieldMeta;
-typedef struct GravMethodMeta { const char* name; int flags; int ndecos; const GravDecoMeta* decos; } GravMethodMeta;
+typedef struct GravMethodMeta {
+    const char* name; int flags; int ndecos; const GravDecoMeta* decos;
+    int nparams; const char* params;          /* its parameter types, "string, int" */
+    int (*call)(GravAny self, const GravAny* args, int n, GravAny* out);   /* 0 when it cannot be called by reflection */
+} GravMethodMeta;
+typedef struct GravCtorMeta {
+    int nparams; const char* params;
+    int (*make)(const GravAny* args, int n, GravAny* out);
+} GravCtorMeta;
 typedef struct GravClassMeta {
     int nfields; const GravFieldMeta* fields;
     int nmethods; const GravMethodMeta* methods;
     int ndecos; const GravDecoMeta* decos;
+    int nctors; const GravCtorMeta* ctors;    /* none for an abstract class */
     void* info;                               /* its ClassInfo once made (set once, atomically) */
 } GravClassMeta;
+/* Reflection's conversions of an `any` to a field's or parameter's type: 1 with
+   the value in *out when it fits, else 0. An integer type `bits` wide (signed
+   or not) takes whole numbers in its range: integers, bools, floats without a
+   fraction, and strings holding one ("42", as databases give DECIMAL and BIGINT).
+   A float takes numbers and numeric strings; a bool takes bools, 0 and 1, and
+   "true"/"false", "t"/"f", "yes"/"no", "1"/"0". */
+static GRAV_UNUSED int grav_rf_int(GravAny v, int bits, int uns, long long* out) {
+    long long x = 0;
+    unsigned long long u = 0;
+    int big = 0;                              /* (u holds a value above LLONG_MAX) */
+    switch (v.tag) {
+        case GRAV_ANY_INT: case GRAV_ANY_ENUM: x = v.v.i; break;
+        case GRAV_ANY_UINT: if (v.v.u > 9223372036854775807ULL) { u = v.v.u; big = 1; } else x = (long long)v.v.u; break;
+        case GRAV_ANY_BOOL: x = v.v.b ? 1 : 0; break;
+        case GRAV_ANY_FLOAT: {
+            double d = v.v.f;
+            if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0) || d != (double)(long long)d) return 0;
+            x = (long long)d;
+            break;
+        }
+        case GRAV_ANY_STR: {
+            const char* s = v.v.s;
+            char* end = 0;
+            if (!s || !*s) return 0;
+            while (*s == ' ') s++;
+            errno = 0;
+            if (*s == '-') x = strtoll(s, &end, 10);
+            else { u = strtoull(s, &end, 10); if (u > 9223372036854775807ULL) big = 1; else x = (long long)u; }
+            if (end == s || *end || errno) return 0;
+            break;
+        }
+        default: return 0;
+    }
+    if (big) { if (!uns || bits < 64) return 0; *out = (long long)u; return 1; }
+    if (uns) { if (x < 0 || (bits < 64 && ((unsigned long long)x >> bits) != 0)) return 0; }
+    else if (bits < 64) { long long lim = 1LL << (bits - 1); if (x < -lim || x >= lim) return 0; }
+    *out = x;
+    return 1;
+}
+static GRAV_UNUSED int grav_rf_float(GravAny v, double* out) {
+    switch (v.tag) {
+        case GRAV_ANY_FLOAT: *out = v.v.f; return 1;
+        case GRAV_ANY_INT: case GRAV_ANY_ENUM: *out = (double)v.v.i; return 1;
+        case GRAV_ANY_UINT: *out = (double)v.v.u; return 1;
+        case GRAV_ANY_STR: {
+            char* end = 0;
+            if (!v.v.s || !*v.v.s) return 0;
+            double d = strtod(v.v.s, &end);
+            if (*end) return 0;
+            *out = d;
+            return 1;
+        }
+        default: return 0;
+    }
+}
+static GRAV_UNUSED int grav_rf_bool(GravAny v, int* out) {
+    switch (v.tag) {
+        case GRAV_ANY_BOOL: *out = v.v.b ? 1 : 0; return 1;
+        case GRAV_ANY_INT: case GRAV_ANY_UINT: if (v.v.u > 1) return 0; *out = (int)v.v.u; return 1;
+        case GRAV_ANY_STR: {
+            static const char* const yes[] = { "true", "t", "yes", "y", "1", 0 }, * const no[] = { "false", "f", "no", "n", "0", 0 };
+            for (int i = 0; yes[i]; i++) if (!strcasecmp(v.v.s, yes[i])) { *out = 1; return 1; }
+            for (int i = 0; no[i]; i++) if (!strcasecmp(v.v.s, no[i])) { *out = 0; return 1; }
+            return 0;
+        }
+        default: return 0;
+    }
+}
 static inline GravAny grav_any_autorelease(GravAny a) {
     if (a.tag == GRAV_ANY_OBJ) grav_autorelease(a.v.p);
     else if (a.tag == GRAV_ANY_FN) grav_autorelease(a.v.fn.env);

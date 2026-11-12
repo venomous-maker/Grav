@@ -8,6 +8,14 @@
 //   info.decorator("Table").text(0)            // "users"
 //   for (f in info.fields()) { print(f.name + " = " + str(f.get(user))) }
 //   info.field("email").set(user, "ada@example.com")
+//   let u = info.create() as User              // `new User()`
+//   info.invoke(u, "greet", ["Ada"])            // `u.greet("Ada")`
+//
+// Values going in (FieldInfo.set, invoke, create) are converted to the field's
+// or parameter's type when they fit: a whole number into any integer type in
+// range (from an integer, a bool, a float without a fraction or a string such as
+// "42"), a number or numeric string into a float, a bool, 0/1 or
+// "true"/"false"/"t"/"f"/"yes"/"no" into a bool. Anything else is a ValueError.
 //
 // A class has fields, methods and decorators here when its hierarchy (its root
 // class and everything under it) has a decorator anywhere, or reflect(...) names
@@ -59,6 +67,11 @@ namespace std.core {
         grav_rf_n++;
         pthread_mutex_unlock(&grav_rf_lock);
         return info;
+    }
+    /* Calls method or constructor meta `mm` (kind 0 method, 1 constructor): its code (see GravMethodMeta). */
+    static int grav_rf_call(const unsigned char* mm, int kind, GravAny self, const GravAny* a, int n, GravAny* out) {
+        if (kind) return ((const GravCtorMeta*)mm)->make(a, n, out);
+        return ((const GravMethodMeta*)mm)->call(self, a, n, out);
     }
     static GravAny grav_rf_dec_arg(const unsigned char* d, int i, int k) { return ((const GravDecoMeta*)d)[i].args[k]; }
     /* A field read or write in one step: 0 done, 1 `obj` is not of the declaring
@@ -165,9 +178,11 @@ namespace std.core {
             return out;
         }
         // Stores `value` in the field of `obj`. ValueError when the value does not
-        // fit its type: an int field takes whole numbers, a float field any
-        // number, a class field an object of that class or null, a T? field a T or
-        // null. Readonly and private fields are written too.
+        // fit its type, converted as the top of this file says (an int field takes
+        // 42, 42.0, true or "42" when in range; a float field any number or numeric
+        // string; a bool field true, 1 or "t"), a class field an object of that
+        // class or null, a T? field a T or null. Readonly and private fields are
+        // written too.
         fn set(obj: any, value: any) {
             let m = self.meta;
             let t = self.owner;
@@ -177,7 +192,7 @@ namespace std.core {
         private fn fail(why: int, obj: any, value: any) {
             if (why == 1) { throw new ValueError("field '" + self.name + "' needs a " + self.declaringClass + ", got " + typename(obj)); }
             if (why == 2) { throw new StateError("field '" + self.name + "' (" + self.typeName + ") cannot go through an any"); }
-            throw new ValueError("field '" + self.name + "' of " + self.declaringClass + " is " + self.typeName + ", not " + typename(value));
+            throw new ValueError("field '" + self.name + "' of " + self.declaringClass + " (" + self.typeName + ") cannot hold " + ClassInfo.__describe(value));
         }
         fn toString() -> string { return self.name + ": " + self.typeName; }
     }
@@ -186,19 +201,75 @@ namespace std.core {
     class MethodInfo {
         public name: string
         public decorators: Array<Decorator>
+        // Its class ("app.User").
+        public declaringClass: string
+        // Its parameter types as written ("string, int").
+        public params: string
         private flags: int
-        constructor(meta: byte*) {
+        private meta: byte*                  // its GravMethodMeta (or GravCtorMeta)
+        private kind: int                    // 0 a method, 1 a constructor
+        private count: int
+
+        constructor(meta: byte*, owner: string, kind: int) {
+            self.meta = meta;
+            self.kind = kind;
+            self.declaringClass = owner;
+            if (kind == 1) {
+                self.name = "constructor";
+                self.flags = 0;
+                self.count = %{ ((const GravCtorMeta*)meta)->nparams %} as int;
+                self.params = %{ ((const GravCtorMeta*)meta)->params %} as string;
+                self.decorators = new Array<Decorator>();
+                return;
+            }
             self.name = %{ ((const GravMethodMeta*)meta)->name %} as string;
             self.flags = %{ ((const GravMethodMeta*)meta)->flags %} as int;
+            self.count = %{ ((const GravMethodMeta*)meta)->nparams %} as int;
+            self.params = %{ ((const GravMethodMeta*)meta)->params %} as string;
             self.decorators = Decorator.__listOf(%{ (unsigned char*)((const GravMethodMeta*)meta)->decos %} as byte*,
                 %{ ((const GravMethodMeta*)meta)->ndecos %} as int);
+        }
+        // How many arguments it takes.
+        fn paramCount() -> int { return self.count; }
+        // Whether invoke can call it: every parameter and its result can go
+        // through an `any` (numbers, bools, strings, enums, objects, `T?`, any).
+        fn canInvoke() -> bool {
+            let m = self.meta;
+            if (self.kind == 1) { return %{ ((const GravCtorMeta*)m)->make != 0 %} as bool; }
+            return %{ ((const GravMethodMeta*)m)->call != 0 %} as bool;
+        }
+        // Calls it on `obj` (ignored for a static method) with `args`, each
+        // converted to its parameter's type; its result, or null when it returns
+        // nothing. What the method throws goes on.
+        fn invoke(obj: any, args: Array<any> = new Array<any>()) -> any {
+            let out: any = null;
+            let r = self.__call(obj, args, &out);
+            if (r != 0) { self.fail(r, obj, args); }
+            return out;
+        }
+        // (invoke's work: the code, and the result in *out.)
+        fn __call(obj: any, args: Array<any>, out: any*) -> int {
+            if (!self.canInvoke()) { throw new StateError(self.what() + " cannot be called by reflection: a parameter or its result cannot go through an any"); }
+            let m = self.meta;
+            let k = self.kind;
+            let n = args.size();
+            return %{ grav_rf_call(m, k, obj, (const GravAny*)args->data, n, out) %} as int;
+        }
+        private fn what() -> string {
+            return (self.kind == 1 ? "the constructor of " + self.declaringClass : self.declaringClass + "." + self.name) + "(" + self.params + ")";
+        }
+        private fn fail(why: int, obj: any, args: Array<any>) {
+            if (why == 1) { throw new ValueError(self.what() + " needs a " + self.declaringClass + ", got " + typename(obj)); }
+            if (why == 2) { throw new ValueError(self.what() + " takes ${self.count} argument(s), got ${args.size()}"); }
+            let i = why - 3;
+            throw new ValueError("argument ${i + 1} of " + self.what() + " cannot be " + ClassInfo.__describe(args[i]));
         }
         fn isStatic() -> bool { return (self.flags & 16) != 0; }
         fn isPrivate() -> bool { return (self.flags & 2) != 0; }
         fn isProtected() -> bool { return (self.flags & 4) != 0; }
         fn has(name: string) -> bool { return Decorator.__find(self.decorators, name) != null; }
         fn decorator(name: string) -> Decorator { return Decorator.__find(self.decorators, name); }
-        fn toString() -> string { return self.name; }
+        fn toString() -> string { return self.name + "(" + self.params + ")"; }
     }
 
     // What a class is at run time: reflect(User), or ClassInfo.of(anObject).
@@ -209,6 +280,7 @@ namespace std.core {
         private own: Array<FieldInfo>            // made once, shared by every lookup
         private all: Array<FieldInfo>
         private methodList: Array<MethodInfo>
+        private ctorList: Array<MethodInfo>
         private decos: Array<Decorator>
 
         constructor(t: byte*) {
@@ -217,11 +289,14 @@ namespace std.core {
             let meta = %{ (unsigned char*)grav_rf_meta(t) %} as byte*;
             self.own = new Array<FieldInfo>();
             self.methodList = new Array<MethodInfo>();
+            self.ctorList = new Array<MethodInfo>();
             if (meta != null) {
                 let nf = %{ ((const GravClassMeta*)meta)->nfields %} as int;
                 for (i in 0..nf) { self.own.push(new FieldInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->fields[i] %} as byte*, t)); }
                 let nm = %{ ((const GravClassMeta*)meta)->nmethods %} as int;
-                for (i in 0..nm) { self.methodList.push(new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->methods[i] %} as byte*)); }
+                for (i in 0..nm) { self.methodList.push(new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->methods[i] %} as byte*, self.name, 0)); }
+                let nc = %{ ((const GravClassMeta*)meta)->nctors %} as int;
+                for (i in 0..nc) { self.ctorList.push(new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->ctors[i] %} as byte*, self.name, 1)); }
                 self.decos = Decorator.__listOf(%{ (unsigned char*)((const GravClassMeta*)meta)->decos %} as byte*,
                     %{ ((const GravClassMeta*)meta)->ndecos %} as int);
             } else {
@@ -243,6 +318,18 @@ namespace std.core {
             return %{ grav_rf_publish(t, made) %} as ClassInfo;   // (another thread may have made it meanwhile)
         }
         // The class of the object in `value`, or null when it holds no object.
+        // A value for an error message: `"4x"`, `float 3.5`, `an Array`.
+        static fn __describe(v: any) -> string {
+            if (v == null) { return "null"; }
+            if (v is string) { return "\"" + (v as string) + "\""; }
+            let t = typename(v);                         // "std.collections.Array$int" -> "Array"
+            let dot = Str.lastIndexOf(t, ".");
+            if (dot >= 0) { t = t[dot + 1..]; }
+            let gen = Str.indexOf(t, "$");
+            if (gen > 0) { t = t[..gen]; }
+            if (v is int || v is long || v is float || v is bool) { return t + " " + str(v); }
+            return "a" + (Str.indexOf("AEIOU", t[..1]) >= 0 ? "n " : " ") + t;
+        }
         static fn of(value: any) -> ClassInfo {
             if (!(%{ value.tag == GRAV_ANY_OBJ %} as bool)) { return null; }
             return ClassInfo.__fromType(%{ (unsigned char*)((struct GravObject*)value.v.p)->__type %} as byte*);
@@ -276,6 +363,59 @@ namespace std.core {
         }
         // The methods this class declares itself.
         fn methods() -> Array<MethodInfo> { return self.methodList; }
+        // The method called `name`: its own, else its base class's (the first
+        // overload; invoke picks among them). Null when there is none.
+        fn method(name: string) -> MethodInfo {
+            for (m in self.methodList) { if (m.name == name) { return m; } }
+            let b = self.base();
+            return b == null ? null : b.method(name);
+        }
+        // Calls method `name` on `obj` with `args`: the overload (its own, else a
+        // base class's) taking that many arguments that they fit.
+        fn invoke(obj: any, name: string, args: Array<any> = new Array<any>()) -> any {
+            let c: ClassInfo = self;
+            let found: MethodInfo = null;
+            while (c != null) {
+                for (m in c.methodList) {
+                    if (m.name != name || m.paramCount() != args.size() || !m.canInvoke()) { continue; }
+                    let out: any = null;
+                    let r = m.__call(obj, args, &out);
+                    if (r == 0) { return out; }
+                    if (r < 3) { return m.invoke(obj, args); }            // (throws what is wrong)
+                    if (found == null) { found = m; }
+                }
+                c = c.base();
+            }
+            if (found != null) { return found.invoke(obj, args); }       // (throws which argument does not fit)
+            let m = self.method(name);
+            if (m == null) { throw new ValueError(self.name + " has no method '" + name + "'"); }
+            return m.invoke(obj, args);
+        }
+        // Its constructors (none for an abstract class, or one without reflection).
+        fn constructors() -> Array<MethodInfo> { return self.ctorList; }
+        // Whether create can make one with no arguments.
+        fn canCreate() -> bool {
+            for (c in self.ctorList) { if (c.paramCount() == 0 && c.canInvoke()) { return true; } }
+            return false;
+        }
+        // A new object of the class (`new C(args...)`): the constructor taking that
+        // many arguments that they fit.
+        fn create(args: Array<any> = new Array<any>()) -> any {
+            let found: MethodInfo = null;
+            for (c in self.ctorList) {
+                if (c.paramCount() != args.size() || !c.canInvoke()) { continue; }
+                let out: any = null;
+                let r = c.__call(null, args, &out);
+                if (r == 0) { return out; }
+                if (found == null) { found = c; }
+            }
+            if (found != null) { return found.invoke(null, args); }
+            if (self.ctorList.size() == 0) {
+                throw new StateError(self.name + " cannot be created by reflection" +
+                                     (self.isReflected() ? " (it is abstract)" : " (it has no reflection: name it in reflect(...) or decorate it)"));
+            }
+            throw new ValueError(self.name + " has no constructor taking ${args.size()} argument(s)");
+        }
         // Whether this class is `other` or extends it.
         fn isSubclassOf(other: ClassInfo) -> bool {
             let a = self.t;

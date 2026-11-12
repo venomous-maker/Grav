@@ -111,8 +111,8 @@ test "reading and writing fields through any" {
     try { info.field("id").set(new Plain(), 1) } catch (e: ValueError) { msgs.push(e.message()) }
     try { info.field("manager").set(u, new Plain()) } catch (e: ValueError) { msgs.push(e.message()) }
     try { info.field("onSave").set(u, 1) } catch (e: StateError) { msgs.push(e.message()) }
-    assertEq(Str.join(msgs, " | "), "field 'email' of User is string, not int | field 'id' needs a Model, got Plain | " +
-        "field 'manager' of User is User, not Plain | field 'onSave' (fn(int) -> int) cannot go through an any")
+    assertEq(Str.join(msgs, " | "), "field 'email' of User (string) cannot hold int 5 | field 'id' needs a Model, got Plain | " +
+        "field 'manager' of User (User) cannot hold a Plain | field 'onSave' (fn(int) -> int) cannot go through an any")
 }
 
 test "ClassInfo.of, identity and classes without metadata" {

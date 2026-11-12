@@ -1,0 +1,173 @@
+// Reflection that builds and calls: values converted to a field's or
+// parameter's type (numbers in range, numeric strings, bools from 0/1 and
+// words), ClassInfo.create with each constructor, MethodInfo.invoke and
+// ClassInfo.invoke with overloads, inherited and overridden methods, static
+// methods, and the errors when something does not fit.
+import "std"
+
+enum Role { Guest, Member, Admin }
+
+@Table("people")
+class Person {
+    public id: long
+    public age: int
+    public small: byte
+    public score: float
+    public active: bool
+    public name: string
+    public nick: string?
+    public level: int?
+    public role: Role
+    constructor() { self.id = 0; self.age = 0; self.small = 0; self.score = 0.0; self.active = false; self.name = ""; self.nick = null; self.level = null; self.role = Role.Guest }
+    constructor(name: string, age: int) { self.id = 0; self.age = age; self.small = 0; self.score = 0.0; self.active = false; self.name = name; self.nick = null; self.level = null; self.role = Role.Guest }
+    fn greet(other: string) -> string { return "hi " + other + ", I am " + self.name }
+    fn greet(times: int) -> string { return "hi x${times}" }
+    fn birthday() { self.age += 1 }
+    fn older(than: Person) -> bool { return self.age > than.age }
+    fn describe() -> string { return "person " + self.name }
+    fn level2() -> int? { return self.level }
+    static fn make(name: string) -> Person { return new Person(name, 1) }
+    fn each(f: fn(int)) { f(self.age) }
+}
+
+class Student extends Person {
+    constructor() { super() }
+    fn describe() -> string { return "student " + self.name }
+}
+
+@Entity
+abstract class Shape { abstract fn area() -> float }
+
+test "FieldInfo.set converts values that fit" {
+    let info = reflect(Person)
+    let p = new Person()
+    info.field("age").set(p, "42")
+    info.field("id").set(p, 7)
+    info.field("score").set(p, "19.99")
+    info.field("active").set(p, 1)
+    info.field("level").set(p, 3 as long)
+    info.field("nick").set(p, "ace")
+    info.field("small").set(p, 200)
+    info.field("role").set(p, 2)
+    assertEq("${p.age} ${p.id} ${p.score} ${p.active} ${p.level} ${p.nick} ${p.small} ${p.role}", "42 7 19.99 true 3 ace 200 Admin")
+    info.field("active").set(p, "f")
+    info.field("level").set(p, null)
+    info.field("score").set(p, 3)
+    info.field("age").set(p, 12.0)
+    info.field("id").set(p, " -9223372036854775808")
+    assertEq("${p.active} ${p.level} ${p.score} ${p.age} ${p.id}", "false null 3 12 -9223372036854775808")
+}
+
+test "values that do not fit are ValueErrors" {
+    let info = reflect(Person)
+    let p = new Person()
+    let out = new Array<string>()
+    let tries: Array<Array<any>> = [["small", 300], ["small", -1], ["age", 3.5], ["age", "4x"], ["age", ""], ["active", 2],
+                                    ["age", 9999999999 as long], ["id", "99999999999999999999"], ["score", "x"], ["name", 5]]
+    for (t in tries) {
+        try { info.field(t[0] as string).set(p, t[1]); out.push("no error") } catch (e: ValueError) { out.push(e.message()) }
+    }
+    assertEq(Str.join(out, "\n"),
+             "field 'small' of Person (byte) cannot hold int 300\n" +
+             "field 'small' of Person (byte) cannot hold int -1\n" +
+             "field 'age' of Person (int) cannot hold float 3.5\n" +
+             "field 'age' of Person (int) cannot hold \"4x\"\n" +
+             "field 'age' of Person (int) cannot hold \"\"\n" +
+             "field 'active' of Person (bool) cannot hold int 2\n" +
+             "field 'age' of Person (int) cannot hold int 9999999999\n" +
+             "field 'id' of Person (long) cannot hold \"99999999999999999999\"\n" +
+             "field 'score' of Person (float) cannot hold \"x\"\n" +
+             "field 'name' of Person (string) cannot hold int 5")
+}
+
+test "create with each constructor" {
+    let info = reflect(Person)
+    assertEq("${info.canCreate()} ${info.constructors().size()} ${info.constructors()[1]}", "true 2 constructor(string, int)")
+    let p = info.create() as Person
+    assertEq("'${p.name}' ${p.age}", "'' 0")
+    let q = info.create(["Ada", "36"]) as Person
+    assertEq("${q.name} ${q.age}", "Ada 36")
+    let s = reflect(Student).create()
+    assertEq(s is Student, true)
+    let msgs = new Array<string>()
+    try { info.create([1, 2, 3]) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.create([1, 2]) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { reflect(Shape).create() } catch (e: StateError) { msgs.push(e.message()) }
+    assertEq(Str.join(msgs, "\n"),
+             "Person has no constructor taking 3 argument(s)\n" +
+             "argument 1 of the constructor of Person(string, int) cannot be int 1\n" +
+             "Shape cannot be created by reflection (it is abstract)")
+    assertEq(reflect(Shape).canCreate(), false)
+}
+
+test "invoke methods by name" {
+    let info = reflect(Person)
+    let ada = new Person("Ada", 36)
+    let bob = new Person("Bob", 40)
+    assertEq(info.invoke(ada, "greet", ["Bob"]) as string, "hi Bob, I am Ada")
+    assertEq(info.invoke(ada, "greet", [3]) as string, "hi x3")              // (the overload the arguments fit)
+    assertEq(info.invoke(ada, "birthday") == null && ada.age == 37, true)
+    assertEq(info.invoke(ada, "older", [bob]) as bool, false)
+    assertEq(info.invoke(ada, "level2") == null, true)
+    ada.level = 5
+    assertEq(info.invoke(ada, "level2") as long, 5 as long)
+    assertEq((info.invoke(null, "make", ["Ed"]) as Person).name, "Ed")       // (static: no object)
+    // Overridden methods dispatch on the object; inherited ones are found in the base.
+    let cy = new Student()
+    cy.name = "Cy"
+    assertEq(info.invoke(cy, "describe") as string, "student Cy")
+    assertEq(reflect(Student).invoke(cy, "greet", ["Di"]) as string, "hi Di, I am Cy")
+    let m = info.method("older")
+    assertEq("${m} ${m.paramCount()} ${m.canInvoke()} ${m.declaringClass}", "older(Person) 1 true Person")
+    assertEq(m.invoke(bob, [ada]) as bool, true)
+    assertEq(info.method("each").canInvoke(), false)                         // (a function parameter)
+}
+
+test "invoke errors" {
+    let info = reflect(Person)
+    let ada = new Person("Ada", 36)
+    let msgs = new Array<string>()
+    try { info.invoke(ada, "greet", [new Array<int>()]) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.invoke("nope", "describe") } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.invoke(ada, "missing") } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.method("older").invoke(ada, []) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.method("older").invoke(ada, ["x"]) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { info.method("each").invoke(ada, [1]) } catch (e: StateError) { msgs.push(e.message()) }
+    assertEq(Str.join(msgs, "\n"),
+             "argument 1 of Person.greet(string) cannot be an Array\n" +
+             "Person.describe() needs a Person, got string\n" +
+             "Person has no method 'missing'\n" +
+             "Person.older(Person) takes 1 argument(s), got 0\n" +
+             "argument 1 of Person.older(Person) cannot be \"x\"\n" +
+             "Person.each(fn(int)) cannot be called by reflection: a parameter or its result cannot go through an any")
+}
+
+class Repository<T> {
+    // A row into a new T: no factory needed.
+    fn fromRow(row: HashMap<string, any>) -> T {
+        let info = reflect(T)
+        let obj = info.create() as T
+        for (f in info.fields()) { if (row.containsKey(f.name)) { f.set(obj, row[f.name]) } }
+        return obj
+    }
+    fn table() -> string { let t = reflect(T).decorator("Table"); return t == null ? reflect(T).simpleName() : t.text(0) }
+}
+
+class Box<V> {
+    public value: V?
+    constructor() { self.value = null }
+}
+
+test "reflect(T) in a generic class" {
+    let row = new HashMap<string, any>()
+    row["id"] = "12"
+    row["name"] = "Ada"
+    row["active"] = "t"
+    let repo = new Repository<Person>()
+    let p = repo.fromRow(row)
+    assertEq("${p.id} ${p.name} ${p.active} ${repo.table()}", "12 Ada true people")
+    let boxes = new Repository<Box<int>>()
+    let one = new HashMap<string, any>()
+    one["value"] = "5"
+    assertEq("${boxes.fromRow(one).value}", "5")
+}

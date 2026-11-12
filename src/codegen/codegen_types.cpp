@@ -51,6 +51,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     }
     std::string display;
     if (!displayProtos_.empty()) display = "/* display of struct and array values */\n" + displayProtos_ + displayDefs_ + "\n";
+    if (!rfDefs_.empty()) thunks += "/* reflection: calling methods and constructors */\n" + rfDefs_ + "\n";
     return head + structs_ + vtableTypes_ + protos_ + cblocks_ + vtables_ + thunks +
            globals_ + display + defs_;
 }
@@ -650,6 +651,47 @@ bool CodeGen::reflected(const std::string &fq) const {
     return reflectRoots_.count(root(fq)) != 0;
 }
 
+std::string CodeGen::rfConvert(const TypeRef &k, const std::string &dst, const std::string &fail, bool own) const {
+    switch (k.kind) {
+        case TypeRef::Kind::Int: {
+            int bits = k.bits ? k.bits : 32;
+            return "{ long long x_; if (!grav_rf_int(v, " + std::to_string(bits) + ", " + (k.isUnsigned ? "1" : "0") +
+                   ", &x_)) " + fail + " " + dst + " = (" + cTy(k) + ")x_; }";
+        }
+        case TypeRef::Kind::Float:
+            return "{ double d_; if (!grav_rf_float(v, &d_)) " + fail + " " + dst + " = (" + cTy(k) + ")d_; }";
+        case TypeRef::Kind::Bool:
+            return "{ int b_; if (!grav_rf_bool(v, &b_)) " + fail + " " + dst + " = b_; }";
+        case TypeRef::Kind::String:
+            if (own)
+                return "if (v.tag != GRAV_ANY_STR) " + fail + " { const char* old_ = " + dst + "; " + dst +
+                       " = grav_str_retain(v.v.s); grav_str_release(old_); }";
+            return "if (v.tag != GRAV_ANY_STR) " + fail + " " + dst + " = v.v.s;";
+        case TypeRef::Kind::Any:
+            return own ? "" : dst + " = v;";
+        case TypeRef::Kind::Nullable: {
+            if (!k.elem) return "";
+            const TypeRef &e = *k.elem;
+            bool scalar = e.kind == TypeRef::Kind::Int || e.kind == TypeRef::Kind::Float || e.kind == TypeRef::Kind::Bool ||
+                          (e.isNamed() && reg_->isEnum(e.name));
+            if (e.kind == TypeRef::Kind::String)
+                return "if (v.tag == GRAV_ANY_NULL) { " + (own ? "const char* old_ = " + dst + "; " + dst + " = 0; grav_str_release(old_);"
+                                                               : dst + " = 0;") + " } else { " + rfConvert(e, dst, fail, own) + " }";
+            if (!scalar) return "";
+            return "if (v.tag == GRAV_ANY_NULL) " + dst + ".has = 0; else { " + rfConvert(e, dst + ".v", fail, own) + " " + dst +
+                   ".has = 1; }";
+        }
+        default: break;
+    }
+    if (k.isNamed() && reg_->isEnum(k.name))
+        return "if (!((v.tag == GRAV_ANY_ENUM && v.tname && strcmp(v.tname, \"" + k.name + "\") == 0) || v.tag == GRAV_ANY_INT)) " + fail +
+               " " + dst + " = (" + cTy(k) + ")v.v.i;";
+    if (!own && k.isNamed() && reg_->isClass(k.name))
+        return "if (v.tag != GRAV_ANY_NULL && (v.tag != GRAV_ANY_OBJ || !grav_is_instance(v.v.p, &" + mangle(k.name) + "_typeinfo))) " +
+               fail + " " + dst + " = v.tag == GRAV_ANY_OBJ ? (" + cTy(k) + ")v.v.p : 0;";
+    return "";
+}
+
 std::string CodeGen::emitReflection(const std::string &fq) {
     const ClassInfo *ci = reg_->cls(fq);
     if (!ci || !ci->decl || !reflected(fq)) return "0";
@@ -712,23 +754,6 @@ std::string CodeGen::emitReflection(const std::string &fq) {
                         boxAnyC(read, t) + "; }\n";
             get = fn + "_get";
         }
-        // What an `any` holding v must be to fill a field of type `k`, and the store.
-        auto accept = [&](const TypeRef &k, const std::string &dst) -> std::string {
-            if (k.kind == TypeRef::Kind::Int)
-                return "if (v.tag == GRAV_ANY_INT) " + dst + " = (" + cTy(k) + ")v.v.i; else if (v.tag == GRAV_ANY_UINT) " + dst +
-                       " = (" + cTy(k) + ")v.v.u; else return 0;";
-            if (k.kind == TypeRef::Kind::Float)
-                return "if (v.tag == GRAV_ANY_FLOAT) " + dst + " = (" + cTy(k) + ")v.v.f; else if (v.tag == GRAV_ANY_INT) " + dst +
-                       " = (" + cTy(k) + ")v.v.i; else if (v.tag == GRAV_ANY_UINT) " + dst + " = (" + cTy(k) + ")v.v.u; else return 0;";
-            if (k.kind == TypeRef::Kind::Bool) return "if (v.tag != GRAV_ANY_BOOL) return 0; " + dst + " = v.v.b;";
-            if (k.kind == TypeRef::Kind::String)
-                return "if (v.tag != GRAV_ANY_STR) return 0; { const char* old_ = " + dst + "; " + dst +
-                       " = grav_str_retain(v.v.s); grav_str_release(old_); }";
-            if (k.isNamed() && reg_->isEnum(k.name))
-                return "if (!((v.tag == GRAV_ANY_ENUM && v.tname && strcmp(v.tname, \"" + k.name + "\") == 0) || v.tag == GRAV_ANY_INT)) return 0; " +
-                       dst + " = (" + cTy(k) + ")v.v.i;";
-            return "";
-        };
         std::string body;
         if (t.kind == TypeRef::Kind::Any) {
             body = "{ GravAny old_ = " + slot + "; " + slot + " = grav_any_retain(v); grav_any_release(old_); }";
@@ -737,14 +762,8 @@ std::string CodeGen::emitReflection(const std::string &fq) {
             body = "if (v.tag != GRAV_ANY_NULL && (v.tag != GRAV_ANY_OBJ || !grav_is_instance(v.v.p, &" + mangle(t.name) +
                    "_typeinfo))) return 0; { void* old_ = (void*)" + slot + "; void* new_ = v.tag == GRAV_ANY_OBJ ? v.v.p : 0; " +
                    ret + "(new_); " + slot + " = (" + cTy(t) + ")new_; " + rel + "(old_); }";
-        } else if (nul && t.elem->kind == TypeRef::Kind::String) {
-            body = "if (v.tag == GRAV_ANY_NULL) { const char* old_ = " + slot + "; " + slot + " = 0; grav_str_release(old_); return 1; } " +
-                   accept(*t.elem, slot);
-        } else if (nul) {
-            body = "if (v.tag == GRAV_ANY_NULL) { " + slot + ".has = 0; return 1; } " + accept(*t.elem, slot + ".v") + " " +
-                   slot + ".has = 1;";
-        } else {
-            body = accept(t, slot);
+        } else if (!f.isWeak) {
+            body = rfConvert(t, slot, "return 0;", true);
         }
         if (!body.empty()) {
             vtables_ += "static int " + fn + "_set(void* o_, GravAny v) { " + st + "* o = (" + st + "*)o_; " + body +
@@ -756,6 +775,41 @@ std::string CodeGen::emitReflection(const std::string &fq) {
                   escapeC(typeRefName(t)) + "\", " + std::to_string(flags) + ", " + decos(f.decorators) + ", " + get + ", " + set + " }";
     }
     if (!fields.empty()) vtables_ += "static const GravFieldMeta " + m + "__rfields[] = {\n    " + fields + " };\n";
+    // A caller for reflection: checks the count, converts each argument (borrowed:
+    // the caller's list holds them), makes the call `call(p0, p1, ...)` and boxes
+    // its result (owned). "0" when a parameter or the result cannot go through an any.
+    auto returnable = [&](const TypeRef &r) {
+        if (r.isVoid() || r.isNullable()) return r.isVoid() || rfConvert(r, "x", "", false) != "";
+        switch (r.kind) {
+            case TypeRef::Kind::Int: case TypeRef::Kind::Float: case TypeRef::Kind::Bool: case TypeRef::Kind::String:
+            case TypeRef::Kind::Any: case TypeRef::Kind::Function: return true;
+            default: return r.isNamed() && (reg_->isClass(r.name) || reg_->isInterface(r.name) || reg_->isEnum(r.name));
+        }
+    };
+    auto caller = [&](const std::string &fname, const std::string &head, const std::vector<TypeRef> &ps, const TypeRef &ret,
+                      const std::function<std::string(const std::string &)> &call) -> std::string {
+        if (!returnable(ret)) return "0";
+        std::string body = "    if (n != " + std::to_string(ps.size()) + ") return 2;\n" + head, args;
+        for (size_t i = 0; i < ps.size(); ++i) {
+            std::string p = "p" + std::to_string(i);
+            std::string conv = rfConvert(ps[i], p, "return " + std::to_string(3 + i) + ";", false);
+            if (conv.empty()) return "0";
+            body += "    " + cTy(ps[i]) + " " + p + "; memset(&" + p + ", 0, sizeof " + p + ");\n    { GravAny v = a[" +
+                    std::to_string(i) + "]; " + conv + " }\n";
+            args += (args.empty() ? "" : ", ") + p;
+        }
+        body += ret.isVoid() ? "    " + call(args) + ";\n    *out = grav_any_null();\n"
+                             : "    *out = " + boxAnyC(call(args), ret) + ";\n";
+        vtables_ += "static int " + fname + "(" + (head.empty() ? "" : "GravAny self_, ") + "const GravAny* a, int n, GravAny* out);\n";
+        rfDefs_ += "static int " + fname + "(" + (head.empty() ? "" : "GravAny self_, ") + "const GravAny* a, int n, GravAny* out) {\n" +
+                   "    (void)a;\n" + body + "    return 0;\n}\n";
+        return fname;
+    };
+    auto typeList = [&](const std::vector<TypeRef> &ps) {
+        std::string out;
+        for (const auto &p : ps) out += (out.empty() ? "" : ", ") + typeRefName(p);
+        return "\"" + escapeC(out) + "\"";
+    };
     // Methods as written (not the copies the compiler makes: `find$User`, `map$int`).
     std::string methods;
     int nmethods = 0;
@@ -763,16 +817,58 @@ std::string CodeGen::emitReflection(const std::string &fq) {
         if (md.name.find('$') != std::string::npos) continue;
         std::string name = md.sourceName.empty() ? md.name : md.sourceName;
         int flags = access(md.access) | (md.isStatic ? 16 : 0);
+        const MethodInfo *mi = nullptr;
+        for (const auto &x : ci->methods) if (x.name == md.name) { mi = &x; break; }
+        std::string fn = "0", params = "\"\"";
+        size_t np = 0;
+        if (mi) {
+            np = mi->paramTypes.size();
+            params = typeList(mi->paramTypes);
+            std::string fname = m + "__rc" + std::to_string(counter++);
+            if (mi->isStatic) {
+                std::string direct = methodCName(fq, md.name);
+                fn = caller(fname, "    (void)self_;\n", mi->paramTypes, mi->returnType,
+                            [&](const std::string &args) { return direct + "(" + args + ")"; });
+            } else {
+                std::string head = "    if (self_.tag != GRAV_ANY_OBJ || !grav_is_instance(self_.v.p, &" + mangle(fq) +
+                                   "_typeinfo)) return 1;\n    " + st + "* o = (" + st + "*)self_.v.p;\n";
+                TypeRef recv = TypeRef::named(fq);
+                std::string mname = md.name;
+                fn = caller(fname, head, mi->paramTypes, mi->returnType,
+                            [&](const std::string &args) { return methodCall("o", recv, mname, args); });
+            }
+        }
         methods += (methods.empty() ? "" : ",\n    ") + std::string("{ \"") + escapeC(name) + "\", " +
-                   std::to_string(flags) + ", " + decos(md.decorators) + " }";
+                   std::to_string(flags) + ", " + decos(md.decorators) + ", " + std::to_string(np) + ", " + params + ", " + fn + " }";
         ++nmethods;
     }
+    // Constructors (none for an abstract class): `new C(...)` by reflection.
+    std::string ctors;
+    int nctors = 0;
+    if (!ci->isAbstract) {
+        auto add = [&](const std::vector<TypeRef> &ps, const std::string &cname) {
+            std::string fname = m + "__rk" + std::to_string(counter++);
+            std::string fn = caller(fname, "", ps, TypeRef::named(fq),
+                                    [&](const std::string &args) { return "(void*)" + cname + "(" + args + ")"; });
+            ctors += (ctors.empty() ? "" : ",\n    ") + std::string("{ ") + std::to_string(ps.size()) + ", " + typeList(ps) + ", " + fn + " }";
+            ++nctors;
+        };
+        if (ci->ctors.empty()) add({}, ctorCName(fq));
+        for (size_t k = 0; k < ci->ctors.size(); ++k) {
+            std::vector<TypeRef> ps;
+            bool ok = true;
+            for (const auto &p : ci->ctors[k]->params) { if (p.variadic) ok = false; ps.push_back(p.type); }
+            if (ok) add(ps, ctorCName(fq, static_cast<int>(k)));
+        }
+    }
+    if (!ctors.empty()) vtables_ += "static const GravCtorMeta " + m + "__rctors[] = {\n    " + ctors + " };\n";
     if (!methods.empty()) vtables_ += "static const GravMethodMeta " + m + "__rmethods[] = {\n    " + methods + " };\n";
     std::string own = decos(cd.decorators);
     // (not const: it keeps the ClassInfo made for it)
     vtables_ += "static GravClassMeta " + m + "__rmeta = { " + std::to_string(cd.fields.size()) + ", " +
                 (fields.empty() ? "0" : m + "__rfields") + ", " + std::to_string(nmethods) + ", " +
-                (methods.empty() ? "0" : m + "__rmethods") + ", " + own + ", 0 };\n";
+                (methods.empty() ? "0" : m + "__rmethods") + ", " + own + ", " + std::to_string(nctors) + ", " +
+                (ctors.empty() ? "0" : m + "__rctors") + ", 0 };\n";
     return "&" + m + "__rmeta";
 }
 
