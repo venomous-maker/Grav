@@ -96,7 +96,8 @@ const KEYWORD_DOCS = {
   type: ["A type alias; fully interchangeable with what it names (`typedef` is a synonym).", "type Meters = double"],
   typedef: ["A synonym of `type`: a type alias.", "typedef Grid = int[3]"],
   interface: ["A set of method signatures a class can implement; `is` / `as` check and convert at run time.", "interface Shape { fn area() -> float }"],
-  trait: ["An interface whose methods may have default bodies; `Self` is the implementing class.", "trait Comparable { fn compareTo(o: Self) -> int }"],
+  trait: ["An interface whose methods may have default bodies, and which may bring fields, static fields, private helpers and decorators: a class that implements it gets them all (a trait has no constructor: give its fields initializers). `Self` is the implementing class.",
+          "trait Versioned {\n    public version: int = 1\n    fn bump() { self.version = self.version + 1 }\n}\nclass Page implements Versioned { }"],
   Self: ["As a class method's result type: the receiver's own class, so chains keep a subclass's type (the method returns `self`). In a static method: the class the call names (`new Self()`, `Self.table()`, `Array<Self>`). In a trait: the implementing class.", "fn where(c: string) -> Self { self.parts.push(c); return self }\nstatic fn find(id: int) -> Self { return new Self() }"],
   abstract: ["An abstract class cannot be instantiated; an abstract method has no body and must be overridden.", "abstract class Shape { abstract fn area() -> float }"],
   final: ["A final class cannot be extended; a final method cannot be overridden (calls are direct).", "final class Version { ... }"],
@@ -425,9 +426,12 @@ function parseFile(text) {
       const kind = { class: KIND.Class, struct: KIND.Struct, interface: KIND.Interface, trait: KIND.Interface, enum: KIND.Enum }[kw];
       const decl = raw.trim().replace(/\s*\{.*$/, "");
       const ext = /\bextends\s+([\w.<>, ]+?)(?:\s+implements|\s+uses|\s*\{|$)/.exec(m);
+      const imp = /\bimplements\s+([\w.<>, ]+?)(?:\s+extends|\s+uses|\s*\{|$)/.exec(m);
       opened = add({ name, kind, keyword: kw, line: i, ch: m.indexOf(name, mm.index + mm[0].indexOf(kw) + kw.length),
         namespace: ns, container: container && container.name, typeParams: mm[3] || "",
-        base: ext ? ext[1].trim().replace(/<.*$/, "") : "", detail: decl, doc: docAbove(lines, i), children: [] });
+        base: ext ? ext[1].trim().replace(/<.*$/, "") : "", detail: decl, doc: docAbove(lines, i), children: [],
+        // implemented interfaces and traits (a trait's fields, statics and methods become the class's)
+        impls: imp ? splitParams(imp[1]).map((x) => x.trim().replace(/<.*$/, "")).filter(Boolean) : [] });
       // a one-line enum: enum Color { Red, Green }
       if (kw === "enum") {
         const ob = m.indexOf("{"), cb = m.lastIndexOf("}");
@@ -1039,6 +1043,8 @@ class Workspace {
       if (![KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(sym.kind)) continue;
       for (const m of sym.members || []) out.push({ file: f, sym: m });
       if (sym.base) out.push(...this.membersOf(file, sym.base, seen));
+      for (const t of sym.impls || [])                                    // implements Versioned: its members too
+        for (const x of this.membersOf(file, t, seen)) if (!out.some((o) => o.sym.name === x.sym.name)) out.push(x);
       // a data enum variant's fields live on Shape$Circle: none in source; its methods on the base
       break;
     }
@@ -1442,7 +1448,7 @@ class Workspace {
           if (isTypeName && sym.kind !== KIND.EnumMember && !sym.isStatic) continue;   // Type.<static members>
           if (!isTypeName && sym.isStatic && expr !== "super") continue;   // super.x also reaches the base's statics
           const cls = this.enclosingClass(file, pos);
-          if (/^\s*private\b/.test(sym.detail) && (!cls || cls.name !== sym.container)) continue;
+          if (/^\s*private\b/.test(sym.detail) && (!cls || (cls.name !== sym.container && !(cls.impls || []).includes(sym.container)))) continue;
           push(sym.name, COMPLETION_KIND[sym.kind] || 6, this.bindMember(file, t, sym, sym.detail), sym.doc);
         }
         // n.toHex(), "a,b".split(","), u.toMap(): the std/types methods the value takes
