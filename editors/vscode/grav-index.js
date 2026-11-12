@@ -486,7 +486,7 @@ function parseFile(text) {
       const owner = inBody ? ctx : opened;
       for (const lm of m.matchAll(new RegExp(RE.local.source, "g"))) {
         const ch = lm.index + lm[0].indexOf(lm[2], lm[1].length);
-        const init = raw.slice(lm.index + lm[0].length - lm[4].length).trim();
+        const init = raw.slice(lm.index + lm[0].lastIndexOf("=", lm[0].length - lm[4].length - 1) + 1).trim();
         add({ name: lm[2], kind: lm[1] === "const" ? KIND.Constant : KIND.Variable, line: i, ch, local: owner,
           type: lm[3] ? lm[3].trim() : inferType(init), written: !!lm[3], role: lm[1], detail: raw.trim(), doc: "" });
       }
@@ -561,6 +561,60 @@ function parseFile(text) {
   }
 }
 
+// ---- types of built-in values, for std/types' value methods ----
+const INT_TYPES = new Set(["int", "long", "byte", "short", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16",
+                           "uint32", "uint64", "ulong", "signed", "unsigned"]);
+const BUILTIN_VALUE = new Set([...INT_TYPES, "float", "float32", "float64", "double", "string", "bool", "binary", "any", "void"]);
+// Spelling a type the way the checker sees it: `double` is a float, `int32` an int.
+function normType(t) {
+  const s = String(t || "").replace(/\s+/g, "").replace(/^std\.\w+\./, "");
+  return { double: "float", float64: "float", int32: "int", signed: "int", int64: "long", unsigned: "uint", uint32: "uint" }[s] || s;
+}
+function paramType(p) { const i = p.indexOf(":"); return i < 0 ? "" : p.slice(i + 1).replace(/=.*$/, "").trim(); }
+// How well a value of type `v` fits a parameter of type `p`: 2 exactly, 1 by
+// widening (an int for a long, anything for an `any`, a `T?` for a generic `T?`), 0 not.
+function typeFits(p, v, typeParams) {
+  p = normType(p); v = normType(v);
+  const generic = new Set((typeParams || "").replace(/[<>\s]/g, "").split(",").filter(Boolean));
+  if (!p || !v) return 0;
+  if (p === v) return 2;
+  if (p === "any") return 1;
+  if (generic.has(p.replace(/\?$/, ""))) return p.endsWith("?") === v.endsWith("?") || !p.endsWith("?") ? 1 : 0;
+  const rank = { byte: 1, uint8: 1, int8: 1, int16: 2, short: 2, uint16: 2, int: 3, uint: 3, long: 4, ulong: 4, uint64: 4 };
+  return rank[p] && rank[v] && rank[v] <= rank[p] ? 1 : 0;
+}
+// A value method's types for a value of type `v`, its type parameter bound:
+// `Null.orElse<T>(v: T?, fallback: T) -> T` on an int? takes and gives an int.
+function bindTypes(sym, v, text) {
+  const tp = (sym.typeParams || "").replace(/[<>\s]/g, "").split(",").filter(Boolean);
+  const first = normType(paramType(sym.params[0]));
+  const bare = first.replace(/\?$/, "");
+  if (!v || !tp.includes(bare)) return text;
+  const bound = first.endsWith("?") ? String(v).replace(/\?$/, "") : String(v);
+  return text.replace(new RegExp(`\\b${bare}\\b`, "g"), bound);
+}
+function bindReturn(sym, v) { return bindTypes(sym, v, sym.returns || ""); }
+// A method as a function value's type: `fn(int, int) -> int` (`skip` parameters left
+// out: a value method's receiver).
+function fnTypeOf(sym, skip) {
+  const ps = (sym.params || []).slice(skip).map(paramType);
+  return `fn(${ps.join(", ")})${sym.returns ? " -> " + sym.returns : ""}`;
+}
+// A value method as completion and signature help show it: without the receiver
+// (and for a value of type `v`, with a type parameter it binds filled in).
+function valueSignature(sym, v) {
+  return bindTypes(sym, v, `${sym.name}(${(sym.params || []).slice(1).join(", ")})${sym.returns ? " -> " + sym.returns : ""}`);
+}
+// Text before a `//` comment that is not inside a string.
+function stripComment(s) {
+  for (let i = 0, q = false; i < s.length; i++) {
+    if (q && s[i] === "\\") { i++; continue; }
+    if (s[i] === '"') q = !q;
+    else if (!q && s[i] === "/" && s[i + 1] === "/") return s.slice(0, i);
+  }
+  return s;
+}
+
 // A type as an inlay hint shows it: namespaces dropped (`db.Row` -> `Row`,
 // `geo.Point<int>` -> `Point<int>`); a data enum variant keeps its enum (`Shape.Circle`).
 function shortType(t) { return String(t).replace(/\b(?:[a-z_]\w*\.)+(?=[A-Za-z_])/g, ""); }
@@ -568,13 +622,21 @@ function shortType(t) { return String(t).replace(/\b(?:[a-z_]\w*\.)+(?=[A-Za-z_]
 // The type of `new T<...>(...)`, `T.of(...)`-style or literal initializers.
 function inferType(init) {
   let m;
+  init = stripComment(init || "").trim().replace(/;\s*$/, "").trim();
   if ((m = /^new\s+([\w.]+)\s*(<[^(]*>)?/.exec(init))) return m[1] + (m[2] || "");
-  if (/^"/.test(init)) return "string";
+  if ((m = /^[^"]*(?:"(?:[^"\\]|\\.)*"[^"]*)*?\s+as\s+([A-Za-z_][\w.]*(?:<.*>)?\??)$/.exec(init))) return m[1];   // x as Decimal
+  // a chain of members and calls (n.toHex(), "a,b".split(","), Integer.compare,
+  // 0.5.round(1)) or a plain name: typed by the workspace
+  const ARGS = "\\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\"|\\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\")*\\))*\\)";
+  const HEAD = `(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d+(?:\\.\\d+)?|\\(-?\\d+(?:\\.\\d+)?\\)|[A-Za-z_]\\w*)`;
+  if (new RegExp(`^${HEAD}(?:${ARGS})?(?:\\.[A-Za-z_]\\w*(?:${ARGS})?)+$`).test(init)) return { expr: init };
+  if (/^"(?:[^"\\]|\\.)*"(?:\s*\+.*)?$/.test(init)) return "string";   // "x", "a" + b
   if (/^-?\d+\.\d/.test(init)) return "float";
   if (/^-?\d/.test(init)) return "int";
   if (/^(true|false)\b/.test(init)) return "bool";
   if ((m = /^([A-Z]\w*)\.(\w+)\(/.exec(init))) return { call: m[1], method: m[2] };
   if ((m = /^([A-Z]\w*)\.(\w+)\b/.exec(init))) return m[1];   // Enum.Variant
+  if (/^[A-Za-z_]\w*$/.test(init) && !KEYWORD_SET.has(init)) return { expr: init };   // let big = Infinity
   return "";
 }
 
@@ -879,6 +941,8 @@ class Workspace {
       if (t) {
         const m = this.membersOf(file, t).filter((x) => x.sym.name === w.word);
         if (m.length) return m.map((x) => ({ file: x.file, range: x.sym.range }));
+        const vm = this.valueMethod(file, t, w.word);       // n.toHex(): Integer.toHex
+        if (vm) return [{ file: vm.file, range: vm.sym.range }];
       }
     }
     // an alias from `import { A as B }` or `use a.A as B` means A
@@ -967,10 +1031,19 @@ class Workspace {
 
   // Best-effort type of `a`, `a.b`, `a.b()` at a position (locals, params, fields, returns).
   typeOfExpr(file, pos, expr, depth = 0) {
-    const parts = expr.replace(/\([^()]*\)/g, "()").split(".");
+    // strings to "", call arguments to (), so the dots left separate members
+    let e = expr.trim().replace(/"(?:[^"\\]|\\.)*"/g, '""');
     let type = "";
+    const lit = /^(""|-?\d+\.\d+|-?\d+|true|false)(?=[.(]|$)/.exec(e) || /^\((""|-?\d+(?:\.\d+)?)\)(?=\.|$)/.exec(e);
+    if (lit) {                                                    // "x".upper(), 255.toHex(), (-7).abs()
+      type = lit[1] === '""' ? "string" : /^(true|false)$/.test(lit[1]) ? "bool" : lit[1].includes(".") ? "float" : "int";
+      e = "_" + e.slice(lit[0].length);
+    }
+    for (let prev = ""; prev !== e;) { prev = e; e = e.replace(/\([^()]*\)/g, "()"); }
+    const parts = e.split(".");
     const first = parts[0].replace(/\(\)$/, "");
-    if (first === "self") {
+    if (lit) {
+    } else if (first === "self") {
       const c = this.enclosingClass(file, pos);
       type = c ? c.name : "";
     } else {
@@ -978,7 +1051,9 @@ class Workspace {
       if (local) type = this.localType(file, local, depth);
       else {
         const decl = this.symbolsNamed(file, first).find((x) => [KIND.Class, KIND.Struct, KIND.Enum, KIND.Interface, KIND.Namespace].includes(x.sym.kind));
-        if (decl) type = decl.sym.name;
+        const fn = parts[0].endsWith("()") && this.symbolsNamed(file, first).find((x) => x.sym.kind === KIND.Function && !x.sym.container);
+        if (fn) type = fn.sym.returns || "";
+        else if (decl) type = decl.sym.name;
         else {
           const g = this.symbolsNamed(file, first).find((x) => x.sym.type);
           if (g) type = g.sym.type;
@@ -986,11 +1061,18 @@ class Workspace {
       }
     }
     for (const p of parts.slice(1)) {
-      if (!type) return "";
-      const name = p.replace(/\(\)$/, "");
+      if (!type || typeof type !== "string") return "";
+      const name = p.replace(/\(\)$/, ""), called = p.endsWith("()");
       const m = this.membersOf(file, type).find((x) => x.sym.name === name);
-      if (!m) return "";
-      type = m.sym.kind === KIND.Field ? m.sym.type : (m.sym.returns || "");
+      if (!m) {                                                   // n.toHex(): Integer.toHex(n)
+        const vm = this.valueMethod(file, type, name);
+        if (!vm) return "";
+        type = called ? vm.returns : fnTypeOf(vm.sym, 1);
+        continue;
+      }
+      if (m.sym.kind === KIND.EnumMember) type = m.sym.container;     // Shape.Circle(1.0) is a Shape
+      else if (m.sym.kind === KIND.Field) type = m.sym.type;
+      else type = called ? (m.sym.returns || "") : fnTypeOf(m.sym, 0);   // Integer.compare as a value
     }
     return typeof type === "string" ? type : "";
   }
@@ -1008,11 +1090,55 @@ class Workspace {
     const line = known && splitLines(this.text(file) || "")[sym.line];
     const t = line !== undefined && known && known.get(sym.name + "\0" + line.trim());
     if (t) return t;
+    if (depth > 4) return "";
+    if (sym.type && sym.type.expr) return this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.type.expr, depth + 1);
     if (typeof sym.type === "object") return this.returnOf(file, sym.type.call, sym.type.method);
-    if (sym.type || sym.role !== "for" || !sym.iter || depth > 4) return sym.type || "";
+    if (sym.type || sym.role !== "for" || !sym.iter) return sym.type || "";
     if (/\.\./.test(sym.iter)) return "int";                                   // for (i in 0..n)
     return this.elementType(file, this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.iter, depth + 1));
   }
+  // ---- methods on built-in values (std/types) ----
+  // `n.toHex()` is `Integer.toHex(n)`: the std.types classes whose static methods
+  // a value of type `t` takes as its own, the most specific first (as the
+  // compiler's valueMethodClasses); a class instance takes Object's for names
+  // its class lacks.
+  static valueClasses(t) {
+    const b = normType(t);
+    if (/\?$/.test(b) && BUILTIN_VALUE.has(b.slice(0, -1))) return ["Null"];
+    if (b === "byte" || b === "uint8") return ["Byte", "Integer"];
+    if (INT_TYPES.has(b)) return ["Integer"];
+    if (b === "float" || b === "float32") return ["Float"];
+    if (b === "string") return ["String"];
+    if (b === "bool") return ["Bool"];
+    if (b === "any") return ["Object"];
+    return b && /^[A-Za-z_][\w.]*(<.*>)?\??$/.test(b) && !BUILTIN_VALUE.has(b) ? ["Object"] : [];
+  }
+  // The static methods of std.types class `cls` a value of type `t` can call as its
+  // own (first parameter fits), each with its owner and the return type for `t`.
+  valueMethods(file, t, cls) {
+    const out = [];
+    for (const { file: f, sym } of this.membersOf(file, "std.types." + cls)) {
+      if (!sym.isStatic || ![KIND.Method, KIND.Function].includes(sym.kind) || !sym.params || !sym.params.length) continue;
+      const fit = typeFits(paramType(sym.params[0]), t, sym.typeParams);
+      if (fit) out.push({ file: f, sym, owner: cls, fit, returns: bindReturn(sym, t) });
+    }
+    return out;
+  }
+  // The method `name` a value of type `t` calls (`port.grouped()`), the best fit; or null.
+  valueMethod(file, t, name) {
+    const ms = this.valueMethodsNamed(file, t, name);
+    return ms[0] || null;
+  }
+  // Every overload of `name` a value of type `t` may call, the best first.
+  valueMethodsNamed(file, t, name) {
+    for (const cls of Workspace.valueClasses(t)) {
+      if (cls === "Object" && this.membersOf(file, t).some((x) => x.sym.name === name)) return [];
+      const ms = this.valueMethods(file, t, cls).filter((x) => x.sym.name === name);
+      if (ms.length) return ms.sort((a, b) => b.fit - a.fit);
+    }
+    return [];
+  }
+
   // What `for (x in <a value of type t>)` gives x.
   elementType(file, t) {
     let m, r = "";
@@ -1041,6 +1167,14 @@ class Workspace {
       const sym = info && info.symbols.find((s) => s.range.start.line === d.range.start.line && s.range.start.character === d.range.start.character);
       if (!sym) continue;
       if (sym.local) return { markdown: this.localHover(d.file, sym), range: w.range };
+      const vm = w.qualifier && sym.isStatic && this.valueCall(file, pos, w);
+      if (vm) {
+        const recv = w.qualifier.length > 24 ? "x" : w.qualifier, rest = (sym.params || []).slice(1).map((p) => p.split(":")[0].trim());
+        let md = "```grav\n" + valueSignature(sym, this.typeOfExpr(file, pos, w.qualifier)) + "\n```";
+        if (sym.doc) md += "\n\n" + sym.doc;
+        md += `\n\n*\`${recv}.${sym.name}(${rest.join(", ")})\` is \`${vm.owner}.${sym.name}(${[recv, ...rest].join(", ")})\` · std/types*`;
+        return { markdown: md, range: w.range };
+      }
       const where = [];
       if (sym.namespace) where.push("namespace " + sym.namespace);
       if (sym.container) where.push("in " + sym.container);
@@ -1053,6 +1187,12 @@ class Workspace {
     }
     if (b) return { markdown: "```grav\n" + b[1] + "\n```\n\n" + b[2], range: w.range };
     return null;
+  }
+  // The value method a qualified word is (`n.toHex` at the cursor: Integer.toHex), or null.
+  valueCall(file, pos, w) {
+    const t = this.typeOfExpr(file, pos, w.qualifier);
+    if (!t || this.membersOf(file, t).some((x) => x.sym.name === w.word)) return null;
+    return this.valueMethod(file, t, w.word);
   }
   // A local binding as hover shows it: `let xs: Array<int>`, `x: int` (loop variable), ...
   localHover(file, sym) {
@@ -1129,8 +1269,9 @@ class Workspace {
       }
       return items.map((it) => ({ ...it, insertText: it.label.slice(typed.lastIndexOf("/") + 1), filterText: it.label.slice(typed.lastIndexOf("/") + 1) }));
     }
-    // members after a dot: expr.<cursor>
-    m = /([A-Za-z_][\w]*(?:\([^()]*\))?(?:\.[A-Za-z_]\w*(?:\([^()]*\))?)*)\.(\w*)$/.exec(lineText);
+    // members after a dot: expr.<cursor> (also "text".<cursor>, (-7).<cursor>, and 255.t<cursor>)
+    m = /((?:[A-Za-z_]\w*|"(?:[^"\\]|\\.)*"|\(-?\d+(?:\.\d+)?\))(?:\([^()]*\))?(?:\.[A-Za-z_]\w*(?:\([^()]*\))?)*)\.(\w*)$/.exec(lineText) ||
+        /(?:^|[^\w.])(-?\d+(?:\.\d+)?)\.([A-Za-z_]\w*)$/.exec(lineText);
     if (m) {
       const expr = m[1];
       const t = this.typeOfExpr(file, pos, expr);
@@ -1148,6 +1289,17 @@ class Workspace {
           if (/^\s*private\b/.test(sym.detail) && (!cls || cls.name !== sym.container)) continue;
           push(sym.name, COMPLETION_KIND[sym.kind] || 6, sym.detail, sym.doc,
             [KIND.Method, KIND.Function].includes(sym.kind) ? undefined : undefined);
+        }
+        // n.toHex(), "a,b".split(","), u.toMap(): the std/types methods the value takes
+        if (!isTypeName) {
+          const own = new Set(items.map((x) => x.label));
+          for (const cls of Workspace.valueClasses(t))
+            for (const vm of this.valueMethods(file, t, cls).sort((a, b) => b.fit - a.fit)) {
+              if (own.has(vm.sym.name)) continue;
+              own.add(vm.sym.name);
+              push(vm.sym.name, COMPLETION_KIND[KIND.Method], valueSignature(vm.sym, t),
+                (vm.sym.doc ? vm.sym.doc + "\n\n" : "") + `*${vm.owner}.${vm.sym.name} in std/types*`);
+            }
         }
       }
       return items;
@@ -1223,6 +1375,12 @@ class Workspace {
     } else if (qual) {
       const t = this.typeOfExpr(file, pos, qual);
       cands = (t ? this.membersOf(file, t) : []).filter((x) => x.sym.name === name).map((x) => x.sym);
+      const vms = !cands.length && t ? this.valueMethodsNamed(file, t, name) : [];
+      if (vms.length) return {   // maybe.orElse(<cursor>: shown without the value itself
+        signatures: vms.slice(0, 8).map((x) => ({ label: valueSignature(x.sym, t), documentation: x.sym.doc || "",
+          parameters: x.sym.params.slice(1).map((p) => ({ label: bindTypes(x.sym, t, p) })) })),
+        activeParameter: commas,
+      };
       if (!cands.length) cands = this.symbolsNamed(file, name, qual).map((x) => x.sym).filter((s) => s.params);
     } else {
       cands = this.symbolsNamed(file, name).map((x) => x.sym).filter((s) => s.params && !s.container);
