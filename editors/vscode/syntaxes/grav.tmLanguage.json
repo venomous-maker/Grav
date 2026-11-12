@@ -276,7 +276,7 @@
     },
     "named-args": {
       "comment": "f(x, name: value) \u2014 a named argument (also struct literal fields)",
-      "match": "(?<=[(,{])\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?!:)",
+      "match": "(?<!\\$\\{)(?<=[(,{])\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:)(?!:)(?!\\s*(?:(?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b(?!\\s*\\()|fn\\s*\\())",
       "captures": {
         "1": {
           "name": "variable.parameter.named.grav"
@@ -399,7 +399,7 @@
       "patterns": [
         {
           "begin": "(->)\\s*",
-          "end": "(?=[{=;]|=>|$)",
+          "end": "(?=[{}=;),]|=>|$)",
           "beginCaptures": {
             "1": {
               "name": "punctuation.separator.return.grav"
@@ -593,8 +593,69 @@
           }
         },
         {
-          "comment": "class / struct / interface / trait / enum Name<T>",
-          "begin": "\\b(class|struct|interface|trait|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "comment": "enum Name { A, B(x: T), ... }: its variants",
+          "begin": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "end": "(?<=\\})",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.enum.grav"
+            },
+            "2": {
+              "name": "entity.name.type.declaration.grav"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#type-params"
+            },
+            {
+              "match": "\\b(implements)\\b",
+              "name": "storage.modifier.inherit.grav"
+            },
+            {
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.definition.block.grav"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.definition.block.grav"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "include": "#decorators"
+                },
+                {
+                  "match": "(?:(?<=[{,])|^)\\s*(?!fn\\b|static\\b|public\\b|private\\b)([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:[(,}=]|//|$))",
+                  "captures": {
+                    "1": {
+                      "name": "variable.other.enummember.grav"
+                    }
+                  }
+                },
+                {
+                  "include": "#block"
+                },
+                {
+                  "include": "#expression"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "comment": "class / struct / interface / trait Name<T>",
+          "begin": "\\b(class|struct|interface|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "end": "(?=\\{)|$",
           "beginCaptures": {
             "1": {
@@ -696,6 +757,40 @@
           ]
         },
         {
+          "comment": "a lambda's parameters: fn(x, y: int) => ...",
+          "begin": "\\b(fn)\\s*(\\()(?=[^()]*\\)\\s*(?:=>|->|\\{))",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.function.grav"
+            },
+            "2": {
+              "name": "punctuation.definition.parens.grav"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.parens.grav"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#type-annotation"
+            },
+            {
+              "match": "[A-Za-z_][A-Za-z0-9_]*",
+              "name": "variable.parameter.grav"
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.grav"
+            }
+          ]
+        },
+        {
           "match": "\\b(constructor|destructor)\\b",
           "name": "entity.name.function.constructor.grav"
         },
@@ -708,6 +803,23 @@
             },
             "2": {
               "name": "variable.other.declaration.grav"
+            }
+          }
+        },
+        {
+          "comment": "a field: `[modifiers] name: Type [= value]` starting a line (a parameter's line has a ) after its type, or ends with a comma)",
+          "match": "^\\s*((?:(?:public|private|protected|static|readonly|weak|final|export)\\s+)*)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*:(?!:)(?!\\s*[^=(]*\\))(?![^=]*,\\s*(?://.*)?$))",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "match": "\\w+",
+                  "name": "storage.modifier.grav"
+                }
+              ]
+            },
+            "2": {
+              "name": "variable.other.property.declaration.grav"
             }
           }
         },
@@ -737,8 +849,40 @@
           "name": "keyword.other.operator.grav"
         },
         {
-          "match": "\\b(new|free|sizeof|typename)\\b",
+          "match": "\\b(sizeof)\\s*(\\()\\s*((?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self))\\s*(?=\\))",
+          "captures": {
+            "1": {
+              "name": "support.function.builtin.grav"
+            },
+            "2": {
+              "name": "punctuation.definition.parens.grav"
+            },
+            "3": {
+              "name": "storage.type.primitive.grav"
+            }
+          }
+        },
+        {
+          "match": "\\b(new|free)\\b",
           "name": "keyword.operator.new.grav"
+        },
+        {
+          "comment": "x as Array<int>: a cast to a generic type",
+          "begin": "\\b(is|as)\\s+((?:[A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*)(?=<)",
+          "end": "(?<=>)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.operator.type.grav"
+            },
+            "2": {
+              "name": "entity.name.type.grav"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#type-args"
+            }
+          ]
         },
         {
           "match": "\\b(is|as)\\s+((?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self))\\b",
@@ -783,6 +927,11 @@
           "name": "constant.language.null.grav"
         },
         {
+          "comment": "std/types' NaN and Infinity",
+          "match": "\\b(NaN|Infinity)\\b",
+          "name": "constant.language.float.grav"
+        },
+        {
           "match": "\\b(self|super)\\b",
           "name": "variable.language.self.grav"
         }
@@ -805,12 +954,13 @@
       ]
     },
     "builtins": {
-      "match": "\\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|reflect|int|float|bool)\\b(?=\\s*\\()",
+      "comment": "the compiler's built-in functions, and conversions such as long(x) and double(x)",
+      "match": "\\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|sizeof|reflect|int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b(?=\\s*\\()",
       "name": "support.function.builtin.grav"
     },
     "case-pattern": {
       "comment": "case Circle(r, _): / case Shape.Empty:",
-      "match": "\\b(case)\\s+((?:[A-Za-z_][A-Za-z0-9_]*\\.)*)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*[(:,])",
+      "match": "\\b(case)\\s+(?:([A-Za-z_][A-Za-z0-9_]*)(\\.))?([A-Za-z_][A-Za-z0-9_]*)(?=\\s*[(:,])",
       "captures": {
         "1": {
           "name": "keyword.control.grav"
@@ -819,6 +969,9 @@
           "name": "entity.name.type.grav"
         },
         "3": {
+          "name": "punctuation.accessor.grav"
+        },
+        "4": {
           "name": "variable.other.enummember.grav"
         }
       }
@@ -920,6 +1073,21 @@
           "name": "variable.other.constant.grav"
         },
         {
+          "comment": "Color.Red, Shape.Circle(1.0): a variant after its enum",
+          "match": "\\b([A-Z]\\w*)\\s*(\\.)\\s*([A-Z][A-Z0-9_]*[a-z]\\w*)\\b(?!\\s*[<.])",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.grav"
+            },
+            "2": {
+              "name": "punctuation.accessor.grav"
+            },
+            "3": {
+              "name": "variable.other.enummember.grav"
+            }
+          }
+        },
+        {
           "match": "\\b([A-Z]\\w*)(?=\\s*<[\\w\\s,.<>\\[\\]*?]*>)",
           "name": "entity.name.type.grav"
         },
@@ -1003,6 +1171,31 @@
         {
           "match": "[:?]",
           "name": "punctuation.separator.grav"
+        }
+      ]
+    },
+    "block": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.grav"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.block.grav"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#decorators"
+        },
+        {
+          "include": "#block"
+        },
+        {
+          "include": "#expression"
         }
       ]
     },
