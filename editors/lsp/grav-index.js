@@ -1037,7 +1037,11 @@ class Workspace {
         bases.push([path.join(path.dirname(file), dir), dir ? dir + "/" : ""]);
         if (!dir) push("std", 9, "the whole standard library (except networking)");
         const proj = this.project(path.dirname(file));
-        if (proj && !dir) for (const d of proj.deps) push(d.name, 9, `package ${d.source}${d.version ? "@" + d.version : ""}`);
+        if (proj && !dir) for (const d of proj.deps) push(d.name, 9, d.local ? `package at ${d.source}` : `package ${d.source}${d.version ? "@" + d.version : ""}`);
+        // inside a package: import "grav-db/src/<cursor>
+        const dep = proj && dir && proj.deps.find((d) => d.name === dir.split("/")[0]);
+        const pdir = dep && this.packageDir(proj, dep);
+        if (pdir) bases.push([path.join(pdir, dir.slice(dep.name.length + 1)), dir + "/"]);
       }
       for (const [base, prefix] of bases) {
         try {
