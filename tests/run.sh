@@ -159,6 +159,12 @@ if [ $UPDATE = 0 ] && [ -x tests/packages.sh ]; then
   else cat "$TMP/pkg.out"; fail=$((fail+1)); fi
 fi
 
+# What editors are told about types (grav check --types, inlay hints).
+if [ $UPDATE = 0 ] && [ -x tests/editors.sh ]; then
+  if bash tests/editors.sh >"$TMP/editors.out" 2>&1; then tail -1 "$TMP/editors.out"
+  else cat "$TMP/editors.out"; fail=$((fail+1)); fi
+fi
+
 # The standard-library pages' API sections must match the library source.
 if command -v node >/dev/null; then
   if node docs/std/gen-api.js --check >"$TMP/api.out" 2>&1; then echo "ok   docs/std API sections"; pass=$((pass+1))
