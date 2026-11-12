@@ -62,6 +62,11 @@ void TypeChecker::unify(const TypeRef &p, const TypeRef &a, const std::vector<st
     if (p.kind == a.kind && p.elem && a.elem &&
         (p.isFuture() || p.isPointer() || p.isArray()))
         unify(*p.elem, *a.elem, tps, s);
+    // `T?` takes a `U?` (T = U) or a plain `U` (T = U).
+    if (p.isNullable() && p.elem) {
+        if (a.isNullable() && a.elem) unify(*p.elem, *a.elem, tps, s);
+        else if (!a.isNullable()) unify(*p.elem, a, tps, s);
+    }
     if (p.isFunction() && a.isFunction()) {
         for (size_t i = 0; i < p.fnParams.size() && i < a.fnParams.size(); ++i)
             unify(p.fnParams[i], a.fnParams[i], tps, s);

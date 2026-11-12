@@ -501,9 +501,76 @@ TypeRef TypeChecker::checkAs(AsExpr &e) {
         default:
             break;
     }
+    // A conversion, as a call in the operand's place (the cast is then a no-op):
+    // `price as float` is `price.toFloat()`, `19.99 as Decimal` is
+    // `Decimal.from(19.99)`, `"42" as int` is `"42".toInt()`, `42 as string` is
+    // `42.toString()` (std.types' methods for the built-in types).
+    if (std::string method = conversionMethod(src, e.target); !method.empty()) {
+        auto call = std::make_unique<CallExpr>();
+        call->line = e.line;
+        call->col = e.col;
+        auto callee = std::make_unique<MemberExpr>();
+        callee->line = e.line;
+        callee->col = e.col;
+        callee->member = method;
+        if (method == "from") {
+            auto owner = std::make_unique<NameExpr>();
+            owner->name = e.target.name;
+            owner->line = e.line;
+            owner->col = e.col;
+            callee->object = std::move(owner);
+            call->args.push_back(std::move(e.operand));
+        } else {
+            callee->object = std::move(e.operand);
+        }
+        call->callee = std::move(callee);
+        e.operand = std::move(call);
+        TypeRef got = checkExpr(*e.operand);
+        if (got.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+        return checkAs(e);
+    }
     error(e.line, e.col, "cannot cast a value of type " + typeRefName(src) +
                              " to " + typeRefName(e.target));
     return TypeRef::prim(TypeRef::Kind::Error);
+}
+
+// The method a cast from `src` to `target` calls when it is a conversion rather
+// than a cast Grav makes itself: a class's toInt/toLong/toFloat/toString/toBool
+// to a built-in type; a class's static `from(x)` from anything it takes; and
+// between strings and numbers or bools through std.types. "" when there is none.
+std::string TypeChecker::conversionMethod(const TypeRef &src, const TypeRef &target) const {
+    auto builtinName = [](const TypeRef &t) -> std::string {
+        switch (t.kind) {
+            case TypeRef::Kind::Int: return t.bits == 64 ? "toLong" : "toInt";
+            case TypeRef::Kind::Float: return "toFloat";
+            case TypeRef::Kind::String: return "toString";
+            case TypeRef::Kind::Bool: return "toBool";
+            default: return "";
+        }
+    };
+    auto hasInstance = [&](const std::string &cls, const std::string &m) {
+        for (const MethodInfo *x : reg_->findMethodsBySource(cls, m))
+            if (!x->isStatic && x->paramTypes.empty()) return true;
+        return false;
+    };
+    auto hasStatic = [&](const std::string &cls, const std::string &m) {
+        for (const MethodInfo *x : reg_->findMethodsBySource(cls, m))
+            if (x->isStatic && x->paramTypes.size() == 1) return true;
+        return false;
+    };
+    std::string want = builtinName(target);
+    if (src.isNamed() && reg_->isClass(src.name) && !want.empty()) {
+        if (hasInstance(src.name, want)) return want;
+        if (want == "toInt" && hasInstance(src.name, "toLong")) return "toLong";   // (then narrowed)
+        return "";
+    }
+    if (target.isNamed() && reg_->isClass(target.name) && hasStatic(target.name, "from")) return "from";
+    // Built-in to built-in: through the value's std.types class (`"42".toInt()`, `42.toString()`).
+    if (!want.empty() && (src.kind == TypeRef::Kind::String || target.kind == TypeRef::Kind::String)) {
+        for (const auto &owner : valueMethodClasses(src))
+            if (hasStatic(owner, want) || (want != "toString" && !reg_->findMethodsBySource(owner, want).empty())) return want;
+    }
+    return "";
 }
 
 TypeRef TypeChecker::checkIs(IsExpr &e) {
@@ -1494,6 +1561,30 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     // Instance method: dispatch on the object's class via its vtable.
     TypeRef objType = checkExpr(*mem->object);
     if (objType.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    // `n.toHex()` on a built-in value: the static method of its type's class in
+    // std.types, with the value first (`Integer.toHex(n)`): one plain call.
+    if (std::vector<std::string> owners = valueMethodClasses(objType); !owners.empty()) {
+        for (const auto &owner : owners) {
+            bool has = program_ && program_->generics.methods.count(owner + "." + mem->member);   // (`Null.orElse<T>`)
+            for (const MethodInfo *m : reg_->findMethodsBySource(owner, mem->member))
+                if (m->isStatic && !m->paramTypes.empty()) has = true;
+            if (!has) continue;
+            auto cls = std::make_unique<NameExpr>();
+            cls->name = owner;
+            cls->line = mem->line;
+            cls->col = mem->col;
+            e.args.insert(e.args.begin(), std::move(mem->object));
+            mem->object = std::move(cls);
+            return checkCall(e);
+        }
+        std::string kind = typeRefName(objType);
+        std::string a = std::string("aeiou").find(kind[0]) != std::string::npos ? "an " : "a ";
+        std::string where = owners.back().substr(owners.back().rfind('.') + 1);
+        error(mem->line, mem->col, reg_->isClass(owners.back())
+                                       ? a + kind + " has no method '" + mem->member + "' (see " + where + " in std/types)"
+                                       : a + kind + " has no methods without std/types: import \"std\" (or \"std/types\")");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     // `obj.handler(x)` where `handler` is a field holding a function value.
     if (objType.isNamed() && (reg_->isClass(objType.name) || reg_->isStruct(objType.name))) {
         const FieldInfo *fld = reg_->isClass(objType.name)
@@ -1574,6 +1665,21 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 return *tryInferCall(e, mem->member, gm->second, expCall);
             const ClassInfo *ci = reg_->cls(cur);
             cur = ci ? ci->baseClass : "";
+        }
+    }
+    if (cands.empty() && reg_->isClass(objType.name)) {
+        // A name the class lacks: Object's (std.types), with the object first (`u.toMap()`).
+        bool has = false;
+        for (const MethodInfo *m : reg_->findMethodsBySource("std.types.Object", mem->member))
+            if (m->isStatic && !m->paramTypes.empty()) has = true;
+        if (has) {
+            auto cls = std::make_unique<NameExpr>();
+            cls->name = "std.types.Object";
+            cls->line = mem->line;
+            cls->col = mem->col;
+            e.args.insert(e.args.begin(), std::move(mem->object));
+            mem->object = std::move(cls);
+            return checkCall(e);
         }
     }
     if (cands.empty()) {
@@ -1694,6 +1800,24 @@ TypeRef TypeChecker::bindMethod(MemberExpr &e, const TypeRef &objType, const Typ
     return checkExpr(*e.bound);
 }
 
+// The classes in std.types whose static methods a built-in value of type `t`
+// takes as methods, the most specific first (a byte's are Byte's, then
+// Integer's; a `T?`'s are Null's; an `any`'s Object's); none for other types
+// (an object takes Object's only for names its class lacks).
+std::vector<std::string> TypeChecker::valueMethodClasses(const TypeRef &t) const {
+    switch (t.kind) {
+        case TypeRef::Kind::Int:
+            if (t.bits == 8 && t.isUnsigned) return {"std.types.Byte", "std.types.Integer"};
+            return {"std.types.Integer"};
+        case TypeRef::Kind::Float: return {"std.types.Float"};
+        case TypeRef::Kind::String: return {"std.types.String"};
+        case TypeRef::Kind::Bool: return {"std.types.Bool"};
+        case TypeRef::Kind::Nullable: return {"std.types.Null"};
+        case TypeRef::Kind::Any: return {"std.types.Object"};
+        default: return {};
+    }
+}
+
 // Inside lambdas, `self` (used directly or through `super`) is captured like
 // any other outer variable.
 void TypeChecker::captureSelf() {
@@ -1711,6 +1835,58 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
     // `EnumType.Member` is a constant, not a field access on a value.
     if (auto enumTy = tryEnumValue(e)) return *enumTy;
     if (auto sf = tryStaticField(e)) return *sf;
+    // `Integer.compare` as a value: `fn(a, b) => Integer.compare(a, b)` (of overloads,
+    // the one the expected function type takes).
+    if (auto chain = flattenNames(&e); chain && chain->size() >= 2 && lookupLocal((*chain)[0]) == nullptr) {
+        std::string clsFq = reg_->resolveType(joinDots(*chain, chain->size() - 1), currentNs_);
+        if (!clsFq.empty() && reg_->isClass(clsFq)) {
+            std::vector<const MethodInfo *> cands;
+            for (const MethodInfo *m : reg_->findMethodsBySource(clsFq, e.member))
+                if (m->isStatic) cands.push_back(m);
+            if (!cands.empty()) {
+                const MethodInfo *mi = cands.size() == 1 ? cands[0] : nullptr;
+                if (!mi && expMember && expMember->isFunction())
+                    for (const MethodInfo *m : cands)
+                        if (m->paramTypes == expMember->fnParams) mi = m;
+                if (!mi) {
+                    error(e.line, e.col, "static method '" + e.member + "' is overloaded; give the variable a function type to pick one");
+                    return TypeRef::prim(TypeRef::Kind::Error);
+                }
+                auto lam = std::make_unique<LambdaExpr>();
+                lam->line = e.line;
+                lam->col = e.col;
+                lam->isArrow = true;
+                auto call = std::make_unique<CallExpr>();
+                call->line = e.line;
+                call->col = e.col;
+                auto callee = std::make_unique<MemberExpr>();
+                callee->line = e.line;
+                callee->col = e.col;
+                auto owner = std::make_unique<NameExpr>();
+                owner->name = clsFq;
+                owner->line = e.line;
+                owner->col = e.col;
+                callee->object = std::move(owner);
+                callee->member = e.member;
+                call->callee = std::move(callee);
+                for (size_t i = 0; i < mi->paramTypes.size(); ++i) {
+                    Param p;
+                    p.name = "arg__" + std::to_string(i);
+                    p.type = mi->paramTypes[i];
+                    lam->params.push_back(p);
+                    lam->paramTyped.push_back(true);
+                    auto n = std::make_unique<NameExpr>();
+                    n->name = p.name;
+                    n->line = e.line;
+                    n->col = e.col;
+                    call->args.push_back(std::move(n));
+                }
+                lam->exprBody = std::move(call);
+                e.bound = std::move(lam);
+                return checkExpr(*e.bound);
+            }
+        }
+    }
     // `super.count` for a static field: the parent's (or an ancestor's).
     if (dynamic_cast<SuperExpr *>(e.object.get()))
         if (const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_); ci && !ci->baseClass.empty())
