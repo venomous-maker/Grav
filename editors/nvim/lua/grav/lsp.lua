@@ -51,6 +51,11 @@ local function on_attach(_, bufnr)
   if vim.lsp.completion and vim.lsp.completion.enable then
     pcall(vim.lsp.completion.enable, true, _, bufnr, { autotrigger = true })
   end
+  -- Inlay hints: the types of bindings that do not write one (Neovim 0.10+).
+  -- Turn them off with vim.g.grav_inlay_hints = false.
+  if vim.lsp.inlay_hint and vim.lsp.inlay_hint.enable and vim.g.grav_inlay_hints ~= false then
+    pcall(vim.lsp.inlay_hint.enable, true, { bufnr = bufnr })
+  end
 end
 
 function M.start(bufnr)

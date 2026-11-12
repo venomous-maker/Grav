@@ -11,6 +11,8 @@
 //   • signature help for calls and constructors
 //   • document outline (nested), workspace symbols (including the library)
 //   • find references, rename
+//   • inlay hints: the types of bindings that do not write one (let, for-in,
+//     lambda parameters, match bindings), from `grav check --types`
 //   • formatting (`grav fmt -`)
 //   • diagnostics from `grav check --json` on open and save
 //
@@ -59,6 +61,8 @@ function log(s) { process.stderr.write(`[grav-lsp] ${s}\n`); }
 // ---- state ----------------------------------------------------------------
 let ws = new idx.Workspace({ compiler: process.env.GRAV_COMPILER || "grav", log });
 const published = new Map(); // uri -> true (files we sent diagnostics for)
+let refreshHints = false;     // the client takes workspace/inlayHint/refresh
+let nextRequest = 1;
 
 function uriToPath(uri) { return decodeURIComponent(uri.replace(/^file:\/\//, "")); }
 function pathToUri(p) { return "file://" + path.resolve(p).split(path.sep).map(encodeURIComponent).join("/").replace(/%2F/g, "/"); }
@@ -67,6 +71,7 @@ const loc = (d) => ({ uri: pathToUri(d.file), range: d.range });
 // ---- dispatch -------------------------------------------------------------
 function handle(msg) {
   const { id, method, params } = msg;
+  if (!method) return; // a response to one of our requests
   switch (method) {
     case "initialize": return onInitialize(id, params);
     case "initialized": return;
@@ -121,6 +126,11 @@ function handle(msg) {
       }
       return reply(id, { changes });
     }
+    case "textDocument/inlayHint": {
+      const r = params.range;
+      return reply(id, ws.inlayHints(uriToPath(params.textDocument.uri), r.start.line, r.end.line)
+        .map((h) => ({ position: h.position, label: h.label, kind: h.kind, paddingLeft: false })));
+    }
     case "textDocument/formatting": {
       const file = uriToPath(params.textDocument.uri);
       const text = ws.text(file) || "";
@@ -138,6 +148,8 @@ function onInitialize(id, params) {
     (params.rootUri ? uriToPath(params.rootUri) :
       (params.workspaceFolders && params.workspaceFolders[0] ? uriToPath(params.workspaceFolders[0].uri) : null));
   const opts = params.initializationOptions || {};
+  const caps = params.capabilities || {};
+  refreshHints = !!(caps.workspace && caps.workspace.inlayHint && caps.workspace.inlayHint.refreshSupport);
   ws = new idx.Workspace({ root, compiler: opts.compilerPath || process.env.GRAV_COMPILER || "grav", log });
   reply(id, {
     capabilities: {
@@ -152,6 +164,7 @@ function onInitialize(id, params) {
       signatureHelpProvider: { triggerCharacters: ["(", ","] },
       renameProvider: { prepareProvider: true },
       documentFormattingProvider: true,
+      inlayHintProvider: true,
     },
     serverInfo: { name: "grav-lsp", version: "1.6.0" },
   });
@@ -181,6 +194,8 @@ function diagnose(uri) {
       notify("textDocument/publishDiagnostics", { uri: u, diagnostics: list });
       if (list.length) published.set(u, true); else published.delete(u);
     }
+    // the check also brought the compiler's types of the file's bindings
+    if (refreshHints) send({ jsonrpc: "2.0", id: "grav-" + nextRequest++, method: "workspace/inlayHint/refresh" });
   });
 }
 

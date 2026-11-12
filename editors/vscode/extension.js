@@ -1,7 +1,8 @@
 // Grav VS Code extension. Language features run in-process on the shared,
 // dependency-free index (grav-index.js, a copy of editors/lsp/grav-index.js):
 // it follows imports into the standard library, project paths and installed
-// packages. Diagnostics come from `grav check --json`, formatting from `grav fmt`.
+// packages. Diagnostics, and the types inlay hints show, come from
+// `grav check --json --types`; formatting from `grav fmt`.
 // Plain CommonJS: no build step and no npm dependencies.
 "use strict";
 
@@ -12,6 +13,7 @@ const idx = require("./grav-index");
 const SEL = { language: "grav" };
 let ws = null;
 let diagnostics = null;
+let hintsChanged = null; // fired when a check brings new types for the inlay hints
 
 function compilerPath() {
   return vscode.workspace.getConfiguration("grav").get("compilerPath", "grav");
@@ -90,6 +92,7 @@ function checkFile(file, announce) {
       byFile.get(f).push(item);
     }
     for (const [f, list] of byFile) diagnostics.set(vscode.Uri.file(f), list);
+    hintsChanged.fire();
     if (announce) {
       const errors = diags.filter((d) => d.severity === "error").length;
       vscode.window.setStatusBarMessage(errors ? `Grav: ${errors} error(s)` : "Grav: no errors", 4000);
@@ -169,6 +172,15 @@ const providers = {
       return help;
     },
   },
+  inlayHints: {
+    provideInlayHints(doc, range) {
+      return workspace().inlayHints(doc.fileName, range.start.line, range.end.line).map((h) => {
+        const hint = new vscode.InlayHint(new vscode.Position(h.position.line, h.position.character), h.label, vscode.InlayHintKind.Type);
+        hint.paddingLeft = false;
+        return hint;
+      });
+    },
+  },
   formatting: {
     provideDocumentFormattingEdits(doc) {
       const text = doc.getText();
@@ -185,8 +197,10 @@ const providers = {
 
 function activate(context) {
   diagnostics = vscode.languages.createDiagnosticCollection("grav");
+  hintsChanged = new vscode.EventEmitter();
+  providers.inlayHints.onDidChangeInlayHints = hintsChanged.event;
   const subs = context.subscriptions;
-  subs.push(diagnostics);
+  subs.push(diagnostics, hintsChanged);
   for (const [name, fn] of Object.entries(COMMANDS)) subs.push(vscode.commands.registerCommand(name, fn));
   subs.push(
     vscode.languages.registerDefinitionProvider(SEL, providers.definition),
@@ -198,6 +212,7 @@ function activate(context) {
     vscode.languages.registerCompletionItemProvider(SEL, providers.completion, ".", "\"", "/"),
     vscode.languages.registerSignatureHelpProvider(SEL, providers.signature, "(", ","),
     vscode.languages.registerDocumentFormattingEditProvider(SEL, providers.formatting),
+    vscode.languages.registerInlayHintsProvider(SEL, providers.inlayHints),
     vscode.workspace.onDidOpenTextDocument((d) => {
       if (d.languageId !== "grav") return;
       workspace().setDoc(d.fileName, d.getText());
