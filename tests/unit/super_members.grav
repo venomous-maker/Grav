@@ -1,0 +1,74 @@
+// `super`: the parent's constructor, fields (read, assigned, `+=`, `++`),
+// methods (the parent's own version, also from a grandchild), static fields and
+// methods, a method as a function value, and all of it inside lambdas.
+import "std"
+
+class Base {
+    public id: int
+    protected name: string
+    public static count: int = 0
+    constructor() { self.id = 1; self.name = "base"; Base.count += 1 }
+    fn describe() -> string { return "base ${self.id}" }
+    fn greet(x: string) -> string { return "hi " + x + " from " + self.name }
+    static fn make() -> int { return 7 }
+    static fn label(x: int) -> string { return "#${x}" }
+}
+
+class Child extends Base {
+    constructor() {
+        super()
+        super.id = 0
+        super.name = "child"
+    }
+    fn describe() -> string { return "child(" + super.describe() + ")" }
+    fn greet(x: string) -> string { return "hey " + x }
+}
+
+class Grandchild extends Child {
+    constructor() { super() }
+    fn describe() -> string { return "grandchild(" + super.describe() + ")" }
+}
+
+test "fields through super" {
+    let c = new Child()
+    assertEq("${c.id} ${c.describe()}", "0 child(base 0)")
+    let g = new Grandchild()
+    assertEq(g.describe(), "grandchild(child(base 0))")
+}
+
+class Probe extends Child {
+    constructor() { super() }
+    fn greet(x: string) -> string { return "probe " + x }
+    fn run() -> string {
+        super.id += 5
+        super.id++
+        super.name = super.name + "!"
+        return "${super.id} " + super.name + " " + super.greet("x") + " " + self.greet("y")
+    }
+    fn statics() -> string {
+        super.count = super.count + 10
+        return "${super.make()} " + super.label(3) + " ${super.count == Base.count}"
+    }
+    fn values() -> string {
+        let f = super.greet                                    // (the parent's, bound to self)
+        let g = self.greet
+        return f("a") + " | " + g("b")
+    }
+    fn inLambdas() -> string {
+        let read = fn() -> string => super.describe() + " ${super.id}"
+        let write = fn(n: int) { super.id = n }
+        write(42)
+        let nested = fn() -> string { let inner = fn() -> string => super.greet("z"); return inner() }
+        return read() + " / " + nested()
+    }
+}
+
+test "super for assignment, methods, statics and values" {
+    let p = new Probe()
+    assertEq(p.run(), "6 child! hey x probe y")
+    let before = Base.count
+    assertEq(p.statics(), "7 #3 true")
+    assertEq(Base.count, before + 10)
+    assertEq(p.values(), "hey a | probe b")
+    assertEq(p.inLambdas(), "child(base 42) 42 / hey z")
+}

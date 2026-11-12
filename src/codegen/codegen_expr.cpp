@@ -230,7 +230,8 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
     }
     if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) return emitLambdaValue(*e);
     if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
-    if (dynamic_cast<const SuperExpr *>(&expr)) return "self"; // viewed as parent in calls
+    if (dynamic_cast<const SuperExpr *>(&expr))               // self, viewed as its parent
+        return expr.type.isNamed() && reg_->isClass(expr.type.name) ? "((" + cTy(expr.type) + ")self)" : "self";
 
     if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
         // Comparing an interface value against null tests its object pointer.

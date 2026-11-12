@@ -286,6 +286,7 @@ private:
     bool inDefer_ = false; // checking a `defer` body (no `return` allowed)
     struct LambdaCtx { LambdaExpr *lam; size_t scopeBase; };
     std::vector<LambdaCtx> lambdaStack_; // enclosing lambdas, innermost last
+    void captureSelf();                  // records `self` as captured by the enclosing lambdas
     const TypeRef *expected_ = nullptr;  // expected type for the next lambda
 
 public:

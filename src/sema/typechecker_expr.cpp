@@ -100,12 +100,7 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
             t = TypeRef::prim(TypeRef::Kind::Error);
         } else {
             t = TypeRef::named(currentClass_);
-            // `self` inside a lambda is captured like any other outer variable.
-            for (auto &ctx : lambdaStack_) {
-                bool have = false;
-                for (const auto &c : ctx.lam->captures) if (c.name == "self") have = true;
-                if (!have) ctx.lam->captures.push_back({"self", t});
-            }
+            captureSelf();
         }
     } else if (auto *e = dynamic_cast<SuperExpr *>(&expr)) {
         const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_);
@@ -116,6 +111,7 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
             t = TypeRef::prim(TypeRef::Kind::Error);
         } else {
             t = TypeRef::named(ci->baseClass);
+            captureSelf();                                 // (`super` is self, seen as its parent)
         }
     } else if (auto *e = dynamic_cast<NameExpr *>(&expr)) {
         size_t scopeIdx = 0;
@@ -1112,8 +1108,21 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
         return TypeRef::prim(TypeRef::Kind::Error);
     }
     std::vector<const MethodInfo *> cands;
-    for (const MethodInfo *c : reg_->findMethodsBySource(parent, mem->member))
+    bool statics = false;
+    for (const MethodInfo *c : reg_->findMethodsBySource(parent, mem->member)) {
         if (!c->isStatic && c->hasBody) cands.push_back(c);
+        if (c->isStatic) statics = true;
+    }
+    if (cands.empty() && statics) {
+        // `super.make()` for a static method: the parent's, as `Parent.make()`.
+        auto name = std::make_unique<NameExpr>();
+        name->line = mem->object->line;
+        name->col = mem->object->col;
+        name->name = parent;
+        mem->object = std::move(name);
+        return std::nullopt;
+    }
+    if (!inStatic_) captureSelf();
     if (cands.empty()) {
         error(mem->line, mem->col, "parent class '" + parent + "' has no method '" +
                                        mem->member + "'");
@@ -1636,7 +1645,7 @@ std::optional<TypeRef> TypeChecker::tryStaticField(MemberExpr &e) {
 // those. An overloaded method needs the expected function type to pick one.
 TypeRef TypeChecker::bindMethod(MemberExpr &e, const TypeRef &objType, const TypeRef *want) {
     std::function<bool(const Expr *)> pure = [&](const Expr *x) {
-        if (dynamic_cast<const NameExpr *>(x) || dynamic_cast<const SelfExpr *>(x)) return true;
+        if (dynamic_cast<const NameExpr *>(x) || dynamic_cast<const SelfExpr *>(x) || dynamic_cast<const SuperExpr *>(x)) return true;
         if (auto *m = dynamic_cast<const MemberExpr *>(x)) return pure(m->object.get());
         return false;
     };
@@ -1685,12 +1694,33 @@ TypeRef TypeChecker::bindMethod(MemberExpr &e, const TypeRef &objType, const Typ
     return checkExpr(*e.bound);
 }
 
+// Inside lambdas, `self` (used directly or through `super`) is captured like
+// any other outer variable.
+void TypeChecker::captureSelf() {
+    TypeRef t = TypeRef::named(currentClass_);
+    for (auto &ctx : lambdaStack_) {
+        bool have = false;
+        for (const auto &c : ctx.lam->captures) if (c.name == "self") have = true;
+        if (!have) ctx.lam->captures.push_back({"self", t});
+    }
+}
+
 TypeRef TypeChecker::checkMember(MemberExpr &e) {
     const TypeRef *expMember = expected_; // a function type picks an overloaded method value
     expected_ = nullptr;
     // `EnumType.Member` is a constant, not a field access on a value.
     if (auto enumTy = tryEnumValue(e)) return *enumTy;
     if (auto sf = tryStaticField(e)) return *sf;
+    // `super.count` for a static field: the parent's (or an ancestor's).
+    if (dynamic_cast<SuperExpr *>(e.object.get()))
+        if (const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_); ci && !ci->baseClass.empty())
+            if (const GlobalInfo *gi = reg_->findStaticField(ci->baseClass, e.member)) {
+                if (!checkAccess(gi->access, gi->ownerClass))
+                    error(e.line, e.col, "static field '" + e.member + "' is " + accessName(gi->access) + " in '" + gi->ownerClass + "'");
+                e.kind = MemberKind::StaticField;
+                e.qualified = gi->cName;
+                return gi->type;
+            }
     TypeRef objType = checkExpr(*e.object);
     if (objType.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     // `arr.length` is the fixed length of an array, as an int.

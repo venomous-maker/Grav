@@ -1,0 +1,4 @@
+running 2 tests
+  ok    fields through super
+  ok    super for assignment, methods, statics and values
+result: 2 passed, 0 failed

@@ -67,7 +67,11 @@ Several things are going on:
 - **`super(name)`** in a constructor runs the parent's constructor, so the
   parent can set up its own fields.
 - **`super.speak()`** calls the parent's version of a method, so an override
-  can extend it instead of replacing it.
+  can extend it instead of replacing it. `super` reaches the rest of the
+  parent too: its fields (`super.id = 0`, `super.count += 1`, read like
+  `self.id`), its static fields and static methods (`super.make()` is
+  `Animal.make()`), and a method as a value (`let f = super.speak`, bound to
+  this object). It works inside lambdas as well.
 - **`protected`** fields are visible to subclasses but not to outside code.
 
 Rules worth knowing:
@@ -431,8 +435,8 @@ multiple inheritance rarely.
 ## Summary
 
 - `class B extends A` inherits `A`'s members; a `B` can be used as an `A`.
-- Methods are virtual: the object's own override runs. `super(...)` and
-  `super.method()` reach the parent.
+- Methods are virtual: the object's own override runs. `super(...)`,
+  `super.method()`, `super.field` and the parent's statics reach the parent.
 - `-> Self` returns the receiver as the caller's own class; in a static method,
   `Self` is the class the call names (`User.find(1)` makes a `User`).
 - `abstract` classes cannot be created; their `abstract` methods must be implemented.

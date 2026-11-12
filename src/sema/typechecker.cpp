@@ -663,14 +663,21 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
 
     if (auto *mem = dynamic_cast<MemberExpr *>(s.target.get())) {
-        // Static field assignment: `Class.field = value`.
-        if (auto chain = flattenNames(mem); chain && chain->size() >= 2 &&
-            lookupLocal((*chain)[0]) == nullptr) {
+        // Static field assignment: `Class.field = value`, or `super.field` for the parent's.
+        auto chain = flattenNames(mem);
+        std::string clsFq;
+        if (chain && chain->size() >= 2 && lookupLocal((*chain)[0]) == nullptr) {
             std::string prefix;
             for (size_t i = 0; i + 1 < chain->size(); ++i)
                 prefix += (i ? "." : "") + (*chain)[i];
-            std::string clsFq = reg_->resolveType(prefix, currentNs_);
-            if (!clsFq.empty() && reg_->isClass(clsFq)) {
+            clsFq = reg_->resolveType(prefix, currentNs_);
+        } else if (dynamic_cast<SuperExpr *>(mem->object.get())) {
+            if (const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_))
+                clsFq = ci->baseClass;
+            chain = std::vector<std::string>{"super", mem->member};
+        }
+        if (!clsFq.empty()) {
+            if (reg_->isClass(clsFq)) {
                 if (const GlobalInfo *gi = reg_->findStaticField(clsFq, chain->back())) {
                     mem->kind = MemberKind::StaticField;
                     mem->qualified = gi->cName;
