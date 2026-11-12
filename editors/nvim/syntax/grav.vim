@@ -10,6 +10,11 @@ syn keyword gravTodo contained TODO FIXME XXX NOTE
 syn match   gravLineComment "//.*$" contains=gravTodo
 syn region  gravBlockComment start="/\*" end="\*/" contains=gravTodo
 
+" Operators, and capitalized names as types: defined first, so that every later,
+" more specific match starting at the same column wins over them.
+syn match gravOperator "[-+*/%<>=!&|^~?:.]"
+syn match gravTypeName "\<\u\w*\>"
+
 " Declaration / structure keywords
 syn keyword gravKeyword fn class struct enum type typedef interface abstract namespace
 syn keyword gravKeyword constructor extends implements uses new return import export from use test
@@ -22,7 +27,7 @@ syn keyword gravConditional if else switch case default match
 syn keyword gravRepeat     while for do in step
 syn keyword gravStatement  break continue defer
 syn keyword gravException  try catch finally throw
-syn keyword gravOperatorKw as is sizeof
+syn keyword gravOperatorKw as is
 
 " Built-in types: the core set plus the widened numeric / binary types. These are
 " only types in type position (resolved by the parser), so they are matched, not
@@ -30,15 +35,16 @@ syn keyword gravOperatorKw as is sizeof
 syn keyword gravType int float bool string void binary
 syn keyword gravType long int64 int32 int16 int8 signed
 syn keyword gravType uint unsigned uint64 ulong uint32 uint16 uint8 byte
-syn keyword gravType double float64 float32 any auto
+syn keyword gravType double float64 float32 any auto Self
 
 " Constants
 syn keyword gravBoolean true false
-syn keyword gravConstant null self this Self super
+syn keyword gravConstant null self this super
+syn keyword gravConstant NaN Infinity
 
 " Built-in functions
 syn keyword gravBuiltin print println typename isInstance reflect str input argc argv len
-syn keyword gravBuiltin free panic assert assertEq exit cwd env
+syn keyword gravBuiltin free panic assert assertEq exit cwd env sizeof
 
 " Numbers: 42, 1_000_000, 0xff_ff, 0b1010, 2.5, 1e9, 2.5e-3
 syn match gravNumber "\<\d\%(_\=\d\)*\>"
@@ -48,8 +54,8 @@ syn match gravFloat  "\<\d\%(_\=\d\)*\.\d\+\%([eE][-+]\=\d\+\)\=\>"
 syn match gravFloat  "\<\d\%(_\=\d\)*[eE][-+]\=\d\+\>"
 
 " Strings with ${...} interpolation. The interpolated expression highlights its
-" own numbers / booleans / builtins / types / operators (not nested strings).
-syn cluster gravInterpInner contains=gravNumber,gravFloat,gravBoolean,gravConstant,gravBuiltin,gravType,gravOperator
+" own numbers / booleans / builtins / types / operators, calls and nested strings.
+syn cluster gravInterpInner contains=gravNumber,gravFloat,gravBoolean,gravConstant,gravBuiltin,gravType,gravOperator,gravString,gravChar,gravFuncCall,gravMethodCall,gravField
 syn match  gravFormatSpec ":\%([<>^]\=+\=0\=\d*\%(\.\d\+\)\=[dfexXobs%]\=\)\ze}" contained   " ${x:.2f}
 syn region gravInterp matchgroup=gravInterpDelim start="\${" end="}" contained contains=@gravInterpInner,gravFormatSpec
 syn region gravString start=+"+ skip=+\\"+ end=+"+ contains=gravInterp,gravEscape
@@ -88,17 +94,18 @@ syn match gravFuncDef     "\%(\<fn\s\+\)\@<=\w\+"                " fn name
 syn match gravFuncDef     "\%(\<fn\s\+operator\s*\)\@<=\S\{1,3}\ze\s*("    " fn operator==
 syn match gravTypeDef     "\%(\<\%(class\|struct\|enum\|interface\|trait\|type\)\s\+\)\@<=\w\+"
 syn match gravNamespace   "\%(\<\%(namespace\|use\)\s\+\)\@<=\w\+\%(\%(\.\|::\)\w\+\)*"
-syn match gravNamespace   "\%(\<import\s\+"[^"]*"\s\+as\s\+\)\@<=\w\+"
-syn match gravEnumMember  "\%(\<case\s\+\%(\w\+\.\)*\)\@<=\u\w*"   " case Circle(r):
+syn match gravNamespace   +\%(\<import\s\+"[^"]*"\s\+as\s\+\)\@<=\w\++
+syn match gravEnumMember  "\%(\<case\s\+\%(\w\+\.\)*\)\@<=\u\w*\ze\s*[(:,]"   " case Circle(r):, case Shape.Square(s):
+" An enum's variants: a capitalized name opening a line, or after `{` or `,`,
+" followed by its payload, a comma, `}` or the end of the line (enum Color { Red, Green }).
+syn match gravEnumMember  "\%(^\s*\|[{,]\s*\)\@<=\u\w*\ze\s*\%([(,}=]\|//\|$\)"
+syn match gravTypeRef     "\%(\<implements\>[^{]*\)\@<=\<\u\w*"         " implements A, B<T>
 syn match gravImportPath  +\%(\<\%(import\|from\)\s*\)\@<="[^"]*"+
 syn match gravTestName    +\%(^\s*test\s\+\)\@<="[^"]*"+
 syn match gravLabel       "^\s*\zs\w\+\ze\s*:\s*\%(for\|while\|do\)\>"      " outer: for (...)
 syn match gravLabel       "\%(\<\%(break\|continue\)\s\+\)\@<=\w\+"        " break outer
 syn match gravNamedArg    "\%([(,]\s*\)\@<=\w\+\ze\s*:[^:]"                " f(name: value)
 syn match gravSpread      "\.\.\."                                         " f(...xs)
-
-" Operators
-syn match gravOperator "[-+*/%<>=!&|^~?:.]"
 
 hi def link gravLineComment   Comment
 hi def link gravBlockComment  Comment
@@ -134,6 +141,7 @@ hi def link gravFuncCall      Function
 hi def link gravMethodCall    Function
 hi def link gravTypeDef       Structure
 hi def link gravTypeRef       Type
+hi def link gravTypeName      Type
 hi def link gravField         Identifier
 hi def link gravEnumMember    Constant
 hi def link gravImportPath    Include
