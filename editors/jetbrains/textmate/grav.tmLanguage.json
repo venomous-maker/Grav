@@ -451,7 +451,7 @@
           ]
         },
         {
-          "begin": "(?<![:?])(:)(?!:)\\s*(?=fn\\b|\\(|(?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b|[A-Z]|[a-z_][\\w.]*\\s*(?:<|[,)=\\]]|$))",
+          "begin": "(?<=[A-Za-z0-9_])(:)(?!:)\\s*(?=fn\\b|\\(|(?:int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b|[A-Z]|[a-z_][\\w.]*\\s*(?:<|[,)=\\]]|$))",
           "end": "(?=[,)=;{}]|$)",
           "beginCaptures": {
             "1": {

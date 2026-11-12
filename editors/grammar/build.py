@@ -113,7 +113,8 @@ repo = {
         "patterns": [
             {"begin": r"(->)\s*", "end": r"(?=[{=;]|=>|$)", "beginCaptures": {"1": {"name": "punctuation.separator.return.grav"}},
              "patterns": [{"include": "#type-args"}] + type_patterns()},
-            {"begin": r"(?<![:?])(:)(?!:)\s*(?=fn\b|\(|" + PRIM + r"\b|[A-Z]|[a-z_][\w.]*\s*(?:<|[,)=\]]|$))",
+            # `name: Type`: the ':' right after a name (`? a : B` is a ternary, not a type).
+            {"begin": r"(?<=[A-Za-z0-9_])(:)(?!:)\s*(?=fn\b|\(|" + PRIM + r"\b|[A-Z]|[a-z_][\w.]*\s*(?:<|[,)=\]]|$))",
              "end": r"(?=[,)=;{}]|$)", "beginCaptures": {"1": {"name": "punctuation.separator.type.grav"}},
              "patterns": [{"include": "#type-args"},
                           {"begin": r"\b(fn)\s*(\()", "end": r"\)",
