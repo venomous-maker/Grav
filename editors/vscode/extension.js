@@ -110,15 +110,35 @@ const providers = {
   },
   rename: {
     prepareRename(doc, p) {
-      const w = idx.wordAtPosition(doc.getText(), pos(p));
-      if (!w || idx.KEYWORDS.includes(w.word)) throw new Error("You cannot rename this element.");
-      return toRange(w.range);
+      const r = workspace().prepareRename(doc.fileName, pos(p));
+      if (r.error) throw new Error(r.error);
+      return { range: toRange(r.range), placeholder: r.placeholder };
     },
     provideRenameEdits(doc, p, newName) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName) || idx.KEYWORDS.includes(newName))
+        throw new Error(`'${newName}' is not a name Grav allows.`);
+      const edits = workspace().rename(doc.fileName, pos(p));
+      if (edits.error) throw new Error(edits.error);
       const edit = new vscode.WorkspaceEdit();
-      for (const r of workspace().references(doc.fileName, pos(p), false))
-        edit.replace(vscode.Uri.file(r.file), toRange(r.range), newName);
+      for (const r of edits) edit.replace(vscode.Uri.file(r.file), toRange(r.range), newName);
       return edit;
+    },
+  },
+  highlights: {
+    provideDocumentHighlights(doc, p) {
+      return workspace().references(doc.fileName, pos(p), false)
+        .filter((r) => path.resolve(r.file) === path.resolve(doc.fileName))
+        .map((r) => new vscode.DocumentHighlight(toRange(r.range), vscode.DocumentHighlightKind.Text));
+    },
+  },
+  organizeImports: {
+    provideCodeActions(doc) {
+      const e = workspace().organizeImports(doc.fileName);
+      if (!e) return [];
+      const action = new vscode.CodeAction("Organize imports", vscode.CodeActionKind.SourceOrganizeImports);
+      action.edit = new vscode.WorkspaceEdit();
+      action.edit.replace(doc.uri, toRange(e.range), e.newText);
+      return [action];
     },
   },
   symbols: {
@@ -206,6 +226,9 @@ function activate(context) {
     vscode.languages.registerDefinitionProvider(SEL, providers.definition),
     vscode.languages.registerReferenceProvider(SEL, providers.references),
     vscode.languages.registerRenameProvider(SEL, providers.rename),
+    vscode.languages.registerDocumentHighlightProvider(SEL, providers.highlights),
+    vscode.languages.registerCodeActionsProvider(SEL, providers.organizeImports,
+      { providedCodeActionKinds: [vscode.CodeActionKind.SourceOrganizeImports] }),
     vscode.languages.registerDocumentSymbolProvider(SEL, providers.symbols),
     vscode.languages.registerWorkspaceSymbolProvider(providers.workspaceSymbols),
     vscode.languages.registerHoverProvider(SEL, providers.hover),

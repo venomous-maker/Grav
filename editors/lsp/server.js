@@ -10,7 +10,9 @@
 //     visible declarations, keywords, builtins, and import paths
 //   • signature help for calls and constructors
 //   • document outline (nested), workspace symbols (including the library)
-//   • find references, rename
+//   • find references and rename, by declaration (a local in its function, a member
+//     on its type); names from the standard library and package cache are refused
+//   • document highlights, and organize imports (source.organizeImports)
 //   • inlay hints: the types of bindings that do not write one (let, for-in,
 //     lambda parameters, match bindings), from `grav check --types`
 //   • formatting (`grav fmt -`)
@@ -114,17 +116,33 @@ function handle(msg) {
       return reply(id, sh ? { signatures: sh.signatures, activeSignature: 0, activeParameter: sh.activeParameter } : null);
     }
     case "textDocument/prepareRename": {
-      const text = ws.text(uriToPath(params.textDocument.uri)) || "";
-      const w = idx.wordAtPosition(text, params.position);
-      return reply(id, w && !idx.KEYWORDS.includes(w.word) ? w.range : null);
+      const r = ws.prepareRename(uriToPath(params.textDocument.uri), params.position);
+      if (r.error) return send({ jsonrpc: "2.0", id, error: { code: -32803, message: r.error } });
+      return reply(id, { range: r.range, placeholder: r.placeholder });
     }
     case "textDocument/rename": {
+      const edits = ws.rename(uriToPath(params.textDocument.uri), params.position);
+      if (edits.error) return send({ jsonrpc: "2.0", id, error: { code: -32803, message: edits.error } });
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(params.newName) || idx.KEYWORDS.includes(params.newName))
+        return send({ jsonrpc: "2.0", id, error: { code: -32602, message: `'${params.newName}' is not a name Grav allows` } });
       const changes = {};
-      for (const r of ws.references(uriToPath(params.textDocument.uri), params.position, false)) {
+      for (const r of edits) {
         const u = pathToUri(r.file);
         (changes[u] = changes[u] || []).push({ range: r.range, newText: params.newName });
       }
       return reply(id, { changes });
+    }
+    case "textDocument/documentHighlight": {
+      const file = uriToPath(params.textDocument.uri);
+      return reply(id, ws.references(file, params.position, false)
+        .filter((r) => path.resolve(r.file) === path.resolve(file)).map((r) => ({ range: r.range, kind: 1 })));
+    }
+    case "textDocument/codeAction": {
+      const only = params.context && params.context.only;
+      if (only && !only.some((k) => "source.organizeImports".startsWith(k))) return reply(id, []);
+      const edit = ws.organizeImports(uriToPath(params.textDocument.uri));
+      return reply(id, edit ? [{ title: "Organize imports", kind: "source.organizeImports",
+        edit: { changes: { [params.textDocument.uri]: [{ range: edit.range, newText: edit.newText }] } } }] : []);
     }
     case "textDocument/inlayHint": {
       const r = params.range;
@@ -163,6 +181,8 @@ function onInitialize(id, params) {
       completionProvider: { triggerCharacters: [".", "\"", "/"] },
       signatureHelpProvider: { triggerCharacters: ["(", ","] },
       renameProvider: { prepareProvider: true },
+      documentHighlightProvider: true,
+      codeActionProvider: { codeActionKinds: ["source.organizeImports"] },
       documentFormattingProvider: true,
       inlayHintProvider: true,
     },
