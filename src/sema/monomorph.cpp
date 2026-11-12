@@ -272,6 +272,11 @@ StmtPtr cloneStmt(const Stmt *s) {
     return nullptr;
 }
 
+namespace {                                               // (below, with the Self pass)
+bool methodNamesSelf(MethodDecl &m);
+void bindSelf(MethodDecl &m, const std::string &fq);
+} // namespace
+
 MethodDecl cloneMethod(const MethodDecl &m) {
     MethodDecl n;
     n.access = m.access; n.isStatic = m.isStatic; n.isAbstract = m.isAbstract;
@@ -723,6 +728,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
             continue;
         }
         MethodDecl nm = cloneMethod(m);
+        if (nm.isStatic && methodNamesSelf(nm)) bindSelf(nm, inst);   // (Self: this instance)
         rewriteParams(nm.params, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
         if (nm.hasBody) walkBlock(nm.body, subst);
