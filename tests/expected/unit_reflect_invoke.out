@@ -1,8 +1,9 @@
-running 6 tests
+running 7 tests
   ok    FieldInfo.set converts values that fit
   ok    values that do not fit are ValueErrors
   ok    create with each constructor
   ok    invoke methods by name
   ok    invoke errors
   ok    reflect(T) in a generic class
-result: 6 passed, 0 failed
+  ok    get keeps what the object holds
+result: 7 passed, 0 failed

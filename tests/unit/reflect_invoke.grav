@@ -171,3 +171,22 @@ test "reflect(T) in a generic class" {
     one["value"] = "5"
     assertEq("${boxes.fromRow(one).value}", "5")
 }
+
+@Entity
+class Holder {
+    public when: DateTime = DateTime.fromUnix(5)
+    public items: Array<int> = new Array<int>()
+    public name: string = "x"
+}
+
+test "get keeps what the object holds" {
+    let h = new Holder()
+    h.name = "built " + "at run time"
+    let info = reflect(Holder)
+    for (i in 0..3) {
+        let vals = new Array<any>()
+        for (f in info.fields()) { vals.push(f.get(h)) }        // (each read owned by the list, then let go)
+    }
+    info.field("when").get(h)                                    // (a result thrown away)
+    assertEq("${h.when.unix()} ${h.items.size()} ${h.name}", "5 0 built at run time")
+}

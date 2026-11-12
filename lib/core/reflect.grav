@@ -80,7 +80,7 @@ namespace std.core {
         const GravFieldMeta* f = (const GravFieldMeta*)fm;
         if (obj.tag != GRAV_ANY_OBJ || !grav_is_instance(obj.v.p, (const GravTypeInfo*)owner)) return 1;
         if (!f->get) return 2;
-        *out = f->get(obj.v.p);
+        *out = grav_any_retain(f->get(obj.v.p));    /* (the reader's value is borrowed; get's caller owns what it returns) */
         return 0;
     }
     static int grav_rf_set(const unsigned char* fm, const unsigned char* owner, GravAny obj, GravAny v) {
