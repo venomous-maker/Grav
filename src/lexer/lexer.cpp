@@ -228,7 +228,7 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
     advance(); // opening quote
     // A part is either literal text (isExpr == false) or embedded expression
     // source (isExpr == true), captured between `${` and the matching `}`.
-    struct Part { bool isExpr; std::string text; };
+    struct Part { bool isExpr; std::string text; int col = 0; };   // col: where an expression starts
     std::vector<Part> parts;
     std::string lit;
     bool interpolated = false;
@@ -308,6 +308,7 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
             parts.push_back({false, lit});
             lit.clear();
             advance(); advance(); // ${
+            int exprCol = col_;
             std::string expr;
             int depth = 1;
             while (!atEnd() && depth > 0) {
@@ -321,7 +322,7 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
             }
             if (depth > 0) throw GravError("lex", sLine, sCol,
                                            "unterminated '${' in string literal");
-            parts.push_back({true, expr});
+            parts.push_back({true, expr, exprCol});
         } else if (c == '\n') {
             throw GravError("lex", sLine, sCol, "unterminated string literal");
         } else {
@@ -358,12 +359,12 @@ void Lexer::scanStringInto(std::vector<Token> &out) {
             emit(TokenType::Identifier, spec.empty() ? "str" : "__fmt");
             emit(TokenType::LParen, "(");
             Lexer sub(exprText);
-            // Re-anchor the embedded tokens at the string's position so errors
-            // inside `${...}` point at the right line (not line 1).
+            // Re-anchor the embedded tokens where they are in the string, so errors
+            // inside `${...}` point at them (and two calls in one string are two sites).
             for (auto &tk : sub.tokenize()) {
                 if (tk.type == TokenType::EndOfFile) continue;
                 tk.line = sLine;
-                tk.col = sCol + tk.col;
+                tk.col = p.col + tk.col - 1;
                 out.push_back(tk);
             }
             if (!spec.empty()) {

@@ -4,9 +4,9 @@ gravc: tests/errors/values.grav:8:16: type error: a slice of a fixed-length arra
 gravc: tests/errors/values.grav:9:16: type error: the slice [0..9) does not fit in int[3]
         print(fixed[0..9])
                    ^
-gravc: tests/errors/values.grav:11:12: type error: format 'x' needs an integer, but got a float
+gravc: tests/errors/values.grav:11:14: type error: format 'x' needs an integer, but got a float
         print("${pi:x}")
-               ^
+                 ^
 gravc: tests/errors/values.grav:12:17: type error: to use 'm' as a value, put the object in a variable first
         print(make().m)
                     ^
