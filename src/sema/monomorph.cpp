@@ -811,6 +811,15 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         }
         for (auto &a : x->args) walkExpr(a.get(), subst);
     } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
+        // `reflect(T)` for a type parameter T: the class it stands for here.
+        if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get()); callee && callee->name == "reflect" && x->args.size() == 1)
+            if (auto *arg = dynamic_cast<NameExpr *>(x->args[0].get()); arg && arg->typeArgs.empty())
+                if (auto it = subst.find(arg->name); it != subst.end()) {
+                    TypeRef t = it->second;
+                    rewriteType(t, subst, e->line, e->col);
+                    qualifyArg(t);
+                    if (t.isNamed()) arg->name = t.name;
+                }
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
             if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get())) {
