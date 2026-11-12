@@ -662,16 +662,16 @@ class Workspace {
         const key = t.slice(0, eq).trim(), val = t.slice(eq + 1).trim();
         const strs = [...val.matchAll(/"([^"]*)"/g)].map((x) => x[1]);
         if (section === "dependencies") {
-          let source = "", version = "";
+          let source = "", version = "", local = false;
           if (val.startsWith("{")) {
-            const g = /(?:git|source|path)\s*=\s*"([^"]*)"/.exec(val), v = /(?:version|tag|branch|rev)\s*=\s*"([^"]*)"/.exec(val);
-            source = g ? g[1] : ""; version = v ? v[1] : "";
+            const g = /\b(git|source|path)\s*=\s*"([^"]*)"/.exec(val), v = /\b(?:version|tag|branch|rev)\s*=\s*"([^"]*)"/.exec(val);
+            source = g ? g[2] : ""; version = v ? v[1] : ""; local = !!g && g[1] === "path";
           } else {
             const spec = strs[0] || "", at = spec.lastIndexOf("@");
             if (at > 0 && !spec.slice(at).includes("/") && !(spec.startsWith("git@") && at === 3)) { source = spec.slice(0, at); version = spec.slice(at + 1); }
             else source = spec;
           }
-          proj.deps.push({ name: key, source, version });
+          proj.deps.push({ name: key, source, version, local });
         } else if (key === "paths") proj.paths = strs.map((s) => path.join(root, s));
         else if (key === "lib" && strs[0]) proj.lib = path.join(root, strs[0]);
         else if (key === "main" && strs[0]) proj.main = path.join(root, strs[0]);
@@ -679,8 +679,8 @@ class Workspace {
       const lock = path.join(root, "grav.lock");
       if (fs.existsSync(lock))
         for (const l of fs.readFileSync(lock, "utf8").split(/\r?\n/)) {
-          const m = /^(\S+)\s*=\s*\{.*version = "([^"]*)".*commit = "([^"]*)"/.exec(l);
-          if (m) proj.lock[m[1]] = { version: m[2], commit: m[3] };
+          const m = /^(\S+)\s*=\s*\{.*version = "([^"]*)".*commit = "([^"]*)"/.exec(l), s = /source = "([^"]*)"/.exec(l);
+          if (m) proj.lock[m[1]] = { source: s ? s[1] : "", version: m[2], commit: m[3] };
         }
     } catch {}
     return proj;
@@ -690,15 +690,28 @@ class Workspace {
     if (s.startsWith("git@")) s = s.slice(4).replace(":", "/");
     s = s.replace(/\.git$/, "").replace(/\/+$/, "");
     if (s.startsWith("/")) s = "local" + s;
-    return s;
+    return s.replace(/^\./, "_");
   }
+  // Where a dependency's files are, like the driver's installedPackage(): a
+  // `{ path = ... }` one in place (relative to grav.toml), a git one in the
+  // package cache at its grav.lock commit, else its version, else any installed.
   packageDir(proj, dep) {
+    const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+    if (dep.local) {
+      let p = dep.source;
+      if (p.startsWith("~")) p = path.join(os.homedir(), p.slice(1));
+      p = path.resolve(proj.root, p);
+      try { p = fs.realpathSync(p); } catch {}
+      return isDir(p) ? p : null;
+    }
     const key = Workspace.sourceKey(dep.source);
     const base = path.join(this.env().packages, path.dirname(key));
     const repo = path.basename(key);
     const lock = proj.lock[dep.name];
-    const want = lock ? (lock.version || (lock.commit || "").slice(0, 12)) : dep.version;
-    if (want && fs.existsSync(path.join(base, `${repo}@${want}`))) return path.join(base, `${repo}@${want}`);
+    const wants = [];
+    if (lock && (!lock.source || lock.source === dep.source)) wants.push(lock.version || (lock.commit || "").slice(0, 12));
+    if (dep.version) wants.push(dep.version);
+    for (const want of wants) if (want && isDir(path.join(base, `${repo}@${want}`))) return path.join(base, `${repo}@${want}`);
     try {
       const found = fs.readdirSync(base).filter((n) => n.startsWith(repo + "@"))
         .map((n) => path.join(base, n)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
@@ -728,7 +741,7 @@ class Workspace {
         if (!dir) return null;
         if (spec === head) {
           const sub = this.readProject(dir);
-          for (const c of [sub.lib, path.join(dir, head + ".grav"), path.join(dir, "lib.grav"), path.join(dir, "src", "lib.grav"), path.join(dir, "mod.grav")])
+          for (const c of [sub.lib, path.join(dir, head + ".grav"), path.join(dir, "lib.grav"), path.join(dir, "src", "lib.grav"), path.join(dir, "mod.grav"), path.join(dir, "src", head + ".grav")])
             if (c && fs.existsSync(c)) return c;
           return null;
         }
