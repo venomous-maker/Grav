@@ -668,6 +668,10 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     for (const auto &f : tpl->fields) {
         FieldDecl nf = f;
         rewriteType(nf.type, subst, f.line, f.col);
+        if (nf.init) {                                   // (its own copy, with this instance's types)
+            nf.init = std::shared_ptr<Expr>(cloneExpr(f.init.get()).release());
+            walkExpr(nf.init.get(), subst);
+        }
         out->fields.push_back(std::move(nf));
     }
     for (const auto &sf : tpl->staticFields) {
@@ -982,7 +986,13 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             if (i < cd->interfaceArgs.size())
                 rewriteSuper(cd->interfaceNames[i], cd->interfaceArgs[i], subst,
                              /*isClass=*/false, cd->line, cd->col);
-        for (auto &f : cd->fields) rewriteType(f.type, subst, f.line, f.col);
+        for (auto &f : cd->fields) {
+            rewriteType(f.type, subst, f.line, f.col);
+            if (f.init) {
+                f.init = std::shared_ptr<Expr>(cloneExpr(f.init.get()).release());
+                walkExpr(f.init.get(), subst);
+            }
+        }
         for (auto &d : cd->delegates) rewriteType(d.type, subst, cd->line, cd->col);
         for (auto &sf : cd->staticFields) {
             rewriteType(sf.type, subst, sf.line, sf.col);

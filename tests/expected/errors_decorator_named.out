@@ -1,0 +1,3 @@
+gravc: tests/errors/decorator_named.grav:2:20: parse error: a positional decorator argument cannot follow a named one
+    @Column(length: 5, "late")
+                       ^

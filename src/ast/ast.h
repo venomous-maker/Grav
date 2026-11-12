@@ -455,6 +455,7 @@ struct DecoratorArg {
     long long i = 0;
     double f = 0;
     bool b = false;
+    std::string key; // `@Column(length: 255)`: "length"; "" for a positional argument
 };
 struct Decorator {
     std::string name;
@@ -469,6 +470,13 @@ struct FieldDecl {
     std::string name;
     TypeRef type;
     std::vector<Decorator> decorators;
+    // `public active: bool = true`: assigned in every constructor, after the
+    // parent's and before the body. Shared between copies of the declaration;
+    // every use works on a clone.
+    std::shared_ptr<Expr> init;
+    // Written with `?` (`joined: DateTime?`): the type drops it for a class, which
+    // can hold null anyway, but reflection reports it (FieldInfo.isNullable).
+    bool writtenNullable = false;
     int line = 0, col = 0;
 };
 

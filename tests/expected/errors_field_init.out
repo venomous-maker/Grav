@@ -1,0 +1,4 @@
+gravc: tests/errors/field_init.grav:5:21: type error: cannot assign a value of type string to field 'n' of type int
+        public n: int = "text"
+                        ^
+gravc: 1 error(s); aborting

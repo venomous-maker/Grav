@@ -1041,8 +1041,8 @@ static GRAV_UNUSED void grav_uw_any(void* p) { grav_any_release(*(GravAny*)p); }
    constructor's caller converts its arguments the same way and gives back its
    result (owned): 0 done, 1 `self` is not of the class, 2 the wrong number of
    arguments, 3 + i argument i does not fit. */
-typedef struct GravDecoMeta { const char* name; int nargs; const GravAny* args; } GravDecoMeta;
-enum { GRAV_RM_READONLY = 1, GRAV_RM_PRIVATE = 2, GRAV_RM_PROTECTED = 4, GRAV_RM_WEAK = 8, GRAV_RM_STATIC = 16 };
+typedef struct GravDecoMeta { const char* name; int nargs; const GravAny* args; const char* const* keys; } GravDecoMeta;   /* keys: each argument's name, "" when positional (0: none named) */
+enum { GRAV_RM_READONLY = 1, GRAV_RM_PRIVATE = 2, GRAV_RM_PROTECTED = 4, GRAV_RM_WEAK = 8, GRAV_RM_STATIC = 16, GRAV_RM_NULLABLE = 32, GRAV_RM_ENUM = 64, GRAV_RM_OBJECT = 128 };
 typedef struct GravFieldMeta {
     const char* name; const char* type; int flags;
     int ndecos; const GravDecoMeta* decos;

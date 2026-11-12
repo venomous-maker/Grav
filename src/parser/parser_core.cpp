@@ -462,6 +462,8 @@ DeclPtr Parser::parseStruct() {
         if (check(TokenType::Fn)) { parseStructMethod(*st); continue; }
         // Fields are `name: type` (always public).
         st->fields.push_back(parseField(Access::Public, /*readonly=*/false));
+        if (st->fields.back().init)
+            fail(previous(), "a struct field cannot have an initializer: a struct literal gives every field its value");
     }
     expect(TokenType::RBrace, "to close the struct body");
     for (const auto &f : st->fields)
@@ -668,9 +670,27 @@ std::vector<Decorator> Parser::parseDecorators() {
         d.col = at.col;
         d.name = parseQualifiedName("after '@'");
         if (check(TokenType::LParen)) {
+            bool named = false;
             for (auto &e : parseArguments()) {
                 DecoratorArg a;
                 const Expr *x = e.get();
+                if (auto *na = dynamic_cast<const NamedArgExpr *>(x)) {    // `length: 255`
+                    a.key = na->name;
+                    x = na->value.get();
+                    for (const auto &o : d.args)
+                        if (o.key == a.key) {
+                            Token where = peek();
+                            where.line = e->line;
+                            where.col = e->col;
+                            fail(where, "decorator argument '" + a.key + "' is given twice");
+                        }
+                    named = true;
+                } else if (named) {
+                    Token where = peek();
+                    where.line = e->line;
+                    where.col = e->col;
+                    fail(where, "a positional decorator argument cannot follow a named one");
+                }
                 bool neg = false;
                 if (auto *b = dynamic_cast<const BinaryExpr *>(x); b && b->op == BinaryOp::Sub) {
                     auto *z = dynamic_cast<const IntLiteralExpr *>(b->left.get());
@@ -718,6 +738,8 @@ FieldDecl Parser::parseField(Access access, bool readonly) {
     f.col = name.col;
     expect(TokenType::Colon, "after the field name");
     f.type = parseType("for the field");
+    f.writtenNullable = f.type.isNullable();
+    if (matchToken(TokenType::Assign)) f.init = std::shared_ptr<Expr>(parseExpression().release());
     return f;
 }
 

@@ -1,0 +1,3 @@
+// Named decorator arguments come after the positional ones, once each.
+@Column(length: 5, "late")
+class A { }

@@ -274,7 +274,46 @@ rgb(255, 64, 0)
 640x600
 ```
 
-A class with no constructor gets an empty one that takes no arguments.
+A class with no constructor gets an empty one that takes no arguments. Its
+fields start at their type's zero: `0`, `false`, `""`, and `null` for objects
+and `T?`.
+
+### Field initializers
+
+A field can say what it starts as. Its initializer runs in every constructor,
+after the parent's constructor and before the constructor's own body, so the
+body can rely on it, or change it:
+
+```grav
+import "std"
+
+class Task {
+    public title: string = "untitled"
+    public done: bool = false
+    public tags: Array<string> = new Array<string>()
+    public created: DateTime = DateTime.fromUnix(0)
+    constructor() { }
+    constructor(title: string) { self.title = title }
+}
+
+fn main() {
+    let a = new Task()
+    let b = new Task("write docs")
+    a.tags.push("chores")
+    print("${a.title} ${a.done} ${a.tags} | ${b.title} ${b.tags}")
+}
+```
+
+Output:
+
+```text
+untitled false ["chores"] | write docs []
+```
+
+Every object gets its own value: the initializer runs again for each one, so
+`a` and `b` have separate lists. Initializers run in the order the fields are
+written, a subclass's after its parent's, and they belong to classes (a struct
+literal gives a struct's fields their values).
 
 ## Making objects printable: toString
 
@@ -404,6 +443,7 @@ v2
   fields are set only in constructors; private fields get `get_`/`set_` methods.
 - `static` members belong to the class.
 - Several constructors are allowed, with defaults and named arguments.
+- `public done: bool = false` gives a field its starting value, in every constructor.
 - `toString` controls printing; a `destructor` runs when the last reference goes away.
 
 ## Exercises

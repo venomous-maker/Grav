@@ -724,8 +724,17 @@ std::string CodeGen::emitReflection(const std::string &fq) {
                 }
                 vtables_ += "static const GravAny " + args + "[] = { " + vals + " };\n";
             }
+            std::string keys = "0";
+            bool anyKey = false;
+            for (const auto &a : d.args) if (!a.key.empty()) anyKey = true;
+            if (anyKey) {
+                keys = m + "__rk" + std::to_string(counter++);
+                std::string names;
+                for (const auto &a : d.args) names += (names.empty() ? "" : ", ") + std::string("\"") + escapeC(a.key) + "\"";
+                vtables_ += "static const char* const " + keys + "[] = { " + names + " };\n";
+            }
             entries += (entries.empty() ? "" : ", ") + std::string("{ \"") + escapeC(d.name) + "\", " +
-                       std::to_string(d.args.size()) + ", " + args + " }";
+                       std::to_string(d.args.size()) + ", " + args + ", " + keys + " }";
         }
         vtables_ += "static const GravDecoMeta " + tbl + "[] = { " + entries + " };\n";
         return std::to_string(ds.size()) + ", " + tbl;
@@ -770,9 +779,15 @@ std::string CodeGen::emitReflection(const std::string &fq) {
                         " return 1; }\n";
             set = fn + "_set";
         }
-        int flags = (f.isReadonly ? 1 : 0) | access(f.access) | (f.isWeak ? 8 : 0);
+        bool nullable = t.isNullable() || f.writtenNullable;
+        const TypeRef &base = t.isNullable() && t.elem ? *t.elem : t;
+        bool isEnum = base.isNamed() && reg_->isEnum(base.name);
+        bool isObject = base.isNamed() && (reg_->isClass(base.name) || reg_->isInterface(base.name));
+        int flags = (f.isReadonly ? 1 : 0) | access(f.access) | (f.isWeak ? 8 : 0) | (nullable ? 32 : 0) |
+                    (isEnum ? 64 : 0) | (isObject ? 128 : 0);
+        std::string shown = typeRefName(t) + (nullable && !t.isNullable() ? "?" : "");   // (`DateTime?` as written)
         fields += (fields.empty() ? "" : ",\n    ") + std::string("{ \"") + escapeC(f.name) + "\", \"" +
-                  escapeC(typeRefName(t)) + "\", " + std::to_string(flags) + ", " + decos(f.decorators) + ", " + get + ", " + set + " }";
+                  escapeC(shown) + "\", " + std::to_string(flags) + ", " + decos(f.decorators) + ", " + get + ", " + set + " }";
     }
     if (!fields.empty()) vtables_ += "static const GravFieldMeta " + m + "__rfields[] = {\n    " + fields + " };\n";
     // A caller for reflection: checks the count, converts each argument (borrowed:

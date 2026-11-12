@@ -1,0 +1,7 @@
+// A field initializer must fit the field's type.
+import "std"
+
+class A {
+    public n: int = "text"
+    public ok: int = 1
+}

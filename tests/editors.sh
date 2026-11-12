@@ -136,4 +136,34 @@ chmod +x "$T/oldgrav"
 node -e 'const [index, file, compiler] = process.argv.slice(1);
   new (require(index).Workspace)({ compiler }).check(file, (d) => process.exit(d.some((x) => /cannot initialize/.test(x.message)) ? 0 : 1));' \
   "$INDEX" "$T/bad.grav" "$T/oldgrav" || fail "diagnostics from a compiler without --types"
+# Field initializers and named decorator arguments: no false errors, and the
+# fields' types (as written, `?` kept) reach the index.
+cat > "$T/model.grav" <<'EOF'
+import "std"
+@Table("users")
+class User {
+    @Column("email_address", length: 255, unique: true)
+    public email: string = ""
+    public tags: Array<string> = new Array<string>()
+    public joined: DateTime? = null
+}
+fn main() {
+    let u = new User()
+    let t = u.tags
+    let j = u.joined
+    print(u.email + "${t.size()} ${j}")
+}
+EOF
+"$GRAV" check --json "$T/model.grav" | grep -q '"errors": 0' || fail "field initializers and named decorator arguments check cleanly"
+node -e 'const [index, file] = process.argv.slice(1);
+  const f = require(index).parseFile(require("fs").readFileSync(file, "utf8"));
+  const user = f.symbols.find((s) => s.name === "User");
+  const names = (user.members || []).map((m) => m.name).join(",");
+  if (names !== "email,tags,joined") { console.log("members: " + names); process.exit(1); }' "$INDEX" "$T/model.grav" ||
+  fail "the index lists a class's fields with initializers"
+node -e 'const [index, file] = process.argv.slice(1);
+  const ws = new (require(index).Workspace)({ compiler: "/nonexistent/grav" });
+  const got = ws.inlayHints(file).map((h) => h.label).join(" ");
+  process.exit(got === ": User : Array<string> : DateTime?" ? 0 : 1);' "$INDEX" "$T/model.grav" ||
+  fail "types through fields with initializers"
 echo "editors: ok"

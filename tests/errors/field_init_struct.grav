@@ -1,0 +1,2 @@
+// A struct's fields take their values from struct literals, not initializers.
+struct P { x: int = 1 }

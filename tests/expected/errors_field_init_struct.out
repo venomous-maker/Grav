@@ -1,0 +1,3 @@
+gravc: tests/errors/field_init_struct.grav:2:21: parse error: a struct field cannot have an initializer: a struct literal gives every field its value
+    struct P { x: int = 1 }
+                        ^

@@ -1,0 +1,6 @@
+running 4 tests
+  ok    initializers run in every constructor
+  ok    named decorator arguments
+  ok    nullability as written
+  ok    enum and object fields
+result: 4 passed, 0 failed

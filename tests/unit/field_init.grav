@@ -1,0 +1,68 @@
+// Field initializers (run in every constructor, after the parent's and before
+// the body; a class without a constructor gets one for them), named decorator
+// arguments, and reflection telling `DateTime?` from `DateTime`.
+import "std"
+
+class Model {
+    public id: long = 0
+    public createdAt: DateTime = DateTime.fromUnix(0)
+    public tags: Array<string> = new Array<string>()
+}
+@Table("users")
+class User extends Model {
+    @Column("email_address", length: 255, unique: true)
+    public email: string = ""
+    public active: bool = true
+    public score: float = 1.5
+    public age: int? = null
+    public joined: DateTime? = null
+}
+class Named {
+    public name: string = "x"
+    public n: int = 1
+    constructor(name: string) { self.name = name }        // (the body runs after the initializers)
+    constructor() { }
+}
+class Sub extends Named { public extra: int = 42 }       // (inherits both constructors)
+class Box<T> { public items: Array<T> = new Array<T>(); public count: int = 0 }
+class Counter { readonly start: int = 10; public now: int = Counter.base() * 2; static fn base() -> int { return 5 } }
+
+test "initializers run in every constructor" {
+    let u = new User()
+    assertEq("${u.id} ${u.createdAt.unix()} ${u.tags.size()} '${u.email}' ${u.active} ${u.score} ${u.age} ${u.joined == null}",
+             "0 0 0 '' true 1.5 null true")
+    assertEq("${new Named("ada").name} ${new Named("ada").n} ${new Named().name}", "ada 1 x")
+    let s = new Sub("bob")
+    assertEq("${s.name} ${s.n} ${s.extra} ${new Sub().extra}", "bob 1 42 42")
+    let b = new Box<int>()
+    b.items.push(3)
+    assertEq("${b.items} ${b.count} ${new Counter().start} ${new Counter().now}", "[3] 0 10 10")
+    // Each object gets its own: an initializer runs once per constructor call.
+    let a = new Model()
+    a.tags.push("x")
+    assertEq(new Model().tags.size(), 0)
+}
+
+test "named decorator arguments" {
+    let c = reflect(User).field("email").decorator("Column")
+    assertEq("${c}", "@Column(\"email_address\", length: 255, unique: true)")
+    assertEq("${c.text(0)} ${c.get("length")} ${c.number("length", 0)} ${c.flag("unique", false)} ${c.flag("nullable", true)} ${c.hasArg("length")} ${c.get("nope") == null}",
+             "email_address 255 255 true true true true")
+    assertEq("${c.keys}", "[\"\", \"length\", \"unique\"]")
+}
+
+test "nullability as written" {
+    let out = new Array<string>()
+    for (f in reflect(User).fields()) { out.push(f.name + ":" + f.typeName + (f.isNullable() ? "?" : "")) }
+    assertEq(Str.join(out, " "),
+             "id:long createdAt:DateTime tags:Array<string> email:string active:bool score:float age:int?? joined:DateTime??")
+}
+
+enum Level { Low, High }
+@Entity class Kinds { public level: Level = Level.Low; public maybe: Level? = null; public when: DateTime? = null; public n: int = 0; public tags: Array<int> = new Array<int>() }
+
+test "enum and object fields" {
+    let out = new Array<string>()
+    for (f in reflect(Kinds).fields()) { out.push(f.name + ":" + (f.isEnum() ? "enum" : f.isObject() ? "object" : "value")) }
+    assertEq(Str.join(out, " "), "level:enum maybe:enum when:object n:value tags:object")
+}

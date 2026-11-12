@@ -61,7 +61,11 @@ true
   `@Name(args)`. Arguments are literals (strings, numbers, `true`/`false`) or
   names (`@HasMany(Post)` gives the text `"Post"`). The names are yours: the
   compiler only records them. `text(i)`, `number(i, fallback)` and `arg(i)` read
-  the arguments.
+  the arguments. Arguments can be named, after the positional ones:
+  `@Column("email", length: 255, unique: true)`; `get("length")`,
+  `text("length")`, `number("length", 0)`, `flag("unique", false)` and
+  `hasArg("length")` read those, and `keys` lists each argument's name (`""`
+  for a positional one).
 - **Fields** come base class first, with private and readonly fields included
   (reflection is for library code). `get(obj)` boxes the value; `set(obj, v)`
   takes an `any` that fits the field, **converting** it when it can (what a
@@ -80,6 +84,10 @@ true
   (`field 'age' of User (int) cannot hold "4x"`). Interface and function fields
   can be read but not written, and value structs and fixed arrays neither
   (`canGet()`, `canSet()`).
+- **Nullability as written**: `isNullable()` is true for a field written with
+  `?` (`age: int?`, `joined: DateTime?`), and `typeName` keeps the `?`. A
+  class-typed field written without one (`created: DateTime`) reports false,
+  though it can hold null: what an ORM needs to make `NOT NULL` columns.
 - **Creating objects.** `info.create()` is `new User()`, and
   `info.create(["Ada", 36])` calls the constructor taking two arguments that
   they fit (converted as `set` converts). `constructors()` lists them and
@@ -122,6 +130,8 @@ true
 
 A decorator as written: `@Column("email", 255)` has the name "Column" and
 the arguments "email" and 255 (a name argument, `@HasMany(Post)`, is text).
+Arguments may be named, after the positional ones: `@Column("email",
+length: 255, unique: true)`; get("length") reads one by its name.
 
 **Constructors**
 
@@ -131,9 +141,15 @@ the arguments "email" and 255 (a name argument, `@HasMany(Post)`, is text).
 
 - `name: string`
 - `args: Array<any>`
+- `keys: Array<string>` — Each argument's name, "" for a positional one (parallel to args).
 
 **Methods**
 
+- `fn get(key: string) -> any` — The argument named `key`, or null when there is none.
+- `fn hasArg(key: string) -> bool` — Whether an argument is named `key`.
+- `fn text(key: string) -> string` — The argument named `key` as text ("" when missing).
+- `fn number(key: string, fallback: long) -> long` — The argument named `key` as a number (`fallback` when missing or not a whole number).
+- `fn flag(key: string, fallback: bool) -> bool` — The argument named `key` as a bool (`fallback` when missing or not a bool).
 - `fn arg(i: int) -> any` — Argument i, or null when there is no such argument.
 - `fn text(i: int) -> string` — Argument i as text ("" when missing).
 - `fn number(i: int, fallback: long) -> long` — Argument i as a number (`fallback` when missing or not a whole number).
@@ -161,6 +177,9 @@ write it on any object of that class.
 - `fn isPrivate() -> bool`
 - `fn isProtected() -> bool`
 - `fn isWeak() -> bool`
+- `fn isNullable() -> bool` — Whether its type was written to allow null: `int?`, `DateTime?` (a class-typed field written without `?` is not, though it can hold null).
+- `fn isEnum() -> bool` — Whether its type (or the T of its `T?`) is an enum.
+- `fn isObject() -> bool` — Whether it holds an object: its type is a class or an interface (`Array<int>`, `User`, `DateTime`).
 - `fn canGet() -> bool` — Whether get() works for its type (numbers, bools, strings, enums, objects, any, functions, T?).
 - `fn canSet() -> bool` — Whether set() works for its type (as canGet, but not interfaces or functions).
 - `fn has(name: string) -> bool` — Whether it has a decorator called `name`.

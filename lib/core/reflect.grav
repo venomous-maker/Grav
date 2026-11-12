@@ -93,10 +93,30 @@ namespace std.core {
 
     // A decorator as written: `@Column("email", 255)` has the name "Column" and
     // the arguments "email" and 255 (a name argument, `@HasMany(Post)`, is text).
+    // Arguments may be named, after the positional ones: `@Column("email",
+    // length: 255, unique: true)`; get("length") reads one by its name.
     class Decorator {
         public name: string
         public args: Array<any>
-        constructor(name: string) { self.name = name; self.args = new Array<any>(); }
+        // Each argument's name, "" for a positional one (parallel to args).
+        public keys: Array<string>
+        constructor(name: string) { self.name = name; self.args = new Array<any>(); self.keys = new Array<string>(); }
+        // The argument named `key`, or null when there is none.
+        fn get(key: string) -> any {
+            for (i, k in self.keys) { if (k == key) { return self.args[i]; } }
+            return null;
+        }
+        // Whether an argument is named `key`.
+        fn hasArg(key: string) -> bool { for (k in self.keys) { if (k == key) { return true; } } return false; }
+        // The argument named `key` as text ("" when missing).
+        fn text(key: string) -> string { let a = self.get(key); return a == null ? "" : "${a}"; }
+        // The argument named `key` as a number (`fallback` when missing or not a whole number).
+        fn number(key: string, fallback: long) -> long {
+            let a = self.get(key);
+            return a is long ? a as long : a is int ? (a as int) as long : fallback;
+        }
+        // The argument named `key` as a bool (`fallback` when missing or not a bool).
+        fn flag(key: string, fallback: bool) -> bool { let a = self.get(key); return a is bool ? a as bool : fallback; }
         // Argument i, or null when there is no such argument.
         fn arg(i: int) -> any { return i >= 0 && i < self.args.size() ? self.args[i] : null; }
         // Argument i as text ("" when missing).
@@ -108,7 +128,10 @@ namespace std.core {
         }
         fn toString() -> string {
             let parts = new Array<string>();
-            for (a in self.args) { parts.push(a is string ? "\"" + (a as string) + "\"" : "${a}"); }
+            for (i, a in self.args) {
+                let shown = a is string ? "\"" + (a as string) + "\"" : "${a}";
+                parts.push(self.keys[i] == "" ? shown : self.keys[i] + ": " + shown);
+            }
             return "@" + self.name + (parts.isEmpty() ? "" : "(" + Str.join(parts, ", ") + ")");
         }
         // The decorators of table `d` (C: n GravDecoMeta entries).
@@ -117,7 +140,10 @@ namespace std.core {
             for (i in 0..n) {
                 let dec = new Decorator(%{ ((const GravDecoMeta*)d)[i].name %} as string);
                 let nargs = %{ ((const GravDecoMeta*)d)[i].nargs %} as int;
-                for (k in 0..nargs) { dec.args.push(%{ grav_rf_dec_arg(d, i, k) %} as any); }
+                for (k in 0..nargs) {
+                    dec.args.push(%{ grav_rf_dec_arg(d, i, k) %} as any);
+                    dec.keys.push(%{ ((const GravDecoMeta*)d)[i].keys ? ((const GravDecoMeta*)d)[i].keys[k] : "" %} as string);
+                }
                 out.push(dec);
             }
             return out;
@@ -158,6 +184,14 @@ namespace std.core {
         fn isPrivate() -> bool { return (self.flags & 2) != 0; }
         fn isProtected() -> bool { return (self.flags & 4) != 0; }
         fn isWeak() -> bool { return (self.flags & 8) != 0; }
+        // Whether its type was written to allow null: `int?`, `DateTime?` (a
+        // class-typed field written without `?` is not, though it can hold null).
+        fn isNullable() -> bool { return (self.flags & 32) != 0; }
+        // Whether its type (or the T of its `T?`) is an enum.
+        fn isEnum() -> bool { return (self.flags & 64) != 0; }
+        // Whether it holds an object: its type is a class or an interface
+        // (`Array<int>`, `User`, `DateTime`).
+        fn isObject() -> bool { return (self.flags & 128) != 0; }
         // Whether get() works for its type (numbers, bools, strings, enums, objects, any, functions, T?).
         fn canGet() -> bool { return %{ ((const GravFieldMeta*)self->meta)->get != 0 %} as bool; }
         // Whether set() works for its type (as canGet, but not interfaces or functions).
