@@ -1,0 +1,242 @@
+// How each construct is colored (see editors/grammar/test.js for the format).
+import "std"
+// <- keyword.control.import
+use std.types.*
+//  ^^^ entity.name.namespace
+
+// ---- casts and type tests ----
+let a = x as int
+//        ^^ keyword.operator.type
+//           ^^^ storage.type.primitive
+let b = "42" as int
+//      ^^^^ string.quoted.double
+//           ^^ keyword.operator.type
+//              ^^^ storage.type.primitive
+let c = d as Decimal
+//           ^^^^^^^ entity.name.type
+let c2 = x as Array<int>
+//            ^^^^^ entity.name.type
+//                 ^ punctuation.definition.generic.begin - keyword.operator.comparison
+//                  ^^^ storage.type.primitive
+//                     ^ punctuation.definition.generic.end
+let c3 = y as int?
+//            ^^^ storage.type.primitive
+let e = v is Foo
+//        ^^ keyword.operator.type
+//           ^^^ entity.name.type
+let e2 = v is Shape.Circle
+//            ^^^^^^^^^^^^ entity.name.type
+let f = %{ 1 + 2 %} as long
+//      ^^ punctuation.section.embedded.begin
+//         ^ constant.numeric
+//               ^^ punctuation.section.embedded.end
+//                  ^^ keyword.operator.type
+//                     ^^^^ storage.type.primitive
+
+// ---- generics and turbofish ----
+let g = m::<int>(3)
+//      ^ entity.name.function
+//       ^^ punctuation.separator.turbofish
+//          ^^^ storage.type.primitive
+let h = new Box<Array<int>>()
+//      ^^^ keyword.operator.new
+//          ^^^ entity.name.type
+//              ^^^^^ entity.name.type
+//                    ^^^ storage.type.primitive
+let tf = Box::<int>.of(3)
+//             ^^^ storage.type.primitive
+//                  ^^ entity.name.function.method
+
+// ---- declarations ----
+@Table("users")
+// <- punctuation.definition.decorator
+//^^^^ entity.name.function.decorator
+class Repo<T: Model> extends Base implements Store<T>, Closeable {
+// ^^ storage.type.class
+//    ^^^^ entity.name.type.declaration
+//         ^ entity.name.type.parameter
+//            ^^^^^ entity.name.type
+//                   ^^^^^^^ storage.modifier.inherit
+//                           ^^^^ entity.other.inherited-class
+//                                ^^^^^^^^^^ storage.modifier.inherit
+//                                                     ^^^^^^^^^ entity.other.inherited-class
+    @Column("email", length: 255, unique: true)
+//  ^ punctuation.definition.decorator
+//   ^^^^^^ entity.name.function.decorator
+//           ^^^^^ string.quoted.double
+//                   ^^^^^^ variable.parameter.named
+//                           ^^^ constant.numeric
+//                                ^^^^^^ variable.parameter.named
+//                                        ^^^^ constant.language.boolean
+    public email: string = ""
+//  ^^^^^^ storage.modifier
+//         ^^^^^ variable.other.property.declaration
+//                ^^^^^^ storage.type.primitive
+    weak parent: Node? = null
+//  ^^^^ storage.modifier
+//       ^^^^^^ variable.other.property.declaration
+//               ^^^^ entity.name.type
+//                       ^^^^ constant.language.null
+    static readonly MAX: int = 5
+//                  ^^^ variable.other.property.declaration
+    tags: HashMap<string, int> = new HashMap<string, int>()
+//  ^^^^ variable.other.property.declaration
+//        ^^^^^^^ entity.name.type
+//                ^^^^^^ storage.type.primitive
+    fn operator==(o: Repo<T>) -> bool { return true }
+//  ^^ storage.type.function
+//     ^^^^^^^^ keyword.other.operator
+//             ^^ entity.name.function.operator
+//                ^ variable.parameter
+//                               ^^^^ storage.type.primitive
+    async fn load(id: int,
+//  ^^^^^ keyword.control.async
+//           ^^^^ entity.name.function.declaration
+//                ^^ variable.parameter
+                  name: string) -> Future<int> { await x }
+//                ^^^^ variable.parameter
+//                                 ^^^^^^ entity.name.type
+//                                        ^^^ storage.type.primitive
+//                                               ^^^^^ keyword.control.async
+    fn me() -> Self { return super.me() }
+//             ^^^^ storage.type
+//                           ^^^^^ variable.language
+//                                 ^^ entity.name.function.method
+}
+interface Shape { fn area() -> float }
+//                             ^^^^^ storage.type.primitive
+//                                   ^ punctuation.definition.block - storage.type - entity.name.type
+struct Point { x: int, y: int }
+// ^^^ storage.type.struct
+//     ^^^^^ entity.name.type.declaration
+type Pair<A> = Map<A, A>
+// <- storage.type.alias
+//   ^^^^ entity.name.type.alias
+enum Color { Red, Green, Blue }
+// ^ storage.type.enum
+//   ^^^^^ entity.name.type.declaration
+//           ^^^ variable.other.enummember
+//                ^^^^^ variable.other.enummember
+enum Shape2 {
+    Circle(r: float),
+//  ^^^^^^ variable.other.enummember
+//         ^ variable.parameter
+//            ^^^^^ storage.type.primitive
+    Square(side: float)
+//  ^^^^^^ variable.other.enummember
+    fn area() -> float { if (x) { return 1.0 } return 0.0 }
+//  ^^ storage.type.function
+//     ^^^^ entity.name.function.declaration
+}
+let col = Color.Red
+//        ^^^^^ entity.name.type
+//              ^^^ variable.other.enummember
+let lim = Integer.MAX + Integer.parse("1")
+//        ^^^^^^^ entity.name.type
+//                ^^^ variable.other.constant
+//                              ^^^^^ entity.name.function.method
+
+// ---- functions and lambdas ----
+let k = fn(x: int) -> string { return "${x}" }
+//      ^^ storage.type.function - entity.name.function
+//         ^ variable.parameter
+//            ^^^ storage.type.primitive
+//                    ^^^^^^ storage.type.primitive
+let sq = xs.map(fn(v) => v * 2)
+//              ^^ storage.type.function - entity.name.function
+//                 ^ variable.parameter
+//                    ^^ keyword.operator.arrow
+let add = (a: int, b: int) => a + b
+//         ^ variable.parameter
+//            ^^^ storage.type.primitive
+//                 ^ variable.parameter - variable.parameter.named
+//                    ^^^ storage.type.primitive
+let k2: fn(int, string) -> bool = null
+//      ^^ storage.type.function
+//         ^^^ storage.type.primitive
+//                         ^^^^ storage.type.primitive
+let cmp = Integer.compare
+//        ^^^^^^^ entity.name.type
+xs.sortBy(Integer.descending)
+//        ^^^^^^^ entity.name.type
+f(x, name: value)
+//   ^^^^ variable.parameter.named
+
+// ---- control flow ----
+match (sh) { case Circle(r): print(r) case Shape.Square(s): print(s) default: print("") }
+// <- keyword.control
+//           ^^^^ keyword.control
+//                ^^^^^^ variable.other.enummember
+//                                         ^^^^^ entity.name.type
+//                                              ^ punctuation - entity.name.type
+//                                               ^^^^^^ variable.other.enummember
+let t = a ? 0 : Integer.parse("${x}")
+//            ^ punctuation.separator - punctuation.separator.type
+//              ^^^^^^^ entity.name.type
+//                                  ^ punctuation.definition.parens - string
+outer: for (i in 0..=10 step 2) { if (i == 3) { continue outer } }
+// <- entity.name.label
+//     ^^^ keyword.control
+//                ^^^ keyword.operator.range
+//                      ^^^^ keyword.control
+//                                                       ^^^^^ entity.name.label
+try { throw new IoError("x") } catch (e: IoError) { print(e.message) } finally { }
+//                             ^^^^^ keyword.control
+//                                    ^ variable.parameter
+//                                       ^^^^^^^ entity.name.type
+let w = a?.b ?? c!
+//       ^^ keyword.operator.null
+//           ^^ keyword.operator.null
+//               ^ keyword.operator.unwrap
+defer close()
+// <- keyword.control
+test "adds numbers" { assertEq(1 + 1, 2) }
+// <- keyword.other.test
+//   ^^^^^^^^^^^^^^ string.quoted.double
+
+// ---- strings ----
+let u = "v=${price:.2f} n=${n:>8} ${a ? "y" : "n"}"
+//         ^^ punctuation.section.interpolation.begin
+//           ^^^^^ variable.other - variable.parameter
+//                ^ punctuation.separator.format
+//                 ^^^ constant.other.format-spec
+//                          ^ variable.other - variable.parameter
+//                           ^ punctuation.separator.format
+//                            ^^ constant.other.format-spec
+//                                      ^^^ string.quoted.double
+//                                               ^ punctuation.section.interpolation.end
+let raw = r"C:\path\n${x}"
+//        ^^^^^^^^^^^^^^^^ string.quoted.raw - constant.character.escape - meta.interpolation
+let tri = """line ${x}
+//        ^^^ string.quoted.triple
+//                ^^ punctuation.section.interpolation.begin
+second "quoted" line"""
+// <- string.quoted.triple
+//                  ^^^ string.quoted.triple
+let esc = "a\tb\u{1F600}\$"
+//          ^^ constant.character.escape
+//             ^^^^^^^^^ constant.character.escape
+let ch = '\n' + 'a'
+//       ^^^^ constant.character
+//              ^^^ constant.character
+
+// ---- values and built-ins ----
+let inf = Infinity + NaN - 1_000_000 + 0xFF + 0b1010 + 1.5e3
+//        ^^^^^^^^ constant.language
+//                   ^^^ constant.language
+//                         ^^^^^^^^^ constant.numeric
+//                                     ^^^^ constant.numeric.hex
+//                                            ^^^^^^ constant.numeric.binary
+let tn = typename(x) + str(n) + "${sizeof(int)}"
+//       ^^^^^^^^ support.function.builtin
+//                     ^^^ support.function.builtin
+//                                 ^^^^^^ support.function.builtin
+//                                        ^^^ storage.type.primitive
+let info = reflect(User)
+//         ^^^^^^^ support.function.builtin
+//                 ^^^^ entity.name.type
+let conv = long(x) + double(y)
+//         ^^^^ support.function.builtin
+//                   ^^^^^^ support.function.builtin
+let me = self.name
+//       ^^^^ variable.language

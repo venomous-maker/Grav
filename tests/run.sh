@@ -165,6 +165,12 @@ if [ $UPDATE = 0 ] && [ -x tests/editors.sh ]; then
   else cat "$TMP/editors.out"; fail=$((fail+1)); fi
 fi
 
+# Syntax coloring (TextMate grammar and Neovim syntax), when their tools are installed.
+if [ $UPDATE = 0 ] && [ -x tests/grammar.sh ]; then
+  if bash tests/grammar.sh >"$TMP/grammar.out" 2>&1; then tail -1 "$TMP/grammar.out"
+  else cat "$TMP/grammar.out"; fail=$((fail+1)); fi
+fi
+
 # The standard-library pages' API sections must match the library source.
 if command -v node >/dev/null; then
   if node docs/std/gen-api.js --check >"$TMP/api.out" 2>&1; then echo "ok   docs/std API sections"; pass=$((pass+1))
