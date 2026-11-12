@@ -560,6 +560,16 @@ function parseFile(text) {
   }
 }
 
+// A decorator's hover and completion text.
+const DECORATOR_DOC = (name) => `\`@${name}\` — a decorator: recorded with its arguments on the class, field or method ` +
+  `it precedes and read at run time through reflection (\`reflect(T).decorator("${name}")\`, \`field.decorator("${name}")\`, ` +
+  `then \`.arg(i)\` / \`.named("key")\`). It does nothing by itself.`;
+
+// What the compiler's built-in functions return (for types after `reflect(User).`).
+const BUILTIN_RETURNS = { str: "string", input: "string", typename: "string", sizeof: "int", argc: "int", argv: "string",
+  env: "string", cwd: "string", isInstance: "bool", reflect: "ClassInfo", int: "int", long: "long", float: "float",
+  double: "float", bool: "bool", byte: "byte", uint: "uint", string: "string" };
+
 // ---- types of built-in values, for std/types' value methods ----
 const INT_TYPES = new Set(["int", "long", "byte", "short", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16",
                            "uint32", "uint64", "ulong", "signed", "unsigned"]);
@@ -1040,18 +1050,28 @@ class Workspace {
     // strings to "", call arguments to (), so the dots left separate members
     let e = expr.trim().replace(/"(?:[^"\\]|\\.)*"/g, '""');
     let type = "";
+    const made = /^new\s+([\w.]+(?:<[^()]*>)?)\s*\([^()]*\)/.exec(e);   // new User().posts()
+    if (made) { type = made[1]; e = "_" + e.slice(made[0].length); }
     const lit = /^(""|-?\d+\.\d+|-?\d+|true|false)(?=[.(]|$)/.exec(e) || /^\((""|-?\d+(?:\.\d+)?)\)(?=\.|$)/.exec(e);
     if (lit) {                                                    // "x".upper(), 255.toHex(), (-7).abs()
       type = lit[1] === '""' ? "string" : /^(true|false)$/.test(lit[1]) ? "bool" : lit[1].includes(".") ? "float" : "int";
       e = "_" + e.slice(lit[0].length);
     }
-    for (let prev = ""; prev !== e;) { prev = e; e = e.replace(/\([^()]*\)/g, "()"); }
+    for (let prev = ""; prev !== e;) { prev = e; e = e.replace(/\([^()]*\)/g, "()").replace(/\[[^\[\]]*\]/g, "[]"); }
     const parts = e.split(".");
-    const first = parts[0].replace(/\(\)$/, "");
-    if (lit) {
+    // xs[0], m["k"], f()[1]: the element type, once per index
+    const indexed = (t, p) => { for (let k = (/(\[\])+$/.exec(p) || [""])[0].length / 2; k > 0 && t; k--) t = this.elementType(file, t); return t; };
+    const first = parts[0].replace(/(\[\])+$/, "").replace(/\(\)$/, "");
+    const builtin = parts[0].replace(/(\[\])+$/, "").endsWith("()") && BUILTIN_RETURNS[first];
+    if (lit || made) {
+    } else if (builtin) {
+      type = builtin;                                             // reflect(User) is a ClassInfo
     } else if (first === "self") {
       const c = this.enclosingClass(file, pos);
       type = c ? c.name : "";
+    } else if (first === "super") {                               // super.x: the base class's members
+      const c = this.enclosingClass(file, pos);
+      type = c && c.base ? c.base : "";
     } else {
       const local = this.localsAt(file, pos).filter((s) => s.name === first).pop();
       if (local) type = this.localType(file, local, depth);
@@ -1066,21 +1086,41 @@ class Workspace {
         }
       }
     }
-    for (const p of parts.slice(1)) {
+    if (typeof type === "string") type = indexed(type, parts[0]);
+    for (const p0 of parts.slice(1)) {
       if (!type || typeof type !== "string") return "";
+      const p = p0.replace(/(\[\])+$/, "");
       const name = p.replace(/\(\)$/, ""), called = p.endsWith("()");
       const m = this.membersOf(file, type).find((x) => x.sym.name === name);
       if (!m) {                                                   // n.toHex(): Integer.toHex(n)
         const vm = this.valueMethod(file, type, name);
         if (!vm) return "";
-        type = called ? vm.returns : fnTypeOf(vm.sym, 1);
+        type = indexed(called ? vm.returns : fnTypeOf(vm.sym, 1), p0);
         continue;
       }
-      if (m.sym.kind === KIND.EnumMember) type = m.sym.container;     // Shape.Circle(1.0) is a Shape
-      else if (m.sym.kind === KIND.Field) type = m.sym.type;
-      else type = called ? (m.sym.returns || "") : fnTypeOf(m.sym, 0);   // Integer.compare as a value
+      let t;
+      if (m.sym.kind === KIND.EnumMember) t = m.sym.container;       // Shape.Circle(1.0) is a Shape
+      else if (m.sym.kind === KIND.Field) t = m.sym.type;
+      else t = called ? (m.sym.returns || "") : fnTypeOf(m.sym, 0);   // Integer.compare as a value
+      type = indexed(this.bindMember(file, type, m.sym, t), p0);
     }
     return typeof type === "string" ? type : "";
+  }
+  // A member's type as seen on a receiver: the class's type parameters bound to the
+  // receiver's arguments (Array<int>.get() -> int, Query<User>.first() -> User) and
+  // Self to the receiver (User.where(...) -> Query<User>).
+  bindMember(file, recv, sym, t) {
+    if (!t || typeof t !== "string") return t;
+    const m = /^([\w.]+)\s*(?:<(.*)>)?\??$/.exec(String(recv).trim());
+    if (!m) return t;
+    const base = m[1], args = m[2] ? splitParams(m[2]).map((a) => a.trim()) : [];
+    let out = t.replace(/\bSelf\b/g, base.split(".").pop() + (m[2] ? `<${m[2]}>` : ""));
+    if (args.length && sym.container) {
+      const cls = this.symbolsNamed(file, sym.container).find((x) => [KIND.Class, KIND.Struct, KIND.Interface].includes(x.sym.kind) && x.sym.typeParams);
+      const names = cls ? splitParams(cls.sym.typeParams.replace(/^<|>$/g, "")).map((p) => p.split(":")[0].trim()) : [];
+      names.forEach((n, k) => { if (args[k]) out = out.replace(new RegExp(`\\b${n}\\b`, "g"), args[k]); });
+    }
+    return out;
   }
   returnOf(file, cls, method) {
     const m = this.membersOf(file, cls).find((x) => x.sym.name === method);
@@ -1103,6 +1143,59 @@ class Workspace {
     if (/\.\./.test(sym.iter)) return "int";                                   // for (i in 0..n)
     return this.elementType(file, this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.iter, depth + 1));
   }
+  // Decorator names written in the project (the file's imports and the workspace),
+  // with how often: [[name, uses]], the most used first.
+  decoratorNames(file) {
+    const count = new Map();
+    for (const f of this.searchOrder(file)) {
+      if (this.isLibrary(f) && !/reflect\.grav$/.test(f)) continue;
+      const text = this.text(f);
+      if (!text) continue;
+      for (const m of mask(text).matchAll(/(?:^|[^\w@.])@([A-Za-z_][\w.]*)/gm)) count.set(m[1], (count.get(m[1]) || 0) + 1);
+    }
+    return [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }
+  // The types `expr as T` can convert a value of expr's type to, as the compiler's
+  // casts and conversionMethod(): numbers between themselves, strings and numbers
+  // or bools through std/types (`"42" as int`), a class with toInt()/toFloat()/...,
+  // and any class with a static from(x) that takes the value (`d as Decimal`).
+  conversions(file, pos, expr) {
+    const t = normType(this.typeOfExpr(file, pos, expr));
+    const out = [], seen = new Set();
+    const add = (type, detail, doc) => { if (!seen.has(type)) { seen.add(type); out.push({ type, detail, doc: doc || "" }); } };
+    const nums = ["int", "long", "float", "byte", "uint", "double"];
+    const numeric = INT_TYPES.has(t) || t === "float" || t === "float32";
+    if (numeric) for (const n of nums) if (n !== t) add(n, `${t} -> ${n}`, "A numeric cast.");
+    if (t === "bool") for (const n of ["int", "long", "float"]) add(n, "true is 1, false is 0", "");
+    if (t === "string") for (const [n, m] of [["int", "toInt"], ["long", "toLong"], ["float", "toFloat"], ["bool", "toBool"]])
+      add(n, `"…".${m}() (std/types)`, `Parses the string; fails with an error when it is not a ${n}.`);
+    if (numeric || t === "bool") add("string", `${t} -> string`, "Through std/types: the value's text.");
+    if (t === "bool" || numeric) add("bool", "nonzero is true", "");
+    // a class instance with toInt/toFloat/toString/toBool/toLong
+    if (t && !BUILTIN_VALUE.has(t.replace(/\?$/, "")))
+      for (const { sym } of this.membersOf(file, t))
+        if (!sym.isStatic && sym.params && !sym.params.length && /^to(Int|Long|Float|String|Bool)$/.test(sym.name))
+          add({ toInt: "int", toLong: "long", toFloat: "float", toString: "string", toBool: "bool" }[sym.name], `${sym.container}.${sym.name}()`, sym.doc);
+    // classes with a static from(x) taking the value
+    for (const f of this.reachable(file)) {
+      const info = this.info(f);
+      if (!info) continue;
+      for (const s of info.symbols)
+        if (s.name === "from" && s.isStatic && s.container && s.params && s.params.length === 1 && t && typeFits(paramType(s.params[0]), t))
+          add(s.container, `${s.container}.from(${paramType(s.params[0])})`, s.doc);
+    }
+    // the class itself and its bases (an upcast), for a class instance
+    if (t && /^[A-Z]/.test(t)) {
+      const decl = this.symbolsNamed(file, t.replace(/<.*$/, "")).find((x) => x.sym.kind === KIND.Class);
+      for (let b = decl && decl.sym.base, k = 0; b && k < 10; k++) {
+        add(b, "a base class", "");
+        const bd = this.symbolsNamed(file, b).find((x) => x.sym.kind === KIND.Class);
+        b = bd && bd.sym.base;
+      }
+    }
+    return out;
+  }
+
   // ---- methods on built-in values (std/types) ----
   // `n.toHex()` is `Integer.toHex(n)`: the std.types classes whose static methods
   // a value of type `t` takes as its own, the most specific first (as the
@@ -1153,7 +1246,7 @@ class Workspace {
     else if ((m = /^(?:[\w.]+\.)?Array<(.+)>$/.exec(t))) r = m[1];
     else if (t) {
       const get = this.membersOf(file, t).find((x) => ["get", "at"].includes(x.sym.name) && x.sym.returns);
-      r = get ? get.sym.returns : "";
+      r = get ? this.bindMember(file, t, get.sym, get.sym.returns) : "";
     }
     return /^[A-Z]$/.test(r) ? "" : r;                                         // a bare type parameter: unknown
   }
@@ -1162,6 +1255,11 @@ class Workspace {
     const text = this.text(file) || "";
     const w = wordAtPosition(text, pos);
     if (!w) return null;
+    const lineText = splitLines(text)[pos.line] || "";
+    if (lineText[w.range.start.character - 1] === "@") {          // @Column: what a decorator is, and how to read it
+      const uses = (this.decoratorNames(file).find((d) => d[0] === w.word) || [, 0])[1];
+      return { markdown: DECORATOR_DOC(w.word) + (uses ? `\n\n*used ${uses} time${uses === 1 ? "" : "s"} in this project*` : ""), range: w.range };
+    }
     if (KEYWORD_SET.has(w.word)) {
       const d = KEYWORD_DOCS[w.word];
       return d ? { markdown: `**${w.word}** — ${d[0]}\n\n\`\`\`grav\n${d[1]}\n\`\`\``, range: w.range } : null;
@@ -1208,9 +1306,11 @@ class Workspace {
                    case: "match binding", param: `parameter of ${sym.local.name}` }[sym.role];
     return "```grav\n" + decl + (type ? ": " + type : "") + "\n```" + (what ? `\n\n*${what}*` : "");
   }
-  // Inlay hints: the type after each binding whose type is not written (let without
-  // `: T`, for-in, lambda parameters, match bindings), within lines [from, to].
-  inlayHints(file, from = 0, to = Infinity) {
+  // Inlay hints, within lines [from, to]: the type after each binding whose type is
+  // not written (let without `: T`, for-in, lambda parameters, match bindings), and
+  // (unless opts.parameterNames is false) the parameter's name before each literal
+  // argument of a call (`square(n: 3)`), as TypeScript's "literals" setting.
+  inlayHints(file, from = 0, to = Infinity, opts = {}) {
     const info = this.info(file);
     if (!info) return [];
     const out = [];
@@ -1219,6 +1319,43 @@ class Workspace {
       const type = this.localType(file, s);
       if (!type) continue;
       out.push({ position: { line: s.line, character: s.ch + s.name.length }, label: ": " + shortType(type), kind: 1 });
+    }
+    if (opts.parameterNames !== false) out.push(...this.parameterHints(file, from, to));
+    return out.sort((a, b) => a.position.line - b.position.line || a.position.character - b.position.character);
+  }
+  parameterHints(file, from, to) {
+    const text = this.text(file) || "";
+    const raws = splitLines(text), masked = splitLines(mask(text)), out = [];
+    const LITERAL = /^(?:-?\d[\d_]*(?:\.\d+)?(?:[eE][-+]?\d+)?|0[xXbB]\w+|r?"(?:[^"\\]|\\.)*"|r?"{3}[\s\S]*|'(?:[^'\\]|\\.)+'|true|false|null)$/;
+    const NOT_CALLS = new Set([...KEYWORDS, "print", "println", "str", "assert", "assertEq", "panic", "typename", "sizeof", "reflect", "env"]);
+    for (let i = Math.max(0, from); i <= Math.min(to, masked.length - 1); i++) {
+      const m = masked[i], raw = raws[i];
+      for (const c of m.matchAll(/([A-Za-z_]\w*)\s*(?:::<[^>]*>)?\s*\(/g)) {
+        if (NOT_CALLS.has(c[1]) || /\bfn\s+$/.test(m.slice(0, c.index))) continue;     // keywords, builtins, declarations
+        const open = c.index + c[0].length - 1;
+        // the arguments, split at top-level commas (strings are blanked in the masked line)
+        const args = [];
+        let depth = 0, start = open + 1, close = -1;
+        for (let k = open + 1; k < m.length && close < 0; k++) {
+          const ch = m[k];
+          if ("([{".includes(ch)) depth++;
+          else if (")]}".includes(ch)) { if (depth-- === 0) { args.push([start, k]); close = k; } }
+          else if (ch === "," && depth === 0) { args.push([start, k]); start = k + 1; }
+        }
+        if (close < 0 || !args.some(([a, b]) => LITERAL.test(raw.slice(a, b).trim()))) continue;
+        const sig = this.signature(file, { line: i, character: open + 1 });
+        if (!sig || !sig.signatures.length) continue;
+        const n = args.filter(([a, b]) => raw.slice(a, b).trim()).length;
+        const pick = sig.signatures.find((s) => s.parameters.length === n) ||
+                     sig.signatures.find((s) => s.parameters.length >= n) || sig.signatures[0];
+        args.forEach(([a, b], k) => {
+          const arg = raw.slice(a, b), p = pick.parameters[k];
+          if (!p || !LITERAL.test(arg.trim()) || /^\s*\w+\s*:(?!:)/.test(arg)) return;
+          const name = p.label.split(":")[0].replace(/^\.\.\./, "").trim();
+          if (!/^[A-Za-z_]\w*$/.test(name)) return;
+          out.push({ position: { line: i, character: a + (arg.length - arg.trimStart().length) }, label: name + ":", kind: 2 });
+        });
+      }
     }
     return out;
   }
@@ -1275,8 +1412,21 @@ class Workspace {
       }
       return items.map((it) => ({ ...it, insertText: it.label.slice(typed.lastIndexOf("/") + 1), filterText: it.label.slice(typed.lastIndexOf("/") + 1) }));
     }
+    // decorators: @<cursor> offers the decorator names used in the project
+    m = /(?:^|[^\w@])@([A-Za-z_]\w*)?$/.exec(lineText);
+    if (m) {
+      for (const [name, uses] of this.decoratorNames(file))
+        push(name, 15, `decorator · used ${uses} time${uses === 1 ? "" : "s"}`, DECORATOR_DOC(name));
+      return items;
+    }
+    // casts: `expr as <cursor>` offers the types the value converts to
+    m = /((?:[A-Za-z_]\w*|"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|\)|\])(?:[\w.()\[\]"]*))\s+as\s+(\w*)$/.exec(lineText);
+    if (m) {
+      for (const c of this.conversions(file, pos, m[1])) push(c.type, 7, c.detail, c.doc);
+      return items;
+    }
     // members after a dot: expr.<cursor> (also "text".<cursor>, (-7).<cursor>, and 255.t<cursor>)
-    m = /((?:[A-Za-z_]\w*|"(?:[^"\\]|\\.)*"|\(-?\d+(?:\.\d+)?\))(?:\([^()]*\))?(?:\.[A-Za-z_]\w*(?:\([^()]*\))?)*)\.(\w*)$/.exec(lineText) ||
+    m = /((?:[A-Za-z_]\w*|"(?:[^"\\]|\\.)*"|\(-?\d+(?:\.\d+)?\))(?:\([^()]*\)|\[[^\[\]]*\])*(?:\.[A-Za-z_]\w*(?:\([^()]*\)|\[[^\[\]]*\])*)*)\.(\w*)$/.exec(lineText) ||
         /(?:^|[^\w.])(-?\d+(?:\.\d+)?)\.([A-Za-z_]\w*)$/.exec(lineText);
     if (m) {
       const expr = m[1];
@@ -1290,11 +1440,10 @@ class Workspace {
         for (const { sym } of this.membersOf(file, t)) {
           if (sym.kind === KIND.Constructor || sym.name.startsWith("operator")) continue;   // used as syntax, not by name
           if (isTypeName && sym.kind !== KIND.EnumMember && !sym.isStatic) continue;   // Type.<static members>
-          if (!isTypeName && sym.isStatic) continue;
+          if (!isTypeName && sym.isStatic && expr !== "super") continue;   // super.x also reaches the base's statics
           const cls = this.enclosingClass(file, pos);
           if (/^\s*private\b/.test(sym.detail) && (!cls || cls.name !== sym.container)) continue;
-          push(sym.name, COMPLETION_KIND[sym.kind] || 6, sym.detail, sym.doc,
-            [KIND.Method, KIND.Function].includes(sym.kind) ? undefined : undefined);
+          push(sym.name, COMPLETION_KIND[sym.kind] || 6, this.bindMember(file, t, sym, sym.detail), sym.doc);
         }
         // n.toHex(), "a,b".split(","), u.toMap(): the std/types methods the value takes
         if (!isTypeName) {
@@ -1380,7 +1529,7 @@ class Workspace {
       cands = this.membersOf(file, name).filter((x) => x.sym.kind === KIND.Constructor).map((x) => x.sym);
     } else if (qual) {
       const t = this.typeOfExpr(file, pos, qual);
-      cands = (t ? this.membersOf(file, t) : []).filter((x) => x.sym.name === name).map((x) => x.sym);
+      cands = (t ? this.membersOf(file, t) : []).filter((x) => x.sym.name === name && x.sym.params).map((x) => x.sym);
       const vms = !cands.length && t ? this.valueMethodsNamed(file, t, name) : [];
       if (vms.length) return {   // maybe.orElse(<cursor>: shown without the value itself
         signatures: vms.slice(0, 8).map((x) => ({ label: valueSignature(x.sym, t), documentation: x.sym.doc || "",
@@ -1393,9 +1542,14 @@ class Workspace {
       const b = BUILTINS.find((x) => x[0] === name);
       if (!cands.length && b) return { signatures: [{ label: b[1], documentation: b[2], parameters: [] }], activeParameter: commas };
     }
+    cands = cands.filter((s) => s.params);   // (a field of the same name is not called)
     if (!cands.length) return null;
+    const shown = cands.slice(0, 8);
+    const takes = (s) => (s.params || []).length > commas || (s.params || []).some((p) => p.startsWith("..."));
+    const active = Math.max(0, shown.findIndex(takes));
     return {
-      signatures: cands.slice(0, 8).map((s) => ({
+      activeSignature: active,
+      signatures: shown.map((s) => ({
         label: `${s.container && s.kind !== KIND.Constructor ? s.container + "." : ""}${s.kind === KIND.Constructor ? s.container : s.name}(${s.params.join(", ")})${s.returns ? " -> " + s.returns : ""}`,
         documentation: s.doc || "",
         parameters: s.params.map((p) => ({ label: p })),
