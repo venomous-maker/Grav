@@ -1,0 +1,30 @@
+// Type arguments inferred inside generic classes and functions belong to each
+// copy (Box<int> and Box<string> share call sites, not answers), and two calls
+// in one interpolated string are two call sites.
+import "std"
+
+class Util {
+    static fn count<T>(xs: Array<T>) -> int { return xs.size() }
+    static fn firstOr<T>(xs: Array<T>, fallback: T) -> T { return xs.size() > 0 ? xs[0] : fallback }
+}
+class Box<T> {
+    public items: Array<T> = new Array<T>()
+    fn n() -> int { return Util.count(self.items) }
+    fn head(fallback: T) -> T { return Util.firstOr(self.items, fallback) }
+    fn copy() -> Array<T> { let out = new Array<T>(); for (x in self.items) { out.push(x) } return out }
+}
+fn countBoth<T>(xs: Array<T>) -> int { return Util.count(xs) + Util.count(xs) }
+
+test "inferred calls in each instance" {
+    let a = new Box<int>()
+    a.items.push(7)
+    let b = new Box<string>()
+    b.items.push("x")
+    b.items.push("y")
+    let c = new Box<Box<int>>()
+    assertEq("${a.n()} ${b.n()} ${c.n()} ${a.head(0)} ${b.head("-")} ${c.head(a).n()}", "1 2 0 7 x 1")
+    let ints: Array<int> = [1, 2]
+    let strs: Array<string> = ["p"]
+    assertEq("${countBoth(ints)} ${countBoth(strs)}", "4 2")
+    assertEq("${Util.firstOr(ints, 0)} ${Util.firstOr(strs, "")}", "1 p")       // (one string, two call sites)
+}

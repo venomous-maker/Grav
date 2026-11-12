@@ -27,6 +27,8 @@ struct InferenceTable {
 };
 // Fills recorded inferences into a freshly parsed program as explicit type arguments.
 void applyInferences(Program &program, const InferenceTable &table);
+// The key of an inferred call: its declaration (`Box$int`; "" outside one), position and name.
+std::string siteKey(const std::string &scope, int line, int col, const std::string &name);
 
 // "(key: long) -> bool" and "method 'A.m'" -> "method 'A.m(key: long) -> bool'".
 std::string signatureText(const std::vector<std::string> &names, const std::vector<TypeRef> &types,
@@ -273,6 +275,7 @@ private:
     std::vector<size_t> narrowScopes_; // indices of scopes opened by pushNarrowing
 
     std::string currentClass_; // FQ, empty in a free function
+    std::string currentFunction_; // FQ of the free function being checked (with currentClass_: where inferences are recorded)
     std::string currentNs_;    // namespace context
     TypeRef currentReturn_;
     bool currentReturnsSelf_ = false; // in a method returning Self (see isSelfValue)

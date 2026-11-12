@@ -487,7 +487,7 @@ int main(int argc, char **argv) {
             grav::applyInferences(*programPtr, inference);
 
             // Expand generic structs/functions into concrete instances before symbols.
-            errors = grav::monomorphize(*programPtr);
+            errors = grav::monomorphize(*programPtr, &inference);
             registerDisplayNames(programPtr->generics);
             registerVariantNames(*programPtr);
             // A failed expansion leaves half-made instances; checking them would only

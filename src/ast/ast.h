@@ -727,6 +727,8 @@ struct Program {
 // Calls `f` on every expression in the program (pre-order, including lambda
 // bodies, initializers of globals and static fields).
 void visitExprs(Program &program, const std::function<void(Expr &)> &f);
+// The same for one declaration (a function, a class's bodies, a global, a test).
+void visitDeclExprs(Decl &d, const std::function<void(Expr &)> &f);
 // The same walk over one block.
 void visitBlockExprs(Block &block, const std::function<void(Expr &)> &f);
 // The same walk over one statement, also calling `onStmt` on every statement.

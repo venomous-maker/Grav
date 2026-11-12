@@ -30,11 +30,13 @@ std::string lastSegment(const std::string &n) {
     return d == std::string::npos ? n : n.substr(d + 1);
 }
 
-std::string siteKey(int line, int col, const std::string &name) {
-    return std::to_string(line) + ":" + std::to_string(col) + ":" + name;
-}
-
 } // namespace
+
+// A call site: where it is and, since the copies of a generic class or function
+// share their positions, in which declaration (`Box$int`, `first$string`).
+std::string siteKey(const std::string &scope, int line, int col, const std::string &name) {
+    return scope + "|" + std::to_string(line) + ":" + std::to_string(col) + ":" + name;
+}
 
 void TypeChecker::unify(const TypeRef &p, const TypeRef &a, const std::vector<std::string> &tps,
                         Subst &s) const {
@@ -176,7 +178,7 @@ std::optional<TypeRef> TypeChecker::recordInference(int line, int col, const std
                                                     const Subst &s, const TypeRef &ret) {
     std::vector<TypeRef> args;
     for (const auto &tp : tps) args.push_back(toSource(s.at(tp)));
-    std::string key = siteKey(line, col, name);
+    std::string key = siteKey(currentClass_.empty() ? currentFunction_ : currentClass_, line, col, name);
     if (!infer_) {
         error(line, col, "cannot infer type arguments here; write them explicitly with ::<...>");
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -235,18 +237,23 @@ std::optional<TypeRef> TypeChecker::tryInferNew(NewExpr &e, const TypeRef *expec
 
 void applyInferences(Program &program, const InferenceTable &table) {
     if (table.entries.empty()) return;
-    visitExprs(program, [&](Expr &e) {
-        if (auto *c = dynamic_cast<CallExpr *>(&e)) {
-            std::string name;
-            if (auto *n = dynamic_cast<NameExpr *>(c->callee.get())) name = n->name;
-            else if (auto *m = dynamic_cast<MemberExpr *>(c->callee.get())) name = m->member;
-            auto it = table.entries.find(siteKey(c->line, c->col, name));
-            if (it != table.entries.end()) c->typeArgs = it->second;
-        } else if (auto *n = dynamic_cast<NewExpr *>(&e)) {
-            auto it = table.entries.find(siteKey(n->line, n->col, n->className));
-            if (it != table.entries.end()) n->typeArgs = it->second;
-        }
-    });
+    for (auto &d : program.decls) {
+        std::string scope;
+        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) scope = fn->fqName;
+        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) scope = c->fqName;
+        visitDeclExprs(*d, [&](Expr &e) {
+            if (auto *c = dynamic_cast<CallExpr *>(&e)) {
+                std::string name;
+                if (auto *n = dynamic_cast<NameExpr *>(c->callee.get())) name = n->name;
+                else if (auto *m = dynamic_cast<MemberExpr *>(c->callee.get())) name = m->member;
+                auto it = table.entries.find(siteKey(scope, c->line, c->col, name));
+                if (it != table.entries.end()) c->typeArgs = it->second;
+            } else if (auto *n = dynamic_cast<NewExpr *>(&e)) {
+                auto it = table.entries.find(siteKey(scope, n->line, n->col, n->className));
+                if (it != table.entries.end()) n->typeArgs = it->second;
+            }
+        });
+    }
 }
 
 } // namespace grav

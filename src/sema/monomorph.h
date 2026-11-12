@@ -13,7 +13,10 @@ namespace grav {
 // calls) to its mangled instance. Runs after parsing and before symbol building,
 // mutating the program in place: generic templates are removed and the needed
 // instances are appended. Generic classes are reported as unsupported.
-std::vector<GravError> monomorphize(Program &program);
+struct InferenceTable;
+// `inferred`: type arguments the checker inferred in an earlier pass, for calls
+// inside generic instances (the rest are applied to the parsed program).
+std::vector<GravError> monomorphize(Program &program, const InferenceTable *inferred = nullptr);
 
 // A deep copy of an expression (for rewrites such as `obj[k] += v`).
 ExprPtr cloneExpression(const Expr *e);

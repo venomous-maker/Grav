@@ -1,4 +1,5 @@
 #include "sema/monomorph.h"
+#include "sema/typechecker.h"
 
 #include <string>
 #include <unordered_map>
@@ -289,11 +290,22 @@ using Subst = std::unordered_map<std::string, TypeRef>;
 
 class Mono {
 public:
-    explicit Mono(Program &program) : program_(program) {}
+    explicit Mono(Program &program, const InferenceTable *infer = nullptr) : program_(program), infer_(infer) {}
     void run();
     std::vector<GravError> errors;
 
 private:
+    // Type arguments the checker inferred inside a generic instance (keyed by the
+    // instance, `Box$int`): filled in while that instance's copy is walked, since
+    // its copies of the template share their call sites.
+    const InferenceTable *infer_ = nullptr;
+    std::string scope_;                          // the instance being walked ("" for none)
+    struct ScopeGuard {
+        std::string &slot, saved;
+        ScopeGuard(std::string &s, const std::string &v) : slot(s), saved(s) { slot = v; }
+        ~ScopeGuard() { slot = saved; }
+    };
+    void applyInferred(Expr *e);
     Program &program_;
     std::vector<DeclPtr> templates_;                 // owned generic templates
     std::unordered_map<std::string, StructDecl *> structTpl_;
@@ -562,6 +574,7 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
     for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
     checkBounds(tpl->typeParams, tpl->typeParamBounds, args, "function '" + name + "'", line, col);
 
+    ScopeGuard scope(scope_, inst);
     auto out = std::make_unique<FunctionDecl>();
     out->line = tpl->line; out->col = tpl->col;
     out->name = inst; out->fqName = inst; out->isAsync = tpl->isAsync;
@@ -638,6 +651,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     for (size_t i = 0; i < args.size(); ++i) subst[tpl->typeParams[i]] = args[i];
     checkBounds(tpl->typeParams, tpl->typeParamBounds, args, "class '" + name + "'", line, col);
 
+    ScopeGuard scope(scope_, inst);
     auto out = std::make_unique<ClassDecl>();
     out->line = tpl->line; out->col = tpl->col;
     out->name = inst; out->fqName = inst;
@@ -805,6 +819,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
             error(e->line, e->col, "unknown generic class '" + x->name + "'");
         x->typeArgs.clear();
     } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
+        applyInferred(e);
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
             if (std::string fq = findTpl(x->className, classTpl_); !fq.empty())
@@ -815,6 +830,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         }
         for (auto &a : x->args) walkExpr(a.get(), subst);
     } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
+        applyInferred(e);
         // `reflect(T)` for a type parameter T: the class it stands for here.
         if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get()); callee && callee->name == "reflect" && x->args.size() == 1)
             if (auto *arg = dynamic_cast<NameExpr *>(x->args[0].get()); arg && arg->typeArgs.empty())
@@ -1446,8 +1462,25 @@ void Mono::instantiateSelfStatics() {
 // A deep copy of an expression (for rewrites such as `obj[k] += v`).
 ExprPtr cloneExpression(const Expr *e) { return cloneExpr(e); }
 
-std::vector<GravError> monomorphize(Program &program) {
-    Mono m(program);
+// Inferred type arguments for a call or `new` in the instance being walked.
+void Mono::applyInferred(Expr *e) {
+    if (!infer_ || scope_.empty() || infer_->entries.empty()) return;
+    if (auto *c = dynamic_cast<CallExpr *>(e)) {
+        if (!c->typeArgs.empty()) return;
+        std::string name;
+        if (auto *n = dynamic_cast<NameExpr *>(c->callee.get())) name = n->name;
+        else if (auto *m = dynamic_cast<MemberExpr *>(c->callee.get())) name = m->member;
+        auto it = infer_->entries.find(siteKey(scope_, c->line, c->col, name));
+        if (it != infer_->entries.end()) c->typeArgs = it->second;
+    } else if (auto *n = dynamic_cast<NewExpr *>(e)) {
+        if (!n->typeArgs.empty()) return;
+        auto it = infer_->entries.find(siteKey(scope_, n->line, n->col, n->className));
+        if (it != infer_->entries.end()) n->typeArgs = it->second;
+    }
+}
+
+std::vector<GravError> monomorphize(Program &program, const InferenceTable *inferred) {
+    Mono m(program, inferred);
     m.run();
     return m.errors;
 }

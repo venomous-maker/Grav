@@ -157,6 +157,7 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
         } else if (auto *t = dynamic_cast<TestDecl *>(d)) {
             // A test is checked like a parameterless void function.
             currentClass_.clear();
+            currentFunction_.clear();
             currentNs_ = Registry::namespaceOf(t->fqName);
             currentReturn_ = TypeRef::prim(TypeRef::Kind::Void);
             inConstructor_ = false; inStatic_ = false; inAsync_ = true;
@@ -180,6 +181,7 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
 
 void TypeChecker::checkGlobal(GlobalVarDecl &g) {
     currentClass_.clear();
+    currentFunction_.clear();
     currentNs_ = Registry::namespaceOf(g.fqName);
     inConstructor_ = false; inStatic_ = true; inAsync_ = false;
     const GlobalInfo *gi = reg_->global(g.fqName);
@@ -196,6 +198,7 @@ void TypeChecker::checkGlobal(GlobalVarDecl &g) {
 
 void TypeChecker::checkStaticFields(ClassDecl &cls) {
     currentClass_ = cls.fqName;
+    currentFunction_.clear();
     currentNs_ = Registry::namespaceOf(cls.fqName);
     inConstructor_ = false; inStatic_ = true; inAsync_ = false;
     for (auto &sf : cls.staticFields) {
@@ -213,6 +216,7 @@ void TypeChecker::checkStaticFields(ClassDecl &cls) {
 
 void TypeChecker::checkFunction(FunctionDecl &fn) {
     currentClass_.clear();
+    currentFunction_ = fn.fqName;
     currentNs_ = Registry::namespaceOf(fn.fqName);
     currentReturn_ = fn.returnType;
     currentReturnsSelf_ = false;
@@ -234,6 +238,7 @@ void TypeChecker::checkFunction(FunctionDecl &fn) {
 
 void TypeChecker::checkClass(ClassDecl &cls) {
     currentClass_ = cls.fqName;
+    currentFunction_.clear();
     currentNs_ = Registry::namespaceOf(cls.fqName);
     inAsync_ = false; // methods are not async in core v0.2
 

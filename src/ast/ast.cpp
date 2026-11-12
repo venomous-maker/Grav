@@ -262,19 +262,21 @@ void visitExpr(Expr &expr, const std::function<void(Expr &)> &f) {
     v.expr(&expr);
 }
 
-void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
+void visitDeclExprs(Decl &d, const std::function<void(Expr &)> &f) {
     Visitor v{f};
-    for (auto &d : program.decls) {
-        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) v.block(fn->body);
-        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
-            v.block(c->constructor.body);
-            for (auto &x : c->extraCtors) v.block(x.body);
-            v.block(c->destructor.body);
-            for (auto &m : c->methods) v.block(m.body);
-            for (auto &sf : c->staticFields) v.expr(sf.init.get());
-        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) v.expr(g->init.get());
-        else if (auto *t = dynamic_cast<TestDecl *>(d.get())) v.block(t->body);
-    }
+    if (auto *fn = dynamic_cast<FunctionDecl *>(&d)) v.block(fn->body);
+    else if (auto *c = dynamic_cast<ClassDecl *>(&d)) {
+        v.block(c->constructor.body);
+        for (auto &x : c->extraCtors) v.block(x.body);
+        v.block(c->destructor.body);
+        for (auto &m : c->methods) v.block(m.body);
+        for (auto &sf : c->staticFields) v.expr(sf.init.get());
+    } else if (auto *g = dynamic_cast<GlobalVarDecl *>(&d)) v.expr(g->init.get());
+    else if (auto *t = dynamic_cast<TestDecl *>(&d)) v.block(t->body);
+}
+
+void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
+    for (auto &d : program.decls) visitDeclExprs(*d, f);
 }
 
 } // namespace grav
