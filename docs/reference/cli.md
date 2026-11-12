@@ -74,6 +74,10 @@ scripts:
 ], "errors": 1, "warnings": 0}
 ```
 
+Like every command, it reads the `grav.toml` found from the file's folder
+upward, so `import "<package>"` resolves to the installed copy (or a `path`
+dependency's folder) without fetching anything.
+
 ### fmt
 
 `grav fmt` re-indents code with 4 spaces per level (brackets opened on one line

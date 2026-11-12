@@ -11,7 +11,9 @@ dependencies, so they offer the same features.
   interpolation and format specs, raw and multi-line strings, character literals,
   `T?` and `x!`, labels, named arguments, and inline C with the C grammar.
 - **Go to definition**, following imports into the standard library, project
-  paths and installed packages. On an import string, it opens the module.
+  paths and the `grav.toml` dependencies of the open file's project: git packages
+  from the cache at their `grav.lock` commit, local `{ path = ... }` ones in their
+  folder. On an import string, it opens the module.
 - **Hover**: a declaration's signature, its doc comment (the `//` lines above it),
   and where it lives; for a keyword, type or built-in function, what it means and
   an example.

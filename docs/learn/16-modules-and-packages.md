@@ -255,6 +255,12 @@ grav packages                                     # list dependencies and where 
   dependencies, and nothing is pinned in `grav.lock`. Publish it, then switch
   with `grav add github.com/you/grav-db`. (`grav add --git <folder>` clones a
   local repository's commits instead.)
+- **In the editor**, VS Code and the language server (Neovim, JetBrains) find
+  the `grav.toml` above the open file and follow its dependencies the way the
+  compiler does: completion, hover and go to definition reach into the cached
+  copy pinned by `grav.lock`, or into a local package's folder. They never fetch:
+  a package that is not installed yet is reported by `grav check` until you run
+  `grav install`.
 
 To publish a package, push a repository with a `grav.toml` (with a `lib = "..."`
 entry) and tag a version: `git tag v1.0.0 && git push --tags`.

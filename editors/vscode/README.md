@@ -13,8 +13,9 @@ Syntax highlighting, snippets, and build/run commands for the
   format specs like `${x:.2f}`), loop labels (`outer:` / `break outer`), named
   arguments, the spread `...`, and inline C `%{ … %}` with the real C grammar.
 - **Understands your imports** — go to definition (`F12`) and hover follow
-  `import` lines into the standard library, `grav.toml` paths and installed
-  packages; `F12` on an import string opens the module.
+  `import` lines into the standard library, `grav.toml` paths and packages
+  (git ones from the cache at their `grav.lock` commit, `{ path = ... }` ones
+  in their folder); `F12` on an import string opens the module.
 - **Completion** — members after `.` (from the variable's type), static members
   after a type name, namespace and alias members, import paths after
   `import "`, keywords (with explanations) and built-ins; **signature help**

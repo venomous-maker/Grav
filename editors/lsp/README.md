@@ -6,7 +6,7 @@ every editor:
 
 | Feature | LSP method |
 | ------- | ---------- |
-| Go to definition / declaration — follows `import` lines into the standard library, `grav.toml` paths and installed packages; resolves `import { A as B }` and `use … as` aliases; on an import string, opens the module | `textDocument/definition`, `declaration` |
+| Go to definition / declaration — follows `import` lines into the standard library, `grav.toml` paths and packages (installed git ones and `{ path = ... }` folders); resolves `import { A as B }` and `use … as` aliases; on an import string, opens the module | `textDocument/definition`, `declaration` |
 | Hover — signature, doc comment, namespace and module; what a keyword, type or built-in (including the internal `__retain`/`__release`/...) means, with an example | `textDocument/hover` |
 | Completion — members by inferred type, static members, namespace/alias members, import paths, keywords and built-ins (documented), snippets for common constructs | `textDocument/completion` |
 | Signature help for calls and constructors | `textDocument/signatureHelp` |
