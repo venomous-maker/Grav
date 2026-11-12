@@ -10,11 +10,12 @@ every editor:
 | Hover — signature, doc comment, namespace and module; what a keyword, type or built-in (including the internal `__retain`/`__release`/...) means, with an example | `textDocument/hover` |
 | Completion — members by inferred type, static members, namespace/alias members, import paths, keywords and built-ins (documented), snippets for common constructs | `textDocument/completion` |
 | Signature help for calls and constructors | `textDocument/signatureHelp` |
+| Inlay hints — the type after each `let`, `for`, lambda parameter and `match` binding that does not write one, from `grav check --types` (refreshed after each check) | `textDocument/inlayHint` |
 | Outline with classes, members and enum variants nested | `textDocument/documentSymbol` |
 | Workspace symbols, including the standard library | `workspace/symbol` |
 | Find references, rename | `textDocument/references`, `rename` (+ `prepareRename`) |
 | Formatting (`grav fmt -`) | `textDocument/formatting` |
-| Diagnostics (`grav check --json`, with "declared in std.x" notes) on open and save | `textDocument/publishDiagnostics` |
+| Diagnostics (`grav check --json --types`, with "declared in std.x" notes) on open and save | `textDocument/publishDiagnostics` |
 
 It is a careful scanner rather than a full parser: strings, comments and inline C
 are masked first, then declarations are matched with a bracket stack for nesting.

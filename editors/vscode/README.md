@@ -22,9 +22,13 @@ Syntax highlighting, snippets, and build/run commands for the
   inside calls.
 - **Hover** — the declaration's signature, its doc comment, and where it lives
   (`namespace std.net · std/net/http`); on a keyword or built-in type, what it
-  means and an example.
+  means and an example; on a local, its type (also for `for`, `catch`, lambda
+  and `match` variables).
+- **Inlay hints** — the type after each binding that does not write one
+  (`for (row in rows)` shows `row: Row`), from `grav check --types`; turn them
+  off with VS Code's `editor.inlayHints.enabled`.
 - **Outline, workspace symbols (including the library), references, rename.**
-- **Diagnostics** — `grav check --json` runs on open and save (`grav.checkOnSave`).
+- **Diagnostics** — `grav check --json --types` runs on open and save (`grav.checkOnSave`).
 - **Formatting** — *Format Document* runs `grav fmt`.
 - **Commands** (Ctrl+Shift+P → "Grav") — Run (`Ctrl+Alt+R`), Build, Run Tests
   (`Ctrl+Alt+T`), Check, Format, Show Generated C, Run/Test Project, New Project,

@@ -74,6 +74,18 @@ scripts:
 ], "errors": 1, "warnings": 0}
 ```
 
+With `--types` (which implies `--json`) the report also lists the type of every
+local binding in the file (`let`, `for` and `catch` variables, lambda and
+function parameters, `match` bindings), written as in Grav. Editors use it for
+hover and inlay hints. It is printed even when the file has type errors:
+
+```text
+{"diagnostics": [], "errors": 0, "warnings": 0, "types": [
+  {"line": 3, "column": 5, "name": "names", "type": "Array<string>"},
+  {"line": 4, "column": 5, "name": "s", "type": "string"}
+]}
+```
+
 Like every command, it reads the `grav.toml` found from the file's folder
 upward, so `import "<package>"` resolves to the installed copy (or a `path`
 dependency's folder) without fetching anything.

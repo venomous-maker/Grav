@@ -16,14 +16,24 @@ dependencies, so they offer the same features.
   folder. On an import string, it opens the module.
 - **Hover**: a declaration's signature, its doc comment (the `//` lines above it),
   and where it lives; for a keyword, type or built-in function, what it means and
-  an example.
-- **Completion** of members (from the variable's type), static members,
+  an example. On a local variable, its type, even where none is written:
+  `let xs: Array<int>`, a `for (row in rows)` loop variable (`row: Row`), a
+  `catch (e: IoError)` variable, a lambda parameter, a `case Some(x):` binding.
+- **Inlay hints** show those types after each binding that does not write one
+  (`let names = new Array<string>()` shows `names: Array<string>`). The types
+  come from the compiler (`grav check --types`, run on open and save) and are
+  printed the way they are written in Grav: `HashMap<string, any>`,
+  `fn(int) -> string`, `long?`, `int[3]`. Before the first check, and for code
+  the compiler cannot check, they are read from the source where it shows them.
+- **Completion** of members (from the variable's type, including loop and
+  lambda variables), static members,
   namespace members, import paths, keywords and built-ins, plus snippets for
   common constructs (`fn`, `class`, `match`, `test`, `ifnull`, ...).
 - **Signature help** inside calls.
 - **Outline**, workspace symbols (including the standard library), find
   references and rename.
-- **Diagnostics** from `grav check --json` on open and save.
+- **Diagnostics** from `grav check --json` on open and save. (A compiler older
+  than `--types` still gives diagnostics, without the compiler's types.)
 - **Formatting** with `grav fmt`.
 
 ## VS Code
@@ -42,6 +52,8 @@ Package, Install Packages. Settings: `grav.compilerPath`, `grav.checkOnSave`.
 
 Add `editors/nvim` to the runtime path. `.grav` files get highlighting,
 indentation and the language server automatically (Node.js must be on `PATH`).
+Inlay hints are on in Neovim 0.10 and later; set `vim.g.grav_inlay_hints = false`
+to turn them off, or toggle them with `vim.lsp.inlay_hint.enable(false)`.
 See [`editors/nvim/README.md`](../../editors/nvim/README.md).
 
 ## JetBrains IDEs

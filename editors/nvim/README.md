@@ -54,7 +54,9 @@ Set `GRAVC_REPO` (or `GRAVC`) in your shell if your checkout isn't at
 **LSP (recommended).** When `node` and the [Grav language server](../lsp/)
 (`editors/lsp/server.js`) are found, `ftplugin/grav.lua` starts it for `.grav`
 buffers and rebinds `gd`/`gr`/`gO`/`K` to real LSP requests, and adds `grn`
-(rename) plus inline compiler diagnostics. The server is located by walking up
+(rename) plus inline compiler diagnostics and, in Neovim 0.10+, inlay hints with
+the types of untyped bindings (`let`, `for`, lambda parameters; off with
+`vim.g.grav_inlay_hints = false`). The server is located by walking up
 from the file for `editors/lsp/server.js`, or set `g:grav_lsp_server` /
 `$GRAV_LSP_SERVER`.
 
