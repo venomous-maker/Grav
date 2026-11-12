@@ -1,4 +1,4 @@
-running 7 tests
+running 8 tests
   ok    Math extras
   ok    Stats
   ok    Array, HashMap, Map and SortedMap helpers
@@ -6,4 +6,5 @@ running 7 tests
   ok    Duration and DateTime
   ok    logging to a file
   ok    command-line arguments
-result: 7 passed, 0 failed
+  ok    DateTime to the microsecond, with zones
+result: 8 passed, 0 failed

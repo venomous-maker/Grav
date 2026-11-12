@@ -3,6 +3,12 @@
 //   let d = DateTime.of(2024, 2, 29, 9, 30, 0)
 //   print(d)                              // 2024-02-29 09:30:00
 //   print(d.addDays(1).format("%A %d %B"))
+//   print(DateTime.parse("2024-02-29T09:30:00.25+03:00").micros())   // 250000
+//
+// A DateTime is a moment to the microsecond: unix seconds and the microseconds
+// past them. Most code never sees the microseconds (now(), of() and the
+// arithmetic keep them 0); they come from parsing a time with a fraction, as
+// databases give, and are printed only when not 0.
 
 import "../core/exception.grav"
 import "../text/string.grav"
@@ -41,6 +47,62 @@ namespace std.sys {
         *ok = 1;
         return (long long)mktime(&t);
     }
+    /* Parses "YYYY-MM-DD", optionally with "HH:MM[:SS[.ffffff]]" after a space or
+       'T', then optionally a zone ("Z", "+HH", "+HH:MM", "+HHMM"; spaces before it
+       allowed): 1 with the unix seconds (local time without a zone) and the
+       microseconds, else 0. */
+    static int grav_dt_iso(const char* s, long long* secs, int* micros) {
+        int v[6] = { 0, 1, 1, 0, 0, 0 }, us = 0, n = 0;
+        const char* p = s;
+        while (*p == ' ') p++;
+        for (int i = 0; i < 6; i++) {
+            static const int width[6] = { 4, 2, 2, 2, 2, 2 };
+            if (i == 3) {
+                if (*p != ' ' && *p != 'T') break;
+                p++;
+            } else if (i > 0) {
+                char sep = i < 3 ? '-' : ':';
+                if (*p != sep) { if (i == 5) break; return 0; }
+                p++;
+            }
+            int x = 0, k = 0;
+            while (k < width[i] && *p >= '0' && *p <= '9') { x = x * 10 + (*p++ - '0'); k++; }
+            if (i == 0 ? k != 4 : k == 0) return 0;          /* (one-digit months, days and times are fine) */
+            v[i] = x;
+            n = i + 1;
+        }
+        if (n != 3 && n < 5) return 0;
+        if (n == 6 && *p == '.') {
+            p++;
+            int k = 0;
+            while (*p >= '0' && *p <= '9') { if (k < 6) { us = us * 10 + (*p - '0'); k++; } p++; }
+            if (k == 0) return 0;
+            while (k++ < 6) us *= 10;
+        }
+        while (*p == ' ') p++;
+        int zoned = 0, off = 0;
+        if (*p == 'Z' || *p == 'z') { zoned = 1; p++; }
+        else if (*p == '+' || *p == '-') {
+            int sign = *p++ == '-' ? -1 : 1, h = 0, m = 0, k = 0;
+            while (k < 2 && *p >= '0' && *p <= '9') { h = h * 10 + (*p++ - '0'); k++; }
+            if (k != 2) return 0;
+            if (*p == ':') p++;
+            k = 0;
+            while (k < 2 && *p >= '0' && *p <= '9') { m = m * 10 + (*p++ - '0'); k++; }
+            if (k == 1) return 0;
+            zoned = 1;
+            off = sign * (h * 3600 + m * 60);
+        }
+        while (*p == ' ') p++;
+        if (*p) return 0;
+        if (v[1] < 1 || v[1] > 12 || v[2] < 1 || v[2] > 31 || v[3] > 23 || v[4] > 59 || v[5] > 60) return 0;
+        struct tm t = {0};
+        t.tm_year = v[0] - 1900; t.tm_mon = v[1] - 1; t.tm_mday = v[2];
+        t.tm_hour = v[3]; t.tm_min = v[4]; t.tm_sec = v[5]; t.tm_isdst = -1;
+        *secs = zoned ? (long long)timegm(&t) - off : (long long)mktime(&t);
+        *micros = us;
+        return 1;
+    }
     static long long grav_mktime(int y, int mo, int d, int h, int mi, int s) {
         struct tm t = {0};
         t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d;
@@ -51,12 +113,23 @@ namespace std.sys {
 
     class DateTime {
         private ts: long                      // unix seconds (64-bit: safe past 2038)
-        constructor(unixSeconds: long) { self.ts = unixSeconds; }
+        private us: int                       // and microseconds past them, 0..999999
+        constructor(unixSeconds: long) { self.ts = unixSeconds; self.us = 0; }
+        // `seconds` and `micros` past them (any micros: they carry into the seconds).
+        private static fn at(seconds: long, micros: long) -> DateTime {
+            let d = new DateTime(seconds + micros / 1000000);
+            let r = (micros % 1000000) as int;
+            if (r < 0) { r += 1000000; d.ts -= 1; }
+            d.us = r;
+            return d;
+        }
 
         // The current moment.
         static fn now() -> DateTime { return new DateTime(%{ (long long)time(0) %} as long); }
         // The moment `seconds` after 1970-01-01 00:00 UTC.
         static fn fromUnix(seconds: long) -> DateTime { return new DateTime(seconds); }
+        // The moment `seconds` and `micros` microseconds after 1970-01-01 00:00 UTC.
+        static fn fromUnix(seconds: long, micros: int) -> DateTime { return DateTime.at(seconds, micros as long); }
         // From calendar fields (local time); out-of-range fields roll over (Jan 32 -> Feb 1).
         static fn of(year: int, month: int, day: int, hour: int, minute: int, second: int) -> DateTime {
             return new DateTime(%{ grav_mktime(year, month, day, hour, minute, second) %} as long);
@@ -73,6 +146,10 @@ namespace std.sys {
 
         // Seconds since 1970-01-01 00:00 UTC.
         public fn unix() -> long { return self.ts; }
+        // The microseconds past the second, 0..999999.
+        public fn micros() -> int { return self.us; }
+        // Microseconds since 1970-01-01 00:00 UTC.
+        public fn unixMicros() -> long { return self.ts * 1000000 + (self.us as long); }
         // The year (local time).
         public fn year() -> int { let t = self.ts; return %{ grav_tm_field(t, 0) %} as int; }
         // The month, 1..12 (local time).
@@ -96,44 +173,54 @@ namespace std.sys {
         public fn date() -> string { return self.format("%Y-%m-%d"); }
         // The time of day as "HH:MM:SS".
         public fn time() -> string { return self.format("%H:%M:%S"); }
-        // "YYYY-MM-DD HH:MM:SS".
-        fn toString() -> string { return self.format("%Y-%m-%d %H:%M:%S"); }
+        // "YYYY-MM-DD HH:MM:SS", with ".ffffff" when the microseconds are not 0.
+        fn toString() -> string { return self.format("%Y-%m-%d %H:%M:%S") + self.fraction(); }
+        private fn fraction() -> string {
+            if (self.us == 0) { return ""; }
+            let u = self.us;
+            return %{ ({ char* b = grav_str_alloc(8); snprintf(b, 8, ".%06d", u); b; }) %} as string;
+        }
 
         // A moment `s` seconds later (earlier when negative).
-        public fn addSeconds(s: long) -> DateTime { return new DateTime(self.ts + s); }
+        public fn addSeconds(s: long) -> DateTime { return DateTime.at(self.ts + s, self.us as long); }
         // A moment `m` minutes later.
-        public fn addMinutes(m: int) -> DateTime { return new DateTime(self.ts + (m as long) * 60); }
+        public fn addMinutes(m: int) -> DateTime { return DateTime.at(self.ts + (m as long) * 60, self.us as long); }
         // A moment `hours` hours later.
-        public fn addHours(hours: int) -> DateTime { return new DateTime(self.ts + (hours as long) * 3600); }
+        public fn addHours(hours: int) -> DateTime { return DateTime.at(self.ts + (hours as long) * 3600, self.us as long); }
         // A moment `days` days later (24-hour days).
-        public fn addDays(days: int) -> DateTime { return new DateTime(self.ts + (days as long) * 86400); }
+        public fn addDays(days: int) -> DateTime { return DateTime.at(self.ts + (days as long) * 86400, self.us as long); }
         // Seconds from this instant to `other` (negative if `other` is earlier).
         public fn secondsUntil(other: DateTime) -> long { return other.ts - self.ts; }
         // Whole days from this moment to `other` (negative when `other` is earlier).
         public fn daysUntil(other: DateTime) -> long { return (other.ts - self.ts) / 86400; }
 
         // Whether both are the same moment.
-        fn operator==(o: DateTime) -> bool { return self.ts == o.ts; }
+        fn operator==(o: DateTime) -> bool { return self.ts == o.ts && self.us == o.us; }
         // Whether this moment is earlier than `o`.
-        fn operator<(o: DateTime) -> bool { return self.ts < o.ts; }
+        fn operator<(o: DateTime) -> bool { return self.ts < o.ts || (self.ts == o.ts && self.us < o.us); }
         // Whether this moment is not later than `o`.
-        fn operator<=(o: DateTime) -> bool { return self.ts <= o.ts; }
+        fn operator<=(o: DateTime) -> bool { return !(o < self); }
         // Whether this moment is later than `o`.
-        fn operator>(o: DateTime) -> bool { return self.ts > o.ts; }
+        fn operator>(o: DateTime) -> bool { return o < self; }
         // Whether this moment is not earlier than `o`.
-        fn operator>=(o: DateTime) -> bool { return self.ts >= o.ts; }
+        fn operator>=(o: DateTime) -> bool { return !(self < o); }
 
         // ── parsing and more arithmetic ─────────────────────────────────────────
         // Parses "2024-02-28", "2024-02-28 09:30", "2024-02-28 09:30:15" or the ISO
-        // "2024-02-28T09:30:15" (local time); ValueError for anything else.
+        // "2024-02-28T09:30:15", with optional fractional seconds (".25") and zone
+        // ("Z", "+03:00", "-0500"; local time without one); ValueError for
+        // anything else.
         static fn parse(text: string) -> DateTime {
-            let t = Str.trim(text);
-            for (f in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"]) {
-                let ok = 0;
-                let ts = %{ grav_strptime(t, f, &ok) %} as long;
-                if (ok != 0) { return new DateTime(ts); }
-            }
-            throw new ValueError("not a date: '${text}' (expected YYYY-MM-DD, optionally with HH:MM[:SS])");
+            let d = DateTime.tryParse(text);
+            if (d == null) { throw new ValueError("not a date: '${text}' (expected YYYY-MM-DD, optionally with HH:MM[:SS])"); }
+            return d;
+        }
+        // As parse, but null for text that is not a date.
+        static fn tryParse(text: string) -> DateTime {
+            let secs = 0 as long;
+            let us = 0;
+            if (!(%{ grav_dt_iso(text, &secs, &us) %} as bool)) { return null; }
+            return DateTime.fromUnix(secs, us);
         }
         // Parses `text` with a strptime pattern such as "%d/%m/%Y %H:%M" (local time);
         // ValueError when it does not fit.
@@ -143,8 +230,9 @@ namespace std.sys {
             if (ok == 0) { throw new ValueError("'${text}' does not match '${pattern}'"); }
             return new DateTime(ts);
         }
-        // "YYYY-MM-DDTHH:MM:SS" (ISO 8601, local time).
-        public fn iso() -> string { return self.format("%Y-%m-%dT%H:%M:%S"); }
+        // "YYYY-MM-DDTHH:MM:SS" (ISO 8601, local time), with ".ffffff" when the
+        // microseconds are not 0.
+        public fn iso() -> string { return self.format("%Y-%m-%dT%H:%M:%S") + self.fraction(); }
         // Midnight at the start of this day.
         public fn startOfDay() -> DateTime { return DateTime.of(self.year(), self.month(), self.day()); }
         // The same day and time `months` later (or earlier when negative); a day that the
@@ -155,16 +243,16 @@ namespace std.sys {
             let m = total % 12 + 1;
             let d = self.day();
             let last = DateTime.daysInMonth(y, m);
-            return DateTime.of(y, m, d > last ? last : d, self.hour(), self.minute(), self.second());
+            return DateTime.at(DateTime.of(y, m, d > last ? last : d, self.hour(), self.minute(), self.second()).ts, self.us as long);
         }
         // The same date `years` later (Feb 29 becomes Feb 28 in a non-leap year).
         public fn addYears(years: int) -> DateTime { return self.addMonths(years * 12); }
         // This moment plus a Duration.
-        public fn plus(d: Duration) -> DateTime { return new DateTime(self.ts + d.ms / 1000); }
+        public fn plus(d: Duration) -> DateTime { return DateTime.at(self.ts, (self.us as long) + d.ms * 1000); }
         // This moment minus a Duration.
-        public fn minus(d: Duration) -> DateTime { return new DateTime(self.ts - d.ms / 1000); }
-        // The time from this moment until `other` (negative when other is earlier).
-        public fn until(other: DateTime) -> Duration { return Duration.ofSeconds(other.ts - self.ts); }
+        public fn minus(d: Duration) -> DateTime { return DateTime.at(self.ts, (self.us as long) - d.ms * 1000); }
+        // The time from this moment until `other` (negative when other is earlier; to the millisecond).
+        public fn until(other: DateTime) -> Duration { return Duration.ofMillis((other.unixMicros() - self.unixMicros()) / 1000); }
         // Whether both are on the same calendar day.
         public fn isSameDay(other: DateTime) -> bool {
             return self.year() == other.year() && self.dayOfYear() == other.dayOfYear();

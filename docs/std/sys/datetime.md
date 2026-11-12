@@ -49,8 +49,16 @@ true
 
 ## Parsing and calendar arithmetic
 
-`DateTime.parse` reads `YYYY-MM-DD` with an optional time, or any layout given
-as a `strptime` pattern. `addMonths` and `addYears` keep the day where they can and
+`DateTime.parse` reads `YYYY-MM-DD` with an optional time (after a space or
+`T`), fractional seconds (`09:30:15.25`) and a zone (`Z`, `+03:00`, `-0500`;
+without one the time is local), or any layout given as a `strptime` pattern.
+`DateTime.tryParse` is the same but gives `null` for text that is not a date.
+
+A `DateTime` is a moment to the **microsecond**: `micros()` is the part past the
+second, `unixMicros()` the whole of it, and `DateTime.fromUnix(seconds, micros)`
+makes one. `now()`, `of()` and the arithmetic keep the microseconds as they are
+(0 unless a parsed time had a fraction), `print`, `toString()` and `iso()` show
+them as `.ffffff` only when they are not 0, and the comparisons use them. `addMonths` and `addYears` keep the day where they can and
 use the month's last day where they cannot. `plus`, `minus` and `until` work with
 [`Duration`](time.md#duration).
 
@@ -95,16 +103,20 @@ Output:
 
 - `static fn now() -> DateTime` — The current moment.
 - `static fn fromUnix(seconds: long) -> DateTime` — The moment `seconds` after 1970-01-01 00:00 UTC.
+- `static fn fromUnix(seconds: long, micros: int) -> DateTime` — The moment `seconds` and `micros` microseconds after 1970-01-01 00:00 UTC.
 - `static fn of(year: int, month: int, day: int, hour: int, minute: int, second: int) -> DateTime` — From calendar fields (local time); out-of-range fields roll over (Jan 32 -> Feb 1).
 - `static fn of(year: int, month: int, day: int) -> DateTime` — Midnight (local time) of the given date.
 - `static fn isLeapYear(year: int) -> bool` — Whether `year` has a February 29.
 - `static fn daysInMonth(year: int, month: int) -> int` — How many days the month has (month 1..12).
-- `static fn parse(text: string) -> DateTime` — Parses "2024-02-28", "2024-02-28 09:30", "2024-02-28 09:30:15" or the ISO "2024-02-28T09:30:15" (local time); ValueError for anything else.
+- `static fn parse(text: string) -> DateTime` — Parses "2024-02-28", "2024-02-28 09:30", "2024-02-28 09:30:15" or the ISO "2024-02-28T09:30:15", with optional fractional seconds (".25") and zone ("Z", "+03:00", "-0500"; local time without one); ValueError for anything else.
+- `static fn tryParse(text: string) -> DateTime` — As parse, but null for text that is not a date.
 - `static fn parse(text: string, pattern: string) -> DateTime` — Parses `text` with a strptime pattern such as "%d/%m/%Y %H:%M" (local time); ValueError when it does not fit.
 
 **Methods**
 
 - `fn unix() -> long` — Seconds since 1970-01-01 00:00 UTC.
+- `fn micros() -> int` — The microseconds past the second, 0..999999.
+- `fn unixMicros() -> long` — Microseconds since 1970-01-01 00:00 UTC.
 - `fn year() -> int` — The year (local time).
 - `fn month() -> int` — The month, 1..12 (local time).
 - `fn day() -> int` — The day of the month, 1..31 (local time).
@@ -116,7 +128,7 @@ Output:
 - `fn format(fmt: string) -> string` — strftime patterns, e.g. "%Y-%m-%d %H:%M".
 - `fn date() -> string` — The date as "YYYY-MM-DD".
 - `fn time() -> string` — The time of day as "HH:MM:SS".
-- `fn toString() -> string` — "YYYY-MM-DD HH:MM:SS".
+- `fn toString() -> string` — "YYYY-MM-DD HH:MM:SS", with ".ffffff" when the microseconds are not 0.
 - `fn addSeconds(s: long) -> DateTime` — A moment `s` seconds later (earlier when negative).
 - `fn addMinutes(m: int) -> DateTime` — A moment `m` minutes later.
 - `fn addHours(hours: int) -> DateTime` — A moment `hours` hours later.
@@ -128,13 +140,13 @@ Output:
 - `fn operator<=(o: DateTime) -> bool` — Whether this moment is not later than `o`.
 - `fn operator>(o: DateTime) -> bool` — Whether this moment is later than `o`.
 - `fn operator>=(o: DateTime) -> bool` — Whether this moment is not earlier than `o`.
-- `fn iso() -> string` — "YYYY-MM-DDTHH:MM:SS" (ISO 8601, local time).
+- `fn iso() -> string` — "YYYY-MM-DDTHH:MM:SS" (ISO 8601, local time), with ".ffffff" when the microseconds are not 0.
 - `fn startOfDay() -> DateTime` — Midnight at the start of this day.
 - `fn addMonths(months: int) -> DateTime` — The same day and time `months` later (or earlier when negative); a day that the target month lacks becomes its last day (Jan 31 + 1 month = Feb 28 or 29).
 - `fn addYears(years: int) -> DateTime` — The same date `years` later (Feb 29 becomes Feb 28 in a non-leap year).
 - `fn plus(d: Duration) -> DateTime` — This moment plus a Duration.
 - `fn minus(d: Duration) -> DateTime` — This moment minus a Duration.
-- `fn until(other: DateTime) -> Duration` — The time from this moment until `other` (negative when other is earlier).
+- `fn until(other: DateTime) -> Duration` — The time from this moment until `other` (negative when other is earlier; to the millisecond).
 - `fn isSameDay(other: DateTime) -> bool` — Whether both are on the same calendar day.
 
 <!-- api:end -->
