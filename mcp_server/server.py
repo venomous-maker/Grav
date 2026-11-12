@@ -16,6 +16,7 @@ The gravc binary is located via the GRAVC environment variable, falling back to
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -26,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 SERVER_NAME = "gravc"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 # Protocol version we fall back to if the client doesn't pin one.
 DEFAULT_PROTOCOL = "2024-11-05"
 
@@ -102,24 +103,51 @@ def _run(args: list[str], *, stdin: str | None = None, cwd: Path | None = None):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def _source_args(source: str | None, path: str | None, tmp: Path) -> tuple[list[str], Path | None, str | None]:
+@contextlib.contextmanager
+def _inputs(source: str | None, path: str | None, project: str | None = None):
     """The gravc input for either inline `source` or a file/project `path`.
 
-    Returns (args, cwd, error). A directory path means "the project there": gravc
-    is run inside it so grav.toml (main, paths, dependencies) applies.
+    Yields (args, cwd, error, tmp), tmp being a scratch directory. A directory path
+    means "the project there": gravc is run inside it so grav.toml (main, paths,
+    dependencies) applies. Inline `source` with a `project` directory is written
+    to a hidden file in that directory for the call, so it is compiled as part of
+    the project: its grav.toml dependencies and relative imports resolve.
     """
-    if path:
-        p = Path(path).expanduser()
-        if not p.exists():
-            return [], None, f"no such file or directory: {p}"
-        if p.is_dir():
-            return [], p, None
-        return [str(p.resolve())], p.parent, None
-    if source is None:
-        return [], None, "pass either `source` (Grav code) or `path` (a .grav file or project directory)"
-    src = tmp / "program.grav"
-    src.write_text(source)
-    return [str(src)], REPO_ROOT, None
+    with tempfile.TemporaryDirectory() as tmp:
+        if path:
+            p = Path(path).expanduser()
+            if not p.exists():
+                yield [], None, f"no such file or directory: {p}", Path(tmp)
+            elif p.is_dir():
+                yield [], p, None, Path(tmp)
+            else:
+                yield [str(p.resolve())], p.parent, None, Path(tmp)
+        elif source is None:
+            yield [], None, "pass either `source` (Grav code) or `path` (a .grav file or project directory)", Path(tmp)
+        elif project:
+            d = Path(project).expanduser()
+            if not d.is_dir():
+                yield [], None, f"`project` must be a directory: {d}", Path(tmp)
+                return
+            fd, name = tempfile.mkstemp(prefix=".grav-mcp-", suffix=".grav", dir=d)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(source)
+                yield [name], d, None, Path(tmp)
+            finally:
+                Path(name).unlink(missing_ok=True)
+        else:
+            src = Path(tmp) / "program.grav"
+            src.write_text(source)
+            yield [str(src)], REPO_ROOT, None, Path(tmp)
+
+
+def _hint(text: str, source: str | None, project: str | None) -> str:
+    """Point out `project` when inline code imports something only a project has."""
+    if source is not None and not project and "cannot find module" in text:
+        text += ("\n(inline `source` is compiled outside any project: pass `project`, a directory "
+                 "with grav.toml, to use its packages and files)")
+    return text
 
 
 def _clip(text: str, limit: int = 60000) -> str:
@@ -140,42 +168,40 @@ def grav_to_c(source: str) -> str:
     return _clip(out)
 
 
-def grav_check(source: str | None = None, path: str | None = None) -> str:
+def grav_check(source: str | None = None, path: str | None = None, project: str | None = None) -> str:
     """Type-check Grav source or a file/project; return 'ok: no errors' or diagnostics."""
     err = _ensure_built()
     if err:
         return err
-    with tempfile.TemporaryDirectory() as tmp:
-        args, cwd, e = _source_args(source, path, Path(tmp))
+    with _inputs(source, path, project) as (args, cwd, e, tmp):
         if e:
             return e
         if not args and cwd:  # a project: check its main file
             args = ["build"]
-        out_c = Path(tmp) / "check.c"
+        out_c = tmp / "check.c"
         cmd = [str(_gravc())] + (args if args[:1] == ["build"] else args + ["-o", str(out_c)])
         if args[:1] == ["build"]:
-            cmd += ["-o", str(Path(tmp) / "check.bin")]
+            cmd += ["-o", str(tmp / "check.bin")]
         try:
             code, out, diag = _run(cmd, cwd=cwd)
         except subprocess.TimeoutExpired:
             return f"gravc timed out after {TIMEOUT_S}s"
         warnings = "\n".join(l for l in diag.splitlines() if "warning" in l)
         if code != 0:
-            return diag.strip() or out.strip() or "gravc reported an error"
+            return _hint(diag.strip() or out.strip() or "gravc reported an error", source, project)
         return "ok: no errors" + (f"\n{warnings}" if warnings else "")
 
 
 def grav_run(source: str | None = None, path: str | None = None, args: list[str] | None = None,
-             stdin: str | None = None) -> str:
+             stdin: str | None = None, project: str | None = None) -> str:
     """Compile a Grav program (inline, a file, or a project) and run it; return its output."""
     err = _ensure_built()
     if err:
         return err
-    with tempfile.TemporaryDirectory() as tmp:
-        src_args, cwd, e = _source_args(source, path, Path(tmp))
+    with _inputs(source, path, project) as (src_args, cwd, e, tmp):
         if e:
             return e
-        binary = Path(tmp) / "program"
+        binary = tmp / "program"
         cmd = [str(_gravc())] + (src_args if src_args else ["build"]) + ["--emit", "bin", "-o", str(binary)]
         if not src_args:
             cmd = [str(_gravc()), "build", "-o", str(binary)]
@@ -184,7 +210,7 @@ def grav_run(source: str | None = None, path: str | None = None, args: list[str]
         except subprocess.TimeoutExpired:
             return f"gravc timed out after {TIMEOUT_S}s"
         if code != 0:
-            return f"build failed:\n{diag.strip() or out.strip()}"
+            return _hint(f"build failed:\n{diag.strip() or out.strip()}", source, project)
         try:
             rcode, rout, rerr = _run([str(binary)] + list(args or []), stdin=stdin, cwd=cwd)
         except subprocess.TimeoutExpired:
@@ -197,13 +223,13 @@ def grav_run(source: str | None = None, path: str | None = None, args: list[str]
         return _clip(result) or "(no output)"
 
 
-def grav_test(source: str | None = None, path: str | None = None, filter: str | None = None) -> str:
+def grav_test(source: str | None = None, path: str | None = None, filter: str | None = None,
+              project: str | None = None) -> str:
     """Run the `test` blocks of Grav source, a file, or a project; return the report."""
     err = _ensure_built()
     if err:
         return err
-    with tempfile.TemporaryDirectory() as tmp:
-        src_args, cwd, e = _source_args(source, path, Path(tmp))
+    with _inputs(source, path, project) as (src_args, cwd, e, tmp):
         if e:
             return e
         cmd = [str(_gravc()), "test"] + src_args + (["--filter", filter] if filter else [])
@@ -212,7 +238,7 @@ def grav_test(source: str | None = None, path: str | None = None, filter: str | 
         except subprocess.TimeoutExpired:
             return f"tests timed out after {TIMEOUT_S}s"
         text = (out + ("\n" + diag.strip() if diag.strip() else "")).strip()
-        return _clip(text) + ("" if code == 0 else f"\n[exit code {code}]")
+        return _hint(_clip(text), source, project) + ("" if code == 0 else f"\n[exit code {code}]")
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +391,8 @@ _SOURCE_SCHEMA = {
 _SOURCE_OR_PATH = {
     "source": {"type": "string", "description": "Grav source text (or use `path`)."},
     "path": {"type": "string", "description": "A .grav file, or a project directory with grav.toml."},
+    "project": {"type": "string", "description": "With `source`: a project directory to compile it in, "
+                "so imports of the project's packages (grav.toml dependencies) and files resolve."},
 }
 
 
@@ -382,7 +410,8 @@ TOOLS = {
     "grav_check": (
         grav_check,
         "Type-check Grav code without running it: inline `source`, a .grav file, or a "
-        "project directory. Returns 'ok: no errors' (plus warnings) or the diagnostics "
+        "project directory (`path`). Pass `project` with `source` to check it as part of "
+        "that project, with its packages. Returns 'ok: no errors' (plus warnings) or the diagnostics "
         "with file:line:col locations.",
         _schema(_SOURCE_OR_PATH),
     ),
