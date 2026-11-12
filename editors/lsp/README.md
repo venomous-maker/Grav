@@ -8,7 +8,7 @@ every editor:
 | ------- | ---------- |
 | Go to definition / declaration — follows `import` lines into the standard library, `grav.toml` paths and packages (installed git ones and `{ path = ... }` folders); resolves `import { A as B }` and `use … as` aliases; on an import string, opens the module | `textDocument/definition`, `declaration` |
 | Hover — signature, doc comment, namespace and module; what a keyword, type or built-in (including the internal `__retain`/`__release`/...) means, with an example | `textDocument/hover` |
-| Completion — members by inferred type, static members, namespace/alias members, import paths, keywords and built-ins (documented), snippets for common constructs | `textDocument/completion` |
+| Completion — members by inferred type, the std/types methods of built-in values (`n.toHex()`, `"x".split(",")`, `maybe.orElse(0)`, `Object`'s on class instances), static members, namespace/alias members, import paths, keywords and built-ins (documented), snippets for common constructs | `textDocument/completion` |
 | Signature help for calls and constructors | `textDocument/signatureHelp` |
 | Inlay hints — the type after each `let`, `for`, lambda parameter and `match` binding that does not write one, from `grav check --types` (refreshed after each check) | `textDocument/inlayHint` |
 | Outline with classes, members and enum variants nested | `textDocument/documentSymbol` |

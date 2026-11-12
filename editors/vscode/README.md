@@ -16,8 +16,9 @@ Syntax highlighting, snippets, and build/run commands for the
   `import` lines into the standard library, `grav.toml` paths and packages
   (git ones from the cache at their `grav.lock` commit, `{ path = ... }` ones
   in their folder); `F12` on an import string opens the module.
-- **Completion** — members after `.` (from the variable's type), static members
-  after a type name, namespace and alias members, import paths after
+- **Completion** — members after `.` (from the variable's type), the std/types
+  methods of built-in values (`n.toHex()`, `"a,b".split(",")`, `maybe.orElse(0)`),
+  static members after a type name, namespace and alias members, import paths after
   `import "`, keywords (with explanations) and built-ins; **signature help**
   inside calls.
 - **Hover** — the declaration's signature, its doc comment, and where it lives

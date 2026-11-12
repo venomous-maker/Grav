@@ -29,6 +29,14 @@ dependencies, so they offer the same features.
   lambda variables), static members,
   namespace members, import paths, keywords and built-ins, plus snippets for
   common constructs (`fn`, `class`, `match`, `test`, `ifnull`, ...).
+- **Methods on built-in values** ([std/types](../std/types/integer.md)): after
+  `n.`, `port.`, `"text".`, `maybe.` or `x.`, completion lists the std/types
+  methods the value takes (`n.toHex()` is `Integer.toHex(n)`), without the value's
+  own parameter and with their doc comments; a class instance also gets
+  `Object`'s for names it lacks (`u.toMap()`). Hover, signature help and go to
+  definition work on these calls, and the types of their results, of conversion
+  casts (`d as Decimal`, `"42" as int`) and of method values (`Integer.compare`:
+  `fn(int, int) -> int`) show in hovers and inlay hints.
 - **Signature help** inside calls.
 - **Outline**, workspace symbols (including the standard library), find
   references and rename.
