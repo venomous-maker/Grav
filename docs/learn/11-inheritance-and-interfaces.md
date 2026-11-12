@@ -284,6 +284,65 @@ true
 false
 ```
 
+### Traits with state
+
+A trait can also bring fields, static fields, private helpers and decorators.
+A class that implements it gets them as if it had written them itself, so one
+trait can add the same piece of state and behaviour to many unrelated classes:
+
+```grav
+import "std"
+
+@Audited
+trait Versioned {
+    public version: int = 1
+    private history: Array<string> = new Array<string>()
+    
+
+    fn change(what: string) -> Self {
+        self.history.push("v${self.version}: ${what}")
+        self.version += 1
+        return self
+    }
+    fn log() -> string { return self.joined(", ") }
+    private fn joined(sep: string) -> string {
+        let out = ""
+        for (i, h in self.history) { out += (i > 0 ? sep : "") + h }
+        return out
+    }
+}
+
+class Page implements Versioned {
+    public title: string
+    constructor(title: string) { self.title = title }
+}
+
+fn main() {
+    let p = new Page("Home")
+    p.change("draft").change("review")
+    print(p.version)
+    print(p.log())
+    print(ClassInfo.of(p).has("Audited"))
+    let v: Versioned = p
+    print(v.log())
+}
+```
+
+Output:
+
+```text
+3
+v1: draft, v2: review
+true
+v1: draft, v2: review
+```
+
+`Page` now has a `version` field (starting at 1), a private `history`, and the
+`@Audited` decorator, which reflection sees. The class's own members win: had
+`Page` declared `version` itself, the trait's would be left out. A subclass of
+`Page` inherits these members from `Page`, so it does not get a second copy. A
+trait has no constructor, so give its fields initial values instead.
+
 ## Checking types at run time
 
 A variable of type `Animal` may hold a `Dog` or a `Cat`. Usually virtual methods
@@ -441,7 +500,7 @@ multiple inheritance rarely.
   `Self` is the class the call names (`User.find(1)` makes a `User`).
 - `abstract` classes cannot be created; their `abstract` methods must be implemented.
 - An `interface` lists methods; a class can implement many. A `trait` can provide
-  default method bodies.
+  default method bodies, and fields, helpers and decorators its classes take in.
 - `x is T`, `x as T` and `typename(x)` inspect types at run time.
 - `uses` forwards to a helper object; `extends A, B` flattens several classes.
 

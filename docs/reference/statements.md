@@ -12,7 +12,7 @@ struct Name<T> { field: T  other: int  fn method() -> T { ... } }
 enum Name { A, B = 5, C }
 enum Name<T> { Variant(field: T), Other(int, string), Empty,  fn method() { ... } }
 interface Name<T> { fn method(x: T) -> R }
-trait Name { fn required(o: Self) -> int  fn provided() -> bool { ... } }
+trait Name { fn required(o: Self) -> int  fn provided() -> bool { ... }  field: T = init  ... }
 type Alias<T> = Type          (typedef is a synonym)
 let name: T = value           (a global variable; the type is required; a non-literal value is
                               computed at start-up, before main, in declaration order)
@@ -53,6 +53,34 @@ fn operator+(o: T) -> R { ... }               (also - * / % == != < <= > >= [] [
   constructor first.
 - Overrides must keep the parameter and result types.
 - `abstract` methods have no body and make the class abstract.
+
+### Traits
+
+A trait is an interface that may also bring code and state. Its members:
+
+```text
+fn name(params) -> T                          (required: each class writes it)
+fn name(params) -> T { ... }                  (a default: the class may write its own)
+[public | private | protected] [readonly] [weak] name: Type [= init]
+[public | private | protected] static name: Type = init
+[private | protected] fn name(params) -> T { ... }
+[public | private | protected] static fn name(params) -> T { ... }
+@Decorator trait Name { ... }
+```
+
+- A class that `implements` the trait gets its fields, static fields, private,
+  protected and static methods and decorators as if it had written them; its
+  public methods are the trait's interface, so `x is Name` and `let n: Name = x`
+  work.
+- What the class writes itself wins: its own field, method or decorator of the
+  same name is kept, and the trait's is left out.
+- A subclass of a class that implements the trait inherits these members; it does
+  not get a second copy, even if it names the trait again.
+- Each class gets its own copy of a static field.
+- Names in a trait's members mean what they mean where the trait is declared,
+  whichever namespace the class is in.
+- A trait has no constructor (give its fields initializers instead), and a
+  generic trait (`trait T<X>`) may have only public methods.
 
 ### Enums
 
