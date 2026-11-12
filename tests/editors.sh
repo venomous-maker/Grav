@@ -57,7 +57,7 @@ hints() { # compiler, then "check" to run it first
   node -e 'const [index, file, compiler, run] = process.argv.slice(1);
     const ws = new (require(index).Workspace)({ compiler });
     const lines = require("fs").readFileSync(file, "utf8").split("\n");
-    const show = () => { for (const h of ws.inlayHints(file)) {
+    const show = () => { for (const h of ws.inlayHints(file, 0, Infinity, { parameterNames: false })) {
       const before = lines[h.position.line].slice(0, h.position.character);
       console.log(`${h.position.line + 1}: ${before.match(/\w+$/)[0]}${h.label}`); } };
     if (run) ws.check(file, show); else show();' "$INDEX" "$T/types.grav" "$1" "${2:-}"
@@ -74,7 +74,7 @@ hints /nonexistent/grav > "$T/source.txt"
 for want in '7: names: Array<string>' '11: sh: Shape' '12: i: int' '13: s: string' '15: n: int'; do
   grep -qxF "$want" "$T/source.txt" || fail "inlay hint from the source: $want"
 done
-grep -q '^14: k' "$T/source.txt" && fail "a type parameter (Array<K>) is not a hint"
+grep -qxF '14: k: string' "$T/source.txt" || fail "a generic's type parameter is bound (HashMap<string, ...>.keys() gives strings)"
 # Methods on built-in values (std/types): `n.toHex()` is `Integer.toHex(n)`.
 cat > "$T/values.grav" <<'EOF'
 import "std"
@@ -124,11 +124,77 @@ node -e 'const [index, file] = process.argv.slice(1);
   const sig = ws.signature(file, at("orElse(", 7));
   expect("signature maybe.orElse(", sig && sig.signatures[0].label, "orElse(fallback: int) -> int");
   // the types of call results, casts and method values, from the source alone
-  const hints = Object.fromEntries(ws.inlayHints(file).map((x) => [lines[x.position.line].trim().split(/\s+/)[1], x.label]));
+  const hints = Object.fromEntries(ws.inlayHints(file).filter((x) => x.kind === 1).map((x) => [lines[x.position.line].trim().split(/\s+/)[1], x.label]));
   for (const [name, want] of [["hex", ": string"], ["money", ": Decimal"], ["back", ": int"], ["parts", ": Array<string>"],
                               ["or", ": int"], ["upper", ": fn(string) -> string"], ["big", ": float"]])
     expect("inlay hint " + name, hints[name], want);
   if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/values.grav" || fail "methods on built-in values in the editor"
+
+# Refactoring and completion around classes: rename by declaration, organize
+# imports, reflect/super/cast/decorator completion, generics bound, parameter hints.
+mkdir -p "$T/ref"
+cat > "$T/ref/model.grav" <<'EOF'
+@Table("counters")
+class Counter {
+    count: int = 0
+    static made: int = 0
+    fn bump() { self.count = self.count + 1 }
+    fn size() -> int { return self.count }
+}
+class Named extends Counter {
+    fn size() -> int { return super.size() + 1 }
+}
+EOF
+cat > "$T/ref/main.grav" <<'EOF'
+import "std"
+import "model.grav"
+import "std"
+fn area(width: int, height: int) -> int { return width * height }
+fn main() {
+    let count = 0
+    let c = new Counter()
+    c.bump()
+    let xs = new Array<int>()
+    let total = count + c.size() + c.count + xs.size() + area(3, 4)
+    let info = reflect(Counter)
+    let d = 19.99
+    print("${total} ${info.name} ${d}")
+}
+EOF
+"$GRAV" check "$T/ref/main.grav" >/dev/null 2>&1 || fail "ref/main.grav should compile"
+node -e 'const [index, dir] = process.argv.slice(1);
+  const path = require("path"), fs = require("fs");
+  const ws = new (require(index).Workspace)({ root: dir, compiler: "/nonexistent/grav" });
+  const main = path.join(dir, "main.grav"), model = path.join(dir, "model.grav");
+  const lines = fs.readFileSync(main, "utf8").split("\n");
+  const at = (w, d = 1) => { const l = lines.findIndex((x) => x.includes(w)); return { line: l, character: lines[l].indexOf(w) + d }; };
+  const bad = [], expect = (what, got, want) => { if (JSON.stringify(got) !== JSON.stringify(want)) bad.push(`${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); };
+  const where = (edits) => edits.error ? edits.error : edits.map((e) => path.basename(e.file) + ":" + (e.range.start.line + 1) + ":" + (e.range.start.character + 1)).sort();
+  // rename: the local, the field and the method each only where they are meant
+  expect("rename the local count", where(ws.rename(main, at("count = 0", 0))), ["main.grav:10:17", "main.grav:6:9"]);
+  expect("rename the field count", where(ws.rename(main, at("c.count", 2))), ["main.grav:10:38", "model.grav:3:5", "model.grav:5:22", "model.grav:5:35", "model.grav:6:36"]);
+  expect("rename Counter.size", where(ws.rename(main, at("c.size", 2))), ["main.grav:10:27", "model.grav:6:8", "model.grav:9:37"]);
+  expect("a library name is not renamed", /standard library/.test(ws.rename(main, at("xs.size", 3)).error || ""), true);
+  // organize imports
+  expect("organize imports", (ws.organizeImports(main) || {}).newText, "import \"std\"\n\nimport \"model.grav\"");
+  // completion
+  const complete = (expr, file = main, line = lines.findIndex((x) => x.includes("print(")) ) => {
+    const text = fs.readFileSync(file, "utf8"), ls = text.split("\n");
+    ws.setDoc(file, [...ls.slice(0, line), "    " + expr, ...ls.slice(line)].join("\n"));
+    const r = ws.completion(file, { line, character: 4 + expr.length }).map((c) => c.label); ws.setDoc(file, text); return r; };
+  expect("reflect(T). is a ClassInfo", complete("info.").includes("fields"), true);
+  expect("info.fields()[0]. is a FieldInfo", complete("info.fields()[0].").includes("decorator"), true);
+  expect("d as (a float)", complete("d as ").filter((x) => ["int", "string", "Decimal"].includes(x)).sort(), ["Decimal", "int", "string"]);
+  expect("@ offers used decorators", complete("@"), ["Table"]);
+  const ml = fs.readFileSync(model, "utf8").split("\n").findIndex((x) => x.includes("super.size"));
+  expect("super. reaches fields, methods and statics", ["count", "size", "made"].every((x) => complete("super.", model, ml).includes(x)), true);
+  expect("generics bound: Array<int>.get()", ws.typeOfExpr(main, at("print("), "xs.get(0)"), "int");
+  // hover on a decorator, parameter-name hints
+  const ms = fs.readFileSync(model, "utf8").split("\n");
+  expect("hover on @Table", /a decorator/.test((ws.hover(model, { line: 0, character: 2 }) || {}).markdown || ""), true);
+  const names = ws.inlayHints(main).filter((h) => h.kind === 2).map((h) => h.label);
+  expect("parameter names before literal arguments", names, ["width:", "height:"]);
+  if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/ref" || fail "refactoring and completion around classes"
 
 # A compiler older than --types still gives diagnostics.
 printf '#!/bin/sh\nfor a; do [ "$a" = --types ] && { echo "gravc: unknown option '"'"'--types'"'"'" >&2; echo "{\\"diagnostics\\": []}"; exit 2; }; done\nexec "%s" "$@"\n' "$GRAV" > "$T/oldgrav"
@@ -163,7 +229,7 @@ node -e 'const [index, file] = process.argv.slice(1);
   fail "the index lists a class's fields with initializers"
 node -e 'const [index, file] = process.argv.slice(1);
   const ws = new (require(index).Workspace)({ compiler: "/nonexistent/grav" });
-  const got = ws.inlayHints(file).map((h) => h.label).join(" ");
+  const got = ws.inlayHints(file).filter((h) => h.kind === 1).map((h) => h.label).join(" ");
   process.exit(got === ": User : Array<string> : DateTime?" ? 0 : 1);' "$INDEX" "$T/model.grav" ||
   fail "types through fields with initializers"
 echo "editors: ok"
