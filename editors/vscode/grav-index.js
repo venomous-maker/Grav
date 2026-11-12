@@ -351,7 +351,8 @@ const RE = {
   local: new RegExp(`\\b(let|const)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=\\s*(.*)$`),
   field: new RegExp(`^\\s*(?:(?:public|private|protected|readonly|static|weak)\\s+)*(${IDENT})\\s*:\\s*([^=]+?)\\s*(?:=.*)?$`),
   test: /^\s*test\s+"([^"]*)"/,
-  forVar: new RegExp(`\\bfor\\s*\\(\\s*(${IDENT})(?:\\s*,\\s*(${IDENT}))?\\s+in\\b`),
+  forVar: new RegExp(`\\bfor\\s*\\(\\s*(${IDENT})(?:\\s*,\\s*(${IDENT}))?\\s+in\\b\\s*(.*)$`),
+  caseBind: new RegExp(`\\bcase\\s+(?:${IDENT}\\.)*${IDENT}\\s*\\(([^()]*)\\)`, "g"),
   catchVar: new RegExp(`\\bcatch\\s*\\(\\s*(${IDENT})\\s*:\\s*(${IDENT}(?:\\.${IDENT})*)`),
   lambdaParams: /\bfn\s*\(([^()]*)\)\s*(?:->\s*[^{=]+)?\s*(?:=>|\{)/g,
 };
@@ -487,20 +488,35 @@ function parseFile(text) {
         const ch = lm.index + lm[0].indexOf(lm[2], lm[1].length);
         const init = raw.slice(lm.index + lm[0].length - lm[4].length).trim();
         add({ name: lm[2], kind: lm[1] === "const" ? KIND.Constant : KIND.Variable, line: i, ch, local: owner,
-          type: lm[3] ? lm[3].trim() : inferType(init), detail: raw.trim(), doc: "" });
+          type: lm[3] ? lm[3].trim() : inferType(init), written: !!lm[3], role: lm[1], detail: raw.trim(), doc: "" });
       }
-      if ((mm = RE.forVar.exec(m))) for (const g of [mm[1], mm[2]]) if (g)
-        add({ name: g, kind: KIND.Variable, line: i, ch: m.indexOf(g, mm.index), local: owner, type: "", detail: raw.trim(), doc: "" });
+      // for (x in xs), for (i, x in xs): `iter` is what is iterated, for guessing x's type
+      if ((mm = RE.forVar.exec(m))) {
+        let iter = "", depth = 0;
+        for (const c of mm[3]) { if (c === "(" || c === "[") depth++; else if (c === ")" || c === "]") { if (!depth--) break; } iter += c; }
+        for (const g of [mm[1], mm[2]]) if (g)
+          add({ name: g, kind: KIND.Variable, line: i, ch: m.indexOf(g, mm.index), local: owner, type: mm[2] && g === mm[1] ? "int" : "",
+            role: mm[2] && g === mm[1] ? "index" : "for", iter: raw.slice(m.length - mm[3].length).slice(0, iter.length).trim(), detail: raw.trim(), doc: "" });
+      }
       if ((mm = RE.catchVar.exec(m)))
-        add({ name: mm[1], kind: KIND.Variable, line: i, ch: m.indexOf(mm[1], mm.index), local: owner, type: mm[2], detail: raw.trim(), doc: "" });
+        add({ name: mm[1], kind: KIND.Variable, line: i, ch: m.indexOf(mm[1], mm.index), local: owner, type: mm[2], written: true,
+          role: "catch", detail: raw.trim(), doc: "" });
       for (const lp of m.matchAll(RE.lambdaParams)) {
         if (opened && lp.index === m.indexOf("(", 0) - 2) continue;
         for (const p of splitParams(lp[1])) {
           const pm = new RegExp(`^(${IDENT})\\s*(?::\\s*(.+))?$`).exec(p);
           if (pm) add({ name: pm[1], kind: KIND.Variable, line: i, ch: m.indexOf(pm[1], lp.index), local: owner,
-            type: pm[2] || "", detail: `${pm[1]}${pm[2] ? ": " + pm[2] : ""} (lambda parameter)`, doc: "" });
+            type: pm[2] || "", written: !!pm[2], role: "lambda", detail: `${pm[1]}${pm[2] ? ": " + pm[2] : ""} (lambda parameter)`, doc: "" });
         }
       }
+      // case Some(x):, case Rect(w, h): the bindings of a match arm
+      for (const cb of m.matchAll(RE.caseBind))
+        for (const b of cb[1].split(",")) {
+          const name = b.trim();
+          if (!new RegExp(`^${IDENT}$`).test(name) || name === "_" || KEYWORD_SET.has(name)) continue;
+          add({ name, kind: KIND.Variable, line: i, ch: m.indexOf(name, cb.index + cb[0].indexOf("(")), local: owner, type: "",
+            role: "case", detail: raw.trim(), doc: "" });
+        }
     }
 
     // ---- brackets: bodies of the declarations opened above ----
@@ -539,11 +555,15 @@ function parseFile(text) {
       const pm = new RegExp(`^(?:\\.\\.\\.)?(${IDENT})\\s*:\\s*(.+)$`).exec(p);
       if (!pm) continue;
       const ch = rawLine.indexOf(pm[1], at);
-      symbols.push({ name: pm[1], kind: KIND.Variable, line, ch, local: owner, type: pm[2].trim(),
+      symbols.push({ name: pm[1], kind: KIND.Variable, line, ch, local: owner, type: pm[2].trim(), written: true, role: "param",
         detail: `${pm[1]}: ${pm[2].trim()} (parameter of ${owner.name})`, doc: "", isParam: true });
     }
   }
 }
+
+// A type as an inlay hint shows it: namespaces dropped (`db.Row` -> `Row`,
+// `geo.Point<int>` -> `Point<int>`); a data enum variant keeps its enum (`Shape.Circle`).
+function shortType(t) { return String(t).replace(/\b(?:[a-z_]\w*\.)+(?=[A-Za-z_])/g, ""); }
 
 // The type of `new T<...>(...)`, `T.of(...)`-style or literal initializers.
 function inferType(init) {
@@ -595,6 +615,7 @@ class Workspace {
     this.docs = new Map();      // path -> text (open editors, possibly unsaved)
     this.cache = new Map();     // path -> { mtime, text, info }
     this.envInfo = null;
+    this.types = new Map();     // path -> Map(name + "\0" + line text -> type), from `grav check --types`
   }
 
   setDoc(file, text) { this.docs.set(path.resolve(file), text); }
@@ -945,7 +966,7 @@ class Workspace {
   }
 
   // Best-effort type of `a`, `a.b`, `a.b()` at a position (locals, params, fields, returns).
-  typeOfExpr(file, pos, expr) {
+  typeOfExpr(file, pos, expr, depth = 0) {
     const parts = expr.replace(/\([^()]*\)/g, "()").split(".");
     let type = "";
     const first = parts[0].replace(/\(\)$/, "");
@@ -954,7 +975,7 @@ class Workspace {
       type = c ? c.name : "";
     } else {
       const local = this.localsAt(file, pos).filter((s) => s.name === first).pop();
-      if (local) type = typeof local.type === "object" ? this.returnOf(file, local.type.call, local.type.method) : local.type;
+      if (local) type = this.localType(file, local, depth);
       else {
         const decl = this.symbolsNamed(file, first).find((x) => [KIND.Class, KIND.Struct, KIND.Enum, KIND.Interface, KIND.Namespace].includes(x.sym.kind));
         if (decl) type = decl.sym.name;
@@ -975,7 +996,34 @@ class Workspace {
   }
   returnOf(file, cls, method) {
     const m = this.membersOf(file, cls).find((x) => x.sym.name === method);
+    if (m && m.sym.kind === KIND.EnumMember) return cls;   // Shape.Circle(1.0) is a Shape
     return m ? (m.sym.returns || "") : "";
+  }
+
+  // The type of a local binding: the compiler's, from the last `grav check --types`
+  // of the file (matched by name and line text, so edits elsewhere keep it), else
+  // what the source says or suggests ("" when unknown).
+  localType(file, sym, depth = 0) {
+    const known = this.types.get(path.resolve(file));
+    const line = known && splitLines(this.text(file) || "")[sym.line];
+    const t = line !== undefined && known && known.get(sym.name + "\0" + line.trim());
+    if (t) return t;
+    if (typeof sym.type === "object") return this.returnOf(file, sym.type.call, sym.type.method);
+    if (sym.type || sym.role !== "for" || !sym.iter || depth > 4) return sym.type || "";
+    if (/\.\./.test(sym.iter)) return "int";                                   // for (i in 0..n)
+    return this.elementType(file, this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.iter, depth + 1));
+  }
+  // What `for (x in <a value of type t>)` gives x.
+  elementType(file, t) {
+    let m, r = "";
+    if (t === "string") r = "string";
+    else if ((m = /^(.+)\[\d*\]$/.exec(t))) r = m[1];                       // int[3], T[]
+    else if ((m = /^(?:[\w.]+\.)?Array<(.+)>$/.exec(t))) r = m[1];
+    else if (t) {
+      const get = this.membersOf(file, t).find((x) => ["get", "at"].includes(x.sym.name) && x.sym.returns);
+      r = get ? get.sym.returns : "";
+    }
+    return /^[A-Z]$/.test(r) ? "" : r;                                         // a bare type parameter: unknown
   }
 
   hover(file, pos) {
@@ -992,6 +1040,7 @@ class Workspace {
       const info = this.info(d.file);
       const sym = info && info.symbols.find((s) => s.range.start.line === d.range.start.line && s.range.start.character === d.range.start.character);
       if (!sym) continue;
+      if (sym.local) return { markdown: this.localHover(d.file, sym), range: w.range };
       const where = [];
       if (sym.namespace) where.push("namespace " + sym.namespace);
       if (sym.container) where.push("in " + sym.container);
@@ -1004,6 +1053,28 @@ class Workspace {
     }
     if (b) return { markdown: "```grav\n" + b[1] + "\n```\n\n" + b[2], range: w.range };
     return null;
+  }
+  // A local binding as hover shows it: `let xs: Array<int>`, `x: int` (loop variable), ...
+  localHover(file, sym) {
+    const type = this.localType(file, sym);
+    const decl = ["let", "const"].includes(sym.role) ? `${sym.role} ${sym.name}` : sym.name;
+    const what = { for: "loop variable", index: "loop index", catch: "caught exception", lambda: "lambda parameter",
+                   case: "match binding", param: `parameter of ${sym.local.name}` }[sym.role];
+    return "```grav\n" + decl + (type ? ": " + type : "") + "\n```" + (what ? `\n\n*${what}*` : "");
+  }
+  // Inlay hints: the type after each binding whose type is not written (let without
+  // `: T`, for-in, lambda parameters, match bindings), within lines [from, to].
+  inlayHints(file, from = 0, to = Infinity) {
+    const info = this.info(file);
+    if (!info) return [];
+    const out = [];
+    for (const s of info.symbols) {
+      if (!s.local || s.written || s.role === "param" || s.line < from || s.line > to || s.name === "_") continue;
+      const type = this.localType(file, s);
+      if (!type) continue;
+      out.push({ position: { line: s.line, character: s.ch + s.name.length }, label: ": " + shortType(type), kind: 1 });
+    }
+    return out;
   }
   moduleName(file) {
     const std = this.env().std;
@@ -1082,7 +1153,7 @@ class Workspace {
       return items;
     }
     // everything visible: locals, then declarations from reachable files, keywords, builtins
-    for (const s of this.localsAt(file, pos)) push(s.name, COMPLETION_KIND[s.kind] || 6, s.detail, "");
+    for (const s of this.localsAt(file, pos)) { const t = this.localType(file, s); push(s.name, COMPLETION_KIND[s.kind] || 6, t ? `${s.name}: ${t}` : s.detail, ""); }
     for (const f of this.reachable(file)) {
       const info = this.info(f);
       if (!info) continue;
@@ -1239,10 +1310,25 @@ class Workspace {
 
   // ---- compiler-backed features ----
   // Diagnostics from `grav check --json` (for a file saved on disk).
+  // Also keeps the types of the file's local bindings (`--types`) for hover,
+  // completion and inlay hints.
   check(file, cb) {
-    execFile(this.compiler, ["check", "--json", file], { timeout: 20000, cwd: path.dirname(file) }, (err, stdout) => {
-      let diags = [];
-      try { diags = JSON.parse(stdout).diagnostics || []; } catch { diags = []; }
+    const types = !this.noTypes;
+    execFile(this.compiler, ["check", "--json", ...(types ? ["--types"] : []), file], { timeout: 20000, cwd: path.dirname(file) }, (err, stdout, stderr) => {
+      if (types && /unknown option '--types'/.test(stderr || "")) {   // a compiler older than --types
+        this.noTypes = true;
+        return this.check(file, cb);
+      }
+      let diags = [], report = {};
+      try { report = JSON.parse(stdout); diags = report.diagnostics || []; } catch { diags = []; }
+      if (Array.isArray(report.types)) {
+        const lines = splitLines(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : ""), known = new Map();
+        for (const t of report.types) {
+          const key = t.name + "\0" + (lines[t.line - 1] || "").trim();
+          if (!known.has(key)) known.set(key, t.type);
+        }
+        this.types.set(path.resolve(file), known);
+      }
       cb(diags.map((d) => ({
         file: d.file ? path.resolve(path.dirname(file), d.file) : file,
         line: Math.max(0, (d.line || 1) - 1), character: Math.max(0, (d.column || 1) - 1),
@@ -1258,5 +1344,5 @@ class Workspace {
 
 module.exports = {
   KIND, COMPLETION_KIND, KEYWORDS, TYPES, BUILTINS, INTERNAL_BUILTINS, KEYWORD_DOCS, SNIPPETS, splitLines, mask, parseFile, wordAtPosition,
-  Workspace, inferType,
+  Workspace, inferType, shortType,
 };
