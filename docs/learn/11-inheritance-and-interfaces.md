@@ -138,17 +138,21 @@ SELECT * FROM users WHERE id = 7
 hi, user 7
 ```
 
-- **In an instance method**, `Self` is only the result type, and the method
-  returns `self` (or `null`, or what another `Self` method returns for `self`),
-  so the caller's type is always right. An override of it returns `Self` too.
+- **In an instance method**, `-> Self` as the result type means the receiver's
+  own class, and the method returns `self` (or `null`, or what another `Self`
+  method returns for `self`), so the caller's type is always right. An override
+  of it returns `Self` too. In the body, `Self.count` and `Self.make()` reach the
+  static members of the class that declares the method, as its name would; in a
+  trait's method that is each class that implements the trait, so each has its
+  own count.
 - **In a static method**, `Self` is the class the call names: `new Self(...)`,
   `Self.table()` and types like `Array<Self>` all mean `User` in `User.find`. The
   compiler makes a copy of the method for each class it is called through.
   `Self.table()` therefore reaches `User`'s own `table`, and `new Self()` needs a
   constructor that every such class has.
 - `Self` is not a parameter type in a class, and an instance method cannot write
-  `new Self()` (it does not know the class at compile time; return `self`
-  instead). A method returning `Self` cannot yet be called through an interface
+  `new Self()` or `x is Self` (in a subclass's object they would still mean the
+  declaring class; return `self`, or call a static method, instead). A method returning `Self` cannot yet be called through an interface
   value.
 
 ## Abstract classes
