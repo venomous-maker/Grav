@@ -240,3 +240,23 @@ let conv = long(x) + double(y)
 //                   ^^^^^^ support.function.builtin
 let me = self.name
 //       ^^^^ variable.language
+
+// ---- traits with state ----
+@Versioned
+// <- punctuation.definition.decorator
+trait Versioned {
+// ^^ storage.type.trait
+//    ^^^^^^^^^ entity.name.type.declaration
+    public version: int = 1
+//  ^^^^^^ storage.modifier
+//         ^^^^^^^ variable.other.property.declaration
+//                  ^^^ storage.type.primitive
+    static made: int = 0
+//         ^^^^ variable.other.property.declaration
+    private fn bumped() -> int { return self.version + 1 }
+//          ^^ storage.type.function
+//             ^^^^^^ entity.name.function.declaration
+}
+class Page implements Versioned, Named { }
+//                    ^^^^^^^^^ entity.other.inherited-class
+//                               ^^^^^ entity.other.inherited-class

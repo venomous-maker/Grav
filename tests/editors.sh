@@ -196,6 +196,37 @@ node -e 'const [index, dir] = process.argv.slice(1);
   expect("parameter names before literal arguments", names, ["width:", "height:"]);
   if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/ref" || fail "refactoring and completion around classes"
 
+# A class gets the fields, statics and methods of the traits it implements.
+cat > "$T/traits.grav" <<'EOF'
+import "std"
+trait Versioned {
+    public version: int = 1
+    static made: int = 0
+    private fn bumped() -> int { return self.version + 1 }
+    fn bump() { self.version = self.bumped() }
+}
+class Page implements Versioned {
+    public body: string = ""
+}
+fn main() {
+    let p = new Page()
+    p.bump()
+    print("${p.version} ${Page.made}")
+}
+EOF
+"$GRAV" check "$T/traits.grav" >/dev/null 2>&1 || fail "traits.grav should compile"
+node -e 'const [index, file] = process.argv.slice(1);
+  const ws = new (require(index).Workspace)({ compiler: "/nonexistent/grav" });
+  const text = require("fs").readFileSync(file, "utf8"), lines = text.split("\n"), at = 13;
+  const comp = (e) => { ws.setDoc(file, [...lines.slice(0, at), "    " + e, ...lines.slice(at)].join("\n"));
+    const r = ws.completion(file, { line: at, character: 4 + e.length }).map((c) => c.label); ws.setDoc(file, text); return r; };
+  const bad = [];
+  if (!["version", "bump", "body"].every((x) => comp("p.").includes(x))) bad.push("p. lacks the trait members");
+  if (comp("p.").includes("bumped")) bad.push("a trait private helper is offered outside the class");
+  if (!comp("Page.").includes("made")) bad.push("Page. lacks the trait static");
+  if (ws.typeOfExpr(file, { line: at, character: 4 }, "p.version") !== "int") bad.push("p.version is not an int");
+  if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/traits.grav" || fail "a class gets its traits' members"
+
 # A compiler older than --types still gives diagnostics.
 printf '#!/bin/sh\nfor a; do [ "$a" = --types ] && { echo "gravc: unknown option '"'"'--types'"'"'" >&2; echo "{\\"diagnostics\\": []}"; exit 2; }; done\nexec "%s" "$@"\n' "$GRAV" > "$T/oldgrav"
 chmod +x "$T/oldgrav"
