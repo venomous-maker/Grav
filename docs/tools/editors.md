@@ -31,7 +31,7 @@ dependencies, so they offer the same features.
 Install the extension from `editors/vscode/` (it is packaged as a `.vsix`):
 
 ```bash
-code --install-extension editors/vscode/grav-lang-1.9.0.vsix
+code --install-extension editors/vscode/grav-lang-1.9.1.vsix
 ```
 
 Commands (Ctrl+Shift+P, then "Grav"): Run (Ctrl+Alt+R), Build, Run Tests
