@@ -947,8 +947,11 @@ static const char* grav_uint_to_str(unsigned long long v) {
     char* b = grav_str_new(n); memcpy(b, d, n); b[n] = 0; return b;
 }
 /* Floats print in the shortest form that reads back as the same value: 2.5 is
-   2.5, 0.1 + 0.2 is 0.30000000000000004, 1e21 is 1e+21. `b` holds 32 bytes. */
+   2.5, 0.1 + 0.2 is 0.30000000000000004, 1e21 is 1e+21; NaN and the infinities
+   as NaN, Infinity and -Infinity. `b` holds 32 bytes. */
 static char* grav_dtoa(double v, char* b) {
+    if (v != v) { strcpy(b, "NaN"); return b; }
+    if (v > 1.7976931348623157e308 || v < -1.7976931348623157e308) { strcpy(b, v > 0 ? "Infinity" : "-Infinity"); return b; }
     for (int p = 15; p <= 17; p++) {
         snprintf(b, 32, "%.*g", p, v);
         if (p == 17 || strtod(b, 0) == v) break;
@@ -956,6 +959,7 @@ static char* grav_dtoa(double v, char* b) {
     return b;
 }
 static char* grav_ftoa(float v, char* b) { /* float32: shortest that reads back as the float */
+    if (v != v || v > 3.4028235e38f || v < -3.4028235e38f) return grav_dtoa((double)v, b);
     for (int p = 6; p <= 9; p++) {
         snprintf(b, 32, "%.*g", p, (double)v);
         if (p == 9 || strtof(b, 0) == v) break;
