@@ -1,0 +1,5 @@
+// A trait gives its fields initializers instead of having a constructor.
+trait Counted {
+    public n: int = 0
+    constructor() {}
+}

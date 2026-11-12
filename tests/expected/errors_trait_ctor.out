@@ -1,0 +1,3 @@
+gravc: tests/errors/trait_ctor.grav:4:5: parse error: a trait cannot have a constructor: give its fields initializers instead
+        constructor() {}
+        ^

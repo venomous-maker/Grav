@@ -1,0 +1,4 @@
+gravc: tests/errors/traits.grav:6:1: sema error: class 'Thing' does not implement method 'id' required by trait 'Named'
+    class Thing implements Named {}
+    ^
+gravc: 1 error(s); aborting

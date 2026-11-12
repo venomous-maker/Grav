@@ -1,0 +1,4 @@
+// An interface lists methods only; a trait can have fields.
+interface Shape {
+    sides: int
+}

@@ -1,0 +1,5 @@
+// A generic trait can have only public methods.
+trait Holder<T> {
+    public held: int = 0
+    fn get() -> T
+}

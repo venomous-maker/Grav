@@ -1091,7 +1091,7 @@ void Registry::checkHierarchies() {
                 }
                 if (!have || have->isStatic) {
                     error(line, col, "class '" + fq + "' does not implement method '" +
-                                         want.name + "' required by interface '" + ifq + "'");
+                                         want.name + "' required by " + (ii->decl && ii->decl->isTrait ? "trait '" : "interface '") + ifq + "'");
                     continue;
                 }
                 // An interface type of `Self` is satisfied by the class's own type, or
@@ -1107,7 +1107,7 @@ void Registry::checkHierarchies() {
                     ok = matches(have->paramTypes[i], want.paramTypes[i]);
                 if (!ok) {
                     error(line, col, "method '" + want.name + "' in '" + fq +
-                                         "' does not match interface '" + ifq + "'");
+                                         "' does not match " + (ii->decl && ii->decl->isTrait ? "trait '" : "interface '") + ifq + "'");
                 }
             }
         }

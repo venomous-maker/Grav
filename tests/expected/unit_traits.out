@@ -1,0 +1,6 @@
+running 4 tests
+  ok    a trait's fields, helpers and default methods
+  ok    the class's own members win
+  ok    subclasses inherit, and each class has its own statics
+  ok    reflection and the trait type
+result: 4 passed, 0 failed

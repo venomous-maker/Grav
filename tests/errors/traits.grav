@@ -1,0 +1,6 @@
+// A class must write a trait's required methods (the error names the trait).
+trait Named {
+    public name: string = ""
+    fn id() -> int
+}
+class Thing implements Named {}

@@ -1,0 +1,85 @@
+// Traits with state: fields, static fields, private helpers and decorators are
+// copied into each implementing class; the class's own members win, a subclass
+// inherits them, and names in them belong to the trait's namespace.
+import "std"
+
+namespace lib {
+    class Tag {
+        public name: string
+        constructor(name: string) { self.name = name }
+    }
+    @Tagged("lib")
+    trait Tags {
+        public tags: Array<Tag> = new Array<Tag>()
+        public first: Tag = new Tag("first")
+        protected label: string = "none"
+        static made: int = 0
+
+        fn tagged(n: string) -> Self { self.tags.push(new Tag(n)); return self }
+        fn names() -> string { return self.joined(",") }
+        private fn joined(sep: string) -> string {
+            let out = ""
+            for (i, t in self.tags) { out += (i > 0 ? sep : "") + t.name }
+            return out
+        }
+        static fn make() -> int { Self.made += 1; return Self.made }
+    }
+}
+
+namespace app {
+    class Post implements lib.Tags {
+        public title: string = "post"
+        fn describe() -> string { return self.label + ":" + self.names() }
+    }
+    class Pinned extends Post implements lib.Tags {}
+    @Tagged("own")
+    class Note implements lib.Tags {
+        public label: string = "note"
+        fn names() -> string { return "own" }
+    }
+    class Box<T> implements lib.Tags {
+        public v: T
+        constructor(v: T) { self.v = v }
+    }
+}
+
+use app.*
+
+test "a trait's fields, helpers and default methods" {
+    let p = new Post()
+    p.tagged("a").tagged("b")
+    assertEq(p.names(), "a,b")
+    assertEq(p.describe(), "none:a,b")
+    assertEq(p.first.name, "first")
+}
+
+test "the class's own members win" {
+    let n = new Note()
+    assertEq(n.tagged("x").names(), "own")
+    assertEq(ClassInfo.of(n).decorator("Tagged").text(0), "own")
+    let label = ClassInfo.of(n).field("label")
+    assertEq(label.isProtected(), false)
+}
+
+test "subclasses inherit, and each class has its own statics" {
+    let q = new Pinned()
+    assertEq(q.tagged("z").names(), "z")
+    assertEq(Post.make(), 1)
+    assertEq(Post.make(), 2)
+    assertEq(Note.make(), 1)
+    let b = new Box<int>(7)
+    assertEq(b.tagged("g").names(), "g")
+    assertEq(Box<int>.make(), 1)                     // (Self in a generic instance's static method)
+    assertEq(Box<string>.make(), 1)
+}
+
+test "reflection and the trait type" {
+    let p = new Post()
+    let info = ClassInfo.of(p)
+    assertEq(info.has("Tagged"), true)
+    assertEq(info.decorator("Tagged").text(0), "lib")
+    assertEq(info.field("label").isProtected(), true)
+    assertEq(p is lib.Tags, true)
+    let t: lib.Tags = p.tagged("t")
+    assertEq(t.names(), "t")
+}

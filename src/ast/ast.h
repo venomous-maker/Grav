@@ -331,6 +331,9 @@ struct Block {
 // A bare `{ ... }` used as a statement (e.g. an `else` body).
 struct BlockStmt : Stmt {
     Block block;
+    // Names in it belong to this namespace, not the enclosing code's (the
+    // initializer of a field copied from a trait).
+    std::string ns;
 };
 
 struct IfStmt : Stmt {
@@ -477,6 +480,7 @@ struct FieldDecl {
     // Written with `?` (`joined: DateTime?`): the type drops it for a class, which
     // can hold null anyway, but reflection reports it (FieldInfo.isNullable).
     bool writtenNullable = false;
+    std::string ns; // copied from a trait: the namespace its names belong to
     int line = 0, col = 0;
 };
 
@@ -502,6 +506,8 @@ struct MethodDecl {
     // makes `returnType` the defining class.
     bool returnsSelf = false;
     std::vector<Decorator> decorators;
+    // Copied from a trait in another namespace: names in it are that namespace's.
+    std::string ns;
     int line = 0, col = 0;
 };
 
@@ -540,6 +546,7 @@ struct StaticFieldDecl {
     TypeRef type;
     ExprPtr init;
     std::vector<Decorator> decorators;
+    std::string ns; // copied from a trait: the namespace its names belong to
     int line = 0, col = 0;
 };
 
@@ -579,6 +586,13 @@ struct InterfaceDecl : Decl {
     std::vector<std::string> typeParams; // generic params, e.g. <T>
     std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     std::vector<MethodDecl> methods; // signatures (hasBody == false)
+    // A `trait` may also bring state and helpers. Its fields, static fields,
+    // private/protected/static methods (`members`) and decorators are copied into
+    // each class that implements it; they are not part of the interface type.
+    bool isTrait = false;
+    std::vector<FieldDecl> fields;
+    std::vector<StaticFieldDecl> staticFields;
+    std::vector<MethodDecl> members;
 };
 
 // A plain data type: named fields, value semantics, no methods/vtable/RTTI.

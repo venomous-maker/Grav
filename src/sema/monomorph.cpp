@@ -214,7 +214,7 @@ StmtPtr cloneStmt(const Stmt *s) {
         auto n = mkS<ExprStmt>(s); n->expr = cloneExpr(x->expr.get()); return n;
     }
     if (auto *x = dynamic_cast<const BlockStmt *>(s)) {
-        auto n = mkS<BlockStmt>(s); n->block = cloneBlock(x->block); return n;
+        auto n = mkS<BlockStmt>(s); n->block = cloneBlock(x->block); n->ns = x->ns; return n;
     }
     if (auto *x = dynamic_cast<const IfStmt *>(s)) {
         auto n = mkS<IfStmt>(s); n->cond = cloneExpr(x->cond.get());
@@ -284,6 +284,7 @@ MethodDecl cloneMethod(const MethodDecl &m) {
     n.hasBody = m.hasBody; n.isFinal = m.isFinal; n.line = m.line; n.col = m.col;
     n.typeParams = m.typeParams;
     n.decorators = m.decorators;
+    n.ns = m.ns;
     n.body = cloneBlock(m.body);
     return n;
 }
@@ -350,6 +351,7 @@ private:
     void walkDeclTypes(Decl *d, const Subst &subst);
     void rewriteParams(std::vector<Param> &ps, const Subst &subst, int line, int col);
     void synthesizeTraits(); // copy interface/trait default methods into implementers
+    void copyTraitMembers(); // a trait's fields, statics, helpers and decorators, likewise
     void instantiateSelfStatics(); // static methods naming Self, per class they are called on
     // Generic methods: templates (with the owning class's substitution) and the
     // `obj.m::<Args>(...)` requests seen so far; instantiated to a fixed point.
@@ -684,7 +686,10 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     out->decorators = tpl->decorators;
     out->delegates = tpl->delegates; // `uses field: T` forwarding survives instantiation
     for (auto &d : out->delegates) rewriteType(d.type, subst, tpl->line, tpl->col);
+    // Members copied from a trait name things as the trait's namespace does.
+    auto at = [&](const std::string &ns) { return ns.empty() ? currentNs_ : ns; };
     for (const auto &f : tpl->fields) {
+        NsScope own(currentNs_, at(f.ns));
         FieldDecl nf = f;
         rewriteType(nf.type, subst, f.line, f.col);
         if (nf.init) {                                   // (its own copy, with this instance's types)
@@ -694,9 +699,10 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
         out->fields.push_back(std::move(nf));
     }
     for (const auto &sf : tpl->staticFields) {
+        NsScope own(currentNs_, at(sf.ns));
         StaticFieldDecl ns;
         ns.access = sf.access; ns.isConst = sf.isConst; ns.name = sf.name;
-        ns.type = sf.type; ns.line = sf.line; ns.col = sf.col;
+        ns.type = sf.type; ns.line = sf.line; ns.col = sf.col; ns.ns = sf.ns;
         ns.init = cloneExpr(sf.init.get());
         rewriteType(ns.type, subst, sf.line, sf.col);
         walkExpr(ns.init.get(), subst);
@@ -727,6 +733,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
                 exportSig(m.typeParams, m.params, m.returnType, subst));
             continue;
         }
+        NsScope own(currentNs_, at(m.ns));
         MethodDecl nm = cloneMethod(m);
         if (nm.isStatic && methodNamesSelf(nm)) bindSelf(nm, inst);   // (Self: this instance)
         rewriteParams(nm.params, subst, m.line, m.col);
@@ -1008,7 +1015,10 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             if (i < cd->interfaceArgs.size())
                 rewriteSuper(cd->interfaceNames[i], cd->interfaceArgs[i], subst,
                              /*isClass=*/false, cd->line, cd->col);
+        // Members copied from a trait name things as the trait's namespace does.
+        auto at = [&](const std::string &ns) { return ns.empty() ? currentNs_ : ns; };
         for (auto &f : cd->fields) {
+            NsScope own(currentNs_, at(f.ns));
             rewriteType(f.type, subst, f.line, f.col);
             if (f.init) {
                 f.init = std::shared_ptr<Expr>(cloneExpr(f.init.get()).release());
@@ -1017,6 +1027,7 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         }
         for (auto &d : cd->delegates) rewriteType(d.type, subst, cd->line, cd->col);
         for (auto &sf : cd->staticFields) {
+            NsScope own(currentNs_, at(sf.ns));
             rewriteType(sf.type, subst, sf.line, sf.col);
             walkExpr(sf.init.get(), subst);
         }
@@ -1028,6 +1039,7 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
         }
         if (cd->destructor.present) walkBlock(cd->destructor.body, subst);
         for (auto &m : cd->methods) {
+            NsScope own(currentNs_, at(m.ns));
             rewriteParams(m.params, subst, m.line, m.col);
             rewriteType(m.returnType, subst, m.line, m.col);
             if (m.hasBody) walkBlock(m.body, subst);
@@ -1041,6 +1053,9 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
 }
 
 void Mono::run() {
+    // Traits' state and helpers become each implementing class's own, before
+    // anything below looks at the classes.
+    copyTraitMembers();
     // Static methods naming Self get their copies first, so that generic types
     // such as Array<Self> are concrete before generics are instantiated.
     instantiateSelfStatics();
@@ -1223,7 +1238,7 @@ void Mono::synthesizeTraits() {
     std::unordered_map<std::string, InterfaceDecl *> ifaces;
     std::unordered_map<std::string, ClassDecl *> classes;
     for (auto &d : program_.decls) {
-        if (auto *i = dynamic_cast<InterfaceDecl *>(d.get())) ifaces[i->name] = i;
+        if (auto *i = dynamic_cast<InterfaceDecl *>(d.get())) { ifaces[i->fqName] = i; ifaces.emplace(i->name, i); }
         else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) classes[c->name] = c;
     }
     auto classHasMethod = [&](ClassDecl *c, const std::string &name) {
@@ -1253,12 +1268,15 @@ void Mono::synthesizeTraits() {
         selfSubst["Self"] = TypeRef::named(c->fqName);
         for (const auto &in : names) {
             auto it = ifaces.find(in);
+            if (it == ifaces.end()) it = ifaces.find(in.substr(in.rfind('.') + 1));
             if (it == ifaces.end()) continue;
+            NsScope ns(currentNs_, nsOf(it->second->fqName)); // its names are the interface's
             for (const auto &m : it->second->methods) {
                 if (!m.hasBody) continue;             // abstract: class must provide it
                 if (classHasMethod(c, m.name)) continue; // overridden / already present
                 MethodDecl nm = cloneMethod(m);
                 nm.access = Access::Public;
+                nm.ns = currentNs_;
                 rewriteParams(nm.params, selfSubst, m.line, m.col);
                 rewriteType(nm.returnType, selfSubst, m.line, m.col);
                 walkBlock(nm.body, selfSubst);
@@ -1365,6 +1383,106 @@ void bindSelf(MethodDecl &m, const std::string &fq) {
     });
 }
 } // namespace
+
+// ── Traits with state ───────────────────────────────────────────────────────
+// `trait SoftDeletes { public deletedAt: DateTime? = null }`: a class that
+// implements a trait gets its fields, static fields, private/protected/static
+// methods and decorators as if it had written them. Inside them `Self` is that
+// class. What the class writes itself wins, and a class whose base already
+// implements the trait inherits these from it instead.
+void Mono::copyTraitMembers() {
+    std::unordered_map<std::string, InterfaceDecl *> traits;
+    std::unordered_map<std::string, ClassDecl *> classes;
+    auto simple = [](const std::string &n) {
+        size_t dot = n.rfind('.');
+        return dot == std::string::npos ? n : n.substr(dot + 1);
+    };
+    for (auto &d : program_.decls) {
+        if (auto *t = dynamic_cast<InterfaceDecl *>(d.get()); t && t->isTrait) {
+            traits[t->fqName] = t;
+            traits.emplace(t->name, t);
+        } else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+            classes[c->fqName] = c;
+            classes.emplace(c->name, c);
+        }
+    }
+    if (traits.empty()) return;
+    // A trait's types are named where the trait is: `Tag` in namespace orbit is orbit.Tag.
+    std::unordered_map<std::string, bool> types;
+    for (auto &d : program_.decls) types[d->fqName] = true;
+    std::function<void(TypeRef &, const std::string &)> own = [&](TypeRef &t, const std::string &ns) {
+        if (t.isNamed() && !ns.empty() && t.name.find('.') == std::string::npos && types.count(ns + "." + t.name))
+            t.name = ns + "." + t.name;
+        for (auto &a : t.args) own(a, ns);
+        for (auto &a : t.fnParams) own(a, ns);
+        if (t.elem) {                                   // (copied: the element may be shared)
+            TypeRef e = *t.elem;
+            own(e, ns);
+            t.elem = std::make_shared<TypeRef>(std::move(e));
+        }
+    };
+    auto find = [&](auto &map, const std::string &n) -> decltype(map.begin()->second) {
+        auto it = map.find(n);
+        if (it == map.end()) it = map.find(simple(n));
+        return it == map.end() ? nullptr : it->second;
+    };
+    auto traitOf = [&](const std::string &n) { return find(traits, n); };
+    // Does a base class of `c` implement trait `t`?
+    auto baseHas = [&](ClassDecl *c, InterfaceDecl *t) {
+        std::string cur = c->baseName;
+        for (int g = 0; !cur.empty() && g < 100; ++g) {
+            ClassDecl *b = find(classes, cur);
+            if (!b) break;
+            for (const auto &in : b->interfaceNames) if (traitOf(in) == t) return true;
+            cur = b->baseName;
+        }
+        return false;
+    };
+    for (auto &d : program_.decls) {
+        auto *c = dynamic_cast<ClassDecl *>(d.get());
+        if (!c) continue;
+        for (const auto &in : c->interfaceNames) {
+            InterfaceDecl *t = traitOf(in);
+            if (!t || baseHas(c, t)) continue;
+            std::string ns = nsOf(t->fqName);
+            for (const auto &dc : t->decorators) {
+                bool has = false;
+                for (const auto &own : c->decorators) if (own.name == dc.name) has = true;
+                if (!has) c->decorators.push_back(dc);
+            }
+            for (const auto &f : t->fields) {
+                bool has = false;
+                for (const auto &own : c->fields) if (own.name == f.name) has = true;
+                if (has) continue;
+                c->fields.push_back(f);                 // (the initializer is shared: every use clones it)
+                own(c->fields.back().type, ns);
+                c->fields.back().ns = ns;
+            }
+            for (const auto &sf : t->staticFields) {
+                bool has = false;
+                for (const auto &own : c->staticFields) if (own.name == sf.name) has = true;
+                if (has) continue;
+                StaticFieldDecl n;
+                n.access = sf.access; n.isConst = sf.isConst; n.name = sf.name; n.type = sf.type;
+                n.init = cloneExpr(sf.init.get());
+                n.decorators = sf.decorators; n.line = sf.line; n.col = sf.col;
+                own(n.type, ns);
+                n.ns = ns;
+                c->staticFields.push_back(std::move(n));
+            }
+            for (const auto &m : t->members) {
+                bool has = false;
+                for (const auto &own : c->methods) if (own.name == m.name) has = true;
+                if (has) continue;
+                MethodDecl n = cloneMethod(m);
+                for (auto &p : n.params) own(p.type, ns);
+                own(n.returnType, ns);
+                n.ns = ns;
+                c->methods.push_back(std::move(n));
+            }
+        }
+    }
+}
 
 void Mono::instantiateSelfStatics() {
     std::unordered_map<std::string, ClassDecl *> byName;      // simple and qualified names

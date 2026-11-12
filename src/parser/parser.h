@@ -41,6 +41,8 @@ private:
     void parseUse(Program &program); // `use a.b.*`, `use a.b.C [as D]`, `use a.b as x`
     DeclPtr parseClass(bool isAbstract);
     DeclPtr parseInterface();
+    void parseTraitMember(InterfaceDecl &trait);
+    StaticFieldDecl parseStaticField(Access access, bool readonly);
     DeclPtr parseStruct();
     // `enum` — a plain C enum, or a data enum (variants with payloads, type
     // parameters or methods) lowered to an abstract class plus one final class

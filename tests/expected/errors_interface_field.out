@@ -1,0 +1,3 @@
+gravc: tests/errors/interface_field.grav:3:5: parse error: an interface has only methods: a 'trait' can have fields
+        sides: int
+        ^

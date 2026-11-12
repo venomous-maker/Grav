@@ -52,7 +52,13 @@ StmtPtr fieldInit(const FieldDecl &f) {
     st->value = cloneExpression(f.init.get());
     st->line = f.line;
     st->col = f.col;
-    return st;
+    if (f.ns.empty()) return st;
+    auto in = std::make_unique<BlockStmt>();          // (a trait's field: its names are the trait's)
+    in->ns = f.ns;
+    in->line = f.line;
+    in->col = f.col;
+    in->block.statements.push_back(std::move(st));
+    return in;
 }
 
 // Whether `s` is a `super(...)` call statement.

@@ -202,6 +202,7 @@ void TypeChecker::checkStaticFields(ClassDecl &cls) {
     currentNs_ = Registry::namespaceOf(cls.fqName);
     inConstructor_ = false; inStatic_ = true; inAsync_ = false;
     for (auto &sf : cls.staticFields) {
+        currentNs_ = sf.ns.empty() ? Registry::namespaceOf(cls.fqName) : sf.ns;   // (a trait's: its own)
         const GlobalInfo *gi = reg_->global(cls.fqName + "." + sf.name);
         TypeRef declared = gi ? gi->type : sf.type;
         pushScope();
@@ -267,6 +268,7 @@ void TypeChecker::checkClass(ClassDecl &cls) {
 
     for (auto &m : cls.methods) {
         if (!m.hasBody) continue;
+        currentNs_ = m.ns.empty() ? Registry::namespaceOf(cls.fqName) : m.ns;     // (a trait's: its own)
         inConstructor_ = false;
         inStatic_ = m.isStatic;
         currentReturn_ = m.returnType;
@@ -335,7 +337,14 @@ void TypeChecker::checkStmt(Stmt &stmt) {
     if (auto *s = dynamic_cast<ThrowStmt *>(&stmt)) return checkThrow(*s);
     if (auto *s = dynamic_cast<TryStmt *>(&stmt)) return checkTry(*s);
     if (auto *s = dynamic_cast<DeferStmt *>(&stmt)) return checkDefer(*s);
-    if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) return checkBlock(s->block);
+    if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) {
+        if (s->ns.empty()) return checkBlock(s->block);
+        std::string saved = currentNs_;
+        currentNs_ = s->ns;
+        checkBlock(s->block);
+        currentNs_ = saved;
+        return;
+    }
     if (dynamic_cast<BreakStmt *>(&stmt) || dynamic_cast<ContinueStmt *>(&stmt)) {
         if (loopDepth_ == 0) {
             error(stmt.line, stmt.col, "'break'/'continue' is only valid inside a loop");

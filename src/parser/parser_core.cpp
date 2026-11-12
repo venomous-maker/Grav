@@ -434,19 +434,87 @@ DeclPtr Parser::parseFunction(bool isAsync) {
 }
 
 DeclPtr Parser::parseInterface() {
-    const Token &kw = advance(); // 'interface'
+    const Token &kw = advance(); // 'interface' or 'trait'
     auto iface = std::make_unique<InterfaceDecl>();
     iface->line = kw.line;
     iface->col = kw.col;
-    iface->name = expect(TokenType::Identifier, "after 'interface'").lexeme;
+    iface->isTrait = kw.type == TokenType::Trait;
+    const char *what = iface->isTrait ? "trait" : "interface";
+    iface->name = expect(TokenType::Identifier, (std::string("after '") + what + "'").c_str()).lexeme;
     iface->fqName = qualify(iface->name);
     iface->typeParams = parseTypeParams(&iface->typeParamBounds); // optional <T, ...>
-    expect(TokenType::LBrace, "to open the interface body");
+    expect(TokenType::LBrace, (std::string("to open the ") + what + " body").c_str());
     while (!check(TokenType::RBrace) && !atEnd()) {
+        if (iface->isTrait) { parseTraitMember(*iface); continue; }
+        if (check(TokenType::Identifier) && peekAt(1).type == TokenType::Colon)
+            fail(peek(), "an interface has only methods: a 'trait' can have fields");
         iface->methods.push_back(parseMethod(/*inInterface=*/true));
     }
-    expect(TokenType::RBrace, "to close the interface body");
+    expect(TokenType::RBrace, (std::string("to close the ") + what + " body").c_str());
+    if (!iface->typeParams.empty() &&
+        (!iface->fields.empty() || !iface->staticFields.empty() || !iface->members.empty()))
+        fail(kw, "a generic trait can only have public methods: '" + iface->name +
+                     "' has fields, static members or private methods");
     return iface;
+}
+
+// One member of a trait body. Public instance methods are the trait's interface
+// (with or without a default body); fields, static fields and private,
+// protected or static methods are state and helpers copied into each class.
+void Parser::parseTraitMember(InterfaceDecl &trait) {
+    std::vector<Decorator> decos = parseDecorators();
+    Access access = Access::Public;
+    if (matchToken(TokenType::Private)) access = Access::Private;
+    else if (matchToken(TokenType::Protected)) access = Access::Protected;
+    else matchToken(TokenType::Public);
+    if (check(TokenType::Constructor))
+        fail(peek(), "a trait cannot have a constructor: give its fields initializers instead");
+    bool isStatic = matchToken(TokenType::Static);
+    bool isReadonly = matchToken(TokenType::Readonly);
+    if (check(TokenType::Fn)) {
+        if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
+        bool shared = access == Access::Public && !isStatic;
+        MethodDecl m = parseMethod(/*inInterface=*/shared);
+        m.access = access;
+        m.isStatic = isStatic;
+        m.decorators = std::move(decos);
+        (shared ? trait.methods : trait.members).push_back(std::move(m));
+        return;
+    }
+    if (!check(TokenType::Identifier))
+        fail(peek(), std::string("expected a field or method in the trait body, but found ") +
+                         tokenTypeName(peek().type));
+    if (isStatic) {
+        trait.staticFields.push_back(parseStaticField(access, isReadonly));
+        trait.staticFields.back().decorators = std::move(decos);
+        return;
+    }
+    bool isWeak = false;
+    if (peek().lexeme == "weak" && peekAt(1).type == TokenType::Identifier) {
+        advance();
+        isWeak = true;
+    }
+    trait.fields.push_back(parseField(access, isReadonly));
+    trait.fields.back().isWeak = isWeak;
+    trait.fields.back().decorators = std::move(decos);
+    matchToken(TokenType::Semicolon);
+}
+
+// `static name: T = value` (after `static`) — a class-level field (a C global).
+StaticFieldDecl Parser::parseStaticField(Access access, bool readonly) {
+    StaticFieldDecl sf;
+    sf.access = access;
+    sf.isConst = readonly;
+    const Token &nm = expect(TokenType::Identifier, "as a static field name");
+    sf.name = nm.lexeme;
+    sf.line = nm.line;
+    sf.col = nm.col;
+    expect(TokenType::Colon, "after the static field name");
+    sf.type = parseType("for the static field");
+    expect(TokenType::Assign, "a static field requires an initializer");
+    sf.init = parseExpression();
+    matchToken(TokenType::Semicolon);
+    return sf;
 }
 
 DeclPtr Parser::parseStruct() {
@@ -624,19 +692,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             cls->methods.push_back(std::move(m));
         } else if (check(TokenType::Identifier)) {
             if (isStatic) {
-                // `static name: T = value` — a class-level field (a C global).
-                StaticFieldDecl sf;
-                sf.access = access;
-                sf.isConst = isReadonly;
-                const Token &nm = expect(TokenType::Identifier, "as a static field name");
-                sf.name = nm.lexeme;
-                sf.line = nm.line;
-                sf.col = nm.col;
-                expect(TokenType::Colon, "after the static field name");
-                sf.type = parseType("for the static field");
-                expect(TokenType::Assign, "a static field requires an initializer");
-                sf.init = parseExpression();
-                matchToken(TokenType::Semicolon);
+                StaticFieldDecl sf = parseStaticField(access, isReadonly);
                 sf.decorators = std::move(decos);
                 cls->staticFields.push_back(std::move(sf));
             } else {
