@@ -1,5 +1,5 @@
 class Node {
     constructor() {}
-    fn copy() -> Node { return new Self() }               // no class to name in an instance method
+    fn copy() -> Node { return new Self() }               // in a subclass it would still make a Node
 }
 fn main() { print(typename(new Node().copy())) }

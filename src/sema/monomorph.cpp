@@ -275,6 +275,7 @@ StmtPtr cloneStmt(const Stmt *s) {
 namespace {                                               // (below, with the Self pass)
 bool methodNamesSelf(MethodDecl &m);
 void bindSelf(MethodDecl &m, const std::string &fq);
+bool bindSelfValues(MethodDecl &m, const std::string &fq);
 } // namespace
 
 MethodDecl cloneMethod(const MethodDecl &m) {
@@ -352,6 +353,7 @@ private:
     void rewriteParams(std::vector<Param> &ps, const Subst &subst, int line, int col);
     void synthesizeTraits(); // copy interface/trait default methods into implementers
     void copyTraitMembers(); // a trait's fields, statics, helpers and decorators, likewise
+    void selfInInstance(const MethodDecl &m); // the error for `new Self` in an instance method
     void instantiateSelfStatics(); // static methods naming Self, per class they are called on
     // Generic methods: templates (with the owning class's substitution) and the
     // `obj.m::<Args>(...)` requests seen so far; instantiated to a fixed point.
@@ -736,6 +738,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
         NsScope own(currentNs_, at(m.ns));
         MethodDecl nm = cloneMethod(m);
         if (nm.isStatic && methodNamesSelf(nm)) bindSelf(nm, inst);   // (Self: this instance)
+        else if (!nm.isStatic && !bindSelfValues(nm, inst)) selfInInstance(nm);
         rewriteParams(nm.params, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
         if (nm.hasBody) walkBlock(nm.body, subst);
@@ -1279,6 +1282,7 @@ void Mono::synthesizeTraits() {
                 nm.ns = currentNs_;
                 rewriteParams(nm.params, selfSubst, m.line, m.col);
                 rewriteType(nm.returnType, selfSubst, m.line, m.col);
+                if (!bindSelfValues(nm, c->fqName)) selfInInstance(nm);
                 walkBlock(nm.body, selfSubst);
                 c->methods.push_back(std::move(nm));
             }
@@ -1382,6 +1386,22 @@ void bindSelf(MethodDecl &m, const std::string &fq) {
         else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") x->typeName = fq;
     });
 }
+// In an instance method, `Self.count` and `Self.make()` name the class that
+// declares the method (for a trait's, the class it was copied into). Its type
+// `-> Self` keeps meaning the receiver's class, so only values are bound. False
+// when it also says `new Self(...)` or `is Self`, which would wrongly mean that
+// class in a subclass's object, so they are for static methods only.
+bool bindSelfValues(MethodDecl &m, const std::string &fq) {
+    bool ok = true;
+    for (auto &st : m.body.statements)
+        rewriteStmtExprs(*st, [&](ExprPtr &e) {
+            if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self" && n->typeArgs.empty())
+                e = classRef(fq, n->line, n->col);
+            else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") ok = false;
+            else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") ok = false;
+        });
+    return ok;
+}
 } // namespace
 
 // ── Traits with state ───────────────────────────────────────────────────────
@@ -1484,6 +1504,11 @@ void Mono::copyTraitMembers() {
     }
 }
 
+void Mono::selfInInstance(const MethodDecl &m) {
+    semaError(m.line, m.col, "`new Self` and `is Self` belong in static methods: in instance method '" + m.name +
+                             "' they would mean its own class even in a subclass's object (use self, or a static method)");
+}
+
 void Mono::instantiateSelfStatics() {
     std::unordered_map<std::string, ClassDecl *> byName;      // simple and qualified names
     for (auto &d : program_.decls)
@@ -1502,21 +1527,11 @@ void Mono::instantiateSelfStatics() {
             bindSelf(m, c->fqName);                                // its own class's copy
         }
     }
-    // Self names a class only where the class is known: in a static method's copy.
+    // In an instance method Self.x is the declaring class's; new Self is static-only.
     for (auto &[nm, c] : byName) {
         if (nm != c->fqName) continue;
-        for (auto &m : c->methods) {
-            if (m.isStatic) continue;
-            bool bad = false;
-            for (auto &st : m.body.statements)
-                rewriteStmtExprs(*st, [&](ExprPtr &e) {
-                    if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self") bad = true;
-                    else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") bad = true;
-                });
-            if (bad)
-                semaError(m.line, m.col, "Self names a class only in a static method; in method '" + m.name +
-                                         "' use self (its return type may still be Self)");
-        }
+        for (auto &m : c->methods)
+            if (!m.isStatic && !bindSelfValues(m, c->fqName)) selfInInstance(m);
     }
     if (tpl.empty()) return;
     auto declares = [&](ClassDecl *c, const std::string &m) {

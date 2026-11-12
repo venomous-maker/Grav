@@ -23,6 +23,7 @@ namespace lib {
             return out
         }
         static fn make() -> int { Self.made += 1; return Self.made }
+        fn madeSoFar() -> int { return Self.made }       // (Self.x in an instance method: this class's)
     }
 }
 
@@ -67,6 +68,7 @@ test "subclasses inherit, and each class has its own statics" {
     assertEq(Post.make(), 1)
     assertEq(Post.make(), 2)
     assertEq(Note.make(), 1)
+    assertEq("${new Post().madeSoFar()} ${new Note().madeSoFar()}", "2 1")
     let b = new Box<int>(7)
     assertEq(b.tagged("g").names(), "g")
     assertEq(Box<int>.make(), 1)                     // (Self in a generic instance's static method)
