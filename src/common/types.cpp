@@ -106,7 +106,7 @@ std::string typeRefName(const TypeRef &t) {
         case TypeRef::Kind::Void: return "void";
         case TypeRef::Kind::Named: {
             if (t.args.empty()) return prettyNames(t.name);
-            std::string s = t.name + "<";
+            std::string s = prettyNames(t.name) + "<";
             for (size_t i = 0; i < t.args.size(); ++i) {
                 if (i) s += ", ";
                 s += typeRefName(t.args[i]);
