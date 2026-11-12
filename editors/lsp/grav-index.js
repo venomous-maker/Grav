@@ -629,6 +629,7 @@ function inferType(init) {
   const ARGS = "\\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\"|\\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\")*\\))*\\)";
   const HEAD = `(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d+(?:\\.\\d+)?|\\(-?\\d+(?:\\.\\d+)?\\)|[A-Za-z_]\\w*)`;
   if (new RegExp(`^${HEAD}(?:${ARGS})?(?:\\.[A-Za-z_]\\w*(?:${ARGS})?)+$`).test(init)) return { expr: init };
+  if (new RegExp(`^[A-Za-z_]\\w*${ARGS}$`).test(init) && !/^[A-Z]/.test(init)) return { expr: init };   // fresh(): its return type
   if (/^"(?:[^"\\]|\\.)*"(?:\s*\+.*)?$/.test(init)) return "string";   // "x", "a" + b
   if (/^-?\d+\.\d/.test(init)) return "float";
   if (/^-?\d/.test(init)) return "int";
@@ -839,6 +840,12 @@ class Workspace {
 
   // The file and everything it imports (transitively).
   reachable(file) {
+    if (this.reachMemo && this.reachMemo.has(path.resolve(file))) return this.reachMemo.get(path.resolve(file));
+    const out = this.reachableNow(file);
+    if (this.reachMemo) this.reachMemo.set(path.resolve(file), out);
+    return out;
+  }
+  reachableNow(file) {
     const out = [], seen = new Set();
     const stack = [path.resolve(file)];
     const std = this.env().std;
@@ -1446,23 +1453,102 @@ class Workspace {
   }
 
   // Whole-word occurrences of a name (code only, not strings/comments).
+  // The declaration a name at a position stands for: the one go to definition
+  // picks (or the declaration itself, when the position is on one); null if none.
+  declarationAt(file, pos) {
+    const info = this.info(file);
+    const w = wordAtPosition(this.text(file) || "", pos);
+    if (!info || !w) return null;
+    const own = info.symbols.find((s) => s.line === pos.line && s.name === w.word && pos.character >= s.ch && pos.character <= s.ch + s.name.length);
+    if (own) return { file: path.resolve(file), line: own.line, ch: own.ch, sym: own };
+    const d = this.definition(file, pos)[0];
+    if (!d) return null;
+    const di = this.info(d.file);
+    const sym = di && di.symbols.find((s) => s.line === d.range.start.line && s.ch === d.range.start.character);
+    return sym ? { file: path.resolve(d.file), line: sym.line, ch: sym.ch, sym } : null;
+  }
+
+  // Where the name at a position is used: every occurrence of the word (outside
+  // strings and comments) whose definition is the same declaration, so a local
+  // is found only in its function and a member only on its type (when the
+  // receiver's type is known). Without a declaration, every occurrence of the word.
   references(file, pos, includeLibrary) {
     const w = wordAtPosition(this.text(file) || "", pos);
     if (!w) return [];
     const re = new RegExp(`(?<![A-Za-z0-9_])${w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "g");
-    const out = [];
-    const files = new Set([...this.workspaceFiles(), ...this.reachable(file)]);
-    for (const f of files) {
-      if (!includeLibrary && this.isLibrary(f) && path.resolve(f) !== path.resolve(file)) continue;
-      const text = this.text(f);
-      if (text == null) continue;
-      const lines = splitLines(mask(text));
-      for (let i = 0; i < lines.length; i++) {
-        let m;
-        while ((m = re.exec(lines[i])) !== null) out.push({ file: f, range: range(i, m.index, w.word.length) });
+    this.reachMemo = new Map();
+    try {
+      const target = this.declarationAt(file, pos);
+      const same = (d) => d && path.resolve(d.file) === target.file && d.range.start.line === target.line && d.range.start.character === target.ch;
+      let files = [...new Set([...this.workspaceFiles(), ...this.reachable(file)].map((f) => path.resolve(f)))];
+      if (target && target.sym.local) files = [target.file];          // a local: only its own file
+      const out = [];
+      for (const f of files) {
+        if (!includeLibrary && this.isLibrary(f) && f !== path.resolve(file) && !(target && target.file === f)) continue;
+        const text = this.text(f);
+        if (text == null) continue;
+        const lines = splitLines(mask(text));
+        const from = target && target.sym.local ? target.sym.local.line : 0;
+        const to = target && target.sym.local ? (target.sym.local.endLine ?? lines.length) : lines.length;
+        for (let i = from; i <= Math.min(to, lines.length - 1); i++) {
+          let m;
+          while ((m = re.exec(lines[i])) !== null) {
+            const at = { line: i, character: m.index };
+            if (target) {
+              const own = target.file === f && target.line === i && target.ch === m.index;
+              if (!own) {
+                const here = this.declarationAt(f, at);
+                if (!here || !same({ file: here.file, range: range(here.line, here.ch, 0) })) continue;
+              }
+            }
+            out.push({ file: f, range: range(i, m.index, w.word.length) });
+          }
+        }
       }
+      return out;
+    } finally { this.reachMemo = null; }
+  }
+
+  // Can the name at a position be renamed? { range, placeholder } or { error }.
+  prepareRename(file, pos) {
+    const w = wordAtPosition(this.text(file) || "", pos);
+    if (!w || KEYWORD_SET.has(w.word) || BUILTINS.some((b) => b[0] === w.word)) return { error: "You cannot rename this element." };
+    const target = this.declarationAt(file, pos);
+    if (!target) return { error: `No declaration of '${w.word}' was found to rename.` };
+    if (this.isLibrary(target.file)) return { error: `'${w.word}' is declared in ${this.moduleName(target.file)} (the standard library or an installed package) and cannot be renamed here.` };
+    return { range: w.range, placeholder: w.word };
+  }
+  // The edits that rename the name at a position: [{ file, range }], or { error }.
+  rename(file, pos) {
+    const ok = this.prepareRename(file, pos);
+    if (ok.error) return ok;
+    return this.references(file, pos, false).filter((r) => !this.isLibrary(r.file));
+  }
+
+  // Organize imports: the file's leading block of import lines sorted (the standard
+  // library, then packages, then relative paths) with duplicates removed.
+  // { range, newText } or null when there is nothing to change.
+  organizeImports(file) {
+    const lines = splitLines(this.text(file) || "");
+    let first = -1, last = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (/^import\b/.test(t)) { if (first < 0) first = i; last = i; continue; }
+      if (first >= 0 && t !== "" && !t.startsWith("//")) break;
+      if (first < 0 && t !== "" && !t.startsWith("//")) return null;    // code before the imports
     }
-    return out;
+    if (first < 0) return null;
+    const block = lines.slice(first, last + 1);
+    if (block.some((l) => l.trim().startsWith("//"))) return null;       // comments among them: leave as written
+    const specOf = (l) => (/"([^"]*)"/.exec(l) || [, ""])[1];
+    const group = (s) => (s === "std" || s.startsWith("std/") ? 0 : /^\.{0,2}\//.test(s) || s.endsWith(".grav") ? 2 : 1);
+    const imports = [...new Set(block.filter((l) => l.trim()).map((l) => l.trim()))]
+      .sort((a, b) => group(specOf(a)) - group(specOf(b)) || specOf(a).localeCompare(specOf(b)) || a.localeCompare(b));
+    const out = [];
+    imports.forEach((l, k) => { if (k && group(specOf(l)) !== group(specOf(imports[k - 1]))) out.push(""); out.push(l); });
+    const newText = out.join("\n");
+    if (newText === block.join("\n")) return null;
+    return { range: { start: { line: first, character: 0 }, end: { line: last, character: lines[last].length } }, newText };
   }
 
   // ---- compiler-backed features ----
