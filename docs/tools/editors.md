@@ -9,7 +9,11 @@ dependencies, so they offer the same features.
 - **Highlighting** of the whole language: declarations, generics, function types,
   every import form, `use`, namespaces, `test` blocks, number literals, string
   interpolation and format specs, raw and multi-line strings, character literals,
-  `T?` and `x!`, labels, named arguments, and inline C with the C grammar.
+  `T?` and `x!`, labels, named arguments, and inline C with the C grammar; casts
+  (`x as Array<int>`), lambdas and their parameters, enum variants, fields,
+  decorators with named arguments, `NaN`/`Infinity`, and built-ins such as
+  `reflect`, `sizeof(int)` and `long(x)`. VS Code, JetBrains and Neovim color the
+  same constructs alike (`tests/grammar.sh` checks it).
 - **Go to definition**, following imports into the standard library, project
   paths and the `grav.toml` dependencies of the open file's project: git packages
   from the cache at their `grav.lock` commit, local `{ path = ... }` ones in their
@@ -19,16 +23,26 @@ dependencies, so they offer the same features.
   an example. On a local variable, its type, even where none is written:
   `let xs: Array<int>`, a `for (row in rows)` loop variable (`row: Row`), a
   `catch (e: IoError)` variable, a lambda parameter, a `case Some(x):` binding.
-- **Inlay hints** show those types after each binding that does not write one
+- **Inlay hints** show the parameter's name before each literal argument
+  (`area(width: 3, height: 4)`; off with `grav.inlayHints.parameterNames`), and
+  the types after each binding that does not write one
   (`let names = new Array<string>()` shows `names: Array<string>`). The types
   come from the compiler (`grav check --types`, run on open and save) and are
   printed the way they are written in Grav: `HashMap<string, any>`,
   `fn(int) -> string`, `long?`, `int[3]`. Before the first check, and for code
   the compiler cannot check, they are read from the source where it shows them.
 - **Completion** of members (from the variable's type, including loop and
-  lambda variables), static members,
-  namespace members, import paths, keywords and built-ins, plus snippets for
-  common constructs (`fn`, `class`, `match`, `test`, `ifnull`, ...).
+  lambda variables, with a generic class's type bound: `Array<int>.get()` is an
+  `int`, an Orbit `User.where(...)` a `Query<User>`), static members, namespace
+  members, import paths, keywords and built-ins, plus snippets for common
+  constructs (`fn`, `class`, `match`, `test`, `ifnull`, ...). Also:
+  - after `reflect(User).` the `ClassInfo` members (and `FieldInfo`,
+    `MethodInfo` through them: `info.fields()[0].`);
+  - after `super.` the base class's fields, methods and statics;
+  - after `x as ` the types the value converts to (numeric casts, `"42" as int`,
+    `d as Decimal` through `Decimal.from`, a class's `toFloat()`, base classes);
+  - after `@` the decorators the project uses; hovering one explains how to read
+    it through reflection.
 - **Methods on built-in values** ([std/types](../std/types/integer.md)): after
   `n.`, `port.`, `"text".`, `maybe.` or `x.`, completion lists the std/types
   methods the value takes (`n.toHex()` is `Integer.toHex(n)`), without the value's
@@ -37,9 +51,15 @@ dependencies, so they offer the same features.
   definition work on these calls, and the types of their results, of conversion
   casts (`d as Decimal`, `"42" as int`) and of method values (`Integer.compare`:
   `fn(int, int) -> int`) show in hovers and inlay hints.
-- **Signature help** inside calls.
-- **Outline**, workspace symbols (including the standard library), find
-  references and rename.
+- **Signature help** inside calls, opening on the overload that takes the
+  arguments written so far.
+- **Outline** and workspace symbols (including the standard library).
+- **Find references and rename** by declaration: a local is renamed only in its
+  function, a field or method only on its class (and where the receiver's type
+  is known to be it), across files and local packages. Names from the standard
+  library and installed packages are not renamed. **Highlights** mark a name's
+  uses in the file, and **Organize Imports** sorts the imports (the standard
+  library, then packages, then relative paths) and removes duplicates.
 - **Diagnostics** from `grav check --json` on open and save. (A compiler older
   than `--types` still gives diagnostics, without the compiler's types.)
 - **Formatting** with `grav fmt`.
@@ -49,12 +69,13 @@ dependencies, so they offer the same features.
 Install the extension from `editors/vscode/` (it is packaged as a `.vsix`):
 
 ```bash
-code --install-extension editors/vscode/grav-lang-1.11.0.vsix
+code --install-extension editors/vscode/grav-lang-1.12.0.vsix
 ```
 
 Commands (Ctrl+Shift+P, then "Grav"): Run (Ctrl+Alt+R), Build, Run Tests
 (Ctrl+Alt+T), Check, Format, Show Generated C, Run/Test Project, New Project, Add
-Package, Install Packages. Settings: `grav.compilerPath`, `grav.checkOnSave`.
+Package, Install Packages. Settings: `grav.compilerPath`, `grav.checkOnSave`,
+`grav.inlayHints.parameterNames`.
 
 ## Neovim
 

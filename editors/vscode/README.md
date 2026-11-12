@@ -25,10 +25,15 @@ Syntax highlighting, snippets, and build/run commands for the
   (`namespace std.net · std/net/http`); on a keyword or built-in type, what it
   means and an example; on a local, its type (also for `for`, `catch`, lambda
   and `match` variables).
-- **Inlay hints** — the type after each binding that does not write one
+- **Inlay hints** — parameter names before literal arguments
+  (`grav.inlayHints.parameterNames`), and the type after each binding that does not write one
   (`for (row in rows)` shows `row: Row`), from `grav check --types`; turn them
   off with VS Code's `editor.inlayHints.enabled`.
-- **Outline, workspace symbols (including the library), references, rename.**
+- **Outline, workspace symbols (including the library), references, highlights.**
+- **Rename** by declaration (a local in its function, a member on its class, across
+  files); library names are refused. **Organize Imports** sorts and dedupes imports.
+- **Completion around classes** — `reflect(T).` members, `super.` (fields, methods,
+  statics), `x as ` conversions, `@` decorator names; generics bound to the receiver.
 - **Diagnostics** — `grav check --json --types` runs on open and save (`grav.checkOnSave`).
 - **Formatting** — *Format Document* runs `grav fmt`.
 - **Commands** (Ctrl+Shift+P → "Grav") — Run (`Ctrl+Alt+R`), Build, Run Tests

@@ -10,10 +10,11 @@ every editor:
 | Hover — signature, doc comment, namespace and module; what a keyword, type or built-in (including the internal `__retain`/`__release`/...) means, with an example | `textDocument/hover` |
 | Completion — members by inferred type, the std/types methods of built-in values (`n.toHex()`, `"x".split(",")`, `maybe.orElse(0)`, `Object`'s on class instances), static members, namespace/alias members, import paths, keywords and built-ins (documented), snippets for common constructs | `textDocument/completion` |
 | Signature help for calls and constructors | `textDocument/signatureHelp` |
-| Inlay hints — the type after each `let`, `for`, lambda parameter and `match` binding that does not write one, from `grav check --types` (refreshed after each check) | `textDocument/inlayHint` |
+| Inlay hints — the parameter's name before each literal argument (`parameterNameHints: false` turns them off), and the type after each `let`, `for`, lambda parameter and `match` binding that does not write one, from `grav check --types` (refreshed after each check) | `textDocument/inlayHint` |
 | Outline with classes, members and enum variants nested | `textDocument/documentSymbol` |
 | Workspace symbols, including the standard library | `workspace/symbol` |
-| Find references, rename | `textDocument/references`, `rename` (+ `prepareRename`) |
+| Find references and rename by declaration (a local in its function, a member on its type, across files and local packages; library names are refused), highlights | `textDocument/references`, `rename` (+ `prepareRename`), `documentHighlight` |
+| Organize imports: sorted (std, packages, relative paths), duplicates removed | `textDocument/codeAction` (`source.organizeImports`) |
 | Formatting (`grav fmt -`) | `textDocument/formatting` |
 | Diagnostics (`grav check --json --types`, with "declared in std.x" notes) on open and save | `textDocument/publishDiagnostics` |
 
