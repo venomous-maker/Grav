@@ -22,3 +22,6 @@ examples/project/main
 
 # grav-db: its own repository (github.com/venomous-maker/grav-db), kept here while developing
 /grav-db/
+
+# grav-orbit: its own repository (github.com/venomous-maker/grav-orbit), kept here while developing
+/grav-orbit/
