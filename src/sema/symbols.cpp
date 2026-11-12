@@ -1094,10 +1094,12 @@ void Registry::checkHierarchies() {
                                          want.name + "' required by interface '" + ifq + "'");
                     continue;
                 }
-                // An interface type of `Self` is satisfied by the class's own type.
+                // An interface type of `Self` is satisfied by the class's own type, or
+                // by the base class's, for a method it inherits from a base that
+                // implements the interface too.
                 auto matches = [&](const TypeRef &h, TypeRef w) {
-                    if (w.isNamed() && w.name == "Self") w = TypeRef::named(fq);
-                    return h == w;
+                    if (!(w.isNamed() && w.name == "Self")) return h == w;
+                    return h == TypeRef::named(fq) || h == TypeRef::named(have->definingClass);
                 };
                 bool ok = matches(have->returnType, want.returnType) &&
                           have->paramTypes.size() == want.paramTypes.size();
