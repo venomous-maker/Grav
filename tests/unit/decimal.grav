@@ -1,0 +1,51 @@
+// Decimal: exact arithmetic, scales kept and combined, rounding half away from
+// zero, parsing (signs, leading zeros, exponents), 38 digits at most, and the
+// errors past that.
+import "std"
+
+test "exact arithmetic" {
+    let p = Decimal.parse("19.99")
+    assertEq("${p * Decimal.of(3)} ${p * Decimal.of(3) + Decimal.parse("0.01")} ${p - Decimal.parse("20")}", "59.97 59.98 -0.01")
+    assertEq("${Decimal.fromFloat(0.1) + Decimal.fromFloat(0.2)}", "0.3")
+    assertEq("${Decimal.of(1).div(Decimal.of(3), 4)} ${Decimal.of(2).div(Decimal.of(3), 2)} ${Decimal.parse("-7").div(Decimal.of(2), 0)}", "0.3333 0.67 -4")
+    assertEq("${Decimal.parse("1.10") * Decimal.parse("2.5")}", "2.750")
+}
+
+test "scales, rounding and comparison" {
+    assertEq("${Decimal.parse("19.90")} ${Decimal.parse("19.90").scale()} ${Decimal.of(1999, 2)} ${Decimal.of(-5, 3)}", "19.90 2 19.99 -0.005")
+    assertEq("${Decimal.parse("2.345").round(2)} ${Decimal.parse("-2.345").round(2)} ${Decimal.parse("2.5").round(0)} ${Decimal.parse("2").round(3)}",
+             "2.35 -2.35 3 2.000")
+    assertEq(Decimal.parse("19.90") == Decimal.parse("19.9"), true)
+    assertEq(Decimal.parse("-0.01") < Decimal.of(0) && Decimal.parse("3") >= Decimal.parse("2.999"), true)
+    let big = Decimal.parse("99999999999999999999999999999999999999")
+    let tiny = Decimal.parse("0.00000000000000000000000000000000000001")
+    assertEq(big > tiny && tiny > big.negate() && tiny.compareTo(tiny) == 0, true)   // (scales too far apart to align)
+    assertEq("${Decimal.parse("0").sign()} ${Decimal.parse("-3").abs()} ${Decimal.parse("-3").isZero()}", "0 3 false")
+}
+
+test "parsing and conversions" {
+    assertEq("${Decimal.parse("-0.05")} ${Decimal.parse(".5")} ${Decimal.parse("+3")} ${Decimal.parse("1.5e3")} ${Decimal.parse("1.5e-3")} ${Decimal.parse("000123.4500")}",
+             "-0.05 0.5 3 1500 0.0015 123.4500")
+    assertEq("${Decimal.parse("19.99").toFloat()} ${Decimal.parse("-19.99").toLong()} ${Decimal.fromFloat(0.1)}", "19.99 -19 0.1")
+    let bad = new Array<string>()
+    for (t in ["", "abc", "1.2.3", "1e", "999999999999999999999999999999999999999", "--1", "1 2"]) {
+        if (Decimal.tryParse(t) == null) { bad.push(t) }
+    }
+    assertEq(bad.size(), 7)
+}
+
+test "errors" {
+    let msgs = new Array<string>()
+    let big = Decimal.parse("99999999999999999999999999999999999999")
+    try { big + Decimal.of(1) } catch (e: ArithmeticError) { msgs.push(e.message()) }
+    try { Decimal.of(1).div(Decimal.of(0), 2) } catch (e: ArithmeticError) { msgs.push(e.message()) }
+    try { Decimal.parse("x1") } catch (e: ValueError) { msgs.push(e.message()) }
+    try { Decimal.of(1, 40) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { big.toLong() } catch (e: ArithmeticError) { msgs.push(e.message()) }
+    assertEq(Str.join(msgs, "\n"),
+             "Decimal overflow: 99999999999999999999999999999999999999 + 1 has more than 38 digits\n" +
+             "division by zero\n" +
+             "not a decimal number (of up to 38 digits): 'x1'\n" +
+             "a Decimal's scale is 0 to 38, not 40\n" +
+             "99999999999999999999999999999999999999 does not fit in a long")
+}

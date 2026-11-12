@@ -1,0 +1,228 @@
+// lib/types/string.grav — text: searching, slicing, case, trimming, splitting
+// and conversions, usable as methods on any string.
+//
+//   print("  Hello, World  ".trim().lower())     // hello, world
+//   print("a,b,c".split(","), "grav".reverse())  // [a, b, c] varg
+//   print("42".toInt() + 1, "19.99".toDecimal()) // 43 19.99
+//   print("user_name".toCamelCase())             // userName
+//
+// Every static method here whose first parameter is the string is also a
+// method of the string itself: `s.trim()` is `String.trim(s)`, one direct call.
+// (These are Str's, with conversions to numbers and other types added.)
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../text/string.grav"
+import "../data/bytes.grav"
+import "integer.grav"
+import "float.grav"
+import "bool.grav"
+import "decimal.grav"
+
+namespace std.types {
+
+    // Text (see the top of this file).
+    class String {
+        // ── inspecting ─────────────────────────────────────────────────────────
+        // The length in bytes (UTF-8: a character may take several).
+        static fn length(s: string) -> int { return Str.length(s); }
+        // Whether the string is "".
+        static fn isEmpty(s: string) -> bool { return Str.isEmpty(s); }
+        // Empty or only whitespace.
+        static fn isBlank(s: string) -> bool { return Str.isBlank(s); }
+        // Whether the strings have the same contents (same as ==).
+        static fn equals(a: string, b: string) -> bool { return Str.equals(a, b); }
+        // Whether the strings are equal ignoring ASCII letter case.
+        static fn equalsIgnoreCase(a: string, b: string) -> bool { return Str.equalsIgnoreCase(a, b); }
+        // <0, 0, >0 like strcmp: `xs.sortBy(fn(a, b) => Str.compare(a, b))` sorts A-Z.
+        static fn compare(a: string, b: string) -> int { return Str.compare(a, b); }
+        // Like compare, ignoring ASCII letter case.
+        static fn compareIgnoreCase(a: string, b: string) -> int { return Str.compareIgnoreCase(a, b); }
+        // The byte at index i (bounds-checked).
+        static fn charAt(s: string, i: int) -> int { return Str.charAt(s, i); }
+        // Whether every character is a digit 0-9 (false for "").
+        static fn isDigits(s: string) -> bool { return Str.isDigits(s); }
+        // Whether every character is an ASCII letter (false for "").
+        static fn isAlpha(s: string) -> bool { return Str.isAlpha(s); }
+        // Whether every character is an ASCII letter or digit (false for "").
+        static fn isAlphanumeric(s: string) -> bool { return Str.isAlphanumeric(s); }
+        // Whether no letter is lowercase (false for "").
+        static fn isUpper(s: string) -> bool { return Str.isUpper(s); }
+        // Whether no letter is uppercase (false for "").
+        static fn isLower(s: string) -> bool { return Str.isLower(s); }
+        // ── searching ──────────────────────────────────────────────────────────
+        // The byte index of the first occurrence of `sub`, or -1.
+        static fn indexOf(s: string, sub: string) -> int { return Str.indexOf(s, sub); }
+        // The byte index of the first occurrence of `sub` at or after `from`, or -1.
+        static fn indexFrom(s: string, sub: string, from: int) -> int { return Str.indexFrom(s, sub, from); }
+        // The byte index of the last occurrence of `sub`, or -1.
+        static fn lastIndexOf(s: string, sub: string) -> int { return Str.lastIndexOf(s, sub); }
+        // Whether `sub` occurs in the string.
+        static fn contains(s: string, sub: string) -> bool { return Str.contains(s, sub); }
+        // How many non-overlapping times `sub` occurs (0 for an empty `sub`).
+        static fn count(s: string, sub: string) -> int { return Str.count(s, sub); }
+        // Whether the string begins with `prefix`.
+        static fn startsWith(s: string, prefix: string) -> bool { return Str.startsWith(s, prefix); }
+        // Whether the string ends with `suffix`.
+        static fn endsWith(s: string, suffix: string) -> bool { return Str.endsWith(s, suffix); }
+        // ── transforming (each returns a new string) ───────────────────────────
+        // The two strings joined (same as a + b).
+        static fn concat(a: string, b: string) -> string { return Str.concat(a, b); }
+        // ASCII letters made uppercase.
+        static fn upper(s: string) -> string { return Str.upper(s); }
+        // ASCII letters made lowercase.
+        static fn lower(s: string) -> string { return Str.lower(s); }
+        // The first character made uppercase (ASCII).
+        static fn capitalize(s: string) -> string { return Str.capitalize(s); }
+        // The bytes in reverse order.
+        static fn reverse(s: string) -> string { return Str.reverse(s); }
+        // The string repeated n times ("" for n <= 0).
+        static fn repeat(s: string, n: int) -> string { return Str.repeat(s, n); }
+        // `len` bytes starting at `start` (bounds are clamped).
+        static fn substring(s: string, start: int, len: int) -> string { return Str.substring(s, start, len); }
+        // Characters [start, end) (bounds are clamped).
+        static fn slice(s: string, start: int, end: int) -> string { return Str.slice(s, start, end); }
+        // The string without the `len` bytes starting at `start`.
+        static fn remove(s: string, start: int, len: int) -> string { return Str.remove(s, start, len); }
+        // The string without `prefix` at its start (unchanged when it does not start with it).
+        static fn removePrefix(s: string, prefix: string) -> string { return Str.removePrefix(s, prefix); }
+        // The string without `suffix` at its end (unchanged when it does not end with it).
+        static fn removeSuffix(s: string, suffix: string) -> string { return Str.removeSuffix(s, suffix); }
+        // Without whitespace at both ends.
+        static fn trim(s: string) -> string { return Str.trim(s); }
+        // Without whitespace at the start.
+        static fn trimStart(s: string) -> string { return Str.trimStart(s); }
+        // Without whitespace at the end.
+        static fn trimEnd(s: string) -> string { return Str.trimEnd(s); }
+        // Every occurrence of `old` replaced by `repl`.
+        static fn replace(s: string, old: string, repl: string) -> string { return Str.replace(s, old, repl); }
+        // Pad to `len` characters with the first character of `ch` (a space if `ch` is empty).
+        static fn padLeft(s: string, len: int, ch: string) -> string { return Str.padLeft(s, len, ch); }
+        // Padded on the right to `len` characters with the first character of `ch` (a space if empty).
+        static fn padRight(s: string, len: int, ch: string) -> string { return Str.padRight(s, len, ch); }
+        // Centered in `width` characters, padded with the first character of `ch` (a space if empty).
+        static fn center(s: string, width: int, ch: string) -> string { return Str.center(s, width, ch); }
+        // ── splitting and joining ──────────────────────────────────────────────
+        // The parts between occurrences of `delim` ("a,,b" by "," gives "a", "", "b").
+        static fn split(s: string, delim: string) -> Array<string> { return Str.split(s, delim); }
+        // Lines of text (handles \n and \r\n; no trailing empty line for a final newline).
+        static fn lines(s: string) -> Array<string> { return Str.lines(s); }
+        // Whitespace-separated words (no empty entries).
+        static fn words(s: string) -> Array<string> { return Str.words(s); }
+        // ── more ───────────────────────────────────────────────────────────────
+        // `s` with only the first occurrence of `old` replaced.
+        static fn replaceFirst(s: string, old: string, repl: string) -> string { return Str.replaceFirst(s, old, repl); }
+        // Split at `delim` into at most `limit` pieces (the last keeps the rest):
+        // splitN("a=b=c", "=", 2) == ["a", "b=c"].
+        static fn splitN(s: string, delim: string, limit: int) -> Array<string> { return Str.splitN(s, delim, limit); }
+        // The text before the first `sep`, or all of `s` when it does not contain one.
+        static fn before(s: string, sep: string) -> string { return Str.before(s, sep); }
+        // The text after the first `sep`, or "" when it does not contain one.
+        static fn after(s: string, sep: string) -> string { return Str.after(s, sep); }
+        // At most `max` characters, ending in "…" when it was cut.
+        static fn truncate(s: string, max: int) -> string { return Str.truncate(s, max); }
+        // The words of `s` re-flowed into lines of at most `width` characters
+        // (a longer word gets a line of its own).
+        static fn wrap(s: string, width: int) -> Array<string> { return Str.wrap(s, width); }
+        // Each line of `s` prefixed with `prefix`.
+        static fn indent(s: string, prefix: string) -> string { return Str.indent(s, prefix); }
+        // The words of an identifier or phrase: "parseHTTPRequest", "parse_http request"
+        // and "parse-http" all split into lowercase words.
+        static fn identifierWords(s: string) -> Array<string> { return Str.identifierWords(s); }
+        // snake_case: "parseHttpRequest" -> "parse_http_request".
+        static fn toSnakeCase(s: string) -> string { return Str.toSnakeCase(s); }
+        // kebab-case: "parseHttpRequest" -> "parse-http-request".
+        static fn toKebabCase(s: string) -> string { return Str.toKebabCase(s); }
+        // camelCase: "parse_http_request" -> "parseHttpRequest".
+        static fn toCamelCase(s: string) -> string { return Str.toCamelCase(s); }
+        // PascalCase: "parse_http_request" -> "ParseHttpRequest".
+        static fn toPascalCase(s: string) -> string { return Str.toPascalCase(s); }
+        // Every word capitalized: "the grav book" -> "The Grav Book".
+        static fn titleCase(s: string) -> string { return Str.titleCase(s); }
+        // The number of single-character edits (insert, delete, replace) that turn a
+        // into b, counted in bytes: levenshtein("kitten", "sitting") == 3.
+        static fn levenshtein(a: string, b: string) -> int { return Str.levenshtein(a, b); }
+        // The longest start that a and b share.
+        static fn commonPrefix(a: string, b: string) -> string { return Str.commonPrefix(a, b); }
+        // Whether `s` starts with `prefix`, ignoring case.
+        static fn startsWithIgnoreCase(s: string, prefix: string) -> bool { return Str.startsWithIgnoreCase(s, prefix); }
+        // Whether `s` contains `sub`, ignoring case.
+        static fn containsIgnoreCase(s: string, sub: string) -> bool { return Str.containsIgnoreCase(s, sub); }
+
+        // ── comparing ────────────────────────────────────────────────────────────
+        // Comparators for sorting (`names.sortBy(String.compare)`, also
+        // compareIgnoreCase above): byte order, -1, 0 or 1.
+        static fn descending(a: string, b: string) -> int { return Str.compare(b, a); }
+        // `a.compareTo(b)`: as compare.
+        static fn compareTo(a: string, b: string) -> int { return Str.compare(a, b); }
+        // Natural order: runs of digits compare as numbers ("file2" before "file10").
+        static fn compareNatural(a: string, b: string) -> int {
+            let i = 0;
+            let j = 0;
+            while (i < a.length && j < b.length) {
+                let ca = a[i] as int;
+                let cb = b[j] as int;
+                let da = ca >= 48 && ca <= 57;
+                let db = cb >= 48 && cb <= 57;
+                if (da && db) {
+                    let si = i;
+                    let sj = j;
+                    while (i < a.length && (a[i] as int) == 48) { i += 1; }
+                    while (j < b.length && (b[j] as int) == 48) { j += 1; }
+                    let ni = i;
+                    let nj = j;
+                    while (i < a.length && (a[i] as int) >= 48 && (a[i] as int) <= 57) { i += 1; }
+                    while (j < b.length && (b[j] as int) >= 48 && (b[j] as int) <= 57) { j += 1; }
+                    if (i - ni != j - nj) { return i - ni < j - nj ? -1 : 1; }
+                    let c = Str.compare(a[ni..i], b[nj..j]);
+                    if (c != 0) { return c; }
+                    if (i - si != j - sj) { return i - si < j - sj ? -1 : 1; }   // (fewer leading zeros first)
+                    continue;
+                }
+                if (ca != cb) { return ca < cb ? -1 : 1; }
+                i += 1;
+                j += 1;
+            }
+            let ra = a.length - i;
+            let rb = b.length - j;
+            return ra < rb ? -1 : ra > rb ? 1 : 0;
+        }
+
+        // ── conversions ──────────────────────────────────────────────────────────
+        // The text as an int, a long, a float, a Decimal or a bool; ValueError when it is not one.
+        static fn toInt(s: string) -> int { return Integer.parse(s); }
+        static fn toLong(s: string) -> long { return Integer.parseLong(s); }
+        static fn toFloat(s: string) -> float { return Float.parse(s); }
+        static fn toDecimal(s: string) -> Decimal { return Decimal.parse(s); }
+        static fn toBool(s: string) -> bool { return Bool.parse(s); }
+        // Whether all of it is a whole number, or any number.
+        static fn isInteger(s: string) -> bool { return Integer.isValid(s); }
+        static fn isNumber(s: string) -> bool { return Float.isValid(s); }
+        // Its UTF-8 bytes.
+        static fn toBytes(s: string) -> Bytes { return Bytes.fromString(s); }
+        // Its characters (UTF-8 aware: "né" gives ["n", "é"]).
+        static fn chars(s: string) -> Array<string> {
+            let out = new Array<string>();
+            let i = 0;
+            while (i < s.length) {
+                let b = s[i] as int;
+                let n = b < 128 ? 1 : b < 224 ? 2 : b < 240 ? 3 : 4;
+                if (i + n > s.length) { n = s.length - i; }
+                out.push(s[i..i + n]);
+                i += n;
+            }
+            return out;
+        }
+        // How many characters it has (UTF-8 aware; `s.length` counts bytes).
+        static fn charCount(s: string) -> int {
+            let c = 0;
+            for (i in 0..s.length) { if (((s[i] as int) & 192) != 128) { c += 1; } }
+            return c;
+        }
+        // `s` with "{0}", "{1}", ... replaced by `args` ("{0} is {1}" with ["x", 3] is "x is 3").
+        static fn format(s: string, args: Array<any>) -> string {
+            let out = s;
+            for (i, a in args) { out = Str.replace(out, "{${i}}", "${a}"); }
+            return out;
+        }
+    }
+}

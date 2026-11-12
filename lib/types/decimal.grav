@@ -1,0 +1,375 @@
+// lib/types/decimal.grav — exact decimal numbers, for money and for databases'
+// DECIMAL and NUMERIC columns, where a float's binary rounding will not do.
+//
+//   let price = Decimal.parse("19.99")
+//   let total = price * Decimal.of(3)              // 59.97, exactly
+//   print(total + Decimal.parse("0.01"))           // 59.98
+//   print(Decimal.of(1).div(Decimal.of(3), 4))     // 0.3333
+//   print(Decimal.parse("10") / 4, price > 10)     // 2.5 true (whole numbers mix in)
+//
+// A Decimal holds up to 38 significant digits, with up to 38 of them after the
+// point (its scale). It keeps the scale it was written with ("19.90" stays
+// 19.90; == still finds it equal to 19.9). + and - give the larger scale, *
+// the sum of both; div rounds to the scale asked for, and round(n) to n digits,
+// both half away from zero; / keeps 16 digits after the point (more when an
+// operand has them), dropping trailing zeros down to the larger scale. A
+// result past 38 digits is an ArithmeticError. The operators also take whole
+// numbers on the right (`price * 3`, `total > 100`).
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../text/string.grav"
+
+namespace std.types {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdio.h>
+    typedef __int128 grav_i128;
+    static grav_i128 grav_dec_join(long long hi, long long lo) { return (grav_i128)(((unsigned __int128)(unsigned long long)hi << 64) | (unsigned long long)lo); }
+    static void grav_dec_split(grav_i128 v, long long* hi, long long* lo) { *hi = (long long)(v >> 64); *lo = (long long)(unsigned long long)v; }
+    static grav_i128 grav_dec_pow10(int n) { grav_i128 r = 1; while (n-- > 0) r *= 10; return r; }
+    static int grav_dec_fits(grav_i128 v) { grav_i128 lim = grav_dec_pow10(38); return v < lim && v > -lim; }
+    /* a * 10^k: 1 when it fits in 38 digits. */
+    static int grav_dec_up(grav_i128 a, int k, grav_i128* out) {
+        while (k-- > 0) if (__builtin_mul_overflow(a, (grav_i128)10, &a)) return 0;
+        if (!grav_dec_fits(a)) return 0;
+        *out = a;
+        return 1;
+    }
+    /* a / 10^k, rounded half away from zero. */
+    static grav_i128 grav_dec_down(grav_i128 a, int k) {
+        if (k <= 0) return a;
+        if (k > 38) return 0;
+        grav_i128 p = grav_dec_pow10(k), q = a / p, r = a % p;
+        if (r < 0) r = -r;
+        if (2 * r >= p) q += a < 0 ? -1 : 1;
+        return q;
+    }
+    /* The result of an operation: its value and scale, or ok = 0 on overflow. */
+    typedef struct { long long hi, lo; int scale, ok; } grav_dec_r;
+    static grav_dec_r grav_dec_make(grav_i128 v, int scale) {
+        grav_dec_r r;
+        r.ok = grav_dec_fits(v) && scale >= 0 && scale <= 38;
+        grav_dec_split(v, &r.hi, &r.lo);
+        r.scale = scale;
+        return r;
+    }
+    static grav_dec_r grav_dec_bad(void) { grav_dec_r r = { 0, 0, 0, 0 }; return r; }
+    /* op 0 +, 1 -, 2 * */
+    static grav_dec_r grav_dec_arith(int op, long long h1, long long l1, int s1, long long h2, long long l2, int s2) {
+        grav_i128 a = grav_dec_join(h1, l1), b = grav_dec_join(h2, l2), v;
+        if (op == 2) {
+            if (__builtin_mul_overflow(a, b, &v)) return grav_dec_bad();
+            int s = s1 + s2;
+            if (s > 38) { v = grav_dec_down(v, s - 38); s = 38; }
+            return grav_dec_make(v, s);
+        }
+        int s = s1 > s2 ? s1 : s2;
+        if (!grav_dec_up(a, s - s1, &a) || !grav_dec_up(b, s - s2, &b)) return grav_dec_bad();
+        if (op == 0 ? __builtin_add_overflow(a, b, &v) : __builtin_sub_overflow(a, b, &v)) return grav_dec_bad();
+        return grav_dec_make(v, s);
+    }
+    /* a / b to `scale` digits, rounded half away from zero (b is not 0). */
+    static grav_dec_r grav_dec_div(long long h1, long long l1, int s1, long long h2, long long l2, int s2, int scale) {
+        grav_i128 a = grav_dec_join(h1, l1), b = grav_dec_join(h2, l2), n;
+        int e = scale + s2 - s1;
+        if (e >= 0) {
+            n = a;
+            for (int i = 0; i < e; i++) if (__builtin_mul_overflow(n, (grav_i128)10, &n)) return grav_dec_bad();
+        } else {
+            n = grav_dec_down(a, -e);
+        }
+        grav_i128 q = n / b, r = n % b;
+        if (r < 0) r = -r;
+        grav_i128 absb = b < 0 ? -b : b;
+        if (r >= absb - r) q += ((n < 0) != (b < 0)) ? -1 : 1;
+        return grav_dec_make(q, scale);
+    }
+    static grav_dec_r grav_dec_round(long long h, long long l, int s, int scale) {
+        grav_i128 a = grav_dec_join(h, l);
+        if (scale >= s) { if (!grav_dec_up(a, scale - s, &a)) return grav_dec_bad(); return grav_dec_make(a, scale); }
+        return grav_dec_make(grav_dec_down(a, s - scale), scale);
+    }
+    /* a % b (the sign of a, as C's %), at the larger scale (b is not 0). */
+    static grav_dec_r grav_dec_mod(long long h1, long long l1, int s1, long long h2, long long l2, int s2) {
+        grav_i128 a = grav_dec_join(h1, l1), b = grav_dec_join(h2, l2);
+        int s = s1 > s2 ? s1 : s2;
+        if (!grav_dec_up(a, s - s1, &a) || !grav_dec_up(b, s - s2, &b)) return grav_dec_bad();
+        return grav_dec_make(a % b, s);
+    }
+    /* The value without trailing zeros after the point, down to `keep` digits. */
+    static grav_dec_r grav_dec_strip(long long h, long long l, int s, int keep) {
+        grav_i128 a = grav_dec_join(h, l);
+        while (s > keep && a % 10 == 0) { a /= 10; s--; }
+        return grav_dec_make(a, s);
+    }
+    /* -1, 0 or 1 as a < b, a == b, a > b. */
+    static int grav_dec_cmp(long long h1, long long l1, int s1, long long h2, long long l2, int s2) {
+        grav_i128 a = grav_dec_join(h1, l1), b = grav_dec_join(h2, l2), x, y;
+        int s = s1 > s2 ? s1 : s2;
+        if (grav_dec_up(a, s - s1, &x) && grav_dec_up(b, s - s2, &y)) return x < y ? -1 : x > y;
+        /* (aligning overflowed: compare the whole parts, then the fractions at 38 digits) */
+        grav_i128 p1 = grav_dec_pow10(s1), p2 = grav_dec_pow10(s2), w1 = a / p1, w2 = b / p2;
+        if (w1 != w2) return w1 < w2 ? -1 : 1;
+        grav_i128 f1 = (a % p1) * grav_dec_pow10(38 - s1), f2 = (b % p2) * grav_dec_pow10(38 - s2);
+        return f1 < f2 ? -1 : f1 > f2;
+    }
+    /* Parses "-12.340", "+5", ".5", "1.5e3": 1 and the value, else 0 (also past 38 digits). */
+    static int grav_dec_parse(const char* s, grav_dec_r* out) {
+        while (*s == ' ') s++;
+        int neg = 0, digits = 0, frac = 0, seen = 0, point = 0;
+        if (*s == '-' || *s == '+') neg = *s++ == '-';
+        grav_i128 v = 0;
+        for (; *s; s++) {
+            if (*s == '.' && !point) { point = 1; continue; }
+            if (*s < '0' || *s > '9') break;
+            seen = 1;
+            if (v == 0 && *s == '0' && !point) continue;          /* (leading zeros) */
+            if (point) frac++;
+            if (v != 0 || *s != '0') digits++;
+            else if (point) digits++;
+            if (digits > 38 || frac > 38) return 0;
+            v = v * 10 + (*s - '0');
+        }
+        if (!seen) return 0;
+        if (*s == 'e' || *s == 'E') {
+            s++;
+            int eneg = 0, e = 0, k = 0;
+            if (*s == '-' || *s == '+') eneg = *s++ == '-';
+            while (*s >= '0' && *s <= '9' && k < 4) { e = e * 10 + (*s++ - '0'); k++; }
+            if (!k) return 0;
+            frac += eneg ? e : -e;
+        }
+        while (*s == ' ') s++;
+        if (*s) return 0;
+        if (frac < 0) { if (!grav_dec_up(v, -frac, &v)) return 0; frac = 0; }
+        if (frac > 38) return 0;
+        *out = grav_dec_make(neg ? -v : v, frac);
+        return out->ok;
+    }
+    static const char* grav_dec_text(long long h, long long l, int scale) {
+        grav_i128 v = grav_dec_join(h, l);
+        char digits[48];
+        int n = 0, neg = v < 0;
+        unsigned __int128 u = neg ? (unsigned __int128)(-v) : (unsigned __int128)v;
+        do { digits[n++] = (char)('0' + (int)(u % 10)); u /= 10; } while (u);
+        while (n <= scale) digits[n++] = '0';                          /* (a 0 before the point) */
+        char* out = grav_str_alloc((size_t)n + 3);
+        if (!out) abort();
+        int o = 0;
+        if (neg) out[o++] = '-';
+        for (int i = n - 1; i >= 0; i--) {
+            out[o++] = digits[i];
+            if (i == scale && scale > 0) out[o++] = '.';
+        }
+        out[o] = 0;
+        return out;
+    }
+    static int grav_dec_long(long long h, long long l, int scale, long long* out) {
+        grav_i128 v = grav_dec_join(h, l) / grav_dec_pow10(scale);
+        if (v > (grav_i128)0x7fffffffffffffffLL || v < -(grav_i128)0x7fffffffffffffffLL - 1) return 0;
+        *out = (long long)v;
+        return 1;
+    }
+    %}
+
+    // An exact decimal number (see the top of this file).
+    class Decimal {
+        private hi: long                          // the unscaled value, a 128-bit integer
+        private lo: long
+        private sc: int                           // digits after the point
+
+        constructor(hi: long, lo: long, scale: int) { self.hi = hi; self.lo = lo; self.sc = scale; }
+
+        // The whole number `n` (scale 0).
+        static fn of(n: long) -> Decimal { return new Decimal(n < 0 ? -1 : 0, n, 0); }
+        // `units` × 10^-scale: Decimal.of(1999, 2) is 19.99.
+        static fn of(units: long, scale: int) -> Decimal {
+            if (scale < 0 || scale > 38) { throw new ValueError("a Decimal's scale is 0 to 38, not ${scale}"); }
+            return new Decimal(units < 0 ? -1 : 0, units, scale);
+        }
+        // For `x as Decimal`: a whole number, a float (its shortest decimal) or text (parsed).
+        static fn from(n: int) -> Decimal { return Decimal.of(n as long); }
+        static fn from(n: long) -> Decimal { return Decimal.of(n); }
+        static fn from(x: float) -> Decimal { return Decimal.fromFloat(x); }
+        static fn from(s: string) -> Decimal { return Decimal.parse(s); }
+        // Parses "19.99", "-0.5", "+3", ".25" or "1.5e3"; ValueError for anything
+        // else, or for more than 38 digits.
+        static fn parse(text: string) -> Decimal {
+            let d = Decimal.tryParse(text);
+            if (d == null) { throw new ValueError("not a decimal number (of up to 38 digits): '" + text + "'"); }
+            return d;
+        }
+        // As parse, but null when the text is not one.
+        static fn tryParse(text: string) -> Decimal {
+            let h = 0 as long;
+            let l = 0 as long;
+            let s = 0;
+            if (!(%{ ({ grav_dec_r r_; int ok_ = grav_dec_parse(text, &r_); h = r_.hi; l = r_.lo; s = r_.scale; ok_; }) %} as bool)) { return null; }
+            return new Decimal(h, l, s);
+        }
+        // The float `x` as the shortest decimal that reads back as it (0.1 is 0.1,
+        // not 0.1000000000000000055...); ValueError for NaN and infinities.
+        static fn fromFloat(x: float) -> Decimal {
+            let text = %{ ({ char* b_ = grav_str_alloc(40); if (!isfinite(x)) b_[0] = 0; else for (int p_ = 15; p_ <= 17; p_++) { snprintf(b_, 40, "%.*g", p_, x); if (strtod(b_, 0) == x) break; } b_; }) %} as string;
+            if (text == "") { throw new ValueError("${x} is not a decimal number"); }
+            return Decimal.parse(text);
+        }
+
+        // Digits after the point.
+        fn scale() -> int { return self.sc; }
+        // -1, 0 or 1.
+        fn sign() -> int { return self.hi < 0 ? -1 : (self.hi == 0 && self.lo == 0 ? 0 : 1); }
+        fn isZero() -> bool { return self.hi == 0 && self.lo == 0; }
+        fn negate() -> Decimal { return Decimal.of(0).minus(self).round(self.sc); }
+        fn abs() -> Decimal { return self.sign() < 0 ? self.negate() : self; }
+
+        fn operator+(o: Decimal) -> Decimal { return self.plus(o); }
+        fn operator-(o: Decimal) -> Decimal { return self.minus(o); }
+        fn operator*(o: Decimal) -> Decimal { return self.times(o); }
+        fn operator/(o: Decimal) -> Decimal { return self.dividedBy(o); }
+        fn operator%(o: Decimal) -> Decimal { return self.remainder(o); }
+        fn operator+(n: long) -> Decimal { return self.plus(Decimal.of(n)); }
+        fn operator-(n: long) -> Decimal { return self.minus(Decimal.of(n)); }
+        fn operator*(n: long) -> Decimal { return self.times(Decimal.of(n)); }
+        fn operator/(n: long) -> Decimal { return self.dividedBy(Decimal.of(n)); }
+        fn operator%(n: long) -> Decimal { return self.remainder(Decimal.of(n)); }
+        // This divided by `o`: 16 digits after the point (more when either has
+        // more), without trailing zeros past the larger of their scales (10 / 4 is
+        // 2.5, 1 / 3 is 0.3333333333333333); ArithmeticError for 0.
+        fn dividedBy(o: Decimal) -> Decimal {
+            let keep = self.sc > o.sc ? self.sc : o.sc;
+            let q = self.div(o, keep > 16 ? keep : 16);
+            return q.stripTrailingZeros(keep);
+        }
+        // What is left of this after taking out whole multiples of `o` (with this
+        // one's sign: -7 % 3 is -1); ArithmeticError for 0.
+        fn remainder(o: Decimal) -> Decimal {
+            if (o.isZero()) { throw new ArithmeticError("division by zero"); }
+            let h1 = self.hi; let l1 = self.lo; let s1 = self.sc;
+            let h2 = o.hi; let l2 = o.lo; let s2 = o.sc;
+            let h = 0 as long; let l = 0 as long; let s = 0;
+            let ok = %{ ({ grav_dec_r r_ = grav_dec_mod(h1, l1, s1, h2, l2, s2); h = r_.hi; l = r_.lo; s = r_.scale; r_.ok; }) %} as bool;
+            if (!ok) { throw new ArithmeticError("Decimal overflow: " + self.toString() + " % " + o.toString()); }
+            return new Decimal(h, l, s);
+        }
+        // The same number without trailing zeros after the point ("19.900" -> "19.9", "5.00" -> "5").
+        fn stripTrailingZeros() -> Decimal { return self.stripTrailingZeros(0); }
+        // As stripTrailingZeros, keeping at least `keep` digits after the point.
+        fn stripTrailingZeros(keep: int) -> Decimal {
+            let h1 = self.hi; let l1 = self.lo; let s1 = self.sc;
+            let h = 0 as long; let l = 0 as long; let s = 0;
+            %{ { grav_dec_r r_ = grav_dec_strip(h1, l1, s1, keep < 0 ? 0 : keep); h = r_.hi; l = r_.lo; s = r_.scale; } %};
+            return new Decimal(h, l, s);
+        }
+        // Rounded down (toward minus infinity) and up to whole numbers.
+        fn floor() -> Decimal { let r = self.round(0); return r > self ? r - 1 : r; }
+        fn ceil() -> Decimal { let r = self.round(0); return r < self ? r + 1 : r; }
+        // Its whole part, toward zero (-2.7 -> -2), and what is left.
+        fn trunc() -> Decimal { return self.sign() < 0 ? self.ceil() : self.floor(); }
+        fn fraction() -> Decimal { return self - self.trunc(); }
+        // This to the power `e` (e >= 0), exactly; ArithmeticError past 38 digits.
+        fn pow(e: int) -> Decimal {
+            if (e < 0) { throw new ValueError("a Decimal power is 0 or more, not ${e}"); }
+            let r = Decimal.of(1);
+            for (i in 0..e) { r = r * self; }
+            return r;
+        }
+        // Whether it has no fraction (5.00 has none).
+        fn isWhole() -> bool { return self.fraction().isZero(); }
+        // `p` percent of this (Decimal.of(200).percent(Decimal.of(15)) is 30).
+        fn percent(p: Decimal) -> Decimal { return self * p / 100; }
+        fn plus(o: Decimal) -> Decimal { return self.op(0, o); }
+        fn minus(o: Decimal) -> Decimal { return self.op(1, o); }
+        fn times(o: Decimal) -> Decimal { return self.op(2, o); }
+        // This divided by `o`, rounded to `scale` digits; ArithmeticError for 0.
+        fn div(o: Decimal, scale: int) -> Decimal {
+            if (o.isZero()) { throw new ArithmeticError("division by zero"); }
+            if (scale < 0 || scale > 38) { throw new ValueError("a Decimal's scale is 0 to 38, not ${scale}"); }
+            let h1 = self.hi; let l1 = self.lo; let s1 = self.sc;
+            let h2 = o.hi; let l2 = o.lo; let s2 = o.sc;
+            let h = 0 as long; let l = 0 as long;
+            let ok = %{ ({ grav_dec_r r_ = grav_dec_div(h1, l1, s1, h2, l2, s2, scale); h = r_.hi; l = r_.lo; r_.ok; }) %} as bool;
+            if (!ok) { throw new ArithmeticError("Decimal overflow: " + self.toString() + " / " + o.toString() + " has more than 38 digits"); }
+            return new Decimal(h, l, scale);
+        }
+        // Rounded (or padded with zeros) to `scale` digits after the point, half away from zero.
+        fn round(scale: int) -> Decimal {
+            if (scale < 0 || scale > 38) { throw new ValueError("a Decimal's scale is 0 to 38, not ${scale}"); }
+            let h1 = self.hi; let l1 = self.lo; let s1 = self.sc;
+            let h = 0 as long; let l = 0 as long;
+            let ok = %{ ({ grav_dec_r r_ = grav_dec_round(h1, l1, s1, scale); h = r_.hi; l = r_.lo; r_.ok; }) %} as bool;
+            if (!ok) { throw new ArithmeticError("Decimal overflow: " + self.toString() + " has no room for ${scale} digits after the point"); }
+            return new Decimal(h, l, scale);
+        }
+
+        // -1, 0 or 1 as this is less than, equal to or greater than `o` (19.9 equals 19.90).
+        fn compareTo(o: Decimal) -> int {
+            let h1 = self.hi; let l1 = self.lo; let s1 = self.sc;
+            let h2 = o.hi; let l2 = o.lo; let s2 = o.sc;
+            return %{ grav_dec_cmp(h1, l1, s1, h2, l2, s2) %} as int;
+        }
+        fn operator==(o: Decimal) -> bool { return self.compareTo(o) == 0; }
+        fn operator<(o: Decimal) -> bool { return self.compareTo(o) < 0; }
+        fn operator<=(o: Decimal) -> bool { return self.compareTo(o) <= 0; }
+        fn operator>(o: Decimal) -> bool { return self.compareTo(o) > 0; }
+        fn operator>=(o: Decimal) -> bool { return self.compareTo(o) >= 0; }
+        fn operator==(n: long) -> bool { return self.compareTo(Decimal.of(n)) == 0; }
+        fn operator<(n: long) -> bool { return self.compareTo(Decimal.of(n)) < 0; }
+        fn operator<=(n: long) -> bool { return self.compareTo(Decimal.of(n)) <= 0; }
+        fn operator>(n: long) -> bool { return self.compareTo(Decimal.of(n)) > 0; }
+        fn operator>=(n: long) -> bool { return self.compareTo(Decimal.of(n)) >= 0; }
+        // Comparators for sorting (`prices.sortBy(Decimal.compare)`): -1, 0 or 1.
+        static fn compare(a: Decimal, b: Decimal) -> int { return a.compareTo(b); }
+        static fn descending(a: Decimal, b: Decimal) -> int { return b.compareTo(a); }
+        // Whether both are the same number (19.9 and 19.90 are), or the same number and scale.
+        static fn equals(a: Decimal, b: Decimal) -> bool { return a.compareTo(b) == 0; }
+        static fn identical(a: Decimal, b: Decimal) -> bool { return a.compareTo(b) == 0 && a.sc == b.sc; }
+        static fn min(a: Decimal, b: Decimal) -> Decimal { return a.compareTo(b) <= 0 ? a : b; }
+        static fn max(a: Decimal, b: Decimal) -> Decimal { return a.compareTo(b) >= 0 ? a : b; }
+        // `x` kept within lo..hi.
+        fn clamp(lo: Decimal, hi: Decimal) -> Decimal { return self < lo ? lo : self > hi ? hi : self; }
+        // The total of `xs` (0 for none), exactly.
+        static fn sum(xs: Array<Decimal>) -> Decimal {
+            let t = Decimal.of(0);
+            for (x in xs) { t = t + x; }
+            return t;
+        }
+        // Their mean, to `scale` digits; ArithmeticError for none.
+        static fn average(xs: Array<Decimal>, scale: int) -> Decimal {
+            if (xs.size() == 0) { throw new ArithmeticError("the average of no numbers"); }
+            return Decimal.sum(xs).div(Decimal.of(xs.size() as long), scale);
+        }
+
+        // The number written out with all its scale's digits ("19.90", "-0.05", "42").
+        fn toString() -> string { let h = self.hi; let l = self.lo; let s = self.sc; return %{ grav_dec_text(h, l, s) %} as string; }
+        // The nearest float.
+        fn toFloat() -> float { let t = self.toString(); return %{ strtod(t, 0) %} as float; }
+        // The whole part as an int, toward zero; ArithmeticError past an int's range.
+        fn toInt() -> int {
+            let n = self.toLong();
+            if (n < -2147483648 || n > 2147483647) { throw new ArithmeticError(self.toString() + " does not fit in an int"); }
+            return n as int;
+        }
+        // The whole part, toward zero (19.99 gives 19); ArithmeticError past a long's range.
+        fn toLong() -> long {
+            let h = self.hi; let l = self.lo; let s = self.sc;
+            let out = 0 as long;
+            if (!(%{ grav_dec_long(h, l, s, &out) %} as bool)) { throw new ArithmeticError(self.toString() + " does not fit in a long"); }
+            return out;
+        }
+
+        private fn op(kind: int, o: Decimal) -> Decimal {
+            let h1 = self.hi; let l1 = self.lo; let s1 = self.sc;
+            let h2 = o.hi; let l2 = o.lo; let s2 = o.sc;
+            let h = 0 as long; let l = 0 as long; let s = 0;
+            let ok = %{ ({ grav_dec_r r_ = grav_dec_arith(kind, h1, l1, s1, h2, l2, s2); h = r_.hi; l = r_.lo; s = r_.scale; r_.ok; }) %} as bool;
+            if (!ok) {
+                let sym = kind == 0 ? " + " : kind == 1 ? " - " : " * ";
+                throw new ArithmeticError("Decimal overflow: " + self.toString() + sym + o.toString() + " has more than 38 digits");
+            }
+            return new Decimal(h, l, s);
+        }
+    }
+}

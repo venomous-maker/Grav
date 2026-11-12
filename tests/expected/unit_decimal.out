@@ -1,0 +1,6 @@
+running 4 tests
+  ok    exact arithmetic
+  ok    scales, rounding and comparison
+  ok    parsing and conversions
+  ok    errors
+result: 4 passed, 0 failed

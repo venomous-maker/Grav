@@ -1,0 +1,272 @@
+// lib/types/integer.grav — whole numbers: limits, parsing, bits, digits and
+// checked arithmetic, usable as methods on any integer value.
+//
+//   print(255.toHex())                 // ff
+//   print(Integer.toHex(255))          // the same function
+//   print(Integer.parse("42") + 1)     // 43
+//   print((-7).abs(), 12.gcd(18))      // 7 6
+//   print(1000000.grouped())           // 1,000,000
+//   print(Integer.MAX.addExact(1))     // ArithmeticError: integer overflow
+//
+// Every static method here whose first parameter is the number is also a
+// method of the number itself: `n.toHex()` is `Integer.toHex(n)`, one direct
+// call, nothing boxed. A byte also has Byte's methods.
+import "../core/exception.grav"
+import "../core/math.grav"
+import "../collections/array.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "decimal.grav"
+
+namespace std.types {
+
+    %{
+    #include <stdlib.h>
+    #include <errno.h>
+    #include <limits.h>
+    /* Parses all of `s` as a whole number in `base` (2..36; an optional sign, and
+       for base 16 an optional 0x): 1 and the value, else 0 (also on overflow). */
+    static int grav_int_parse(const char* s, int base, long long* out) {
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s) return 0;
+        char* end = 0;
+        errno = 0;
+        long long v = strtoll(s, &end, base);
+        if (end == s || errno) return 0;
+        while (*end == ' ' || *end == '\t') end++;
+        if (*end) return 0;
+        *out = v;
+        return 1;
+    }
+    static const char* grav_int_base(unsigned long long u, int neg, int base) {
+        static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+        char buf[72];
+        int n = 0;
+        do { buf[n++] = digits[u % (unsigned)base]; u /= (unsigned)base; } while (u);
+        if (neg) buf[n++] = '-';
+        char* out = grav_str_alloc((size_t)n + 1);
+        if (!out) abort();
+        for (int i = 0; i < n; i++) out[i] = buf[n - 1 - i];
+        out[n] = 0;
+        return out;
+    }
+    %}
+
+    // Whole numbers (see the top of this file).
+    class Integer {
+        // The largest and smallest int (32-bit).
+        static readonly MAX: int = 2147483647
+        static readonly MIN: int = -2147483647 - 1
+        // The largest and smallest long (64-bit).
+        static readonly LONG_MAX: long = 9223372036854775807
+        static readonly LONG_MIN: long = -9223372036854775807 - 1
+
+        // ── parsing ──────────────────────────────────────────────────────────────
+        // `s` as an int ("42", " -7 "); ValueError when it is not one or is out of range.
+        static fn parse(s: string) -> int {
+            let n = Integer.parseLong(s);
+            if (n < (Integer.MIN as long) || n > (Integer.MAX as long)) { throw new ValueError("'" + s + "' is out of the int range"); }
+            return n as int;
+        }
+        // `s` as a long; ValueError when it is not one.
+        static fn parseLong(s: string) -> long {
+            let out = 0 as long;
+            if (!(%{ grav_int_parse(s, 10, &out) %} as bool)) { throw new ValueError("not a whole number: '" + s + "'"); }
+            return out;
+        }
+        // `s` in `base` (2..36: "ff" in 16, "1010" in 2; base 16 also takes "0xff"); ValueError otherwise.
+        static fn parse(s: string, base: int) -> long {
+            if (base < 2 || base > 36) { throw new ValueError("a base is 2 to 36, not ${base}"); }
+            let out = 0 as long;
+            if (!(%{ grav_int_parse(s, base, &out) %} as bool)) { throw new ValueError("not a whole number in base ${base}: '" + s + "'"); }
+            return out;
+        }
+        // `s` as a long, or `fallback` when it is not one.
+        static fn parseOr(s: string, fallback: long) -> long {
+            let out = 0 as long;
+            return %{ grav_int_parse(s, 10, &out) %} as bool ? out : fallback;
+        }
+        // `s` as a long, or null when it is not one.
+        static fn tryParse(s: string) -> long? {
+            let out = 0 as long;
+            if (%{ grav_int_parse(s, 10, &out) %} as bool) { return out; }
+            return null;
+        }
+        // Whether all of `s` is a whole number.
+        static fn isValid(s: string) -> bool { let out = 0 as long; return %{ grav_int_parse(s, 10, &out) %} as bool; }
+
+        // ── text ─────────────────────────────────────────────────────────────────
+        // The number in decimal ("42", "-7").
+        static fn toString(n: long) -> string { return str(n); }
+        // The number in `base` (2..36), lower-case digits, with a "-" when negative.
+        static fn toString(n: long, base: int) -> string {
+            if (base < 2 || base > 36) { throw new ValueError("a base is 2 to 36, not ${base}"); }
+            let neg = n < 0;
+            return %{ grav_int_base(neg ? 0ULL - (unsigned long long)n : (unsigned long long)n, neg, base) %} as string;
+        }
+        // Hexadecimal, lower case ("ff"; "-ff" for -255).
+        static fn toHex(n: long) -> string { return Integer.toString(n, 16); }
+        // Binary ("1010").
+        static fn toBinary(n: long) -> string { return Integer.toString(n, 2); }
+        // Octal ("17").
+        static fn toOctal(n: long) -> string { return Integer.toString(n, 8); }
+        // With thousands separators ("1,234,567").
+        static fn grouped(n: long) -> string { return Format.grouped(n); }
+        // Padded with zeros to `width` digits ("007"; a "-" comes first).
+        static fn padded(n: long, width: int) -> string {
+            let digits = n < 0 ? Integer.toString(0 - n) : Integer.toString(n);
+            let body = Str.padLeft(digits, n < 0 ? width - 1 : width, "0");
+            return n < 0 ? "-" + body : body;
+        }
+        // The character with code point `n` ("A" for 65), as a UTF-8 string.
+        static fn toChar(n: int) -> string { return Str.fromChar(n); }
+        // As an ordinal: "1st", "2nd", "3rd", "11th", "22nd".
+        static fn ordinal(n: long) -> string {
+            let m100 = Integer.abs(n % 100);
+            let m10 = Integer.abs(n % 10);
+            let suffix = m100 >= 11 && m100 <= 13 ? "th" : m10 == 1 ? "st" : m10 == 2 ? "nd" : m10 == 3 ? "rd" : "th";
+            return str(n) + suffix;
+        }
+
+        // ── numbers ──────────────────────────────────────────────────────────────
+        static fn abs(n: int) -> int { return n < 0 ? 0 - n : n; }
+        static fn abs(n: long) -> long { return n < 0 ? 0 - n : n; }
+        // -1, 0 or 1.
+        static fn sign(n: long) -> int { return n < 0 ? -1 : n > 0 ? 1 : 0; }
+        static fn min(a: int, b: int) -> int { return a < b ? a : b; }
+        static fn min(a: long, b: long) -> long { return a < b ? a : b; }
+        static fn max(a: int, b: int) -> int { return a > b ? a : b; }
+        static fn max(a: long, b: long) -> long { return a > b ? a : b; }
+        // `n` kept within lo..hi.
+        static fn clamp(n: int, lo: int, hi: int) -> int { return n < lo ? lo : n > hi ? hi : n; }
+        static fn clamp(n: long, lo: long, hi: long) -> long { return n < lo ? lo : n > hi ? hi : n; }
+        // Whether lo <= n <= hi.
+        static fn between(n: long, lo: long, hi: long) -> bool { return n >= lo && n <= hi; }
+        static fn isEven(n: long) -> bool { return n % 2 == 0; }
+        static fn isOdd(n: long) -> bool { return n % 2 != 0; }
+        // Whether `n` is prime.
+        static fn isPrime(n: long) -> bool { return Math.isPrime(n); }
+        // The greatest common divisor (never negative).
+        static fn gcd(a: long, b: long) -> long {
+            let x = Integer.abs(a);
+            let y = Integer.abs(b);
+            while (y != 0) { let t = x % y; x = y; y = t; }
+            return x;
+        }
+        // The least common multiple (0 when either is 0).
+        static fn lcm(a: long, b: long) -> long {
+            if (a == 0 || b == 0) { return 0; }
+            return Integer.abs(a / Integer.gcd(a, b) * b);
+        }
+        // `n` to the power `e` (e >= 0); ArithmeticError when it overflows a long.
+        static fn pow(n: long, e: int) -> long {
+            if (e < 0) { throw new ValueError("a negative power of a whole number is not whole: ${n}^${e}"); }
+            let r = 0 as long;
+            let ok = %{ ({ long long b_ = n, acc_ = 1; int ee_ = e, ok_ = 1; while (ee_ > 0 && ok_) { if (ee_ & 1) ok_ = !__builtin_mul_overflow(acc_, b_, &acc_); ee_ >>= 1; if (ee_ && ok_) ok_ = !__builtin_mul_overflow(b_, b_, &b_); } r = acc_; ok_; }) %} as bool;
+            if (!ok) { throw new ArithmeticError("integer overflow: ${n}^${e}"); }
+            return r;
+        }
+        // How many decimal digits `n` has (the sign aside; 1 for 0).
+        static fn digitCount(n: long) -> int {
+            let u = %{ n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n %} as ulong;
+            let c = 1;
+            while (u >= (10 as ulong)) { u = u / (10 as ulong); c += 1; }
+            return c;
+        }
+        // The sum of its decimal digits (the sign aside).
+        static fn digitSum(n: long) -> int {
+            let u = %{ n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n %} as ulong;
+            let s = 0;
+            while (u > (0 as ulong)) { s += (u % (10 as ulong)) as int; u = u / (10 as ulong); }
+            return s;
+        }
+        // Its decimal digits, most significant first (the sign aside).
+        static fn digits(n: long) -> Array<int> {
+            let out = new Array<int>();
+            let u = %{ n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n %} as ulong;
+            if (u == (0 as ulong)) { out.push(0); return out; }
+            while (u > (0 as ulong)) { out.push((u % (10 as ulong)) as int); u = u / (10 as ulong); }
+            out.reverse();
+            return out;
+        }
+        // Calls `f` with 0, 1, ..., n - 1.
+        static fn times(n: int, f: fn(int)) { for (i in 0..n) { f(i); } }
+        // The number as a float, a Decimal.
+        static fn toFloat(n: long) -> float { return n as float; }
+        static fn toDecimal(n: long) -> Decimal { return Decimal.of(n); }
+
+        // ── comparing ────────────────────────────────────────────────────────────
+        // Comparators for sorting (`xs.sortBy(Integer.compare)`): -1, 0 or 1.
+        static fn compare(a: int, b: int) -> int { return a < b ? -1 : a > b ? 1 : 0; }
+        static fn compare(a: long, b: long) -> int { return a < b ? -1 : a > b ? 1 : 0; }
+        // Largest first.
+        static fn descending(a: int, b: int) -> int { return b < a ? -1 : b > a ? 1 : 0; }
+        static fn descending(a: long, b: long) -> int { return b < a ? -1 : b > a ? 1 : 0; }
+        // `a.compareTo(b)`: as compare.
+        static fn compareTo(a: long, b: long) -> int { return a < b ? -1 : a > b ? 1 : 0; }
+        static fn equals(a: long, b: long) -> bool { return a == b; }
+
+        // ── checked arithmetic (ArithmeticError instead of wrapping) ─────────────
+        static fn addExact(a: int, b: int) -> int {
+            let r = 0;
+            if (%{ __builtin_add_overflow(a, b, &r) %} as bool) { throw new ArithmeticError("integer overflow: ${a} + ${b}"); }
+            return r;
+        }
+        static fn addExact(a: long, b: long) -> long {
+            let r = 0 as long;
+            if (%{ __builtin_add_overflow(a, b, &r) %} as bool) { throw new ArithmeticError("integer overflow: ${a} + ${b}"); }
+            return r;
+        }
+        static fn subtractExact(a: int, b: int) -> int {
+            let r = 0;
+            if (%{ __builtin_sub_overflow(a, b, &r) %} as bool) { throw new ArithmeticError("integer overflow: ${a} - ${b}"); }
+            return r;
+        }
+        static fn subtractExact(a: long, b: long) -> long {
+            let r = 0 as long;
+            if (%{ __builtin_sub_overflow(a, b, &r) %} as bool) { throw new ArithmeticError("integer overflow: ${a} - ${b}"); }
+            return r;
+        }
+        static fn multiplyExact(a: int, b: int) -> int {
+            let r = 0;
+            if (%{ __builtin_mul_overflow(a, b, &r) %} as bool) { throw new ArithmeticError("integer overflow: ${a} * ${b}"); }
+            return r;
+        }
+        static fn multiplyExact(a: long, b: long) -> long {
+            let r = 0 as long;
+            if (%{ __builtin_mul_overflow(a, b, &r) %} as bool) { throw new ArithmeticError("integer overflow: ${a} * ${b}"); }
+            return r;
+        }
+        // `n` as an int; ArithmeticError when it does not fit.
+        static fn toIntExact(n: long) -> int {
+            if (n < (Integer.MIN as long) || n > (Integer.MAX as long)) { throw new ArithmeticError("${n} does not fit in an int"); }
+            return n as int;
+        }
+
+        // ── bits ─────────────────────────────────────────────────────────────────
+        // How many bits are 1 (of the two's-complement bits: 64 of them for a long, 32 for an int).
+        static fn bitCount(n: int) -> int { return %{ __builtin_popcount((unsigned)n) %} as int; }
+        static fn bitCount(n: long) -> int { return %{ __builtin_popcountll((unsigned long long)n) %} as int; }
+        // Zero bits above the highest 1 (32 or 64 for 0).
+        static fn leadingZeros(n: int) -> int { return n == 0 ? 32 : %{ __builtin_clz((unsigned)n) %} as int; }
+        static fn leadingZeros(n: long) -> int { return n == 0 ? 64 : %{ __builtin_clzll((unsigned long long)n) %} as int; }
+        // Zero bits below the lowest 1 (32 or 64 for 0).
+        static fn trailingZeros(n: int) -> int { return n == 0 ? 32 : %{ __builtin_ctz((unsigned)n) %} as int; }
+        static fn trailingZeros(n: long) -> int { return n == 0 ? 64 : %{ __builtin_ctzll((unsigned long long)n) %} as int; }
+        // Whether `n` is a power of two (1, 2, 4, ...).
+        static fn isPowerOfTwo(n: long) -> bool { return n > 0 && (n & (n - 1)) == 0; }
+        // The smallest power of two >= n (1 for n <= 1); ArithmeticError past a long.
+        static fn nextPowerOfTwo(n: long) -> long {
+            if (n <= 1) { return 1; }
+            if (n > (1 as long) << 62) { throw new ArithmeticError("no power of two >= ${n} fits in a long"); }
+            return (1 as long) << (64 - Integer.leadingZeros(n - 1));
+        }
+        // The bits turned `k` places to the left (those leaving on the left come back on the right).
+        static fn rotateLeft(n: int, k: int) -> int { return %{ (int)(((unsigned)n << (k & 31)) | ((unsigned)n >> ((32 - (k & 31)) & 31))) %} as int; }
+        static fn rotateLeft(n: long, k: int) -> long { return %{ (long long)(((unsigned long long)n << (k & 63)) | ((unsigned long long)n >> ((64 - (k & 63)) & 63))) %} as long; }
+        static fn rotateRight(n: int, k: int) -> int { return Integer.rotateLeft(n, 32 - (k & 31)); }
+        static fn rotateRight(n: long, k: int) -> long { return Integer.rotateLeft(n, 64 - (k & 63)); }
+        // Whether bit `i` (0 = the lowest) is 1.
+        static fn testBit(n: long, i: int) -> bool { return ((n >> i) & 1) != 0; }
+    }
+}

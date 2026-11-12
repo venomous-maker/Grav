@@ -1,0 +1,9 @@
+running 7 tests
+  ok    Integer
+  ok    Float
+  ok    String
+  ok    Bool, Byte and Null
+  ok    Object
+  ok    comparators and Decimal operators
+  ok    casts convert
+result: 7 passed, 0 failed

@@ -1,0 +1,10 @@
+// lib/types.grav — `import "std/types"`: Integer, Float, String, Bool, Byte, Decimal, Null and Object,
+// whose static methods are also methods of the values themselves (`n.toHex()`).
+import "types/decimal.grav"
+import "types/integer.grav"
+import "types/float.grav"
+import "types/string.grav"
+import "types/bool.grav"
+import "types/byte.grav"
+import "types/null.grav"
+import "types/object.grav"

@@ -247,8 +247,10 @@ Output:
 ```
 
 Dividing an integer by zero is an error at run time (an `ArithmeticError`, see
-[Errors](14-errors.md)). Dividing a float by zero gives infinity (`inf`) or
-`nan`, as in C.
+[Errors](14-errors.md)). Dividing a float by zero gives infinity or
+not-a-number, as in C; they print as `Infinity` and `NaN`, and the names
+`Infinity` and `NaN` stand for them in code (`x.isNaN()` tests for NaN, which
+is never `==` to anything).
 
 Integers have a fixed size. Going past the largest value (*overflow*) is not
 checked: the value wraps around, so `2147483647 + 1` is `-2147483648` for an
@@ -350,12 +352,50 @@ false
 ```
 
 Converting a float to an integer drops the fraction (toward zero). To round
-instead, use `Math.round` from the standard library. To turn text into a number,
-use `Format.toInt("42")` and friends, which throw a `ValueError` for text that is
-not a number ([Strings and text](03-strings-and-text.md#strings-and-numbers)).
+instead, use `x.round()` (below) or `Math.round`. To turn text into a number,
+cast it: `"42" as int`, `"2.5" as float`, `"yes" as bool` parse the text and
+throw a `ValueError` for text that is not one; `42 as string` goes the other
+way ([Strings and text](03-strings-and-text.md#strings-and-numbers) has more).
 
 `as` also converts between related classes and to and from `any`; those come
-up in later chapters.
+up in later chapters. A class can take part in casts too: `price as float`
+calls the object's `toFloat()` (likewise `toInt`, `toLong`, `toString`,
+`toBool`), and `19.99 as Decimal` calls the class's static `from(19.99)`.
+
+## Methods on values
+
+Numbers, strings and bools have methods, from the standard library's
+[types](../std/README.md#types) category: `Integer`, `Float`, `String`, `Bool`,
+`Byte`, and `Null` for `T?` values.
+
+```grav
+import "std"
+
+fn main() {
+    let n = 255
+    print(n.toHex() + " " + Integer.toHex(255))
+    print("${(-7).abs()} ${1234567.grouped()} ${22.ordinal()}")
+    print("${3.14159.round(2)} ${"  hi  ".trim().upper()} ${"42".toInt() + 1}")
+    let port: int? = null
+    print(port.orElse(8080))
+}
+```
+
+Output:
+
+```text
+ff ff
+7 1,234,567 22nd
+3.14 HI 43
+8080
+```
+
+`n.toHex()` is just another way to write `Integer.toHex(n)`: every static
+method of those classes whose first parameter is the value works as a method of
+the value, as one direct call, with nothing boxed or allocated for the value.
+The classes also give limits (`Integer.MAX`, `Float.EPSILON`), parsing
+(`Integer.parse`, `Float.tryParse`) and comparators for sorting
+(`xs.sortBy(Integer.descending)`).
 
 ## Operators
 
@@ -448,7 +488,9 @@ true value. For a fixed number of decimals, use a format spec: `"${price:.2f}"`
 - `int` (32-bit), `long` (64-bit), `float`, `bool` and `string` cover most code.
 - Integers mix and widen freely; float to integer needs an explicit conversion.
 - Conditions must be `bool`; there is no "truthy" or "falsy".
-- `int(x)`, `x as int` and `(int)x` convert; `str(x)` turns anything into text.
+- `int(x)`, `x as int` and `(int)x` convert; `str(x)` turns anything into text;
+  `"42" as int` parses.
+- Values have methods: `n.toHex()`, `x.round(2)`, `s.trim()`, `port.orElse(80)`.
 
 ## Exercises
 

@@ -1,0 +1,153 @@
+// lib/types/float.grav — floating-point numbers: limits, parsing, rounding,
+// tests and text, usable as methods on any float value.
+//
+//   print(3.14159.round(2))               // 3.14
+//   print(Float.parse("2.5e3"))           // 2500
+//   print(0.1.toFixed(3), (0.0 / 0.0).isNaN())   // 0.100 true
+//   print(0.1.approxEquals(0.1000001, 1e-6))     // true
+//   print(19.99.toDecimal())              // 19.99, exactly
+//
+// Every static method here whose first parameter is the number is also a
+// method of the number itself: `x.round(2)` is `Float.round(x, 2)`. NaN and
+// Infinity name the special values (`x == Infinity`; NaN is never == to
+// anything, so test it with `x.isNaN()`), and print as NaN, Infinity and
+// -Infinity.
+import "../core/exception.grav"
+import "../core/math.grav"
+import "../text/convert.grav"
+import "decimal.grav"
+
+namespace std.types {
+
+    %{
+    #include <math.h>
+    #include <stdlib.h>
+    #include <float.h>
+    /* All of `s` as a float (also "inf", "nan", "1e3"): 1 and the value, else 0. */
+    static int grav_float_parse(const char* s, double* out) {
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s) return 0;
+        char* end = 0;
+        double d = strtod(s, &end);
+        if (end == s) return 0;
+        while (*end == ' ' || *end == '\t') end++;
+        if (*end) return 0;
+        *out = d;
+        return 1;
+    }
+    %}
+
+    // Not-a-number, and positive infinity (`-Infinity` is the negative one).
+    const NaN: float = 0.0 / 0.0
+    const Infinity: float = 1.0 / 0.0
+
+    // Floating-point numbers (see the top of this file).
+    class Float {
+        // The largest finite float, the smallest positive normal one, and the gap
+        // between 1.0 and the next float.
+        static readonly MAX: float = 1.7976931348623157e308
+        static readonly MIN_POSITIVE: float = 2.2250738585072014e-308
+        static readonly EPSILON: float = 2.220446049250313e-16
+        // Not-a-number (what 0.0 / 0.0 gives; it is not == to anything, itself
+        // included: test with isNaN), and the infinities. Also the globals NaN and
+        // Infinity.
+        static readonly NAN: float = 0.0 / 0.0
+        static readonly INFINITY: float = 1.0 / 0.0
+        static readonly NEGATIVE_INFINITY: float = -1.0 / 0.0
+        static fn infinity() -> float { return %{ (double)INFINITY %} as float; }
+        static fn nan() -> float { return %{ (double)NAN %} as float; }
+
+        // ── parsing ──────────────────────────────────────────────────────────────
+        // `s` as a float ("2.5", "-1e3", "inf"); ValueError when it is not one.
+        static fn parse(s: string) -> float {
+            let out = 0.0;
+            if (!(%{ grav_float_parse(s, &out) %} as bool)) { throw new ValueError("not a number: '" + s + "'"); }
+            return out;
+        }
+        // `s` as a float, or `fallback` when it is not one.
+        static fn parseOr(s: string, fallback: float) -> float { let out = 0.0; return %{ grav_float_parse(s, &out) %} as bool ? out : fallback; }
+        // `s` as a float, or null when it is not one.
+        static fn tryParse(s: string) -> float? {
+            let out = 0.0;
+            if (%{ grav_float_parse(s, &out) %} as bool) { return out; }
+            return null;
+        }
+        // Whether all of `s` is a number.
+        static fn isValid(s: string) -> bool { let out = 0.0; return %{ grav_float_parse(s, &out) %} as bool; }
+
+        // ── tests ────────────────────────────────────────────────────────────────
+        static fn isNaN(x: float) -> bool { return %{ isnan(x) %} as bool; }
+        // Either infinity.
+        static fn isInfinite(x: float) -> bool { return %{ isinf(x) %} as bool; }
+        static fn isPositiveInfinity(x: float) -> bool { return %{ isinf(x) && x > 0 %} as bool; }
+        static fn isNegativeInfinity(x: float) -> bool { return %{ isinf(x) && x < 0 %} as bool; }
+        // Neither NaN nor infinite.
+        static fn isFinite(x: float) -> bool { return %{ isfinite(x) %} as bool; }
+        // Whether it has no fraction (3.0, not 3.5; NaN and infinities are not).
+        static fn isWhole(x: float) -> bool { return %{ isfinite(x) && x == trunc(x) %} as bool; }
+        // Whether `a` and `b` differ by at most `tolerance`.
+        static fn approxEquals(a: float, b: float, tolerance: float) -> bool { return Math.abs(a - b) <= tolerance; }
+
+        // ── rounding and numbers ─────────────────────────────────────────────────
+        // Rounded to `digits` after the point, half away from zero (3.14159 -> 3.14).
+        static fn round(x: float, digits: int) -> float {
+            let p = Math.pow(10.0, digits as float);
+            return %{ round(x * p) / p %} as float;
+        }
+        // Rounded to the nearest whole number, half away from zero.
+        static fn round(x: float) -> float { return %{ round(x) %} as float; }
+        static fn floor(x: float) -> float { return %{ floor(x) %} as float; }
+        static fn ceil(x: float) -> float { return %{ ceil(x) %} as float; }
+        // Toward zero (-2.7 -> -2).
+        static fn trunc(x: float) -> float { return %{ trunc(x) %} as float; }
+        // The part after the point, with the sign (-2.75 -> -0.75).
+        static fn fraction(x: float) -> float { return %{ x - trunc(x) %} as float; }
+        static fn abs(x: float) -> float { return %{ fabs(x) %} as float; }
+        // -1, 0 or 1 (0 for NaN).
+        static fn sign(x: float) -> int { return x > 0.0 ? 1 : x < 0.0 ? -1 : 0; }
+        static fn min(a: float, b: float) -> float { return a < b ? a : b; }
+        static fn max(a: float, b: float) -> float { return a > b ? a : b; }
+        // `x` kept within lo..hi.
+        static fn clamp(x: float, lo: float, hi: float) -> float { return x < lo ? lo : x > hi ? hi : x; }
+        // Whether lo <= x <= hi.
+        static fn between(x: float, lo: float, hi: float) -> bool { return x >= lo && x <= hi; }
+        static fn sqrt(x: float) -> float { return %{ sqrt(x) %} as float; }
+        // `x` to the power `y`.
+        static fn pow(x: float, y: float) -> float { return %{ pow(x, y) %} as float; }
+        // The value t of the way from `a` to `b` (t = 0 gives a, 1 gives b).
+        static fn lerp(a: float, b: float, t: float) -> float { return a + (b - a) * t; }
+
+        // ── comparing ────────────────────────────────────────────────────────────
+        // A comparator for sorting (`xs.sortBy(Float.compare)`): -1, 0 or 1, in a
+        // total order (-0.0 before 0.0, NaN after everything, equal to itself).
+        static fn compare(a: float, b: float) -> int {
+            return %{ isnan(a) ? (isnan(b) ? 0 : 1) : isnan(b) ? -1 : a < b ? -1 : a > b ? 1 : (signbit(a) && !signbit(b)) ? -1 : (!signbit(a) && signbit(b)) ? 1 : 0 %} as int;
+        }
+        // Largest first (NaN last).
+        static fn descending(a: float, b: float) -> int {
+            if (Float.isNaN(a) || Float.isNaN(b)) { return Float.compare(a, b); }
+            return Float.compare(b, a);
+        }
+        // `a.compareTo(b)`: as compare.
+        static fn compareTo(a: float, b: float) -> int { return Float.compare(a, b); }
+        // Whether both are the same number (NaN equals NaN here, unlike ==).
+        static fn equals(a: float, b: float) -> bool { return Float.compare(a, b) == 0 || a == b; }
+
+        // ── conversions and text ─────────────────────────────────────────────────
+        // The whole part as a long, toward zero; ArithmeticError for NaN, infinities and values past a long.
+        static fn toLong(x: float) -> long {
+            if (!(%{ x >= -9223372036854775808.0 && x < 9223372036854775808.0 %} as bool)) { throw new ArithmeticError("${x} does not fit in a long"); }
+            return x as long;
+        }
+        // Rounded to the nearest long (half away from zero); ArithmeticError as toLong.
+        static fn roundToLong(x: float) -> long { return Float.toLong(Float.round(x)); }
+        // The shortest exact Decimal that reads back as `x` (0.1 is 0.1).
+        static fn toDecimal(x: float) -> Decimal { return Decimal.fromFloat(x); }
+        // The shortest text that reads back as `x` ("0.1", "2500", "nan").
+        static fn toString(x: float) -> string { return str(x); }
+        // Exactly `digits` after the point ("3.10").
+        static fn toFixed(x: float, digits: int) -> string { return Format.fixed(x, digits); }
+        // As a percentage with `digits` after the point (0.256 -> "25.6%").
+        static fn toPercent(x: float, digits: int) -> string { return Format.percent(x, digits); }
+    }
+}

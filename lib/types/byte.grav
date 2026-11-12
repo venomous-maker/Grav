@@ -1,0 +1,50 @@
+// lib/types/byte.grav — bytes (0..255), as text holds them (`s[i]`): ASCII
+// tests and case, usable as methods on any byte, which also has Integer's.
+//
+//   let c = "a1 B"[0]
+//   print(c.isLetter(), c.toUpper().toChar(), "a1 B"[1].isDigit())   // true A true
+//   print(Byte.toHex(10))                                            // 0a
+import "../text/string.grav"
+
+namespace std.types {
+
+    // Bytes (see the top of this file).
+    class Byte {
+        static readonly MAX: int = 255
+        static readonly MIN: int = 0
+        // ASCII tests (false for bytes of other UTF-8 characters).
+        static fn isDigit(b: byte) -> bool { return b >= ('0' as byte) && b <= ('9' as byte); }
+        static fn isLetter(b: byte) -> bool { return Byte.isUpper(b) || Byte.isLower(b); }
+        static fn isLetterOrDigit(b: byte) -> bool { return Byte.isLetter(b) || Byte.isDigit(b); }
+        static fn isUpper(b: byte) -> bool { return b >= ('A' as byte) && b <= ('Z' as byte); }
+        static fn isLower(b: byte) -> bool { return b >= ('a' as byte) && b <= ('z' as byte); }
+        // A space, tab, newline, carriage return, vertical tab or form feed.
+        static fn isSpace(b: byte) -> bool { return b == (' ' as byte) || (b >= (9 as byte) && b <= (13 as byte)); }
+        static fn isHexDigit(b: byte) -> bool {
+            return Byte.isDigit(b) || (b >= ('a' as byte) && b <= ('f' as byte)) || (b >= ('A' as byte) && b <= ('F' as byte));
+        }
+        static fn isPunctuation(b: byte) -> bool { return b > (32 as byte) && b < (127 as byte) && !Byte.isLetterOrDigit(b); }
+        // Below 128: a whole character in itself.
+        static fn isAscii(b: byte) -> bool { return b < (128 as byte); }
+        // The ASCII letter in the other case (other bytes as they are).
+        static fn toUpper(b: byte) -> byte { return Byte.isLower(b) ? b - (32 as byte) : b; }
+        static fn toLower(b: byte) -> byte { return Byte.isUpper(b) ? b + (32 as byte) : b; }
+        // The digit's value: 0..9 for '0'..'9', 10..35 for letters (either case); -1 otherwise.
+        static fn digitValue(b: byte) -> int {
+            if (Byte.isDigit(b)) { return (b - ('0' as byte)) as int; }
+            if (Byte.isLower(b)) { return (b - ('a' as byte)) as int + 10; }
+            if (Byte.isUpper(b)) { return (b - ('A' as byte)) as int + 10; }
+            return -1;
+        }
+        // Comparators for sorting: by value; and ignoring ASCII case.
+        static fn compare(a: byte, b: byte) -> int { return a < b ? -1 : a > b ? 1 : 0; }
+        static fn compareIgnoreCase(a: byte, b: byte) -> int { return Byte.compare(Byte.toLower(a), Byte.toLower(b)); }
+        // The byte as a one-byte string ("A" for 65).
+        static fn toChar(b: byte) -> string { return Str.fromChar(b as int); }
+        // Two hex digits ("0a", "ff").
+        static fn toHex(b: byte) -> string {
+            let digits = "0123456789abcdef";
+            return digits[(b >> 4) as int..((b >> 4) as int) + 1] + digits[(b & (15 as byte)) as int..((b & (15 as byte)) as int) + 1];
+        }
+    }
+}

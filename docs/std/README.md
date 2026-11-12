@@ -36,6 +36,24 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [gc](core/gc.md) | `GC`: the cycle collector |
 | [reflect](core/reflect.md) | `ClassInfo`, `FieldInfo`, `MethodInfo`, `Decorator`: classes, fields and decorators at run time |
 
+### types
+
+Each class's static methods whose first parameter is the value are also methods
+of the value itself: `n.toHex()` is `Integer.toHex(n)`, `s.trim()` is
+`String.trim(s)`, one direct call with nothing boxed. A cast converts through
+them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
+
+| Module | Contents |
+|--------|----------|
+| [integer](types/integer.md) | `Integer`: limits, parsing in any base, text (hex, grouped, ordinal), gcd and powers, digits, checked arithmetic, bits, comparators |
+| [float](types/float.md) | `Float`: limits, `NaN` and `Infinity`, parsing, rounding, tests, text, comparators |
+| [string](types/string.md) | `String`: `Str`'s text functions as methods, plus conversions, characters, natural order |
+| [bool](types/bool.md) | `Bool`: parsing ("yes", "on", ...), conversions, comparators |
+| [byte](types/byte.md) | `Byte`: ASCII tests and case for the bytes of text (`s[i]`) |
+| [decimal](types/decimal.md) | `Decimal`: exact decimal numbers, for money and DECIMAL/NUMERIC columns |
+| [null](types/null.md) | `Null`: defaults and checks for `T?` values (`port.orElse(8080)`) |
+| [object](types/object.md) | `Object`: any value's type, text, equality, hash and fields |
+
 ### collections
 
 | Module | Contents |

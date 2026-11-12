@@ -1,0 +1,113 @@
+// lib/types/object.grav — any value: its type, text, equality, hash and fields,
+// usable as methods on any object or `any` (where its class has no method of
+// that name itself).
+//
+//   let u = new User()
+//   print(u.typeName(), u.className())     // app.User User
+//   print(Object.equals(3, 3), Object.identical(u, u))
+//   print(u.toMap())                       // its fields (classes with reflection)
+import "../core/exception.grav"
+import "../core/reflect.grav"
+import "../collections/hashmap.grav"
+import "../collections/array.grav"
+import "../text/string.grav"
+
+namespace std.types {
+
+    %{
+    #include <string.h>
+    /* A hash of a scalar `any` (an object's or function's by identity). */
+    static long long grav_obj_hash(GravAny v) {
+        unsigned long long h = 1469598103934665603ULL;
+        switch (v.tag) {
+            case GRAV_ANY_NULL: return 0;
+            case GRAV_ANY_STR: {
+                const char* s = v.v.s;
+                size_t n = grav_str_len(s);
+                for (size_t i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 1099511628211ULL; }
+                return (long long)h;
+            }
+            case GRAV_ANY_FLOAT: { double d = v.v.f == 0.0 ? 0.0 : v.v.f; unsigned long long b; memcpy(&b, &d, 8); h ^= b; h *= 1099511628211ULL; return (long long)h; }
+            case GRAV_ANY_OBJ: h ^= (unsigned long long)(uintptr_t)v.v.p; break;
+            case GRAV_ANY_FN: h ^= (unsigned long long)(uintptr_t)v.v.fn.env ^ (unsigned long long)(uintptr_t)v.v.fn.fn; break;
+            default: h ^= v.v.u; break;
+        }
+        h *= 1099511628211ULL;
+        h ^= h >> 29;
+        return (long long)h;
+    }
+    /* Whether two `any`s hold equal values: numbers by value (1 == 1.0), strings
+       by text, objects and functions by identity. */
+    static int grav_obj_equals(GravAny a, GravAny b) {
+        int an = a.tag == GRAV_ANY_INT || a.tag == GRAV_ANY_UINT || a.tag == GRAV_ANY_FLOAT || a.tag == GRAV_ANY_ENUM;
+        int bn = b.tag == GRAV_ANY_INT || b.tag == GRAV_ANY_UINT || b.tag == GRAV_ANY_FLOAT || b.tag == GRAV_ANY_ENUM;
+        if (an && bn) {
+            if (a.tag == GRAV_ANY_FLOAT || b.tag == GRAV_ANY_FLOAT) {
+                double x = a.tag == GRAV_ANY_FLOAT ? a.v.f : a.tag == GRAV_ANY_UINT ? (double)a.v.u : (double)a.v.i;
+                double y = b.tag == GRAV_ANY_FLOAT ? b.v.f : b.tag == GRAV_ANY_UINT ? (double)b.v.u : (double)b.v.i;
+                return x == y;
+            }
+            if (a.tag == GRAV_ANY_UINT || b.tag == GRAV_ANY_UINT) return a.v.u == b.v.u && (a.tag == b.tag || (long long)a.v.u >= 0);
+            return a.v.i == b.v.i;
+        }
+        if (a.tag != b.tag) return 0;
+        switch (a.tag) {
+            case GRAV_ANY_NULL: return 1;
+            case GRAV_ANY_BOOL: return a.v.b == b.v.b;
+            case GRAV_ANY_STR: return grav_str_len(a.v.s) == grav_str_len(b.v.s) && !memcmp(a.v.s, b.v.s, grav_str_len(a.v.s));
+            case GRAV_ANY_FN: return a.v.fn.fn == b.v.fn.fn && a.v.fn.env == b.v.fn.env;
+            default: return a.v.p == b.v.p;
+        }
+    }
+    %}
+
+    // Any value (see the top of this file).
+    class Object {
+        // Its type's full name ("app.User", "int", "string"; "null" for null).
+        static fn typeName(v: any) -> string { return v == null ? "null" : typename(v); }
+        // Its class's name without the namespace ("User"; the type name for other values).
+        static fn className(v: any) -> string {
+            let info = ClassInfo.of(v);
+            return info == null ? Object.typeName(v) : info.simpleName();
+        }
+        // How `print` shows it.
+        static fn toString(v: any) -> string { return v == null ? "null" : str(v); }
+        // Whether `a` and `b` hold equal values: numbers by value (1 equals 1.0),
+        // strings by text, bools, and objects only when they are the same object.
+        static fn equals(a: any, b: any) -> bool { return %{ grav_obj_equals(a, b) %} as bool; }
+        // Whether `a` and `b` are the very same object (or equal non-objects).
+        static fn identical(a: any, b: any) -> bool {
+            if (%{ a.tag == GRAV_ANY_OBJ && b.tag == GRAV_ANY_OBJ %} as bool) { return %{ a.v.p == b.v.p %} as bool; }
+            return Object.equals(a, b);
+        }
+        // A hash that agrees with equals (objects by identity).
+        static fn hash(v: any) -> long { return %{ grav_obj_hash(v) %} as long; }
+        // Whether `v` is null.
+        static fn isNull(v: any) -> bool { return v == null; }
+        // `v`; ValueError with `message` when it is null.
+        static fn requireNonNull(v: any, message: string) -> any {
+            if (v == null) { throw new ValueError(message); }
+            return v;
+        }
+        // Its class's ClassInfo (null for values that are not objects).
+        static fn classInfo(v: any) -> ClassInfo { return ClassInfo.of(v); }
+        // Whether it is an object of class `info` or a subclass.
+        static fn isInstanceOf(v: any, info: ClassInfo) -> bool { return info != null && info.isInstance(v); }
+        // Its fields by name, base class first (for a class with reflection: one that
+        // has a decorator, or that reflect(...) names; others give an empty map).
+        static fn toMap(v: any) -> HashMap<string, any> {
+            let out = new HashMap<string, any>();
+            let info = ClassInfo.of(v);
+            if (info == null) { return out; }
+            for (f in info.fields()) { if (f.canGet()) { out.put(f.name, f.get(v)); } }
+            return out;
+        }
+        // Its fields' names (as toMap).
+        static fn fieldNames(v: any) -> Array<string> {
+            let out = new Array<string>();
+            let info = ClassInfo.of(v);
+            if (info != null) { for (f in info.fields()) { out.push(f.name); } }
+            return out;
+        }
+    }
+}

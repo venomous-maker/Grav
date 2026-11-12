@@ -1,0 +1,111 @@
+// std/types: the static methods of Integer, Float, String, Bool, Byte, Null and
+// Object are also methods of the values (`n.toHex()` is `Integer.toHex(n)`),
+// on variables, literals and expressions; comparators sort; Object's methods
+// fill in names a class lacks; Decimal takes whole numbers in its operators.
+import "std"
+
+class User {
+    public id: int
+    public name: string
+    constructor() { self.id = 7; self.name = "ada" }
+    fn toString() -> string { return "User(" + self.name + ")" }      // (its own, not Object's)
+}
+@Entity class Tagged { public id: int; constructor() { self.id = 3 } }
+
+test "Integer" {
+    let n = 255
+    assertEq("${n.toHex()} ${Integer.toHex(255)} ${255.toHex()} ${Integer.parse("42") + 1} ${Integer.parse("ff", 16)} ${"x".length.toHex()}", "ff ff ff 43 255 1")
+    assertEq("${(-7).abs()} ${12.gcd(18)} ${4.lcm(6)} ${1000000.grouped()} ${n.bitCount()} ${7.padded(3)} ${(-7).padded(3)} ${22.ordinal()} ${13.ordinal()}",
+             "7 6 12 1,000,000 8 007 -07 22nd 13th")
+    let big: long = (1 as long) << 40
+    assertEq("${big.bitCount()} ${big.trailingZeros()} ${big.leadingZeros()} ${(5 as long).pow(3)} ${1000.nextPowerOfTwo()} ${12345.digitCount()} ${12345.digitSum()} ${120.digits()}",
+             "1 40 23 125 1024 5 15 [1, 2, 0]")
+    assertEq("${Integer.MAX} ${Integer.MIN} ${Integer.tryParse("x") == null} ${Integer.parseOr("12a", -1)} ${(-255).toString(16)} ${5.toBinary()}",
+             "2147483647 -2147483648 true -1 -ff 101")
+    let msgs = new Array<string>()
+    try { Integer.MAX.addExact(1) } catch (e: ArithmeticError) { msgs.push(e.message()) }
+    try { Integer.parse("3000000000") } catch (e: ValueError) { msgs.push(e.message()) }
+    try { (10 as long).pow(30) } catch (e: ArithmeticError) { msgs.push(e.message()) }
+    assertEq(Str.join(msgs, " | "), "integer overflow: 2147483647 + 1 | '3000000000' is out of the int range | integer overflow: 10^30")
+    let seen = new Array<int>()
+    3.times(fn(i: int) { seen.push(i) })
+    assertEq("${seen}", "[0, 1, 2]")
+}
+
+test "Float" {
+    let x = 3.14159
+    assertEq("${x.round(2)} ${3.14159.round(3)} ${x.toFixed(1)} ${(0.0 / 0.0).isNaN()} ${0.1.toDecimal()} ${2.5.floor()} ${(-2.5).round()} ${Float.parse("2.5e3")}",
+             "3.14 3.142 3.1 true 0.1 2 -3 2500")
+    assertEq("${NaN} ${Infinity} ${-Infinity} ${Float.NAN.isNaN()} ${(1.0 / 0.0) == Infinity} ${Float.NEGATIVE_INFINITY.isNegativeInfinity()} ${NaN == NaN} ${Float.equals(NaN, NaN)}",
+             "NaN Infinity -Infinity true true true false true")
+    assertEq("${Float.parse("Infinity")} ${Float.parse("-inf")} ${Float.parse("NaN").isNaN()} ${Infinity.isFinite()} ${Float.MAX.isFinite()}", "Infinity -Infinity true false true")
+    assertEq("${0.25.toPercent(1)} ${(-2.75).fraction()} ${7.0.isWhole()} ${0.1.approxEquals(0.1000001, 1e-6)} ${Float.tryParse("x") == null} ${2.9.toLong()}",
+             "25.0% -0.75 true true true 2")
+}
+
+test "String" {
+    let s = "  Hello, World  "
+    assertEq(s.trim().lower() + "|" + "a,b,c".split(",").size().toString() + "|" + "grav".reverse() + "|" + "user_name".toCamelCase(),
+             "hello, world|3|varg|userName")
+    assertEq("${"42".toInt() + 1} ${"19.99".toDecimal() * 3} ${"né".chars()} ${"né".charCount()} ${"yes".toBool()} ${"2.5".toFloat() * 2.0}",
+             "43 59.97 [\"n\", \"é\"] 2 true 5")
+    assertEq("{0} is {1}".format(["x", 3]), "x is 3")
+    assertEq("${"file2".compareNatural("file10")} ${"b".compareTo("a")} ${"abc".contains("b")} ${"x".repeat(3)} ${"ab".padLeft(4, ".")}", "-1 1 true xxx ..ab")
+}
+
+test "Bool, Byte and Null" {
+    assertEq("${true.toInt()} ${false.toYesNo()} ${Bool.parse("on")} ${Bool.tryParse("maybe") == null} ${true.xor(true)}", "1 no true true false")
+    let c = "a1 B"[0]
+    assertEq("${c.isLetter()} ${c.toUpper().toChar()} ${"a1 B"[1].isDigit()} ${"a1 B"[2].isSpace()} ${Byte.toHex(10)} ${"f"[0].digitValue()} ${c.toHex()}",
+             "true A true true 0a 15 61")
+    let port: int? = null
+    let id: long? = 7
+    assertEq("${port.orElse(8080)} ${port.isNull()} ${id.require("no id")} ${id.hasValue()} ${port.orElseGet(fn() -> int => 1)}", "8080 true 7 true 1")
+    let bad = ""
+    try { port.require("no port") } catch (e: ValueError) { bad = e.message() }
+    assertEq(bad, "no port")
+}
+
+test "Object" {
+    let u = new User()
+    let v: any = u
+    assertEq(u.typeName() + " " + u.className() + " " + v.typeName() + " " + u.toString(), "User User User User(ada)")
+    assertEq("${Object.equals(3, 3.0)} ${Object.equals("a", "a")} ${u.identical(u)} ${Object.equals(u, new User())} ${Object.hash("x") == Object.hash("x")}",
+             "true true true false true")
+    assertEq("${new Tagged().toMap()} ${new Tagged().fieldNames()} ${Object.isNull(null)}", "{\"id\": 3} [\"id\"] true")
+}
+
+test "comparators and Decimal operators" {
+    let prices = new Array<Decimal>()
+    for (p in ["3.50", "1.25", "2"]) { prices.push(Decimal.parse(p)) }
+    prices.sortBy(Decimal.compare)
+    assertEq("${prices} ${Decimal.sum(prices)} ${Decimal.average(prices, 2)}", "[1.25, 2, 3.50] 6.75 2.25")
+    assertEq("${Decimal.parse("10") / 4} ${Decimal.of(1) / 3} ${Decimal.parse("-7") % 3} ${Decimal.parse("19.99") > 10} ${Decimal.parse("5.00").stripTrailingZeros()}",
+             "2.5 0.3333333333333333 -1 true 5")
+    assertEq("${Decimal.parse("-2.5").floor()} ${Decimal.parse("2.1").ceil()} ${Decimal.parse("1.5").pow(2)} ${Decimal.parse("200").percent(Decimal.of(15))} ${Decimal.parse("2.50").isWhole()}",
+             "-3 3 2.25 30 false")
+    let xs: Array<int> = [5, 3, 9]
+    xs.sortBy(Integer.descending)
+    let fs: Array<float> = [2.5, NaN, 0.0, -1.0]
+    fs.sortBy(Float.compare)
+    let names: Array<string> = ["file10", "file2", "File1"]
+    names.sortBy(String.compareNatural)
+    let flags: Array<bool> = [true, false]
+    flags.sortBy(Bool.compare)
+    assertEq("${xs} ${fs} ${names} ${flags}", "[9, 5, 3] [-1, 0, 2.5, NaN] [\"File1\", \"file2\", \"file10\"] [false, true]")
+    let cmp: fn(long, long) -> int = Integer.compare                       // (the overload the type names)
+    assertEq(cmp(1, 2), -1)
+}
+
+test "casts convert" {
+    let price = Decimal.parse("19.99")
+    let f = price as float
+    let i = price as int
+    assertEq("${f} ${price as long} ${i} ${price as string} ${19.99 as Decimal} ${"42.50" as Decimal} ${7 as Decimal}", "19.99 19 19 19.99 19.99 42.50 7")
+    assertEq("${("42" as int) + 1} ${"3000000000" as long} ${("2.5" as float) * 2.0} ${"yes" as bool} ${(42 as string) + "!"} ${true as string}",
+             "43 3000000000 5 true 42! true")
+    let bad = ""
+    try { print("4x" as int) } catch (e: ValueError) { bad = e.message() }
+    assertEq(bad, "not a whole number: '4x'")
+    assertEq("${3.7 as int} ${(2 as float) / 4.0} ${(65 as byte).toChar()}", "3 0.5 A")      // (Grav's own casts, unchanged)
+}

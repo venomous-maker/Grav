@@ -1,0 +1,43 @@
+// lib/types/bool.grav — truth values: parsing and conversions, usable as
+// methods on any bool.
+//
+//   print(Bool.parse("yes"), true.toInt(), false.toYesNo())   // true 1 no
+import "../core/exception.grav"
+import "../text/string.grav"
+
+namespace std.types {
+
+    // Truth values (see the top of this file).
+    class Bool {
+        // "true"/"false", "t"/"f", "yes"/"no", "y"/"n", "on"/"off", "1"/"0" (any
+        // case); ValueError for anything else.
+        static fn parse(s: string) -> bool {
+            let b = Bool.tryParse(s);
+            if (b == null) { throw new ValueError("not a truth value: '" + s + "' (expected true/false, yes/no, on/off, 1/0)"); }
+            return b as bool;
+        }
+        // As parse, but null for anything else.
+        static fn tryParse(s: string) -> bool? {
+            let t = Str.lower(Str.trim(s));
+            if (t == "true" || t == "t" || t == "yes" || t == "y" || t == "on" || t == "1") { return true; }
+            if (t == "false" || t == "f" || t == "no" || t == "n" || t == "off" || t == "0") { return false; }
+            return null;
+        }
+        // A comparator for sorting: false before true.
+        static fn compare(a: bool, b: bool) -> int { return a == b ? 0 : a ? 1 : -1; }
+        static fn descending(a: bool, b: bool) -> int { return Bool.compare(b, a); }
+        static fn compareTo(a: bool, b: bool) -> int { return Bool.compare(a, b); }
+        // 1 or 0.
+        static fn toInt(b: bool) -> int { return b ? 1 : 0; }
+        // "true" or "false".
+        static fn toString(b: bool) -> string { return b ? "true" : "false"; }
+        // "yes" or "no".
+        static fn toYesNo(b: bool) -> string { return b ? "yes" : "no"; }
+        // "on" or "off".
+        static fn toOnOff(b: bool) -> string { return b ? "on" : "off"; }
+        // Whether exactly one of the two is true.
+        static fn xor(a: bool, b: bool) -> bool { return a != b; }
+        // `a` implies `b`: false only when a is true and b is false.
+        static fn implies(a: bool, b: bool) -> bool { return !a || b; }
+    }
+}

@@ -1,0 +1,30 @@
+// lib/types/null.grav — values that may be null (`T?`): defaults and checks,
+// usable as methods on any nullable value.
+//
+//   let port: int? = null
+//   print(port.orElse(8080), port.isNull())    // 8080 true
+//   let id: long? = 7
+//   print(id.require("no id"))                 // 7
+import "../core/exception.grav"
+
+namespace std.types {
+
+    // Values that may be null (see the top of this file).
+    class Null {
+        // Whether `v` is null.
+        static fn isNull<T>(v: T?) -> bool { return v == null; }
+        // Whether `v` holds a value.
+        static fn hasValue<T>(v: T?) -> bool { return v != null; }
+        // `v`, or `fallback` when it is null.
+        static fn orElse<T>(v: T?, fallback: T) -> T { return v == null ? fallback : v as T; }
+        // `v`, or what `f` makes when it is null (f runs only then).
+        static fn orElseGet<T>(v: T?, f: fn() -> T) -> T { return v == null ? f() : v as T; }
+        // `v`; ValueError with `message` when it is null.
+        static fn require<T>(v: T?, message: string) -> T {
+            if (v == null) { throw new ValueError(message); }
+            return v as T;
+        }
+        // Calls `f` with the value when there is one.
+        static fn ifPresent<T>(v: T?, f: fn(T)) { if (v != null) { f(v as T); } }
+    }
+}
