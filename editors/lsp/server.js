@@ -64,6 +64,7 @@ function log(s) { process.stderr.write(`[grav-lsp] ${s}\n`); }
 let ws = new idx.Workspace({ compiler: process.env.GRAV_COMPILER || "grav", log });
 const published = new Map(); // uri -> true (files we sent diagnostics for)
 let refreshHints = false;     // the client takes workspace/inlayHint/refresh
+let parameterHints = true;    // initializationOptions.parameterNameHints: names before literal arguments
 let nextRequest = 1;
 
 function uriToPath(uri) { return decodeURIComponent(uri.replace(/^file:\/\//, "")); }
@@ -113,7 +114,7 @@ function handle(msg) {
     }
     case "textDocument/signatureHelp": {
       const sh = ws.signature(uriToPath(params.textDocument.uri), params.position);
-      return reply(id, sh ? { signatures: sh.signatures, activeSignature: 0, activeParameter: sh.activeParameter } : null);
+      return reply(id, sh ? { signatures: sh.signatures, activeSignature: sh.activeSignature || 0, activeParameter: sh.activeParameter } : null);
     }
     case "textDocument/prepareRename": {
       const r = ws.prepareRename(uriToPath(params.textDocument.uri), params.position);
@@ -146,8 +147,8 @@ function handle(msg) {
     }
     case "textDocument/inlayHint": {
       const r = params.range;
-      return reply(id, ws.inlayHints(uriToPath(params.textDocument.uri), r.start.line, r.end.line)
-        .map((h) => ({ position: h.position, label: h.label, kind: h.kind, paddingLeft: false })));
+      return reply(id, ws.inlayHints(uriToPath(params.textDocument.uri), r.start.line, r.end.line, { parameterNames: parameterHints })
+        .map((h) => ({ position: h.position, label: h.label, kind: h.kind, paddingLeft: false, paddingRight: h.kind === 2 })));
     }
     case "textDocument/formatting": {
       const file = uriToPath(params.textDocument.uri);
@@ -167,6 +168,7 @@ function onInitialize(id, params) {
       (params.workspaceFolders && params.workspaceFolders[0] ? uriToPath(params.workspaceFolders[0].uri) : null));
   const opts = params.initializationOptions || {};
   const caps = params.capabilities || {};
+  if (opts.parameterNameHints === false) parameterHints = false;
   refreshHints = !!(caps.workspace && caps.workspace.inlayHint && caps.workspace.inlayHint.refreshSupport);
   ws = new idx.Workspace({ root, compiler: opts.compilerPath || process.env.GRAV_COMPILER || "grav", log });
   reply(id, {

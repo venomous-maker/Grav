@@ -187,16 +187,19 @@ const providers = {
         info.parameters = s.parameters.map((x) => new vscode.ParameterInformation(x.label));
         return info;
       });
-      help.activeSignature = 0;
+      help.activeSignature = sh.activeSignature || 0;
       help.activeParameter = sh.activeParameter;
       return help;
     },
   },
   inlayHints: {
     provideInlayHints(doc, range) {
-      return workspace().inlayHints(doc.fileName, range.start.line, range.end.line).map((h) => {
-        const hint = new vscode.InlayHint(new vscode.Position(h.position.line, h.position.character), h.label, vscode.InlayHintKind.Type);
+      const parameterNames = vscode.workspace.getConfiguration("grav").get("inlayHints.parameterNames", true);
+      return workspace().inlayHints(doc.fileName, range.start.line, range.end.line, { parameterNames }).map((h) => {
+        const hint = new vscode.InlayHint(new vscode.Position(h.position.line, h.position.character), h.label,
+          h.kind === 2 ? vscode.InlayHintKind.Parameter : vscode.InlayHintKind.Type);
         hint.paddingLeft = false;
+        hint.paddingRight = h.kind === 2;
         return hint;
       });
     },

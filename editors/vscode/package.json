@@ -147,6 +147,11 @@
           "default": "grav",
           "description": "Path to the grav compiler binary."
         },
+        "grav.inlayHints.parameterNames": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the parameter's name before each literal argument of a call (`square(n: 3)`)."
+        },
         "grav.checkOnSave": {
           "type": "boolean",
           "default": true,
