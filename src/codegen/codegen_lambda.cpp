@@ -71,7 +71,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
 
     // The body.
     defs_ += lineDirective(lam.line);
-    defs_ += head + " {\n";
+    defs_ += "GRAV_FN" + head.substr(6) + " {\n";                 // (head starts "static")
     cur_ = &defs_;
     indent_ = 1;
     currentReturnType_ = ret;

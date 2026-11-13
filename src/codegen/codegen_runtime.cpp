@@ -153,6 +153,16 @@ typedef struct GravTypeInfo {
 /* An interface a class implements: the interface's marker and the class's table for it. */
 typedef struct GravItab { const char* iface; const void* tbl; } GravItab;
 
+/* The generated functions. Without optimization (-O0, -g) the C compiler would
+   compile every one, used or not; an unused static inline one it skips. With
+   optimization it drops unused static functions itself (and `inline` would only
+   change its inlining choices). */
+#ifdef __OPTIMIZE__
+#define GRAV_FN static
+#else
+#define GRAV_FN static inline
+#endif
+
 /* Common object header: vtable pointer, runtime type descriptor, reference count.
    Closure environments share the header (their type info releases the captures). */
 struct GravObject { const void* __vt; const GravTypeInfo* __type; long long __rc; };
