@@ -513,8 +513,9 @@ function parseFile(text) {
         ch: m.indexOf(mm[2], mm.index + mm[0].indexOf(mm[1]) + mm[1].length), namespace: ns,
         type: mm[3] ? mm[3].trim() : "", detail: raw.trim(), doc: docAbove(lines, i) });
     } else if (inType && !inEnum && stack.length && stack[stack.length - 1].ctx === ctx &&
-               (mm = RE.field.exec(m)) && !KEYWORD_SET.has(mm[1])) {
-      add({ name: mm[1], kind: KIND.Field, line: i, ch: m.indexOf(mm[1]), namespace: ns, container: ctx.name,
+               (mm = RE.field.exec(m)) && (!KEYWORD_SET.has(mm[1]) || /^\s*(?:public|private|protected|readonly|static|weak)\s/.test(m))) {
+      // (a keyword is a field's name after a modifier: `public type: string`)
+      add({ name: mm[1], kind: KIND.Field, line: i, ch: m.search(new RegExp(`\\b${mm[1]}\\s*:`)), namespace: ns, container: ctx.name,
         type: mm[2].trim(), isStatic: /\bstatic\b/.test(m), detail: raw.trim(), doc: docAbove(lines, i) });
     }
     // ---- locals inside bodies: let/const, for-in variables, catch variables, lambda params ----
@@ -1304,7 +1305,11 @@ class Workspace {
       const [what, ex] = PROPERTY_DOCS[w.word];
       return { markdown: `**${w.word}** — ${what}\n\n\`\`\`grav\n${ex}\n\`\`\``, range: w.range };
     }
-    if (KEYWORD_SET.has(w.word)) {
+    // A keyword in a member's place is a name: req.string(), Rule.in(...), fn match(), public type: T.
+    const before = lineText.slice(0, w.range.start.character).replace(/\s+$/, "");
+    const asMember = /[^.]\.$/.test(before) || /->$/.test(before) || /\bfn$/.test(before) ||
+      (/\b(?:public|private|protected|static|readonly|weak)$/.test(before) && /^\s*:(?!:)/.test(lineText.slice(w.range.end.character)));
+    if (KEYWORD_SET.has(w.word) && !asMember) {
       const d = KEYWORD_DOCS[w.word];
       return d ? { markdown: `**${w.word}** — ${d[0]}\n\n\`\`\`grav\n${d[1]}\n\`\`\``, range: w.range } : null;
     }

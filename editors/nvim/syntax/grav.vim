@@ -16,7 +16,11 @@ syn match gravOperator "[-+*/%<>=!&|^~?:.]"
 syn match gravTypeName "\<\u\w*\>"
 
 " Declaration / structure keywords
-syn keyword gravKeyword fn class struct enum type typedef interface abstract namespace
+" `fn` is followed by its name, even a keyword one (fn in, fn match): nextgroup
+" items are tried before `syn keyword` at the next position.
+syn keyword gravKeyword fn nextgroup=gravFuncName skipwhite
+syn match   gravFuncName "\%(operator\>\)\@!\h\w*" contained
+syn keyword gravKeyword class struct enum type typedef interface abstract namespace
 syn keyword gravKeyword constructor extends implements uses new return import export from use test
 syn keyword gravKeyword trait destructor operator final
 syn keyword gravStorage  let const static readonly public private protected weak
@@ -82,15 +86,19 @@ syn match gravDecorator "@\w\+\%(\.\w\+\)*"
 " after a keyword are matched with a look-behind (the match starts at the name).
 " Among matches starting at the same column, the one defined last wins.
 syn match gravFuncCall    "\<\w\+\ze\s*\%(::<[^>]*>\)\=\s*("     " foo( / foo::<int>(
-syn match gravField       "\%(\.\|->\)\@<=\w\+"                  " obj.field
-syn match gravMethodCall  "\%(\.\)\@<=\w\+\ze\s*\%(::<[^>]*>\)\=\s*("   " obj.method(
+" A member after "." or "->": the access is matched first and names its member
+" as the next group, which then wins over `syn keyword` (req.string, Rule.in).
+" (lower-case members only: Enum.Member and CONSTANTS keep their own rules)
+syn match gravMemberDot   "\%([^.?]\)\@<=\%(\.\|->\)\ze\l" nextgroup=gravMemberName,gravMemberCall
+syn match gravMemberName  "\l\w*" contained
+syn match gravMemberCall  "\l\w*\ze\s*\%(::<[^>]*>\)\=\s*(" contained
 syn match gravEnumMember  "\%(\<\u\w*\.\)\@<=\u\w*\>"            " Enum.Member
 syn match gravTypeRef     "\%(\<\%(new\|extends\|implements\|as\|is\)\s\+\)\@<=\%(\w\+\.\)*\u\w*"
 syn match gravTypeRef     "\%(\%(^\|[^:]\):\s*\)\@<=\%(\w\+\.\)*\u\w*"   " x: Type
 syn match gravTypeRef     "\%(->\s*\)\@<=\%(\w\+\.\)*\u\w*"              " -> Type
 syn match gravTypeRef     "\%([<,]\s*\)\@<=\u\w*\ze\s*[<>,\[*]"           " Array<Type>, Map<K, V>
 syn match gravTypeParam   "\%(\<\%(class\|struct\|enum\|interface\|trait\|type\|fn\)\s\+\w\+\s*<\s*\%(\w\+\s*\%(:\s*\w\+\s*\)\=,\s*\)*\)\@<=\u\w*"
-syn match gravFuncDef     "\%(\<fn\s\+\)\@<=\w\+"                " fn name
+syn match gravField       "\%(\<\%(public\|private\|protected\|static\|readonly\|weak\)\)\@<=\s\+\zs\%(\%(static\|readonly\|weak\|fn\|get\|set\)\>\)\@!\w\+\ze\s*:[^:]"   " public type: T
 syn match gravFuncDef     "\%(\<fn\s\+operator\s*\)\@<=\S\{1,3}\ze\s*("    " fn operator==
 syn match gravAccessor    "\%(\.\)\@<!\<\%(get\|set\)\ze\s\+\h\w*\s*("   " get name( / set name(
 syn match gravFuncDef     "\%(\<\%(get\|set\)\s\+\)\@<=\h\w*\ze\s*("    " get name( / set name(
@@ -140,6 +148,9 @@ hi def link gravCBlockDelim   Special
 hi def link gravDecorator     PreProc
 hi def link gravOperator      Operator
 hi def link gravFuncDef       Function
+hi def link gravFuncName      Function
+hi def link gravMemberCall    Function
+hi def link gravMemberName    Identifier
 hi def link gravFuncCall      Function
 hi def link gravMethodCall    Function
 hi def link gravTypeDef       Structure

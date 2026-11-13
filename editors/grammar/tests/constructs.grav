@@ -276,3 +276,19 @@ class Temp {
 //     ^^^ entity.name.function.declaration
 //                                    ^^^ entity.name.function.method - storage.type.function.accessor
 }
+
+// Keywords as member names: methods, fields, static calls.
+class KeywordMembers {
+    public type: string = "t"
+//         ^^^^ variable.other.property.declaration
+    static fn in(values: Array<string>) -> bool { return values.size() > 0 }
+//            ^^ entity.name.function.declaration
+    fn match(s: string) -> bool { return s == self.type }
+//     ^^^^^ entity.name.function.declaration
+//                                                 ^^^^ variable.other.property
+}
+let km = new KeywordMembers()
+let kmOk = km.match(km.type) && KeywordMembers.in(["a"])
+//            ^^^^^ entity.name.function.method
+//                     ^^^^ variable.other.property
+//                                             ^^ entity.name.function.method

@@ -1066,6 +1066,28 @@
         }
       ]
     },
+    "members": {
+      "patterns": [
+        {
+          "comment": "a keyword used as a member name: req.string(...), Rule.in(...), self.type",
+          "match": "(?<=[^.]\\.)\\s*(?=[a-z])([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:::<[^>]*>)?\\s*\\()",
+          "name": "entity.name.function.method.grav"
+        },
+        {
+          "match": "(?<=[^.]\\.)\\s*(?=[a-z])([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "name": "variable.other.property.grav"
+        },
+        {
+          "comment": "public type: string (a field named by a keyword)",
+          "match": "(?<=\\b(?:public|private|protected|static|readonly|weak)\\s)\\s*(?!(?:static|readonly|weak|fn|get|set)\\b)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*:(?!:))",
+          "captures": {
+            "1": {
+              "name": "variable.other.property.declaration.grav"
+            }
+          }
+        }
+      ]
+    },
     "calls": {
       "patterns": [
         {
@@ -1245,6 +1267,9 @@
         },
         {
           "include": "#named-args"
+        },
+        {
+          "include": "#members"
         },
         {
           "include": "#keywords"

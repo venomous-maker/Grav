@@ -227,6 +227,14 @@ repo = {
         "beginCaptures": {"1": {"name": "punctuation.separator.turbofish.grav"}, "2": {"name": "punctuation.definition.generic.begin.grav"}},
         "endCaptures": {"0": {"name": "punctuation.definition.generic.end.grav"}},
         "patterns": [{"include": "#type-args"}] + type_patterns()},
+    "members": {"patterns": [
+        {"comment": "a keyword used as a member name: req.string(...), Rule.in(...), self.type",
+         "match": r"(?<=[^.]\.)\s*(?=[a-z])(" + ID + r")(?=\s*(?:::<[^>]*>)?\s*\()", "name": "entity.name.function.method.grav"},
+        {"match": r"(?<=[^.]\.)\s*(?=[a-z])(" + ID + r")\b", "name": "variable.other.property.grav"},
+        {"comment": "public type: string (a field named by a keyword)",
+         "match": r"(?<=\b(?:public|private|protected|static|readonly|weak)\s)\s*(?!(?:static|readonly|weak|fn|get|set)\b)(" + ID + r")(?=\s*:(?!:))",
+         "captures": {"1": {"name": "variable.other.property.declaration.grav"}}},
+    ]},
     "calls": {"patterns": [
         {"match": r"(?<=\.)\s*(" + ID + r")(?=\s*(?:::<[^>]*>)?\s*\()", "name": "entity.name.function.method.grav"},
         {"match": r"\b(" + ID + r")(?=\s*(?:::<[^>]*>)?\s*\()", "name": "entity.name.function.call.grav"},
@@ -267,7 +275,7 @@ repo = {
     "expression": {"patterns": [
         {"include": "#comments"}, {"include": "#inline-c"}, {"include": "#strings"}, {"include": "#numbers"},
         {"include": "#labels"}, {"include": "#case-pattern"}, {"include": "#new-expr"}, {"include": "#turbofish"},
-        {"include": "#declarations"}, {"include": "#type-annotation"}, {"include": "#named-args"}, {"include": "#keywords"}, {"include": "#constants"}, {"include": "#builtins"},
+        {"include": "#declarations"}, {"include": "#type-annotation"}, {"include": "#named-args"}, {"include": "#members"}, {"include": "#keywords"}, {"include": "#constants"}, {"include": "#builtins"},
         {"include": "#calls"}, {"include": "#names"}, {"include": "#operators"}, {"include": "#punctuation"},
     ]},
 }
