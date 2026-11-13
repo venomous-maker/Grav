@@ -171,6 +171,91 @@ Ada
 Hiding fields means you can later change how an object stores its data (say,
 keep the balance in cents) without changing any code that uses it.
 
+## Properties: get and set
+
+A *property* looks like a field from outside, but reading it runs a `get`
+method and assigning it runs a `set` method. Use one when a value is computed,
+or when a change has to be checked or converted:
+
+```grav
+import "std"
+
+class Temperature {
+    private c: float = 0.0
+
+    get celsius() -> float { return self.c }
+    set celsius(v: float) {
+        if (v < -273.15) { throw new ValueError("below absolute zero") }
+        self.c = v
+    }
+    // Computed from the stored value, both ways.
+    get fahrenheit() -> float { return self.c * 9.0 / 5.0 + 32.0 }
+    set fahrenheit(f: float) { self.celsius = (f - 32.0) * 5.0 / 9.0 }
+    // No setter: read-only.
+    get label() -> string { return "${self.c} C" }
+}
+
+fn main() {
+    let t = new Temperature()
+    t.celsius = 100.0
+    print(t.fahrenheit)
+    t.fahrenheit = 50.0
+    print(t.celsius)
+    t.celsius += 5.0
+    t.celsius++
+    print(t.label)
+}
+```
+
+Output:
+
+```text
+212
+10
+16 C
+```
+
+- `get name() -> T` takes no parameters and gives the property's type;
+  `set name(value: T)` takes exactly one, of the same type. Either may be left
+  out: without a setter the property is read-only (`t.label = "x"` is a compile
+  error), without a getter it can only be set.
+- `+=`, `-=` and `++` read through the getter and write through the setter.
+- A property cannot share its name with a field. Keep the value in a private
+  field (`c` above) and read that inside the accessors: `self.celsius` inside
+  `get celsius()` would call itself.
+- Accessors are methods underneath, so everything methods do works: `private`,
+  `static get count() -> int` (read as `Counter.count`), overriding in a
+  subclass (`super.name` reads the parent's), `abstract get area() -> float`,
+  and properties in interfaces and traits:
+
+```grav
+import "std"
+
+interface Shape {
+    get area() -> float
+}
+
+class Square implements Shape {
+    public side: float = 2.0
+    get area() -> float { return self.side * self.side }
+}
+
+fn main() {
+    let s: Shape = new Square()
+    print(s.area)
+}
+```
+
+Output:
+
+```text
+4
+```
+
+Reflection lists them too: `reflect(Temperature).property("fahrenheit")` has
+`get(obj)`, `set(obj, value)`, `canSet()` and the decorators of either accessor
+(see [std/core/reflect](../std/core/reflect.md)).
+
 ## Static members
 
 A `static` field or method belongs to the class itself, not to any one object.
@@ -441,6 +526,9 @@ v2
 - Object variables are references: assigning or passing shares the object.
 - `private` hides a member, `protected` shares it with subclasses, `readonly`
   fields are set only in constructors; private fields get `get_`/`set_` methods.
+- `get name() -> T { }` and `set name(v: T) { }` make a property: `obj.name`
+  reads and assigns through them (`+=` and `++` too); leave out `set` for a
+  read-only one.
 - `static` members belong to the class.
 - Several constructors are allowed, with defaults and named arguments.
 - `public done: bool = false` gives a field its starting value, in every constructor.

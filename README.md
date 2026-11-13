@@ -60,6 +60,7 @@ Every runnable snippet in the docs is compiled and checked by `tests/docs.sh`.
   - [Classes](#classes)
   - [Access modifiers & `readonly`](#access-modifiers--readonly)
   - [Auto getters/setters](#auto-getterssetters)
+  - [Properties: `get` and `set`](#properties-get-and-set)
   - [Inheritance & polymorphism](#inheritance--polymorphism)
   - [Abstract classes](#abstract-classes)
   - [Interfaces](#interfaces)
@@ -872,6 +873,28 @@ class Person { private name: string  constructor(n: string){ self.name = n } }
 let p = new Person("Al")
 print(p.get_name())       // Al
 p.set_name("Bo")
+```
+
+### Properties: `get` and `set`
+
+A property reads like a field and runs code: `get name() -> T` when it is read,
+`set name(v: T)` when it is assigned (`+=` and `++` use both). Without a setter
+it is read-only. Accessors are methods underneath, so they can be `static`,
+private, overridden (`super.name`), abstract, and declared in interfaces and
+traits; reflection lists them with `ClassInfo.properties()`.
+
+```grav
+class Temperature {
+    private c: float = 0.0
+    get celsius() -> float { return self.c }
+    set celsius(v: float) { self.c = v }
+    get fahrenheit() -> float { return self.c * 9.0 / 5.0 + 32.0 }
+}
+
+let t = new Temperature()
+t.celsius = 100.0
+print(t.fahrenheit)       // 212
+t.celsius += 1.0
 ```
 
 ### Inheritance & polymorphism
