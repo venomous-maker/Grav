@@ -128,6 +128,13 @@ true
 - `ClassInfo.of(x)` is `null` when `x` holds no object; for a class without
   recorded metadata it still knows the name and base, with no fields or methods
   (`isReflected()` is false), and it cannot be created or its methods called.
+- `ClassInfo.forName("app.SendInvoice")` finds a class with reflection by its
+  name (or by its bare name, `"SendInvoice"`, when only one has it), and
+  `ClassInfo.all(reflect(Job))` lists every one that is or extends `Job`.
+  Since a decorator anywhere in a hierarchy gives the whole hierarchy
+  reflection, one decorator on a base class makes all its subclasses
+  findable: how a framework discovers its commands, jobs and listeners, or
+  rebuilds a queued job from the class name it was stored under.
 
 ## API
 
@@ -263,6 +270,9 @@ What a class is at run time: reflect(User), or ClassInfo.of(anObject).
 
 **Static members**
 
+- `static fn forName(name: string) -> ClassInfo` — The class called `name` ("app.SendInvoice", or "SendInvoice" when only one reflected class has that bare name); null when none does. Only classes with reflection are known: a class named by reflect(...), or any class in a hierarchy with a decorator (so one decorator on a framework base class makes every subclass findable by name).
+- `static fn all() -> Array<ClassInfo>` — Every class with reflection (see forName), in declaration order; with a base, only the ones that are it or extend it (concrete or not).
+- `static fn all(base: ClassInfo) -> Array<ClassInfo>`
 - `static fn of(value: any) -> ClassInfo`
 
 **Fields**

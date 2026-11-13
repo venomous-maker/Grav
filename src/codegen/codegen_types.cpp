@@ -538,6 +538,7 @@ void CodeGen::emitTypeInfos() {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get()))
             vtables_ += "static const GravTypeInfo " + mangle(c->fqName) + "_typeinfo;\n";
     std::unordered_set<std::string> done;
+    std::string reflectedTypes; // "&A_typeinfo, &B_typeinfo, " for every reflected class
     std::function<void(const std::string &)> emit = [&](const std::string &fq) {
         if (done.count(fq)) return;
         done.insert(fq);
@@ -604,6 +605,7 @@ void CodeGen::emitTypeInfos() {
             vtables_ += "static const GravItab " + itabs + "[" + std::to_string(nitabs) + "];\n";
         }
         std::string meta = emitReflection(fq);
+        if (meta != "0") reflectedTypes += "&" + mangle(fq) + "_typeinfo, ";
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
                     std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + ", " +
@@ -613,6 +615,9 @@ void CodeGen::emitTypeInfos() {
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
     }
+    // Every class with reflection, for ClassInfo.forName/all (null-terminated).
+    vtables_ += "static const GravTypeInfo* const grav_rf_types_[] = { " + reflectedTypes + "0 };\n"
+                "static const GravTypeInfo* const* grav_rf_all_types(void) { return grav_rf_types_; }\n";
     vtables_ += "\n";
 }
 

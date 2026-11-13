@@ -158,3 +158,18 @@ test "nameof names any type, and the one a type parameter stands for" {
     assertEq(new Keys().of::<string>(), "string")
     assertEq(nameKey::<Array<int>>() == nameKey::<Array<string>>(), false)
 }
+
+@Task abstract class Task { abstract fn run() -> string }
+class Backup extends Task { public target: string = "disk"  fn run() -> string { return "backup " + self.target } }
+class Cleanup extends Task { fn run() -> string { return "cleanup" } }
+
+test "ClassInfo.forName finds reflected classes by name, all() lists them" {
+    let b = ClassInfo.forName("Backup")
+    assertEq(b.name, "Backup")
+    assertEq((b.create() as Task).run(), "backup disk")
+    assertEq(ClassInfo.forName("NoSuchClass") == null, true)
+    let names = new Array<string>()
+    for (c in ClassInfo.all(reflect(Task))) { if (c.canCreate()) { names.push(c.name) } }
+    assertEq(Str.join(names, ","), "Backup,Cleanup")
+    assertEq(ClassInfo.all().size() >= 3, true)
+}

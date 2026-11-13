@@ -460,6 +460,31 @@ namespace std.core {
             if (v is int || v is long || v is float || v is bool) { return t + " " + str(v); }
             return "a" + (Str.indexOf("AEIOU", t[..1]) >= 0 ? "n " : " ") + t;
         }
+        // The class called `name` ("app.SendInvoice", or "SendInvoice" when only one
+        // reflected class has that bare name); null when none does. Only classes
+        // with reflection are known: a class named by reflect(...), or any class
+        // in a hierarchy with a decorator (so one decorator on a framework base
+        // class makes every subclass findable by name).
+        static fn forName(name: string) -> ClassInfo {
+            let ambiguous = 0;
+            let t = %{ (unsigned char*)grav_rf_type_named(name, &ambiguous) %} as byte*;
+            if (ambiguous != 0) { throw new ValueError("more than one class is called '" + name + "': use its full name"); }
+            if (t == null) { return null; }
+            return ClassInfo.__fromType(t);
+        }
+        // Every class with reflection (see forName), in declaration order; with a
+        // base, only the ones that are it or extend it (concrete or not).
+        static fn all() -> Array<ClassInfo> {
+            let out = new Array<ClassInfo>();
+            let n = %{ ({ int k = 0; while (grav_rf_all_types()[k]) k++; k; }) %} as int;
+            for (i in 0..n) { out.push(ClassInfo.__fromType(%{ (unsigned char*)grav_rf_all_types()[i] %} as byte*)); }
+            return out;
+        }
+        static fn all(base: ClassInfo) -> Array<ClassInfo> {
+            let out = new Array<ClassInfo>();
+            for (c in ClassInfo.all()) { if (c.isSubclassOf(base)) { out.push(c); } }
+            return out;
+        }
         static fn of(value: any) -> ClassInfo {
             if (!(%{ value.tag == GRAV_ANY_OBJ %} as bool)) { return null; }
             return ClassInfo.__fromType(%{ (unsigned char*)((struct GravObject*)value.v.p)->__type %} as byte*);

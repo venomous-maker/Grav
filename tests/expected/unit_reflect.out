@@ -1,7 +1,8 @@
-running 5 tests
+running 6 tests
   ok    decorators and fields of a class hierarchy
   ok    reading and writing fields through any
   ok    ClassInfo.of, identity and classes without metadata
   ok    many threads share each class's ClassInfo
   ok    nameof names any type, and the one a type parameter stands for
-result: 5 passed, 0 failed
+  ok    ClassInfo.forName finds reflected classes by name, all() lists them
+result: 6 passed, 0 failed

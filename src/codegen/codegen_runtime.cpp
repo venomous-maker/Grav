@@ -1076,6 +1076,25 @@ typedef struct GravClassMeta {
     int nctors; const GravCtorMeta* ctors;    /* none for an abstract class */
     void* info;                               /* its ClassInfo once made (set once, atomically) */
 } GravClassMeta;
+/* Every class with reflection (generated after the descriptors), null-terminated. */
+static GRAV_UNUSED const GravTypeInfo* const* grav_rf_all_types(void);
+/* The reflected class named `name`: its fully-qualified name, or its bare name
+   when exactly one reflected class has it; 0 when none (or the bare name is
+   ambiguous: *ambiguous is set). */
+static GRAV_UNUSED const GravTypeInfo* grav_rf_type_named(const char* name, int* ambiguous) {
+    const GravTypeInfo* const* all = grav_rf_all_types();
+    const GravTypeInfo* bare = 0;
+    int nbare = 0;
+    *ambiguous = 0;
+    for (int i = 0; all[i]; i++) {
+        const char* n = all[i]->name;
+        if (strcmp(n, name) == 0) return all[i];
+        const char* dot = strrchr(n, '.');
+        if (dot && strcmp(dot + 1, name) == 0) { bare = all[i]; nbare++; }
+    }
+    if (nbare > 1) { *ambiguous = 1; return 0; }
+    return bare;
+}
 /* Reflection's conversions of an `any` to a field's or parameter's type: 1 with
    the value in *out when it fits, else 0. An integer type `bits` wide (signed
    or not) takes whole numbers in its range: integers, bools, floats without a
