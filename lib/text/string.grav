@@ -300,11 +300,10 @@ namespace std.text {
         static fn join(parts: Array<string>, delim: string) -> string {
             let n = parts.size();
             if (n == 0) { return ""; }
-            let ptrs = %{ (const char**)malloc(sizeof(const char*) * (size_t)n) %} as string*;
-            for (i in 0..n) { ptrs[i] = parts.get(i); }
-            let out = %{ grav_str_join(ptrs, n, delim) %} as string;
-            free(ptrs);
-            return out;
+            // (The array's own buffer: copying the parts into a `string*` of our own
+            // retained each one, and freeing that copy never released them.)
+            let ptrs = parts.__buffer();
+            return %{ grav_str_join((const char**)ptrs, n, delim) %} as string;
         }
 
         // ── more ───────────────────────────────────────────────────────────────
