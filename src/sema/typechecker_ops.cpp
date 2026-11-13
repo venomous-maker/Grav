@@ -147,8 +147,31 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
         checkArgs(args, cands[0]->paramTypes, line, col, withSignature(what, sigOf(cands[0])));
         return cands[0];
     }
+    // An array literal or a lambda takes its type from the parameter it goes to:
+    // when the overloads of this arity have one that a literal can build (an
+    // Array, a collection with push/add, a fixed array) or one function type at
+    // that position, check it against that (whereIn(name, [..]) beside whereIn(name, sub)).
+    auto contextType = [&](size_t i, const Expr *a) -> const TypeRef * {
+        bool list = dynamic_cast<const ArrayLiteralExpr *>(a) != nullptr, lambda = dynamic_cast<const LambdaExpr *>(a) != nullptr;
+        if (!list && !lambda) return nullptr;
+        const TypeRef *found = nullptr;
+        for (const MethodInfo *m : cands) {
+            if (m->paramTypes.size() != args.size()) continue;
+            const TypeRef &t = m->paramTypes[i];
+            bool fits = lambda ? t.isFunction()
+                               : t.isArray() || (t.isNamed() && reg_->isClass(t.name) &&
+                                                 (reg_->findMethod(t.name, "push") || reg_->findMethod(t.name, "add")));
+            if (!fits) continue;
+            if (found && *found != t) return nullptr; // two different ones: no single context
+            found = &t;
+        }
+        return found;
+    };
     std::vector<TypeRef> argTypes;
-    for (auto &a : args) argTypes.push_back(checkExpr(*a));
+    for (size_t i = 0; i < args.size(); ++i) {
+        const TypeRef *ctx = contextType(i, args[i].get());
+        argTypes.push_back(ctx ? checkExprExpect(*args[i], *ctx) : checkExpr(*args[i]));
+    }
     for (const auto &t : argTypes) if (t.isError()) return nullptr;
     const MethodInfo *exact = nullptr, *assignable = nullptr;
     int nAssignable = 0;
