@@ -330,7 +330,7 @@ void Registry::assignMethodNames() {
                 if (o->paramTypes == m.paramTypes) {
                     int line = m.decl ? m.decl->line : ci.decl->line;
                     int col = m.decl ? m.decl->col : ci.decl->col;
-                    error(line, col, "duplicate method '" + m.sourceName + "' with the same "
+                    error(line, col, "duplicate method '" + memberDisplayName(m.sourceName) + "' with the same "
                                      "parameter types in class '" + fq + "'");
                 }
             }
@@ -1003,6 +1003,22 @@ void Registry::checkHierarchies() {
                                                          inherited->definingClass + "'");
         }
     }
+    // A property's getter and setter agree on its type, and its name is not a field's.
+    for (auto &[fq, ci] : classes_) {
+        for (const auto &m : ci.methods) {
+            bool get = false;
+            std::string p = propertyOf(m.name, &get);
+            if (p.empty() || !m.decl) continue;
+            if (const FieldInfo *f = findField(fq, p))
+                error(m.decl->line, m.decl->col, "'" + p + "' is both a field (in '" + f->definingClass +
+                                                     "') and a property of '" + fq + "'");
+            if (!get) continue;
+            for (const MethodInfo *s : findMethodsBySource(fq, propertySetter(p)))
+                if (s->paramTypes.size() == 1 && s->paramTypes[0] != m.returnType && s->decl)
+                    error(s->decl->line, s->decl->col, "the setter of '" + p + "' takes " + typeRefName(s->paramTypes[0]) +
+                                                           ", but its getter gives " + typeRefName(m.returnType));
+        }
+    }
     for (auto &[fq, ci] : classes_) {
         int line = ci.decl->line, col = ci.decl->col;
 
@@ -1010,7 +1026,7 @@ void Registry::checkHierarchies() {
         for (auto &m : ci.methods) {
             if (m.isAbstract && !ci.isAbstract) {
                 error(m.decl ? m.decl->line : line, m.decl ? m.decl->col : col,
-                      "abstract method '" + m.name +
+                      "abstract method '" + memberDisplayName(m.name) +
                           "' is only allowed in an abstract class");
             }
         }
@@ -1030,7 +1046,8 @@ void Registry::checkHierarchies() {
             for (const auto &n : abstractNames) {
                 if (findMethodImpl(fq, n).empty())
                     error(line, col, "class '" + fq +
-                                         "' must implement abstract method '" + n + "'");
+                                         "' must implement abstract " + (propertyOf(n).empty() ? "method '" : "property accessor '") +
+                                             memberDisplayName(n) + "'");
             }
         }
 
@@ -1049,7 +1066,7 @@ void Registry::checkHierarchies() {
             if (!base) continue;
             if (base->isFinal && m.decl)
                 error(m.decl->line, m.decl->col,
-                      "method '" + m.name + "' overrides final method in '" +
+                      "method '" + memberDisplayName(m.name) + "' overrides final method in '" +
                           base->definingClass + "'");
             // Methods returning Self return their own class each, so the two
             // return types differ in name only.
@@ -1071,7 +1088,7 @@ void Registry::checkHierarchies() {
                                               base->definingClass + "' does not");
             } else if (!ok) {
                 error(m.decl->line, m.decl->col,
-                      "override of '" + m.name + "' does not match the signature in '" +
+                      "override of '" + memberDisplayName(m.name) + "' does not match the signature in '" +
                           base->definingClass + "'");
             }
         }
@@ -1090,8 +1107,8 @@ void Registry::checkHierarchies() {
                     have = all.empty() ? nullptr : all.front();
                 }
                 if (!have || have->isStatic) {
-                    error(line, col, "class '" + fq + "' does not implement method '" +
-                                         want.name + "' required by " + (ii->decl && ii->decl->isTrait ? "trait '" : "interface '") + ifq + "'");
+                    error(line, col, "class '" + fq + "' does not implement " + (propertyOf(want.name).empty() ? "method '" : "property accessor '") +
+                                         memberDisplayName(want.name) + "' required by " + (ii->decl && ii->decl->isTrait ? "trait '" : "interface '") + ifq + "'");
                     continue;
                 }
                 // An interface type of `Self` is satisfied by the class's own type, or
@@ -1106,7 +1123,7 @@ void Registry::checkHierarchies() {
                 for (size_t i = 0; ok && i < want.paramTypes.size(); ++i)
                     ok = matches(have->paramTypes[i], want.paramTypes[i]);
                 if (!ok) {
-                    error(line, col, "method '" + want.name + "' in '" + fq +
+                    error(line, col, "method '" + memberDisplayName(want.name) + "' in '" + fq +
                                          "' does not match " + (ii->decl && ii->decl->isTrait ? "trait '" : "interface '") + ifq + "'");
                 }
             }

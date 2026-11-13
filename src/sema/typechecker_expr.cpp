@@ -639,6 +639,11 @@ std::optional<TypeRef> TypeChecker::tryEnumValue(MemberExpr &e) {
 TypeRef TypeChecker::checkIncDec(IncDecExpr &e) {
     TypeRef t = checkExpr(*e.target);
     if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
+    if (auto *m = dynamic_cast<MemberExpr *>(e.target.get()); m && dynamic_cast<CallExpr *>(m->bound.get())) {
+        error(e.line, e.col, "'++'/'--' on property '" + m->member + "' works only as a statement of its own, "
+                             "not inside an expression");
+        return TypeRef::prim(TypeRef::Kind::Error);
+    }
     if (auto *n = dynamic_cast<NameExpr *>(e.target.get()); n && isCapturedHere(n->name))
         error(e.line, e.col, "cannot modify captured variable '" + n->name +
                                  "' inside a lambda (captures are copies)");
@@ -1512,8 +1517,8 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 e.methodName = mi->name;
                 e.ownerClass = mi->definingClass;
                 if (!checkAccess(mi->access, mi->definingClass))
-                    error(e.line, e.col, "static method '" + last + "' is " +
-                                             accessName(mi->access));
+                    error(e.line, e.col, (propertyOf(last).empty() ? "static method '" : "static property accessor '") +
+                                             memberDisplayName(last) + "' is " + accessName(mi->access));
                 return mi->returnType;
             }
             const MethodInfo *mi = anyMi;
@@ -1692,7 +1697,8 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                                                  "method '" + objType.name + "." + mem->member + "'");
     if (!mi) return TypeRef::prim(TypeRef::Kind::Error);
     if (!checkAccess(mi->access, mi->definingClass))
-        error(mem->line, mem->col, "method '" + mem->member + "' is " +
+        error(mem->line, mem->col, (propertyOf(mem->member).empty() ? "method '" : "property accessor '") +
+                                       memberDisplayName(mem->member) + "' is " +
                                        accessName(mi->access) + " in '" +
                                        mi->definingClass + "'");
 
@@ -1835,6 +1841,7 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
     // `EnumType.Member` is a constant, not a field access on a value.
     if (auto enumTy = tryEnumValue(e)) return *enumTy;
     if (auto sf = tryStaticField(e)) return *sf;
+    if (auto sp = tryPropertyRead(e, nullptr)) return *sp; // `Class.name` through a static getter
     // `Integer.compare` as a value: `fn(a, b) => Integer.compare(a, b)` (of overloads,
     // the one the expected function type takes).
     if (auto chain = flattenNames(&e); chain && chain->size() >= 2 && lookupLocal((*chain)[0]) == nullptr) {
@@ -1930,6 +1937,8 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
         e.ownerClass = objType.name;
         return f->type;
     }
+    if (objType.isNamed() && reg_->isInterface(objType.name))
+        if (auto p = tryPropertyRead(e, &objType)) return *p;
     if (!objType.isNamed() || !reg_->isClass(objType.name)) {
         error(e.line, e.col, "cannot access member '" + e.member +
                                  "' of a value of type " + typeRefName(objType) + maybeNullHint(objType));
@@ -1937,6 +1946,7 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
     }
     const FieldInfo *f = reg_->findField(objType.name, e.member);
     if (!f) {
+        if (auto p = tryPropertyRead(e, &objType)) return *p;
         if (reg_->findMethod(objType.name, e.member))
             return bindMethod(e, objType, expMember);
         else

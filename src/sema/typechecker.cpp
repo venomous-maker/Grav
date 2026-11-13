@@ -280,7 +280,8 @@ void TypeChecker::checkClass(ClassDecl &cls) {
         popScope();
         currentReturnsSelf_ = false;
         checkFallthrough(m.body, m.returnType, m.line, m.col,
-                         "method '" + cls.fqName + "." + m.name + "'");
+                         (propertyOf(m.name).empty() ? "method '" : "property '") + cls.fqName + "." +
+                             memberDisplayName(m.name) + "'");
     }
 }
 
@@ -295,7 +296,8 @@ void TypeChecker::checkBlock(Block &block) {
             if (auto *id = dynamic_cast<IncDecExpr *>(es->expr.get())) {
                 const Expr *root = id->target.get();
                 while (auto *m = dynamic_cast<const MemberExpr *>(root)) root = m->object.get();
-                if (dynamic_cast<const IndexExpr *>(root)) {
+                auto *top = dynamic_cast<MemberExpr *>(id->target.get());
+                if (dynamic_cast<const IndexExpr *>(root) || (top && isPropertyTarget(*top))) {
                     auto as = std::make_unique<AssignStmt>();
                     as->line = s->line;
                     as->col = s->col;
@@ -399,9 +401,9 @@ void TypeChecker::checkDoWhile(DoWhileStmt &s) {
 
 void TypeChecker::checkFor(ForStmt &s) {
     pushScope(); // the initializer's scope spans the whole loop
-    if (s.init) checkStmt(*s.init);
+    if (s.init) { checkStmt(*s.init); if (matchReplacement_) s.init = std::move(matchReplacement_); }
     if (s.cond) requireBool(*s.cond, "a 'for' condition");
-    if (s.update) checkStmt(*s.update);
+    if (s.update) { checkStmt(*s.update); if (matchReplacement_) s.update = std::move(matchReplacement_); }
     enterLoop(s.label, s.line, s.col);
     checkBlock(s.body);
     leaveLoop();
@@ -566,7 +568,9 @@ void TypeChecker::checkLet(LetStmt &s) {
 }
 
 void TypeChecker::checkAssign(AssignStmt &s) {
-    if (std::exchange(assignAtBlockLevel_, false) && rewriteElementStore(s)) return;
+    bool blockLevel = std::exchange(assignAtBlockLevel_, false);
+    if (blockLevel && rewriteElementStore(s)) return;
+    if (auto *mem = dynamic_cast<MemberExpr *>(s.target.get()); mem && tryPropertyWrite(s, *mem, blockLevel)) return;
     if (auto *lam = dynamic_cast<LambdaExpr *>(s.value.get()))
         if (auto *n = dynamic_cast<NameExpr *>(s.target.get()); n && !s.isCompound && lam->selfName.empty() &&
                                                                 lambdaMentions(*lam, n->name))

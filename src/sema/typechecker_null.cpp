@@ -105,6 +105,7 @@ void TypeChecker::checkIf(IfStmt &s) {
     if (s.elseStmt) {
         pushNarrowing(keepUnassigned(std::move(no), {s.elseStmt.get()}));
         checkStmt(*s.elseStmt);
+        if (matchReplacement_) s.elseStmt = std::move(matchReplacement_);
         popNarrowing();
     }
 }

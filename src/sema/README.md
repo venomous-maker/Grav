@@ -11,6 +11,7 @@ system, and annotates the AST for codegen.
 | `typechecker_expr.cpp`   | Expression checking and call/member resolution.            |
 | `typechecker_lambda.cpp` | Lambdas: parameter inference from the expected type, capture analysis (read-only copies), named functions as values, calls through function values. |
 | `typechecker_ops.cpp`    | Operator overloading, for-each/`step` loops, `defer`, `toString`/enum display, and the missing-return analysis. |
+| `typechecker_props.cpp`  | Properties: `obj.name` through `get name()` (the method `__get_name`, put in the MemberExpr's `bound`), and `obj.name = v` / `op=` / `++` through `set name(v)` (the assignment replaced by the setter call, the object evaluated once). |
 
 ### `Registry` (build order matters)
 

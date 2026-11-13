@@ -144,6 +144,13 @@ private:
     void checkIndexAssign(AssignStmt &s, IndexExpr &ix, const TypeRef &base);
     // `xs[i].f = v` through operator[]: write the element copy back (true when rewritten).
     bool rewriteElementStore(AssignStmt &s);
+    // Properties (typechecker_props.cpp): reads through `get name()`, writes
+    // through `set name(v)`.
+    std::string staticPropertyOwner(MemberExpr &e, bool getter);
+    bool hasAccessor(const std::string &type, const std::string &method) const;
+    std::optional<TypeRef> tryPropertyRead(MemberExpr &e, const TypeRef *objType);
+    bool tryPropertyWrite(AssignStmt &s, MemberExpr &mem, bool blockLevel);
+    bool isPropertyTarget(MemberExpr &mem);
     bool assignAtBlockLevel_ = false; // the assignment being checked is a statement of a block
     bool stmtAtBlockLevel_ = false;   // set by checkBlock for the statement it checks next
     // Values print/str/interpolation can render: primitives, enums (member name),
