@@ -43,6 +43,10 @@ dependencies, so they offer the same features.
     `d as Decimal` through `Decimal.from`, a class's `toFloat()`, base classes);
   - after `@` the decorators the project uses; hovering one explains how to read
     it through reflection.
+  - a class's properties (`get name() -> T` / `set name(v: T)`) as one member
+    each, with its type (and "read-only" without a setter); `obj.name` has
+    that type in hovers, inlay hints and further completion, and hovering
+    `get` or `set` explains the accessor. The `prop` snippet writes a pair.
 - **Methods on built-in values** ([std/types](../std/types/integer.md)): after
   `n.`, `port.`, `"text".`, `maybe.` or `x.`, completion lists the std/types
   methods the value takes (`n.toHex()` is `Integer.toHex(n)`), without the value's

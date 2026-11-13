@@ -263,4 +263,36 @@ node -e 'const [index, file] = process.argv.slice(1);
   const got = ws.inlayHints(file).filter((h) => h.kind === 1).map((h) => h.label).join(" ");
   process.exit(got === ": User : Array<string> : DateTime?" ? 0 : 1);' "$INDEX" "$T/model.grav" ||
   fail "types through fields with initializers"
+# Properties: one member per get/set pair, typed, completed after `obj.`, and
+# read through in types; `get`/`set` before `name(` hover as accessors.
+cat > "$T/props.grav" <<'EOF'
+import "std"
+class Temp {
+    private c: float = 0.0
+    get celsius() -> float { return self.c }
+    set celsius(v: float) { self.c = v }
+    get label() -> string { return "${self.c}" }
+}
+fn main() {
+    let t = new Temp()
+    t.celsius = 1.0
+    print(t.label)
+}
+EOF
+"$GRAV" check "$T/props.grav" >/dev/null 2>&1 || fail "props.grav should compile"
+node -e 'const [index, file] = process.argv.slice(1);
+  const g = require(index), text = require("fs").readFileSync(file, "utf8"), lines = text.split("\n"), at = 11;
+  const ws = new g.Workspace({ compiler: "/nonexistent/grav" });
+  const temp = g.parseFile(text).symbols.find((s) => s.name === "Temp");
+  const bad = [];
+  const props = (temp.members || []).filter((m) => m.kind === g.KIND.Property).map((m) => `${m.name}:${m.type}:${m.writable}`).join(",");
+  if (props !== "celsius:float:true,label:string:false") bad.push("properties: " + props);
+  const comp = (e) => { ws.setDoc(file, [...lines.slice(0, at), "    " + e, ...lines.slice(at)].join("\n"));
+    const r = ws.completion(file, { line: at, character: 4 + e.length }).map((c) => c.label); ws.setDoc(file, text); return r; };
+  const got = comp("t.");
+  if (!got.includes("celsius") || !got.includes("label") || got.some((x) => /^(get|set) |__get_/.test(x))) bad.push("t. offers " + got.join(" "));
+  if (ws.typeOfExpr(file, { line: at, character: 4 }, "t.label") !== "string") bad.push("t.label is not a string");
+  const h = ws.hover(file, { line: 3, character: 5 });
+  if (!h || !/getter/.test(h.markdown)) bad.push("no accessor hover on get");
+  if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/props.grav" || fail "properties in the index"
 echo "editors: ok"

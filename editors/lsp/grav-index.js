@@ -170,10 +170,20 @@ const KEYWORD_DOCS = {
 for (const t of ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"])
   KEYWORD_DOCS[t] = [`${t.startsWith("u") ? "Unsigned" : "Signed"} ${t.replace(/\D/g, "")}-bit integer.`, `let v: ${t} = 1\nlet w = ${t}(x)   // a conversion`];
 
+// `get` and `set` are keywords only before `name(` in a class (hover text).
+const PROPERTY_DOCS = {
+  get: ["A property's getter: `obj.name` calls it. Without a `set`, the property is read-only.",
+    "get fullName() -> string { return self.first + \" \" + self.last }"],
+  set: ["A property's setter: `obj.name = v` (and `obj.name += v`) calls it with the new value.",
+    "set fullName(v: string) { let i = Str.indexOf(v, \" \"); self.first = v[..i]; self.last = v[i + 1..] }"],
+};
+
 // Completion snippets (LSP snippet syntax): [label, description, body].
 const SNIPPETS = [
   ["fn", "function", "fn ${1:name}(${2}) -> ${3:void} {\n\t$0\n}"],
   ["main", "entry point", "fn main() {\n\t$0\n}"],
+  ["prop", "property with a getter and a setter", "get ${1:name}() -> ${2:int} { return self.${3:_name} }\nset ${1:name}(value: ${2:int}) { self.${3:_name} = value }"],
+  ["get", "read-only property", "get ${1:name}() -> ${2:int} { return $0 }"],
   ["class", "class with a constructor", "class ${1:Name} {\n\tpublic ${2:value}: ${3:int}\n\tconstructor(${2:value}: ${3:int}) { self.${2:value} = ${2:value} }\n\t$0\n}"],
   ["struct", "struct with a method", "struct ${1:Name} {\n\t${2:x}: ${3:int}\n\tfn ${4:describe}() -> string { return \"${self.${2:x}}\" }\n}"],
   ["enum", "enum", "enum ${1:Name} { ${2:A}, ${3:B} }"],
@@ -345,6 +355,7 @@ const RE = {
   classLike: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(class|struct|interface|trait|enum)\\s+(${IDENT})\\s*(<[^>{]*>)?`),
   alias: new RegExp(`^\\s*${MODS}type\\s+(${IDENT})\\s*(<[^>=]*>)?\\s*=\\s*(.+)$`),
   fn: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}fn\\s+(operator\\s*\\S+?|${IDENT})\\s*(<[^>(]*>)?\\s*\\(`),
+  prop: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(get|set)\\s+(${IDENT})\\s*\\(`),
   ctor: /^\s*constructor\s*\(/,
   dtor: /^\s*destructor\s*\(/,
   global: new RegExp(`^\\s*${MODS}(const|let)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=`),
@@ -461,6 +472,27 @@ function parseFile(text) {
       opened = add({ name, kind, line: i, ch: m.indexOf(mm[1], mm.index), namespace: ns,
         container: container && container.name, typeParams: mm[2] || "", params: sig.params, returns: sig.ret,
         isStatic, detail: raw.trim().replace(/\s*(\{.*|=>.*)$/, ""), doc: docAbove(lines, i), children: [] });
+      addParams(opened, sig.params, i, raw, paren);
+    } else if ((mm = RE.prop.exec(m)) && inType && !inBody) {
+      // get name() -> T { } / set name(v: T) { }: one property; each accessor's body is a hidden method
+      const isGet = mm[1] === "get", name = mm[2];
+      const paren = m.indexOf("(", mm.index + mm[0].length - 1);
+      const sig = signatureFrom(raw, paren);
+      const pm = !isGet && sig.params[0] ? /^(?:\.\.\.)?\w+\s*:\s*(.+)$/.exec(sig.params[0]) : null;
+      const type = isGet ? sig.ret : pm ? pm[1].trim() : "";
+      const isStatic = /\bstatic\s+(?:\w+\s+)*(?:get|set)\b/.test(m);
+      let prop = symbols.find((x) => x.kind === KIND.Property && x.container === ctx.name && x.namespace === ns && x.name === name && !x.local);
+      if (!prop) {
+        prop = add({ name, kind: KIND.Property, line: i, ch: m.indexOf(name, mm.index + mm[0].indexOf(mm[1]) + 3), namespace: ns,
+          container: ctx.name, type, isStatic, readable: false, writable: false, detail: "", doc: docAbove(lines, i) });
+      }
+      if (isGet) prop.readable = true; else prop.writable = true;
+      if (!prop.type) prop.type = type;
+      prop.detail = `${prop.isStatic ? "static " : ""}${prop.name}: ${prop.type}` +
+        (prop.readable && prop.writable ? "" : prop.readable ? " (read-only)" : " (write-only)") + " — property";
+      opened = { name: `${mm[1]} ${name}`, kind: KIND.Method, accessor: true, line: i, ch: m.indexOf(name), namespace: ns,
+        container: ctx.name, params: sig.params, returns: sig.ret, isStatic, detail: raw.trim().replace(/\s*\{.*$/, ""),
+        doc: "", children: [] };
       addParams(opened, sig.params, i, raw, paren);
     } else if ((RE.ctor.test(m) || RE.dtor.test(m)) && inType) {
       const isCtor = RE.ctor.test(m);
@@ -1106,7 +1138,7 @@ class Workspace {
       }
       let t;
       if (m.sym.kind === KIND.EnumMember) t = m.sym.container;       // Shape.Circle(1.0) is a Shape
-      else if (m.sym.kind === KIND.Field) t = m.sym.type;
+      else if (m.sym.kind === KIND.Field || m.sym.kind === KIND.Property) t = m.sym.type;
       else t = called ? (m.sym.returns || "") : fnTypeOf(m.sym, 0);   // Integer.compare as a value
       type = indexed(this.bindMember(file, type, m.sym, t), p0);
     }
@@ -1265,6 +1297,11 @@ class Workspace {
     if (lineText[w.range.start.character - 1] === "@") {          // @Column: what a decorator is, and how to read it
       const uses = (this.decoratorNames(file).find((d) => d[0] === w.word) || [, 0])[1];
       return { markdown: DECORATOR_DOC(w.word) + (uses ? `\n\n*used ${uses} time${uses === 1 ? "" : "s"} in this project*` : ""), range: w.range };
+    }
+    const acc = (w.word === "get" || w.word === "set") && RE.prop.exec(lineText);
+    if (acc && lineText.indexOf(acc[1] + " ", acc.index) === w.range.start.character) {
+      const [what, ex] = PROPERTY_DOCS[w.word];
+      return { markdown: `**${w.word}** — ${what}\n\n\`\`\`grav\n${ex}\n\`\`\``, range: w.range };
     }
     if (KEYWORD_SET.has(w.word)) {
       const d = KEYWORD_DOCS[w.word];

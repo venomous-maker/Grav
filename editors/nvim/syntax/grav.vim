@@ -92,6 +92,8 @@ syn match gravTypeRef     "\%([<,]\s*\)\@<=\u\w*\ze\s*[<>,\[*]"           " Arra
 syn match gravTypeParam   "\%(\<\%(class\|struct\|enum\|interface\|trait\|type\|fn\)\s\+\w\+\s*<\s*\%(\w\+\s*\%(:\s*\w\+\s*\)\=,\s*\)*\)\@<=\u\w*"
 syn match gravFuncDef     "\%(\<fn\s\+\)\@<=\w\+"                " fn name
 syn match gravFuncDef     "\%(\<fn\s\+operator\s*\)\@<=\S\{1,3}\ze\s*("    " fn operator==
+syn match gravAccessor    "\%(\.\)\@<!\<\%(get\|set\)\ze\s\+\h\w*\s*("   " get name( / set name(
+syn match gravFuncDef     "\%(\<\%(get\|set\)\s\+\)\@<=\h\w*\ze\s*("    " get name( / set name(
 syn match gravTypeDef     "\%(\<\%(class\|struct\|enum\|interface\|trait\|type\)\s\+\)\@<=\w\+"
 syn match gravNamespace   "\%(\<\%(namespace\|use\)\s\+\)\@<=\w\+\%(\%(\.\|::\)\w\+\)*"
 syn match gravNamespace   +\%(\<import\s\+"[^"]*"\s\+as\s\+\)\@<=\w\++
@@ -112,6 +114,7 @@ hi def link gravBlockComment  Comment
 hi def link gravTodo          Todo
 hi def link gravKeyword       Keyword
 hi def link gravStorage       StorageClass
+hi def link gravAccessor      Keyword
 hi def link gravConditional   Conditional
 hi def link gravRepeat        Repeat
 hi def link gravStatement     Statement

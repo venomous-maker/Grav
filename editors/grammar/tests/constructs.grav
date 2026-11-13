@@ -260,3 +260,19 @@ trait Versioned {
 class Page implements Versioned, Named { }
 //                    ^^^^^^^^^ entity.other.inherited-class
 //                               ^^^^^ entity.other.inherited-class
+
+// ---- properties ----
+class Temp {
+    get celsius() -> float { return self.c }
+//  ^^^ storage.type.function.accessor
+//      ^^^^^^^ entity.name.function.declaration
+//                   ^^^^^ storage.type.primitive
+    set celsius(v: float) { self.c = v }
+//  ^^^ storage.type.function.accessor
+//      ^^^^^^^ entity.name.function.declaration
+    static get count() -> int { return 0 }
+//         ^^^ storage.type.function.accessor
+    fn get(i: int) -> int { return xs.get(i) }
+//     ^^^ entity.name.function.declaration
+//                                    ^^^ entity.name.function.method - storage.type.function.accessor
+}
