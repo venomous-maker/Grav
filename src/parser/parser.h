@@ -54,6 +54,9 @@ private:
     DeclPtr parseGlobalVar(); // top-level `const`/`let`
     DeclPtr parseFunction(bool isAsync);
     MethodDecl parseMethod(bool inInterface);
+    // `get name() -> T { }` / `set name(v: T) { }`: a property accessor.
+    bool atProperty() const;
+    MethodDecl parseProperty(bool inInterface);
     ConstructorDecl parseConstructor();
     FieldDecl parseField(Access access, bool readonly);
     std::vector<Param> parseParams(bool allowVariadic = false);

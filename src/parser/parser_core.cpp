@@ -448,7 +448,7 @@ DeclPtr Parser::parseInterface() {
         if (iface->isTrait) { parseTraitMember(*iface); continue; }
         if (check(TokenType::Identifier) && peekAt(1).type == TokenType::Colon)
             fail(peek(), "an interface has only methods: a 'trait' can have fields");
-        iface->methods.push_back(parseMethod(/*inInterface=*/true));
+        iface->methods.push_back(atProperty() ? parseProperty(/*inInterface=*/true) : parseMethod(/*inInterface=*/true));
     }
     expect(TokenType::RBrace, (std::string("to close the ") + what + " body").c_str());
     if (!iface->typeParams.empty() &&
@@ -471,10 +471,10 @@ void Parser::parseTraitMember(InterfaceDecl &trait) {
         fail(peek(), "a trait cannot have a constructor: give its fields initializers instead");
     bool isStatic = matchToken(TokenType::Static);
     bool isReadonly = matchToken(TokenType::Readonly);
-    if (check(TokenType::Fn)) {
+    if (check(TokenType::Fn) || atProperty()) {
         if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
         bool shared = access == Access::Public && !isStatic;
-        MethodDecl m = parseMethod(/*inInterface=*/shared);
+        MethodDecl m = atProperty() ? parseProperty(/*inInterface=*/shared) : parseMethod(/*inInterface=*/shared);
         m.access = access;
         m.isStatic = isStatic;
         m.decorators = std::move(decos);
@@ -667,7 +667,9 @@ DeclPtr Parser::parseClass(bool isAbstract) {
         // `final fn m()` (contextual) — the method cannot be overridden.
         bool isFinalMethod = false;
         if (check(TokenType::Identifier) && peek().lexeme == "final" &&
-            peekAt(1).type == TokenType::Fn) {
+            (peekAt(1).type == TokenType::Fn ||
+             (peekAt(1).type == TokenType::Identifier && (peekAt(1).lexeme == "get" || peekAt(1).lexeme == "set") &&
+              peekAt(2).type == TokenType::Identifier && peekAt(3).type == TokenType::LParen))) {
             advance();
             isFinalMethod = true;
         }
@@ -676,9 +678,10 @@ DeclPtr Parser::parseClass(bool isAbstract) {
         bool isStatic = matchToken(TokenType::Static);
         bool isReadonly = matchToken(TokenType::Readonly);
 
-        if (check(TokenType::Fn)) {
+        if (check(TokenType::Fn) || atProperty()) {
             // Abstract methods have no body (parsed like an interface signature).
-            MethodDecl m = parseMethod(/*inInterface=*/isAbstractMethod);
+            MethodDecl m = atProperty() ? parseProperty(/*inInterface=*/isAbstractMethod)
+                                        : parseMethod(/*inInterface=*/isAbstractMethod);
             m.access = access;
             m.isStatic = isStatic;
             m.isAbstract = isAbstractMethod;
@@ -856,6 +859,41 @@ MethodDecl Parser::parseMethod(bool inInterface) {
         m.hasBody = true;
         m.body = parseBlock();
     }
+    return m;
+}
+
+// `get` and `set` are contextual: an accessor when a name and `(` follow.
+bool Parser::atProperty() const {
+    return check(TokenType::Identifier) && (peek().lexeme == "get" || peek().lexeme == "set") &&
+           peekAt(1).type == TokenType::Identifier && peekAt(2).type == TokenType::LParen;
+}
+
+// `get name() -> T { ... }` reads `obj.name`; `set name(v: T) { ... }` takes
+// `obj.name = v`. They are the methods __get_name and __set_name.
+MethodDecl Parser::parseProperty(bool inInterface) {
+    const Token &kw = advance(); // 'get' or 'set'
+    bool isGet = kw.lexeme == "get";
+    MethodDecl m;
+    m.line = kw.line;
+    m.col = kw.col;
+    const Token &nm = expect(TokenType::Identifier, isGet ? "after 'get'" : "after 'set'");
+    m.name = isGet ? propertyGetter(nm.lexeme) : propertySetter(nm.lexeme);
+    m.params = parseParams();
+    for (const auto &p : m.params)
+        if (p.variadic || p.defaultValue) fail(kw, "a property's parameter cannot be variadic or have a default");
+    if (isGet) {
+        if (!m.params.empty()) fail(kw, "a getter takes no parameters: 'get " + nm.lexeme + "()'");
+        if (!matchToken(TokenType::Arrow))
+            fail(peek(), "a getter needs its type: 'get " + nm.lexeme + "() -> T'");
+        m.returnType = parseType("as the property's type");
+    } else {
+        if (m.params.size() != 1)
+            fail(kw, "a setter takes one parameter, the new value: 'set " + nm.lexeme + "(value: T)'");
+        if (check(TokenType::Arrow)) fail(peek(), "a setter returns nothing: its type is its parameter's");
+        m.returnType = TypeRef::prim(TypeRef::Kind::Void);
+    }
+    if (inInterface && !check(TokenType::LBrace)) m.hasBody = false;
+    else { m.hasBody = true; m.body = parseBlock(); }
     return m;
 }
 

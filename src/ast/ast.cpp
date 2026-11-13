@@ -41,6 +41,24 @@ bool isComparison(BinaryOp op) {
     }
 }
 
+std::string propertyGetter(const std::string &name) { return "__get_" + name; }
+std::string propertySetter(const std::string &name) { return "__set_" + name; }
+
+std::string propertyOf(const std::string &method, bool *isGetter) {
+    bool get = method.rfind("__get_", 0) == 0, set = method.rfind("__set_", 0) == 0;
+    if ((!get && !set) || method.size() <= 6) return "";
+    if (isGetter) *isGetter = get;
+    std::string n = method.substr(6);
+    if (size_t at = n.find("__"); at != std::string::npos) n = n.substr(0, at); // an overload's suffix
+    return n;
+}
+
+std::string memberDisplayName(const std::string &method) {
+    bool get = false;
+    std::string p = propertyOf(method, &get);
+    return p.empty() ? method : (get ? "get " : "set ") + p;
+}
+
 bool isLogical(BinaryOp op) {
     return op == BinaryOp::And || op == BinaryOp::Or;
 }

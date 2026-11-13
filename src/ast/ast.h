@@ -104,6 +104,16 @@ bool isLogical(BinaryOp op);
 // Operators defined only on ints (modulo, bitwise, shifts).
 bool isIntOnly(BinaryOp op);
 
+// A property (`get name() -> T { }` / `set name(v: T) { }`) is a pair of
+// methods named `__get_name` and `__set_name`; `obj.name` calls them.
+std::string propertyGetter(const std::string &name);
+std::string propertySetter(const std::string &name);
+// The property a method name accessor stands for ("" when it is none), and
+// whether it is the getter.
+std::string propertyOf(const std::string &method, bool *isGetter = nullptr);
+// A method's name for messages: `get name` / `set name` for an accessor.
+std::string memberDisplayName(const std::string &method);
+
 struct BinaryExpr : Expr {
     BinaryOp op;
     ExprPtr left;
