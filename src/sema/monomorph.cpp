@@ -1047,6 +1047,14 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             rewriteType(m.returnType, subst, m.line, m.col);
             if (m.hasBody) walkBlock(m.body, subst);
         }
+    } else if (auto *id = dynamic_cast<InterfaceDecl *>(d)) {
+        // Signatures (and default bodies, copied into implementers afterwards)
+        // may name generic instances such as Array<string>.
+        for (auto &m : id->methods) {
+            rewriteParams(m.params, subst, m.line, m.col);
+            rewriteType(m.returnType, subst, m.line, m.col);
+            if (m.hasBody) walkBlock(m.body, subst);
+        }
     } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
         if (g->hasDeclaredType) rewriteType(g->declaredType, subst, g->line, g->col);
         walkExpr(g->init.get(), subst);

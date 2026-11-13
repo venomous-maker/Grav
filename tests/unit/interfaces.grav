@@ -72,3 +72,43 @@ test "sibling classes unify to their common base" {
     let one = pets.length > 1 ? new Cat() : new Dog()
     assertEq(one.speak(), "meow")
 }
+
+// Generic instances in an interface's own signatures and default bodies.
+interface Store {
+    fn get(key: string) -> string?
+    fn keys() -> Array<string>
+    fn getMany(keys: Array<string>) -> Array<string?> {
+        let out = new Array<string?>()
+        for (k in keys) { out.push(self.get(k)) }
+        return out
+    }
+    fn dump(into: HashMap<string, string>) { for (k in self.keys()) { into.put(k, self.get(k) ?? "") } }
+    fn boxed() -> Pair<string, int> { return new Pair<string, int>("store", self.keys().size()) }
+}
+class MapStore implements Store {
+    private m: HashMap<string, string> = new HashMap<string, string>()
+    constructor() { self.m.put("a", "1"); self.m.put("b", "2") }
+    fn get(key: string) -> string? { return self.m.containsKey(key) ? self.m[key] : null }
+    fn keys() -> Array<string> { return self.m.keys() }
+}
+class BatchStore implements Store {
+    fn get(key: string) -> string? { return "one:" + key }
+    fn keys() -> Array<string> { return ["x"] }
+    fn getMany(keys: Array<string>) -> Array<string?> {
+        let out = new Array<string?>()
+        for (k in keys) { out.push("batch:" + k) }
+        return out
+    }
+}
+
+test "interface signatures and default bodies can name generic instances" {
+    let s: Store = new MapStore()
+    let got = s.getMany(["a", "zz", "b"])
+    assertEq("${got.size()} ${got[0]} ${got[1] == null} ${got[2]}", "3 1 true 2")
+    let into = new HashMap<string, string>()
+    s.dump(into)
+    assertEq("${into.size()} ${into["b"]}", "2 2")
+    assertEq("${s.boxed().first} ${s.boxed().second}", "store 2")
+    let b: Store = new BatchStore()
+    assertEq("${b.getMany(["q"])[0]} ${b.boxed().second}", "batch:q 1")
+}
