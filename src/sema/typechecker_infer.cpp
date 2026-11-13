@@ -125,6 +125,28 @@ TypeRef TypeChecker::toCanonical(const TypeRef &t) const {
     return r;
 }
 
+// Whether an expression's type is decided by where it is used: a generic
+// `new` without type arguments, a collection literal, or a map literal.
+static bool takesTypeFromContext(const Expr &e) {
+    if (auto *n = dynamic_cast<const NewExpr *>(&e)) return n->typeArgs.empty();
+    if (dynamic_cast<const ArrayLiteralExpr *>(&e)) return true;
+    if (auto *c = dynamic_cast<const CallExpr *>(&e))
+        if (auto *n = dynamic_cast<const NameExpr *>(c->callee.get())) return n->name == "mapOf" && c->typeArgs.empty();
+    return false;
+}
+
+// `{"a": ..., "b": ...}`: a map literal whose keys are all string literals.
+static bool stringKeyedMapLiteral(const Expr &e) {
+    auto *c = dynamic_cast<const CallExpr *>(&e);
+    auto *n = c ? dynamic_cast<const NameExpr *>(c->callee.get()) : nullptr;
+    if (!n || n->name != "mapOf" || !c->typeArgs.empty() || c->args.empty()) return false;
+    for (const auto &a : c->args) {
+        auto *p = dynamic_cast<const NewExpr *>(a.get());
+        if (!p || p->args.size() != 2 || !dynamic_cast<const StringLiteralExpr *>(p->args[0].get())) return false;
+    }
+    return true;
+}
+
 bool TypeChecker::inferArgs(const GenericSig &sig, std::vector<ExprPtr> &args,
                             const std::vector<TypeRef> &explicitArgs, const TypeRef *expected,
                             Subst &s, std::string &why) {
@@ -148,7 +170,23 @@ bool TypeChecker::inferArgs(const GenericSig &sig, std::vector<ExprPtr> &args,
         bool untyped = false;
         if (lam) for (bool b : lam->paramTyped) if (!b) untyped = true;
         if (untyped) { later.push_back(i); continue; }
-        TypeRef at = checkExpr(*args[i]);
+        // An argument whose type comes from context (`new Pair(k, v)`, `[...]`,
+        // a nested `{...}`) takes the parameter's type once it is fully known
+        // (from the call's expected type): {"a": "x"} as HashMap<string, any>.
+        TypeRef at;
+        TypeRef known = substitute(paramFor(i), s);
+        if (!mentions(paramFor(i), sig.typeParams, s) && takesTypeFromContext(*args[i])) {
+            // A string-keyed map literal held as `any` (a nested {...} in JSON-like
+            // data) is a HashMap<string, any> all the way down.
+            if (known.isAny() && stringKeyedMapLiteral(*args[i])) {
+                TypeRef m = TypeRef::named("std.collections.HashMap");
+                m.args.push_back(TypeRef::prim(TypeRef::Kind::String));
+                m.args.push_back(TypeRef::prim(TypeRef::Kind::Any));
+                known = m;
+            }
+            at = checkExprExpect(*args[i], toCanonical(known));
+        }
+        else at = checkExpr(*args[i]);
         unify(paramFor(i), at, sig.typeParams, s);
     }
     for (size_t i : later) {

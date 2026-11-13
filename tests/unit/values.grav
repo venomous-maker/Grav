@@ -97,3 +97,20 @@ test "methods as values" {
     xs.forEach(fn(v) { c.add(v) })
     assertEq(c.n, 13)
 }
+
+fn ruleMap() -> HashMap<string, any> { return {"title": "required", "n": 3, "tags": ["a", "b"], "nested": {"x": [1, 2]}} }
+fn countOf(m: HashMap<string, any>) -> int { return m.size() }
+
+test "map and list literals take their types from where they go" {
+    let r = ruleMap()
+    assertEq("${r["title"]} ${r["n"]} ${(r["tags"] as Array<any>).size()}", "required 3 2")
+    let nested = r["nested"] as HashMap<string, any>                   // a nested {...} held as any
+    assertEq(((nested["x"] as Array<any>)[1]) as long, 2 as long)
+    assertEq(countOf({"a": "x", "b": "y"}), 2)
+    let typed: HashMap<string, any> = {"k": "v"}
+    assertEq(typed["k"] as string, "v")
+    let plain = {"a": 1, "b": 2}                                     // nothing expected: HashMap<string, int>
+    assertEq(plain["b"] + 1, 3)
+    let fixed = [1, 2, 3]                                            // still a fixed array
+    assertEq(fixed.length, 3)
+}

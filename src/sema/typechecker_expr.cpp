@@ -801,6 +801,14 @@ TypeRef TypeChecker::checkArrayLiteral(ArrayLiteralExpr &e) {
     const TypeRef *exp = expected_;
     expected_ = nullptr;
     if (exp && exp->isNamed() && reg_->isClass(exp->name)) return buildCollection(e, *exp);
+    // Held as `any` (a list inside JSON-like data, or a rule list): an Array<any>,
+    // not a fixed array, which an `any` cannot hold.
+    if (exp && exp->isAny()) {
+        TypeRef list = TypeRef::named("std.collections.Array");
+        list.args.push_back(TypeRef::prim(TypeRef::Kind::Any));
+        TypeRef inst = toCanonical(list);
+        if (inst.isNamed() && reg_->isClass(inst.name)) return buildCollection(e, inst);
+    }
     if (exp && exp->isArray() && !exp->isSlice() && exp->elem &&
         exp->arrayLen == static_cast<int>(e.elements.size()) && !e.elements.empty()) {
         const TypeRef &want = *exp->elem;
