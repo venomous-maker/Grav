@@ -55,6 +55,8 @@ std::string CodeGen::emitDescribe(const std::string &objExpr, const TypeRef &typ
             if (s.name == mi->name) { slotOwner = s.slotOwner; break; }
     std::string disp = "((" + vtableType(slotOwner) + "*)((struct GravObject*)(" + objExpr +
                        "))->__vt)->" + memberCName(mi->name);
+    if (!reg_->isOverridden(slotOwner, mi->name))           // (vtables keep only overridden slots)
+        disp = methodCName(reg_->findMethodImpl(slotOwner, mi->name), mi->name);
     return disp + "((" + structName(slotOwner) + "*)(" + objExpr + "))";
 }
 

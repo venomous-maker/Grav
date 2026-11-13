@@ -967,7 +967,10 @@ void CodeGen::emitVTableInstance(const ClassInfo &ci) {
                 vtableInstance(ci.fqName) + " = {\n";
     for (const auto &slot : ci.slots) {
         std::string impl = reg_->findMethodImpl(ci.fqName, slot.name);
-        if (impl.empty()) {
+        // A slot no subclass overrides is never read (every call to it is direct),
+        // so it holds nothing: the method stays unreferenced unless something calls
+        // it, and the C compiler drops it.
+        if (impl.empty() || !reg_->isOverridden(slot.slotOwner, slot.name)) {
             vtables_ += "    0,\n";
         } else {
             vtables_ += "    (" + slotFnType(slot) + ")" +

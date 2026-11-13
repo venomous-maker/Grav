@@ -82,7 +82,7 @@ std::string CodeGen::accessorSig(const std::string &classFq,
 }
 
 void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) {
-    defs_ += "static " + accessorSig(classFq, m) + " {\n";
+    defs_ += "GRAV_FN " + accessorSig(classFq, m) + " {\n";
     const FieldInfo *af = m.accessor == AccessorKind::Delegate ? nullptr : reg_->findField(classFq, m.accessorField);
     bool weak = af && af->isWeak;
     if (m.accessor == AccessorKind::Getter) {
@@ -108,6 +108,9 @@ void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) 
         std::string obj = "self->" + memberCName(m.accessorField);
         std::string disp = "((" + vtableType(slotOwner) + "*)((struct GravObject*)(" +
                            obj + "))->__vt)->" + memberCName(m.name);
+        // Nothing overrides it: call it directly (vtables keep only overridden slots).
+        if (reg_->isClass(slotOwner) && !reg_->isOverridden(slotOwner, m.name))
+            disp = methodCName(reg_->findMethodImpl(slotOwner, m.name), m.name);
         std::string args = "(" + structName(slotOwner) + "*)(" + obj + ")";
         for (const auto &p : m.paramNames) args += ", " + safeLocalName(p);
         defs_ += (m.returnType.isVoid() ? "    " : "    return ") + disp + "(" + args + ");\n";
@@ -147,7 +150,7 @@ void CodeGen::emitEnter(const std::string &displayName, int declLine) {
 void CodeGen::emitFunction(const FunctionDecl &fn) {
     if (fn.fqName == "main") hasMain_ = true;
     defs_ += lineDirective(fn.line);
-    defs_ += "static " + cTy(fn.returnType) + " " + funcCName(fn.fqName, fn.overloadIndex) +
+    defs_ += "GRAV_FN " + cTy(fn.returnType) + " " + funcCName(fn.fqName, fn.overloadIndex) +
              paramList(fn.params, "") + " {\n";
     cur_ = &defs_;
     indent_ = 1;
@@ -194,7 +197,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
     // delegate to it through `super(...)` without re-allocating the object.
     if (ctor) {
         defs_ += lineDirective(ctor->line);
-        defs_ += "static void " + ctorInitCName(cls.fqName, idx) + paramList(params, S) + " {\n";
+        defs_ += "GRAV_FN void " + ctorInitCName(cls.fqName, idx) + paramList(params, S) + " {\n";
         cur_ = &defs_;
         indent_ = 1;
         currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
@@ -209,7 +212,7 @@ void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *cto
     }
 
     // `_new(...)` allocates, installs the vtable / type info, then runs `_init`.
-    defs_ += "static " + S + "* " + ctorCName(cls.fqName, idx) + paramList(params, "") + " {\n";
+    defs_ += "GRAV_FN " + S + "* " + ctorCName(cls.fqName, idx) + paramList(params, "") + " {\n";
     defs_ += "    " + S + "* self = (" + S + "*)grav_zalloc(sizeof(" + S + "));\n";
 
     const ClassInfo *ci = reg_->cls(cls.fqName);
@@ -257,7 +260,7 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
     std::string S = structName(cls.fqName);
     std::string self = m.isStatic ? "" : S;
     defs_ += lineDirective(m.line);
-    defs_ += "static " + cTy(m.returnType) + " " + methodCName(cls.fqName, m.name) +
+    defs_ += "GRAV_FN " + cTy(m.returnType) + " " + methodCName(cls.fqName, m.name) +
              paramList(m.params, self) + " {\n";
     cur_ = &defs_;
     indent_ = 1;
@@ -279,7 +282,7 @@ void CodeGen::emitDestructor(const ClassDecl &cls) {
     if (!cls.destructor.present) return;
     std::string S = structName(cls.fqName);
     defs_ += lineDirective(cls.destructor.line);
-    defs_ += "static void " + mangle(cls.fqName) + "__drop(" + S + "* self) {\n";
+    defs_ += "GRAV_FN void " + mangle(cls.fqName) + "__drop(" + S + "* self) {\n";
     cur_ = &defs_;
     indent_ = 1;
     currentReturnType_ = TypeRef::prim(TypeRef::Kind::Void);
