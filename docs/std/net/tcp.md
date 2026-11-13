@@ -46,7 +46,9 @@ echo: hello
   a thread blocked in `accept()` with a `NetError`.
 - **Reading:** `readLine()` returns `""` at the end of input and sets `eof()`, so
   an empty line can be told apart from the end. Also `read(max)`,
-  `readBytes(max)`, `readExactly(n)`, `readAll()` and `lines(f)`.
+  `readBytes(max)`, `readExactly(n)`, `readAll()` and `lines(f)`; `readText(n)`
+  reads exactly `n` bytes straight into a string, and `skip(n)` drops them (both
+  cheaper than `readExactly` for framed protocols).
 - **Writing:** `write`, `writeLine`, `writeBytes`.
 - **Options:** `setTimeoutMs(ms)` makes a slow read or write throw `TimeoutError`;
   `setNoDelay(true)` turns off Nagle's algorithm for small, latency-sensitive messages.
@@ -94,6 +96,8 @@ One TCP connection.
 - `fn read(max: int) -> string` — Up to `max` bytes as text, waiting for at least one; "" at end of input.
 - `fn readBytes(max: int) -> Bytes` — Up to `max` bytes, waiting for at least one; empty at end of input.
 - `fn readExactly(n: int) -> Bytes` — Exactly `n` bytes; throws NetError if the stream ends first.
+- `fn readText(n: int) -> string` — Exactly `n` bytes as text, copied straight from the read buffer (no Bytes in between); throws NetError if the stream ends first.
+- `fn skip(n: int)` — Reads and drops exactly `n` bytes; throws NetError if the stream ends first.
 - `fn readAll() -> string` — Everything until the peer closes the connection.
 - `fn lines(f: fn(string))` — Calls `f` with each line until end of input.
 - `fn setTimeoutMs(ms: int)` — Reads and writes that wait longer than `ms` throw TimeoutError (0 = never).

@@ -229,6 +229,33 @@ namespace std.net {
         if (errno == EAGAIN || errno == EWOULDBLOCK) s->timedOut = 1;
         return -1;
     }
+    /* Copies (out != 0) or drops the next `n` bytes, refilling as needed; *got says
+       how many were consumed. 1 = all of them, 0 = EOF first, -1 = error. */
+    static int grav_sock_consume(GravSock* s, char* out, int n, int* got) {
+        *got = 0;
+        while (*got < n) {
+            int avail = s->len - s->pos;
+            if (avail > 0) {
+                int k = avail < n - *got ? avail : n - *got;
+                if (out) memcpy(out + *got, s->buf + s->pos, (size_t)k);
+                s->pos += k; *got += k;
+                continue;
+            }
+            if (s->eof) return 0;
+            int r = grav_sock_fill(s);
+            if (r <= 0) return r;
+        }
+        return 1;
+    }
+    /* The next `n` bytes as a counted string (0 with *status <= 0 if they never came). */
+    static const char* grav_sock_read_text(GravSock* s, int n, int* status, int* got) {
+        char* out = grav_str_alloc((size_t)(n < 0 ? 0 : n) + 1);
+        if (!out) abort();
+        *status = grav_sock_consume(s, out, n, got);
+        if (*status <= 0) { grav_str_free(out); return 0; }
+        out[n] = 0;
+        return out;
+    }
     /* Buffers what has already arrived, without waiting, until `limit` bytes are
        buffered: 1 while the connection is open, 0 at its end, -1 on an error. */
     static int grav_sock_fill_now(GravSock* s, long long limit) {
@@ -439,6 +466,25 @@ namespace std.net {
                 free(chunk);
             }
             return out;
+        }
+        // Exactly `n` bytes as text, copied straight from the read buffer (no Bytes
+        // in between); throws NetError if the stream ends first.
+        public fn readText(n: int) -> string {
+            self.ensureOpen();
+            let status = 0;
+            let got = 0;
+            let out = %{ grav_sock_read_text((GravSock*)self->s, n, &status, &got) %} as string;
+            if (status < 0) { self.failed("read"); }
+            if (status == 0) { throw new NetError("connection closed after ${got} of ${n} bytes (" + self.peer + ")"); }
+            return out;
+        }
+        // Reads and drops exactly `n` bytes; throws NetError if the stream ends first.
+        public fn skip(n: int) {
+            self.ensureOpen();
+            let got = 0;
+            let status = %{ grav_sock_consume((GravSock*)self->s, 0, n, &got) %} as int;
+            if (status < 0) { self.failed("read"); }
+            if (status == 0) { throw new NetError("connection closed after ${got} of ${n} bytes (" + self.peer + ")"); }
         }
         // Everything until the peer closes the connection.
         public fn readAll() -> string {
