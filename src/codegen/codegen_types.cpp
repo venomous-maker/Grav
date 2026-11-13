@@ -834,11 +834,12 @@ std::string CodeGen::emitReflection(const std::string &fq) {
         int flags = access(md.access) | (md.isStatic ? 16 : 0);
         const MethodInfo *mi = nullptr;
         for (const auto &x : ci->methods) if (x.name == md.name) { mi = &x; break; }
-        std::string fn = "0", params = "\"\"";
+        std::string fn = "0", params = "\"\"", result = "\"\"";
         size_t np = 0;
         if (mi) {
             np = mi->paramTypes.size();
             params = typeList(mi->paramTypes);
+            if (!mi->returnType.isVoid()) result = typeList({mi->returnType});
             std::string fname = m + "__rc" + std::to_string(counter++);
             if (mi->isStatic) {
                 std::string direct = methodCName(fq, md.name);
@@ -854,7 +855,7 @@ std::string CodeGen::emitReflection(const std::string &fq) {
             }
         }
         methods += (methods.empty() ? "" : ",\n    ") + std::string("{ \"") + escapeC(name) + "\", " +
-                   std::to_string(flags) + ", " + decos(md.decorators) + ", " + std::to_string(np) + ", " + params + ", " + fn + " }";
+                   std::to_string(flags) + ", " + decos(md.decorators) + ", " + std::to_string(np) + ", " + params + ", " + fn + ", " + result + " }";
         ++nmethods;
     }
     // Constructors (none for an abstract class): `new C(...)` by reflection.

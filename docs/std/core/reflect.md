@@ -106,6 +106,13 @@ true
   parameters and result can go through an `any` (numbers, bools, strings,
   enums, objects, `T?`, `any`); one taking a function, say, cannot
   (`canInvoke()`).
+- **Properties.** `info.properties()` lists the class's properties (`get
+  name()` / `set name(v)`, its base classes' first), and `property(name)` finds
+  one: `p.get(obj)` reads it through its getter, `p.set(obj, value)` assigns it
+  through its setter (converted as `FieldInfo.set` converts), `typeName` is its
+  type, `isReadonly()` says it has no setter, and its decorators are those on
+  either accessor. The accessors are not in `methods()`. An override of only
+  the getter keeps its base class's setter.
 - **In a static method**, `reflect(Self)` is the class the call names (see
   [Self](../../learn/11-inheritance-and-interfaces.md#self-methods-and-statics-that-fit-every-subclass)),
   so a base class can hydrate any model: `User.hydrate(row)` makes a `User`.
@@ -202,6 +209,7 @@ One method of a class as written: its name, whether it is static, and its decora
 - `decorators: Array<Decorator>`
 - `declaringClass: string` — Its class ("app.User").
 - `params: string` — Its parameter types as written ("string, int").
+- `result: string` — Its result type ("string"; "" when it returns nothing).
 
 **Methods**
 
@@ -213,6 +221,36 @@ One method of a class as written: its name, whether it is static, and its decora
 - `fn isProtected() -> bool`
 - `fn has(name: string) -> bool`
 - `fn decorator(name: string) -> Decorator`
+- `fn toString() -> string`
+
+### class PropertyInfo
+
+A property (`get name() -> T` and/or `set name(v: T)`): read and written
+through its accessors. Its decorators are those on either accessor.
+
+**Constructors**
+
+- `new PropertyInfo(name: string, getter: MethodInfo, setter: MethodInfo)`
+
+**Fields**
+
+- `name: string`
+- `typeName: string` — Its type as written ("string").
+- `declaringClass: string` — The class that declares it (its getter's, else its setter's).
+- `decorators: Array<Decorator>`
+
+**Methods**
+
+- `fn canGet() -> bool` — Whether it has a getter / a setter that reflection can call.
+- `fn canSet() -> bool`
+- `fn isReadonly() -> bool` — Whether it has no setter at all.
+- `fn isStatic() -> bool`
+- `fn isPrivate() -> bool`
+- `fn isProtected() -> bool`
+- `fn has(name: string) -> bool`
+- `fn decorator(name: string) -> Decorator`
+- `fn get(obj: any) -> any` — Its value in `obj` (ignored for a static property), from its getter.
+- `fn set(obj: any, value: any)` — Sets it through its setter, converting `value` as FieldInfo.set does.
 - `fn toString() -> string`
 
 ### class ClassInfo
@@ -242,7 +280,10 @@ What a class is at run time: reflect(User), or ClassInfo.of(anObject).
 - `fn fields() -> Array<FieldInfo>` — Every field, the base classes' first.
 - `fn ownFields() -> Array<FieldInfo>` — The fields this class declares itself.
 - `fn field(name: string) -> FieldInfo` — The field called `name` (its own or a base class's), or null.
-- `fn methods() -> Array<MethodInfo>` — The methods this class declares itself.
+- `fn properties() -> Array<PropertyInfo>` — Every property, the base classes' first.
+- `fn ownProperties() -> Array<PropertyInfo>` — The properties this class declares itself.
+- `fn property(name: string) -> PropertyInfo` — The property called `name` (its own or a base class's), or null.
+- `fn methods() -> Array<MethodInfo>` — The methods this class declares itself (property accessors are its properties).
 - `fn method(name: string) -> MethodInfo` — The method called `name`: its own, else its base class's (the first overload; invoke picks among them). Null when there is none.
 - `fn invoke(obj: any, name: string, args: Array<any> = new Array<any>()) -> any` — Calls method `name` on `obj` with `args`: the overload (its own, else a base class's) taking that many arguments that they fit.
 - `fn constructors() -> Array<MethodInfo>` — Its constructors (none for an abstract class, or one without reflection).

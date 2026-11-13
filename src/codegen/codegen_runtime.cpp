@@ -1053,6 +1053,7 @@ typedef struct GravMethodMeta {
     const char* name; int flags; int ndecos; const GravDecoMeta* decos;
     int nparams; const char* params;          /* its parameter types, "string, int" */
     int (*call)(GravAny self, const GravAny* args, int n, GravAny* out);   /* 0 when it cannot be called by reflection */
+    const char* result;                       /* its result type, "" for none */
 } GravMethodMeta;
 typedef struct GravCtorMeta {
     int nparams; const char* params;

@@ -10,6 +10,7 @@
 //   info.field("email").set(user, "ada@example.com")
 //   let u = info.create() as User              // `new User()`
 //   info.invoke(u, "greet", ["Ada"])            // `u.greet("Ada")`
+//   info.property("fullName").get(u)           // `u.fullName`, through its getter
 //
 // Values going in (FieldInfo.set, invoke, create) are converted to the field's
 // or parameter's type when they fit: a whole number into any integer type in
@@ -239,6 +240,8 @@ namespace std.core {
         public declaringClass: string
         // Its parameter types as written ("string, int").
         public params: string
+        // Its result type ("string"; "" when it returns nothing).
+        public result: string
         private flags: int
         private meta: byte*                  // its GravMethodMeta (or GravCtorMeta)
         private kind: int                    // 0 a method, 1 a constructor
@@ -253,6 +256,7 @@ namespace std.core {
                 self.flags = 0;
                 self.count = %{ ((const GravCtorMeta*)meta)->nparams %} as int;
                 self.params = %{ ((const GravCtorMeta*)meta)->params %} as string;
+                self.result = owner;
                 self.decorators = new Array<Decorator>();
                 return;
             }
@@ -260,6 +264,7 @@ namespace std.core {
             self.flags = %{ ((const GravMethodMeta*)meta)->flags %} as int;
             self.count = %{ ((const GravMethodMeta*)meta)->nparams %} as int;
             self.params = %{ ((const GravMethodMeta*)meta)->params %} as string;
+            self.result = %{ ((const GravMethodMeta*)meta)->result %} as string;
             self.decorators = Decorator.__listOf(%{ (unsigned char*)((const GravMethodMeta*)meta)->decos %} as byte*,
                 %{ ((const GravMethodMeta*)meta)->ndecos %} as int);
         }
@@ -306,6 +311,60 @@ namespace std.core {
         fn toString() -> string { return self.name + "(" + self.params + ")"; }
     }
 
+    // A property (`get name() -> T` and/or `set name(v: T)`): read and written
+    // through its accessors. Its decorators are those on either accessor.
+    class PropertyInfo {
+        public name: string
+        // Its type as written ("string").
+        public typeName: string
+        // The class that declares it (its getter's, else its setter's).
+        public declaringClass: string
+        public decorators: Array<Decorator>
+        private getter: MethodInfo
+        private setter: MethodInfo
+
+        constructor(name: string, getter: MethodInfo, setter: MethodInfo) {
+            self.name = name;
+            self.getter = getter;
+            self.setter = setter;
+            let first = getter != null ? getter : setter;
+            self.declaringClass = first.declaringClass;
+            self.typeName = getter != null ? getter.result : setter.params;
+            self.decorators = new Array<Decorator>();
+            if (getter != null) { for (d in getter.decorators) { self.decorators.push(d); } }
+            if (setter != null) { for (d in setter.decorators) { self.decorators.push(d); } }
+        }
+        // Whether it has a getter / a setter that reflection can call.
+        fn canGet() -> bool { return self.getter != null && self.getter.canInvoke(); }
+        fn canSet() -> bool { return self.setter != null && self.setter.canInvoke(); }
+        // Whether it has no setter at all.
+        fn isReadonly() -> bool { return self.setter == null; }
+        fn isStatic() -> bool { let m = self.getter != null ? self.getter : self.setter; return m.isStatic(); }
+        fn isPrivate() -> bool { let m = self.getter != null ? self.getter : self.setter; return m.isPrivate(); }
+        fn isProtected() -> bool { let m = self.getter != null ? self.getter : self.setter; return m.isProtected(); }
+        fn has(name: string) -> bool { return Decorator.__find(self.decorators, name) != null; }
+        fn decorator(name: string) -> Decorator { return Decorator.__find(self.decorators, name); }
+        // Its value in `obj` (ignored for a static property), from its getter.
+        fn get(obj: any) -> any {
+            if (self.getter == null) { throw new StateError(self.declaringClass + "." + self.name + " has no getter"); }
+            return self.getter.invoke(obj);
+        }
+        // Sets it through its setter, converting `value` as FieldInfo.set does.
+        fn set(obj: any, value: any) {
+            if (self.setter == null) { throw new StateError(self.declaringClass + "." + self.name + " is read-only: it has no setter"); }
+            let a = new Array<any>();
+            a.push(value);
+            self.setter.invoke(obj, a);
+        }
+        // (ClassInfo's: this one with a base class's accessor for the side it lacks.)
+        fn __with(base: PropertyInfo) -> PropertyInfo {
+            if ((self.getter != null || base.getter == null) && (self.setter != null || base.setter == null)) { return self; }
+            return new PropertyInfo(self.name, self.getter != null ? self.getter : base.getter,
+                                    self.setter != null ? self.setter : base.setter);
+        }
+        fn toString() -> string { return self.name + ": " + self.typeName; }
+    }
+
     // What a class is at run time: reflect(User), or ClassInfo.of(anObject).
     class ClassInfo {
         private t: byte*                         // its GravTypeInfo
@@ -313,7 +372,10 @@ namespace std.core {
         public name: string
         private own: Array<FieldInfo>            // made once, shared by every lookup
         private all: Array<FieldInfo>
-        private methodList: Array<MethodInfo>
+        private methodList: Array<MethodInfo>    // as written: no property accessors
+        private accessors: Array<MethodInfo>     // `get x` / `set x` (the methods __get_x and __set_x)
+        private ownProps: Array<PropertyInfo>
+        private allProps: Array<PropertyInfo>
         private ctorList: Array<MethodInfo>
         private decos: Array<Decorator>
 
@@ -323,12 +385,17 @@ namespace std.core {
             let meta = %{ (unsigned char*)grav_rf_meta(t) %} as byte*;
             self.own = new Array<FieldInfo>();
             self.methodList = new Array<MethodInfo>();
+            self.accessors = new Array<MethodInfo>();
             self.ctorList = new Array<MethodInfo>();
             if (meta != null) {
                 let nf = %{ ((const GravClassMeta*)meta)->nfields %} as int;
                 for (i in 0..nf) { self.own.push(new FieldInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->fields[i] %} as byte*, t)); }
                 let nm = %{ ((const GravClassMeta*)meta)->nmethods %} as int;
-                for (i in 0..nm) { self.methodList.push(new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->methods[i] %} as byte*, self.name, 0)); }
+                for (i in 0..nm) {
+                    let mi = new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->methods[i] %} as byte*, self.name, 0);
+                    if (Str.startsWith(mi.name, "__get_") || Str.startsWith(mi.name, "__set_")) { self.accessors.push(mi); }
+                    else { self.methodList.push(mi); }
+                }
                 let nc = %{ ((const GravClassMeta*)meta)->nctors %} as int;
                 for (i in 0..nc) { self.ctorList.push(new MethodInfo(%{ (unsigned char*)&((const GravClassMeta*)meta)->ctors[i] %} as byte*, self.name, 1)); }
                 self.decos = Decorator.__listOf(%{ (unsigned char*)((const GravClassMeta*)meta)->decos %} as byte*,
@@ -337,6 +404,21 @@ namespace std.core {
                 self.decos = new Array<Decorator>();
             }
             self.all = self.own;                              // (fromType adds the base classes')
+            self.ownProps = new Array<PropertyInfo>();
+            for (a in self.accessors) {
+                let name = a.name[6..];
+                let seen = false;
+                for (p in self.ownProps) { if (p.name == name) { seen = true; } }
+                if (seen) { continue; }
+                let g: MethodInfo = null;
+                let st: MethodInfo = null;
+                for (b in self.accessors) {
+                    if (b.name == "__get_" + name && g == null) { g = b; }
+                    if (b.name == "__set_" + name && st == null) { st = b; }
+                }
+                self.ownProps.push(new PropertyInfo(name, g, st));
+            }
+            self.allProps = self.ownProps;
         }
         // The ClassInfo for a type descriptor (what reflect(...) calls); one per
         // class, fully built before it is shared, and never changed after.
@@ -349,6 +431,20 @@ namespace std.core {
             if (b != null) { for (f in b.fields()) { all.push(f); } }
             for (f in made.own) { all.push(f); }
             made.all = all;
+            if (b != null && b.properties().size() > 0) {      // base classes' first; an override completes its base's
+                let props = new Array<PropertyInfo>();
+                for (p in b.properties()) {
+                    let mine: PropertyInfo = null;
+                    for (o in made.ownProps) { if (o.name == p.name) { mine = o; } }
+                    props.push(mine == null ? p : mine.__with(p));
+                }
+                for (o in made.ownProps) {
+                    let inBase = false;
+                    for (p in b.properties()) { if (p.name == o.name) { inBase = true; } }
+                    if (!inBase) { props.push(o); }
+                }
+                made.allProps = props;
+            }
             return %{ grav_rf_publish(t, made) %} as ClassInfo;   // (another thread may have made it meanwhile)
         }
         // The class of the object in `value`, or null when it holds no object.
@@ -395,7 +491,16 @@ namespace std.core {
             for (f in self.fields()) { if (f.name == name) { return f; } }
             return null;
         }
-        // The methods this class declares itself.
+        // Every property, the base classes' first.
+        fn properties() -> Array<PropertyInfo> { return self.allProps; }
+        // The properties this class declares itself.
+        fn ownProperties() -> Array<PropertyInfo> { return self.ownProps; }
+        // The property called `name` (its own or a base class's), or null.
+        fn property(name: string) -> PropertyInfo {
+            for (p in self.allProps) { if (p.name == name) { return p; } }
+            return null;
+        }
+        // The methods this class declares itself (property accessors are its properties).
         fn methods() -> Array<MethodInfo> { return self.methodList; }
         // The method called `name`: its own, else its base class's (the first
         // overload; invoke picks among them). Null when there is none.
