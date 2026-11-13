@@ -1,4 +1,5 @@
-// Default parameter values, named arguments, and labeled break/continue.
+// Default parameter values, named arguments, labeled break/continue, and
+// literals passed to overloaded methods.
 import "std"
 
 namespace net { const PORT: int = 8080  fn address(host: string, port: int = PORT, tls: bool = false) -> string {
@@ -22,6 +23,13 @@ class Size {
 }
 class Tall extends Size { }
 fn label<T>(x: T, prefix: string = "item") -> string { return "${prefix}=${x}" }
+class Sub { public n: int = 7 }
+class Finder {
+    fn whereIn(name: string, values: Array<any>) -> string { return name + " in ${values.size()}" }
+    fn whereIn(name: string, sub: Sub) -> string { return name + " in sub ${sub.n}" }
+    fn apply(f: fn(int) -> int) -> int { return f(2) }
+    fn apply(f: fn(string) -> string, s: string) -> string { return f(s) }
+}
 
 test "defaults fill the arguments a call leaves out" {
     assertEq(net.address("example.org"), "http://example.org:8080")
@@ -76,4 +84,12 @@ test "labeled break and continue" {
         do { if (n > 3) { break spin } } while (false)
     }
     assertEq(n, 4)
+}
+
+test "a literal argument takes the type of the one overload it fits" {
+    let q = new Finder()
+    assertEq(q.whereIn("a", ["x", "y"]), "a in 2")
+    assertEq(q.whereIn("a", new Sub()), "a in sub 7")
+    assertEq(q.apply(fn(x) => x * 10), 20)
+    assertEq(q.apply(fn(x) => x + "!", "hi"), "hi!")
 }
