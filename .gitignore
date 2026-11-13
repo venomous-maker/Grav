@@ -25,3 +25,15 @@ examples/project/main
 
 # grav-orbit: its own repository (github.com/venomous-maker/grav-orbit), kept here while developing
 /grav-orbit/
+
+# grav-redis: its own repository, kept here while developing
+/grav-redis/
+
+# grav-cache: its own repository, kept here while developing
+/grav-cache/
+
+# grav-logger: its own repository, kept here while developing
+/grav-logger/
+
+# apogee-*: the Apogee web framework's modules, each its own repository, kept here while developing
+/apogee-*/
