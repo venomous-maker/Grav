@@ -1,5 +1,6 @@
-running 16 tests
+running 17 tests
   ok    regex: find, groups, replace, split
+  ok    regex: one Regex shared by threads keeps each one's matches apart
   ok    Str: splitting, cases, wrapping, distance
   ok    string literals survive C trigraphs
   ok    Base64, hex and UTF-8
@@ -15,4 +16,4 @@ running 16 tests
   ok    hash maps: equal strings find each other, removals keep probes intact
   ok    JSON: repeated record keys, escaped keys and prefixes parse exactly
   ok    hash maps of every layout keep keys, values and counts right
-result: 16 passed, 0 failed
+result: 17 passed, 0 failed

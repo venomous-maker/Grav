@@ -23,6 +23,9 @@ The syntax is POSIX extended regular expressions, from the C library:
 In a Grav string, a backslash must itself be escaped (`"\\."`), or use a raw
 string: `r"\.txt$"`.
 
+Matching never changes a `Regex`: compile a pattern once and share it, even
+between threads matching at the same time.
+
 ```grav
 import "std"
 

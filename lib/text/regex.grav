@@ -106,16 +106,12 @@ namespace std.text {
         }
 
         // Whether the pattern matches somewhere in `s`.
-        public fn test(s: string) -> bool { return self.at(s, 0) >= 0 }
-        // Start offset of the first match at or after `from` (-1 if none), with its end in
-        // self.lastEnd: the fast path for test and count, which need no match objects.
-        private fn at(s: string, from: int) -> int {
+        public fn test(s: string) -> bool {
+            // (No match object, and nothing kept in self: like every method here it
+            // leaves the Regex as it was, so threads can share one.)
             let offs: int[20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-            if (!(%{ grav_re_search(self->re, s, from, offs.data) %} as bool)) { return -1 }
-            self.lastEnd = offs[1]
-            return offs[0]
+            return %{ grav_re_search(self->re, s, 0, offs.data) %} as bool
         }
-        private lastEnd: int
         // Whether the pattern matches the whole of `s`.
         public fn matches(s: string) -> bool {
             let m = self.find(s)
@@ -154,14 +150,14 @@ namespace std.text {
         }
         // The number of non-overlapping matches.
         public fn count(s: string) -> int {
+            let offs: int[20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
             let n = 0
             let pos = 0
             let len = s.length
             while (pos <= len) {
-                let start = self.at(s, pos)
-                if (start < 0) { break }
+                if (!(%{ grav_re_search(self->re, s, pos, offs.data) %} as bool)) { break }
                 n += 1
-                pos = self.lastEnd > start ? self.lastEnd : self.lastEnd + 1
+                pos = offs[1] > offs[0] ? offs[1] : offs[1] + 1      // step past an empty match
             }
             return n
         }

@@ -22,6 +22,23 @@ test "regex: find, groups, replace, split" {
     assertEq(Str.startsWith(msg, "bad regular expression '(unclosed'"), true)
 }
 
+test "regex: one Regex shared by threads keeps each one's matches apart" {
+    assertEq("${new Regex("x*").count("abc")} ${new Regex("b").count("")} ${new Regex("[0-9]+").test("n0ne")}", "4 0 true")
+    let digits = new Regex("[0-9]+")
+    let wrong = new AtomicInt(0)
+    let threads = new Array<Thread>()
+    for (t in 0..4) {
+        threads.push(Thread.spawn(fn() {
+            let sb = new StringBuilder()
+            for (i in 0..(10 + t * 7)) { sb.append("w").appendInt(i).append(" ") }
+            let text = sb.toString()
+            for (r in 0..500) { if (digits.count(text) != 10 + t * 7 || !digits.test(text)) { wrong.increment() } }
+        }))
+    }
+    for (th in threads) { th.join() }
+    assertEq(wrong.get(), 0 as long)
+}
+
 test "Str: splitting, cases, wrapping, distance" {
     assertEq(Str.replaceFirst("a-b-c", "-", "+"), "a+b-c")
     assertEq(str(Str.splitN("a=b=c", "=", 2)), "[\"a\", \"b=c\"]")
