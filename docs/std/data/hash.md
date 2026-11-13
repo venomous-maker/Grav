@@ -13,6 +13,9 @@ makes random identifiers that are, in practice, unique everywhere.
 | `Hash.crc32(s)` | a number below 2³² | quick checksums, as in zip, gzip and PNG |
 | `Hash.fnv1a(s)` | a 64-bit number | fast hashing for tables and caches |
 | `Hash.randomToken(n)` | 2n hex digits | session ids, password-reset tokens, nonces |
+| `Hash.hmacSha256(key, s)` | 64 hex digits | signing cookies, tokens and webhooks |
+| `Hash.pbkdf2Sha256(pw, salt, iterations, n)` | 2n hex digits | password hashing (random salt, 600000+ iterations) |
+| `Hash.equals(a, b)` | a bool | comparing signatures and tokens in constant time (never `==`) |
 | `Uuid.v4()` | `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` | database keys, request ids |
 
 ```grav
@@ -62,6 +65,9 @@ Hashes and checksums of text or bytes. The hash functions return lowercase hex.
 
 - `static fn sha256(s: string) -> string` — SHA-256 of the string's bytes, as 64 hex digits.
 - `static fn sha256Bytes(b: Bytes) -> string` — SHA-256 of raw bytes, as 64 hex digits.
+- `static fn hmacSha256(key: string, message: string) -> string` — HMAC-SHA256 of `message` under `key` (RFC 2104), as 64 hex digits: for signing cookies, tokens and webhooks.
+- `static fn pbkdf2Sha256(password: string, salt: string, iterations: long, length: int) -> string` — PBKDF2-HMAC-SHA256 (RFC 8018) of `password` with `salt`: `length` bytes (1..256) as 2*length hex digits. For password hashing use a random salt and at least 600000 iterations.
+- `static fn equals(a: string, b: string) -> bool` — Whether `a` and `b` are equal, comparing in time that depends only on their lengths (for signatures and tokens, never `==`).
 - `static fn sha1(s: string) -> string` — SHA-1 of the string's bytes, as 40 hex digits (legacy: not for security).
 - `static fn md5(s: string) -> string` — MD5 of the string's bytes, as 32 hex digits (legacy: not for security).
 - `static fn md5Bytes(b: Bytes) -> string` — MD5 of raw bytes, as 32 hex digits (legacy: not for security).

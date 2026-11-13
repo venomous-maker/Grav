@@ -14,6 +14,7 @@ namespace std.data {
 
     %{
     #include <stdint.h>
+    #include <stdlib.h>
     #include <string.h>
     #include <stdio.h>
     #include <fcntl.h>
@@ -75,6 +76,89 @@ namespace std.data {
         unsigned char d[32];
         for (int i = 0; i < 8; i++) { d[4*i] = h[i] >> 24; d[4*i+1] = h[i] >> 16; d[4*i+2] = h[i] >> 8; d[4*i+3] = h[i]; }
         return grav_hash_hex(d, 32);
+    }
+
+    /* ---- streaming SHA-256, HMAC-SHA256 (RFC 2104) and PBKDF2 (RFC 8018) ---- */
+    typedef struct { uint32_t h[8]; unsigned char buf[64]; size_t len; uint64_t total; } GravSha256;
+    static void grav_sha256_init(GravSha256* c) {
+        static const uint32_t iv[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+        memcpy(c->h, iv, sizeof iv); c->len = 0; c->total = 0;
+    }
+    static void grav_sha256_update(GravSha256* c, const unsigned char* p, size_t n) {
+        c->total += n;
+        if (c->len) {
+            size_t k = 64 - c->len < n ? 64 - c->len : n;
+            memcpy(c->buf + c->len, p, k); c->len += k; p += k; n -= k;
+            if (c->len < 64) return;
+            grav_h_sha256_block(c->h, c->buf); c->len = 0;
+        }
+        for (; n >= 64; p += 64, n -= 64) grav_h_sha256_block(c->h, p);
+        memcpy(c->buf, p, n); c->len = n;
+    }
+    static void grav_sha256_final(GravSha256* c, unsigned char out[32]) {
+        uint64_t bits = c->total * 8;
+        unsigned char pad[72] = {0x80};
+        size_t padn = c->len < 56 ? 56 - c->len : 120 - c->len;
+        for (int k = 0; k < 8; k++) pad[padn + k] = (unsigned char)(bits >> (56 - 8 * k));
+        uint64_t keep = c->total;
+        grav_sha256_update(c, pad, padn + 8);
+        c->total = keep;
+        for (int i = 0; i < 8; i++) { out[4*i] = c->h[i] >> 24; out[4*i+1] = c->h[i] >> 16; out[4*i+2] = c->h[i] >> 8; out[4*i+3] = c->h[i]; }
+    }
+    /* The inner and outer states after the padded key: every HMAC under one key
+       starts from these two copies (PBKDF2 reuses them each iteration). */
+    static void grav_hmac256_keys(const unsigned char* key, size_t kn, GravSha256* in, GravSha256* out) {
+        unsigned char k[64] = {0}, pad[64];
+        if (kn > 64) { GravSha256 c; grav_sha256_init(&c); grav_sha256_update(&c, key, kn); grav_sha256_final(&c, k); }
+        else memcpy(k, key, kn);
+        for (int i = 0; i < 64; i++) pad[i] = k[i] ^ 0x36;
+        grav_sha256_init(in); grav_sha256_update(in, pad, 64);
+        for (int i = 0; i < 64; i++) pad[i] = k[i] ^ 0x5c;
+        grav_sha256_init(out); grav_sha256_update(out, pad, 64);
+    }
+    static void grav_hmac256(const GravSha256* in, const GravSha256* out, const unsigned char* m, size_t n, unsigned char d[32]) {
+        GravSha256 c = *in; unsigned char t[32];
+        grav_sha256_update(&c, m, n); grav_sha256_final(&c, t);
+        c = *out; grav_sha256_update(&c, t, 32); grav_sha256_final(&c, d);
+    }
+    static const char* grav_h_hmac_sha256(const unsigned char* key, size_t kn, const unsigned char* m, size_t n) {
+        GravSha256 in, out; unsigned char d[32];
+        grav_hmac256_keys(key, kn, &in, &out);
+        grav_hmac256(&in, &out, m, n, d);
+        return grav_hash_hex(d, 32);
+    }
+    static const char* grav_h_pbkdf2_sha256(const unsigned char* pw, size_t pn, const unsigned char* salt, size_t sn,
+                                            long long iters, int dk) {
+        if (dk < 1) dk = 1;
+        if (dk > 256) dk = 256;
+        if (iters < 1) iters = 1;
+        GravSha256 in, out;
+        grav_hmac256_keys(pw, pn, &in, &out);
+        unsigned char res[256], u[32], t[32];
+        unsigned char* m = (unsigned char*)malloc(sn + 4);
+        if (!m) abort();
+        memcpy(m, salt, sn);
+        for (int block = 1, done = 0; done < dk; block++) {
+            m[sn] = (unsigned char)(block >> 24); m[sn+1] = (unsigned char)(block >> 16);
+            m[sn+2] = (unsigned char)(block >> 8); m[sn+3] = (unsigned char)block;
+            grav_hmac256(&in, &out, m, sn + 4, u);
+            memcpy(t, u, 32);
+            for (long long i = 1; i < iters; i++) {
+                grav_hmac256(&in, &out, u, 32, u);
+                for (int j = 0; j < 32; j++) t[j] ^= u[j];
+            }
+            int k = dk - done < 32 ? dk - done : 32;
+            memcpy(res + done, t, (size_t)k); done += k;
+        }
+        free(m);
+        return grav_hash_hex(res, dk);
+    }
+    /* Equal strings, in time that depends only on their lengths. */
+    static int grav_h_ct_equal(const unsigned char* a, size_t an, const unsigned char* b, size_t bn) {
+        unsigned char diff = an != bn;
+        size_t n = an < bn ? an : bn;
+        for (size_t i = 0; i < n; i++) diff |= a[i] ^ b[i];
+        return diff == 0;
     }
 
     /* ---- SHA-1 (legacy) ---- */
@@ -206,6 +290,22 @@ namespace std.data {
             let p = b.rawData()
             let n = b.size()
             return %{ grav_h_sha256(p, (size_t)n) %} as string
+        }
+        // HMAC-SHA256 of `message` under `key` (RFC 2104), as 64 hex digits: for
+        // signing cookies, tokens and webhooks.
+        static fn hmacSha256(key: string, message: string) -> string {
+            return %{ grav_h_hmac_sha256((const unsigned char*)key, (size_t)grav_str_len(key), (const unsigned char*)message, (size_t)grav_str_len(message)) %} as string
+        }
+        // PBKDF2-HMAC-SHA256 (RFC 8018) of `password` with `salt`: `length` bytes
+        // (1..256) as 2*length hex digits. For password hashing use a random salt
+        // and at least 600000 iterations.
+        static fn pbkdf2Sha256(password: string, salt: string, iterations: long, length: int) -> string {
+            return %{ grav_h_pbkdf2_sha256((const unsigned char*)password, (size_t)grav_str_len(password), (const unsigned char*)salt, (size_t)grav_str_len(salt), iterations, length) %} as string
+        }
+        // Whether `a` and `b` are equal, comparing in time that depends only on
+        // their lengths (for signatures and tokens, never `==`).
+        static fn equals(a: string, b: string) -> bool {
+            return %{ grav_h_ct_equal((const unsigned char*)a, (size_t)grav_str_len(a), (const unsigned char*)b, (size_t)grav_str_len(b)) %} as bool
         }
         // SHA-1 of the string's bytes, as 40 hex digits (legacy: not for security).
         static fn sha1(s: string) -> string { return %{ grav_h_sha1((const unsigned char*)s, strlen(s)) %} as string }
