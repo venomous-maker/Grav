@@ -4,6 +4,15 @@ project(Practice CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# gravc compiles the user's program on every run (the front end alone, once
+# per generic-inference pass); an unoptimized gravc makes every grav command
+# several times slower, with nothing to show for it. Default to a fast build
+# unless the cache or the command line already set a type (an explicit
+# -DCMAKE_BUILD_TYPE=Debug for working on the compiler itself still wins).
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
+endif()
+
 add_executable(gravc
         main.cpp
         src/driver/modules.cpp

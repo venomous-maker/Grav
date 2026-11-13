@@ -1164,6 +1164,11 @@ cmake --build build
 ./build/gravc --help        # prints usage
 ```
 
+`gravc` compiles the program on every `grav` command, so its own speed matters:
+the build defaults to `RelWithDebInfo` (optimized, with debug symbols) unless
+`-DCMAKE_BUILD_TYPE` says otherwise. An unoptimized `gravc` is several times
+slower at every command, with nothing to show for it.
+
 ---
 
 ## Editor support
