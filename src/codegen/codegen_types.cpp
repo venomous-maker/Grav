@@ -694,6 +694,12 @@ std::string CodeGen::rfConvert(const TypeRef &k, const std::string &dst, const s
     if (!own && k.isNamed() && reg_->isClass(k.name))
         return "if (v.tag != GRAV_ANY_NULL && (v.tag != GRAV_ANY_OBJ || !grav_is_instance(v.v.p, &" + mangle(k.name) + "_typeinfo))) " +
                fail + " " + dst + " = v.tag == GRAV_ANY_OBJ ? (" + cTy(k) + ")v.v.p : 0;";
+    // An interface: an object whose class implements it (its table found by the marker), or null.
+    if (!own && k.isNamed() && reg_->isInterface(k.name)) {
+        const std::string mk = "&" + mangle(k.name) + "__iface";
+        return "{ const void* it_ = v.tag == GRAV_ANY_OBJ ? grav_itab_find(v.v.p, " + mk + ") : 0; " +
+               "if (v.tag != GRAV_ANY_NULL && !it_) " + fail + " " + dst + ".obj = it_ ? v.v.p : 0; " + dst + ".itab = it_; }";
+    }
     return "";
 }
 

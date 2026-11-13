@@ -173,3 +173,24 @@ test "ClassInfo.forName finds reflected classes by name, all() lists them" {
     assertEq(Str.join(names, ","), "Backup,Cleanup")
     assertEq(ClassInfo.all().size() >= 3, true)
 }
+
+interface Sink { fn write(s: string) -> string }
+class Upper implements Sink { fn write(s: string) -> string { return Str.upper(s) } }
+class NotASink { public n: int = 0 }
+@Wired class Pipe {
+    public sink: Sink
+    constructor(sink: Sink) { self.sink = sink }
+    fn through(other: Sink, s: string) -> string { return other.write(self.sink.write(s)) }
+}
+
+test "reflection passes interface arguments to constructors and methods" {
+    let info = reflect(Pipe)
+    let p = info.create([new Upper() as any]) as Pipe
+    assertEq(p.sink.write("ab"), "AB")
+    assertEq(info.invoke(p, "through", [new Upper() as any, "cd" as any]) as string, "CD")
+    let nullSink = info.create([null]) as Pipe
+    assertEq(nullSink.sink == null, true)
+    let msg = ""
+    try { info.create([new NotASink() as any]) } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg != "", true)
+}
