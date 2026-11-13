@@ -19,6 +19,7 @@
 #include <string>
 #include <tuple>
 #include <algorithm>
+#include <chrono>
 #include <vector>
 
 #include "codegen/codegen.h"
@@ -264,7 +265,7 @@ int usage(const char *prog) {
         "  --keep-c             keep the generated .c when building a binary\n"
         "\n"
         "codegen (passed to the C compiler):\n"
-        "  -O0|-O1|-O2|-O3|-Os|-Ofast  optimization level (default: -O2, or -O0 with -g)\n"
+        "  -O0|-O1|-O2|-O3|-Os|-Ofast|-Og  optimization level (default: -O2; -Og for grav test, -O0 with -g)\n"
         "  --release            -O3, no stack-trace bookkeeping, NDEBUG\n"
         "  --no-trace           drop call-stack tracing (exceptions report no trace)\n"
         "  --native             tune for this machine (-march=native)\n"
@@ -398,7 +399,7 @@ int main(int argc, char **argv) {
             if (i + 1 >= argc) return usage(argv[0]);
             ccOverride = argv[++i];
         } else if (arg == "-O0" || arg == "-O1" || arg == "-O2" || arg == "-O3" ||
-                   arg == "-Os" || arg == "-Ofast") {
+                   arg == "-Os" || arg == "-Ofast" || arg == "-Og") {
             optFlag = arg;
         } else if (arg == "-g" || arg == "-g3" || arg == "-g0" || arg == "-g1" || arg == "-g2") {
             debugFlag = arg;
@@ -477,7 +478,18 @@ int main(int argc, char **argv) {
         std::unique_ptr<grav::Registry> registryPtr;
         std::unique_ptr<grav::TypeChecker> checkerPtr;
         std::vector<grav::GravError> errors;
+        // GRAV_TIMES=1: how long each phase of each pass takes (stderr).
+        static const bool timesOn = std::getenv("GRAV_TIMES") != nullptr;
+        auto clock0 = std::chrono::steady_clock::now();
+        auto lap = [&](const char *what, int pass) {
+            if (!timesOn) return;
+            auto now = std::chrono::steady_clock::now();
+            std::cerr << "gravc: pass " << pass << " " << what << " "
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(now - clock0).count() << " ms\n";
+            clock0 = now;
+        };
         for (int pass = 0; pass < 8; ++pass) {
+            lap("start", pass);
             grav::Lexer lexer(source);
             auto tokens = lexer.tokenize();
             tokens = grav::preprocess(std::move(tokens));
@@ -485,9 +497,11 @@ int main(int argc, char **argv) {
             programPtr = std::make_unique<grav::Program>(parser.parseProgram());
             grav::lowerEnumConstructors(*programPtr); // Shape.Circle(r) -> new Shape$Circle(r)
             grav::applyInferences(*programPtr, inference);
+            lap("parse", pass);
 
             // Expand generic structs/functions into concrete instances before symbols.
             errors = grav::monomorphize(*programPtr, &inference);
+            lap("monomorphize", pass);
             registerDisplayNames(programPtr->generics);
             registerVariantNames(*programPtr);
             // A failed expansion leaves half-made instances; checking them would only
@@ -500,6 +514,7 @@ int main(int argc, char **argv) {
             registryPtr = std::make_unique<grav::Registry>();
             auto buildErrors = registryPtr->build(*programPtr);
             errors.insert(errors.end(), buildErrors.begin(), buildErrors.end());
+            lap("registry", pass);
 
             checkerPtr = std::make_unique<grav::TypeChecker>();
             checkerPtr->setInference(&inference);
@@ -507,6 +522,7 @@ int main(int argc, char **argv) {
             inference.added = 0;
             const auto &typeErrors = checkerPtr->check(*programPtr, *registryPtr);
             errors.insert(errors.end(), typeErrors.begin(), typeErrors.end());
+            lap("check", pass);
             if (inference.added == 0) break; // nothing new inferred: this pass is final
         }
         grav::Program &program = *programPtr;
@@ -600,7 +616,8 @@ int main(int argc, char **argv) {
         // -fwrapv: signed overflow wraps (two's complement) instead of being UB.
         std::string flags = " -std=c11 -D_DEFAULT_SOURCE -fwrapv -pipe";
         // Optimize by default; an explicit -O wins, and plain -g means "debug me".
-        if (optFlag.empty()) optFlag = release ? "-O3" : (debugFlag.empty() ? "-O2" : "-O0");
+        // `grav test` builds for a quick run: -Og compiles about three times as fast as -O2.
+        if (optFlag.empty()) optFlag = release ? "-O3" : !debugFlag.empty() ? "-O0" : testMode ? "-Og" : "-O2";
         flags += " " + optFlag;
         if (release) flags += " -DNDEBUG";
         if (native) flags += " -march=native";

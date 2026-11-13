@@ -44,7 +44,7 @@ These are passed to the C compiler.
 
 | Option | Meaning |
 |--------|---------|
-| `-O0` `-O1` `-O2` `-O3` `-Os` `-Ofast` | optimisation level; default `-O2` (`-O0` when `-g` is given alone) |
+| `-O0` `-O1` `-O2` `-O3` `-Os` `-Ofast` `-Og` | optimisation level; default `-O2`, `-Og` for `grav test` (it compiles about three times as fast), and `-O0` when `-g` is given alone |
 | `--release` | `-O3`, `NDEBUG`, and no stack-trace bookkeeping |
 | `--no-trace` | no call-stack tracing: uncaught exceptions print no stack trace |
 | `--native` | tune for this machine (`-march=native`) |
@@ -129,6 +129,7 @@ dependency is read from its folder each time and is not pinned.
 | `GRAV_MAXPROCS` | programs | the number of worker threads for `async` tasks (default: CPU cores) |
 | `GRAV_PANIC_RECOVERY` | programs | `off` disables panic recovery points |
 | `GRAV_TEST_FILTER` | test runs | the same as `--filter` |
+| `GRAV_TIMES` | the compiler | `1` prints how long each front-end phase takes, per generic-inference pass (stderr) |
 
 ## Exit status
 
