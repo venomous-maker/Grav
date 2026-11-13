@@ -2,7 +2,7 @@
   "name": "grav-lang",
   "displayName": "Grav Language",
   "description": "Grav language support: syntax highlighting (format specs, labels, named arguments), go to definition across imports, the standard library and packages, completion with snippets and keyword docs, signature help, hover explanations for keywords and types, the types of local variables (hover and inlay hints), outline, rename, grav fmt formatting, grav check diagnostics, and run/test/package commands.",
-  "version": "1.12.1",
+  "version": "1.13.0",
   "publisher": "grav",
   "license": "MIT",
   "engines": {
