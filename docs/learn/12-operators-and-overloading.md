@@ -47,6 +47,15 @@ string x
 | b (10)
 ```
 
+An array literal or a lambda with untyped parameters has no type of its own
+until it meets a parameter. Among overloads, it takes the one parameter type it
+can fit at its position: an `Array` (or another collection with `push` or
+`add`) for `[...]`, a function type for a lambda. So `q.whereIn("id", [1, 2])`
+picks `whereIn(name: string, values: Array<any>)` even beside
+`whereIn(name: string, sub: Query)`, and `xs.apply(fn(x) => x * 2)` picks the
+overload taking a function. When two overloads would fit it, give the literal a
+type (`let ids: Array<any> = [1, 2]`).
+
 A subclass can override one overload (same parameter types) and add new ones;
 calls through the parent type still pick the right method:
 
