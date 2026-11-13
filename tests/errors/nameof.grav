@@ -1,0 +1,5 @@
+import "std"
+fn main() {
+    print(nameof(HashMap))
+    print(nameof(3))
+}

@@ -847,14 +847,17 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         for (auto &a : x->args) walkExpr(a.get(), subst);
     } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
         applyInferred(e);
-        // `reflect(T)` for a type parameter T: the class it stands for here.
-        if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get()); callee && callee->name == "reflect" && x->args.size() == 1)
+        // `reflect(T)` / `nameof(T)` for a type parameter T: the type it stands for
+        // here (nameof also takes a primitive, named as written: "int").
+        if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get());
+            callee && (callee->name == "reflect" || callee->name == "nameof") && x->args.size() == 1)
             if (auto *arg = dynamic_cast<NameExpr *>(x->args[0].get()); arg && arg->typeArgs.empty())
                 if (auto it = subst.find(arg->name); it != subst.end()) {
                     TypeRef t = it->second;
                     rewriteType(t, subst, e->line, e->col);
                     qualifyArg(t);
                     if (t.isNamed()) arg->name = t.name;
+                    else if (callee->name == "nameof") arg->name = typeRefName(t);
                 }
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {

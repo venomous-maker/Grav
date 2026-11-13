@@ -19,6 +19,7 @@ is in the [standard library](../std/README.md).
 | [`assertEq(actual, expected[, message])`](#assert-and-asserteq) | | the same, when the values differ |
 | [`typename(value)`](#typename-and-isinstance) | `string` | the class name of an object, or the type held by an `any` |
 | [`isInstance(object, Type)`](#typename-and-isinstance) | `bool` | the same as `object is Type` |
+| [`nameof(Type)`](#nameof) | `string` | a type's fully-qualified name, fixed at compile time (in generic code, the type `T` stands for) |
 | [`reflect(Class)`](../std/core/reflect.md) | `ClassInfo` | a class's fields, methods and decorators at run time (`import "std"`) |
 | [`int(x)`, `long(x)`, `float(x)`, `byte(x)`, ...](#conversions) | | conversions |
 | [`sizeof(T)`](#sizeof) | `int` | a type's size in bytes |
@@ -189,6 +190,39 @@ Output:
 Cat
 true
 float
+```
+
+## nameof
+
+```text
+nameof(Type) -> string
+```
+
+The fully-qualified name of a type, known at compile time: a class, interface,
+struct, enum or primitive. Inside generic code, `nameof(T)` names the type `T`
+stands for in that instance, which makes it a key for registries such as a
+dependency-injection container (interfaces included, which `reflect` does not
+take). Unlike `typename`, it needs no value.
+
+```grav
+namespace app {
+    interface Store { fn get() -> string }
+}
+fn key<T>() -> string { return nameof(T) }
+
+fn main() {
+    print(nameof(app.Store))
+    print(key::<app.Store>())
+    print(key::<int>())
+}
+```
+
+Output:
+
+```text
+app.Store
+app.Store
+int
 ```
 
 ## Conversions

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <unordered_set>
 
 namespace grav {
 
@@ -1381,6 +1382,30 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                     error(e.args[0]->line, e.args[0]->col, "env expects a string name");
             }
             return TypeRef::prim(TypeRef::Kind::String);
+        }
+        if (name->name == "nameof" && e.args.size() == 1) {
+            // `nameof(T)`: the type's fully-qualified name, fixed at compile time
+            // ("app.Mailer", "int"); in generic code, the type T stands for. Only
+            // when the argument names a type: otherwise it is an ordinary call.
+            static const std::unordered_set<std::string> prims = {
+                "int", "long", "uint", "ulong", "byte", "float", "double", "float32", "float64",
+                "bool", "string", "binary", "any", "int64", "unsigned"};
+            if (auto chain = flattenNames(e.args[0].get())) {
+                std::string written = joinDots(*chain, chain->size());
+                std::string fq = lookupLocal(written) ? "" : reg_->resolveTypeOrAlias(written, currentNs_);
+                if (fq.empty() && chain->size() == 1 && prims.count(written) && !lookupLocal(written)) fq = written;
+                if (!fq.empty()) {
+                    e.kind = CallKind::Builtin;
+                    e.targetName = "nameof";
+                    e.ownerClass = fq;
+                    return TypeRef::prim(TypeRef::Kind::String);
+                }
+            }
+            if (reg_->resolveFunc("nameof", currentNs_).empty()) {
+                error(e.args[0]->line, e.args[0]->col,
+                      "nameof expects a type, as in nameof(User) (a generic one with its arguments: nameof(T) inside generic code)");
+                return TypeRef::prim(TypeRef::Kind::Error);
+            }
         }
         if (name->name == "reflect") {
             // `reflect(User)`: the class's ClassInfo (std.core), for a class named here.

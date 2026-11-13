@@ -43,7 +43,7 @@ syn keyword gravConstant null self this super
 syn keyword gravConstant NaN Infinity
 
 " Built-in functions
-syn keyword gravBuiltin print println typename isInstance reflect str input argc argv len
+syn keyword gravBuiltin print println typename nameof isInstance reflect str input argc argv len
 syn keyword gravBuiltin free panic assert assertEq exit cwd env sizeof
 
 " Numbers: 42, 1_000_000, 0xff_ff, 0b1010, 2.5, 1e9, 2.5e-3

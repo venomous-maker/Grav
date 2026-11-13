@@ -60,6 +60,7 @@ const BUILTINS = [
   ["argv", "argv(i) -> string", "Command-line argument i."],
   ["typename", "typename(value) -> string", "The runtime type name of a value."],
   ["sizeof", "sizeof(T) -> int", "Byte size of a type or value."],
+  ["nameof", "nameof(Type) -> string", "A type's fully-qualified name, fixed at compile time (in generic code, the type T stands for; interfaces included)."],
   ["free", "free(object)", "Release an object (runs its destructor)."],
   ["println", "println(value)", "Same as print."],
   ["env", "env(name) -> string", "An environment variable (\"\" when unset)."],
@@ -603,7 +604,7 @@ const DECORATOR_DOC = (name) => `\`@${name}\` — a decorator: recorded with its
   `then \`.arg(i)\` / \`.named("key")\`). It does nothing by itself.`;
 
 // What the compiler's built-in functions return (for types after `reflect(User).`).
-const BUILTIN_RETURNS = { str: "string", input: "string", typename: "string", sizeof: "int", argc: "int", argv: "string",
+const BUILTIN_RETURNS = { str: "string", input: "string", typename: "string", nameof: "string", sizeof: "int", argc: "int", argv: "string",
   env: "string", cwd: "string", isInstance: "bool", reflect: "ClassInfo", int: "int", long: "long", float: "float",
   double: "float", bool: "bool", byte: "byte", uint: "uint", string: "string" };
 
@@ -1371,7 +1372,7 @@ class Workspace {
     const text = this.text(file) || "";
     const raws = splitLines(text), masked = splitLines(mask(text)), out = [];
     const LITERAL = /^(?:-?\d[\d_]*(?:\.\d+)?(?:[eE][-+]?\d+)?|0[xXbB]\w+|r?"(?:[^"\\]|\\.)*"|r?"{3}[\s\S]*|'(?:[^'\\]|\\.)+'|true|false|null)$/;
-    const NOT_CALLS = new Set([...KEYWORDS, "print", "println", "str", "assert", "assertEq", "panic", "typename", "sizeof", "reflect", "env"]);
+    const NOT_CALLS = new Set([...KEYWORDS, "print", "println", "str", "assert", "assertEq", "panic", "typename", "nameof", "sizeof", "reflect", "env"]);
     for (let i = Math.max(0, from); i <= Math.min(to, masked.length - 1); i++) {
       const m = masked[i], raw = raws[i];
       for (const c of m.matchAll(/([A-Za-z_]\w*)\s*(?:::<[^>]*>)?\s*\(/g)) {

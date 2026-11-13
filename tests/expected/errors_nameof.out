@@ -1,0 +1,7 @@
+gravc: tests/errors/nameof.grav:3:18: type error: nameof expects a type, as in nameof(User) (a generic one with its arguments: nameof(T) inside generic code)
+        print(nameof(HashMap))
+                     ^
+gravc: tests/errors/nameof.grav:4:18: type error: nameof expects a type, as in nameof(User) (a generic one with its arguments: nameof(T) inside generic code)
+        print(nameof(3))
+                     ^
+gravc: 2 error(s); aborting

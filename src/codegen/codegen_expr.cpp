@@ -572,6 +572,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             if (call.targetName == "reflect") // a fresh ClassInfo, on the release list
                 return "((" + cTy(call.type) + ")grav_autorelease((void*)" + methodCName("std.core.ClassInfo", "__fromType") +
                        "((unsigned char*)&" + mangle(call.ownerClass) + "_typeinfo)))";
+            if (call.targetName == "nameof") return "\"" + escapeC(call.ownerClass) + "\"";
             if (call.targetName == "typename") {
                 if (call.args[0]->type.isAny()) return "grav_any_typename(" + emitExpr(*call.args[0]) + ")";
                 return "grav_typename(" + emitExpr(*call.args[0]) + ")";

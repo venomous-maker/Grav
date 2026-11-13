@@ -144,3 +144,17 @@ test "many threads share each class's ClassInfo" {
     for (t in threads) { t.join() }
     assertEq(ok.get(), 3000 as long)
 }
+
+interface Greeter { fn greet() -> string }
+fn nameKey<T>() -> string { return nameof(T) }
+class Keys { fn of<T>() -> string { return nameof(T) } }
+
+test "nameof names any type, and the one a type parameter stands for" {
+    assertEq(nameof(Greeter), "Greeter")
+    assertEq(nameof(Role), "Role")
+    assertEq(nameKey::<Greeter>(), "Greeter")
+    assertEq(nameKey::<Model>(), "Model")
+    assertEq(nameKey::<long>(), "long")
+    assertEq(new Keys().of::<string>(), "string")
+    assertEq(nameKey::<Array<int>>() == nameKey::<Array<string>>(), false)
+}

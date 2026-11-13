@@ -211,7 +211,7 @@ repo = {
         {"match": r"\b\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d+)?\b", "name": "constant.numeric.decimal.grav"},
     ]},
     "builtins": {"comment": "the compiler's built-in functions, and conversions such as long(x) and double(x)",
-                 "match": r"\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|sizeof|reflect|" + PRIM[3:-1] + r")\b(?=\s*\()",
+                 "match": r"\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|nameof|sizeof|reflect|" + PRIM[3:-1] + r")\b(?=\s*\()",
                  "name": "support.function.builtin.grav"},
     "case-pattern": {
         "comment": "case Circle(r, _): / case Shape.Empty:",

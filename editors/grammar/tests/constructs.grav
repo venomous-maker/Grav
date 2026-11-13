@@ -227,7 +227,7 @@ let inf = Infinity + NaN - 1_000_000 + 0xFF + 0b1010 + 1.5e3
 //                         ^^^^^^^^^ constant.numeric
 //                                     ^^^^ constant.numeric.hex
 //                                            ^^^^^^ constant.numeric.binary
-let tn = typename(x) + str(n) + "${sizeof(int)}"
+let tn = typename(x) + str(n) + "${sizeof(int)}" + nameof(Shape)
 //       ^^^^^^^^ support.function.builtin
 //                     ^^^ support.function.builtin
 //                                 ^^^^^^ support.function.builtin

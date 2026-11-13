@@ -20,7 +20,7 @@ local SKIP = {
   ["is"] = true, ["in"] = true, ["await"] = true, ["print"] = true,
   ["try"] = true, ["catch"] = true, ["finally"] = true, ["throw"] = true,
   ["sizeof"] = true, ["str"] = true, ["input"] = true, ["argc"] = true,
-  ["argv"] = true, ["typename"] = true, ["isInstance"] = true,
+  ["argv"] = true, ["typename"] = true, ["nameof"] = true, ["isInstance"] = true,
   ["trait"] = true, ["uses"] = true, ["Self"] = true, ["free"] = true,
   ["super"] = true, ["typedef"] = true, ["defer"] = true, ["final"] = true,
   ["destructor"] = true, ["operator"] = true, ["step"] = true, ["println"] = true, ["panic"] = true,

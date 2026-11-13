@@ -967,7 +967,7 @@
     },
     "builtins": {
       "comment": "the compiler's built-in functions, and conversions such as long(x) and double(x)",
-      "match": "\\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|sizeof|reflect|int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b(?=\\s*\\()",
+      "match": "\\b(print|println|str|input|assert|assertEq|panic|exit|argc|argv|env|cwd|isInstance|typename|nameof|sizeof|reflect|int|long|uint|byte|float|float32|double|bool|string|void|binary|any|auto|int8|int16|int32|int64|uint8|uint16|uint32|uint64|Self)\\b(?=\\s*\\()",
       "name": "support.function.builtin.grav"
     },
     "case-pattern": {
