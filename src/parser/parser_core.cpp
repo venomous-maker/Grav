@@ -1,4 +1,5 @@
 #include "parser/parser.h"
+#include "lexer/lexer.h"
 
 #include <charconv>
 #include <cstdlib>
@@ -53,6 +54,12 @@ const Token &Parser::expect(TokenType type, const char *context) {
     fail(t, std::string("expected ") + tokenTypeName(type) + " " + context +
                 ", but found " + tokenTypeName(t.type));
 }
+
+const Token &Parser::memberName(const char *context) {
+    if (atMemberName()) return advance();
+    return expect(TokenType::Identifier, context);
+}
+bool Parser::atMemberName() const { return check(TokenType::Identifier) || Lexer::isKeyword(peek()); }
 
 std::string Parser::qualify(const std::string &simpleName) const {
     std::string out;
@@ -505,7 +512,7 @@ StaticFieldDecl Parser::parseStaticField(Access access, bool readonly) {
     StaticFieldDecl sf;
     sf.access = access;
     sf.isConst = readonly;
-    const Token &nm = expect(TokenType::Identifier, "as a static field name");
+    const Token &nm = memberName("as a static field name");
     sf.name = nm.lexeme;
     sf.line = nm.line;
     sf.col = nm.col;
@@ -693,7 +700,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
             m.decorators = std::move(decos);
             cls->methods.push_back(std::move(m));
-        } else if (check(TokenType::Identifier)) {
+        } else if (check(TokenType::Identifier) || (Lexer::isKeyword(peek()) && peekAt(1).type == TokenType::Colon)) {
             if (isStatic) {
                 StaticFieldDecl sf = parseStaticField(access, isReadonly);
                 sf.decorators = std::move(decos);
@@ -791,7 +798,7 @@ FieldDecl Parser::parseField(Access access, bool readonly) {
     FieldDecl f;
     f.access = access;
     f.isReadonly = readonly;
-    const Token &name = expect(TokenType::Identifier, "as a field name");
+    const Token &name = memberName("as a field name");
     f.name = name.lexeme;
     f.line = name.line;
     f.col = name.col;
@@ -818,7 +825,7 @@ MethodDecl Parser::parseMethod(bool inInterface) {
     MethodDecl m;
     m.line = kw.line;
     m.col = kw.col;
-    m.name = expect(TokenType::Identifier, "after 'fn'").lexeme;
+    m.name = memberName("after 'fn'").lexeme;
     if (m.name != "operator" && check(TokenType::Less)) m.typeParams = parseTypeParams(); // generic method
     // `fn operator+(o: T)` — an operator method, stored under a mangled name.
     if (m.name == "operator" && !check(TokenType::LParen)) {

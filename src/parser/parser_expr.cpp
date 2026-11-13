@@ -1,4 +1,5 @@
 #include "parser/parser.h"
+#include "lexer/lexer.h"
 
 #include <charconv>
 
@@ -368,7 +369,7 @@ ExprPtr Parser::parsePostfix() {
     for (;;) {
         if (check(TokenType::Dot)) {
             const Token &dot = advance();
-            const Token &name = expect(TokenType::Identifier, "after '.'");
+            const Token &name = memberName("after '.'");
             auto member = at<MemberExpr>(dot);
             member->object = std::move(expr);
             member->member = name.lexeme;
@@ -376,7 +377,7 @@ ExprPtr Parser::parsePostfix() {
         } else if (check(TokenType::QuestionDot)) {
             // `a?.b` — optional chaining: guard against a null `a`.
             const Token &dot = advance();
-            const Token &name = expect(TokenType::Identifier, "after '?.'");
+            const Token &name = memberName("after '?.'");
             auto member = at<MemberExpr>(dot);
             member->object = std::move(expr);
             member->member = name.lexeme;
@@ -385,7 +386,7 @@ ExprPtr Parser::parsePostfix() {
         } else if (check(TokenType::Arrow)) {
             // `p->m` — pointer member access, i.e. `(*p).m`.
             const Token &arrow = advance();
-            const Token &name = expect(TokenType::Identifier, "after '->'");
+            const Token &name = memberName("after '->'");
             auto deref = at<DerefExpr>(arrow);
             deref->operand = std::move(expr);
             auto member = at<MemberExpr>(arrow);

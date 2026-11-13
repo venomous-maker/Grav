@@ -72,3 +72,30 @@ test "lambdas that call themselves" {
     walk = fn(n: int) -> int { return n == 0 ? 0 : 1 + walk(n - 1) }
     assertEq(walk(5), 5)
 }
+
+interface KwMatcher { fn match(s: string) -> bool }
+class KwRule implements KwMatcher {
+    public type: string = "rule"
+    public float: double = 1.5
+    public static default: string = "d"
+    fn match(s: string) -> bool { return s == self.type }
+    static fn in(values: Array<string>) -> string { return "in:" + Str.join(values, ",") }
+    static fn fn(x: int) -> int { return x * 2 }
+    fn string(key: string) -> string { return key + "!" }
+    fn is(other: string) -> bool { return other == self.type }
+    fn for<T>(x: T) -> string { return "for " + str(x) }
+    fn return() -> int { return 7 }
+}
+
+test "keywords as member names: methods, fields, static members, after . and ?." {
+    let r = new KwRule()
+    assertEq("${r.type} ${r.float} ${KwRule.default}", "rule 1.5 d")
+    assertEq(r.match("rule"), true)
+    assertEq(KwRule.in(["a", "b"]), "in:a,b")
+    assertEq(KwRule.fn(21), 42)
+    assertEq(r.string("k") + r.for::<int>(3) + "${r.return()}", "k!for 37")
+    assertEq(r.is("rule"), true)
+    let m: KwMatcher = r
+    r.type = "changed"
+    assertEq("${m.match("changed")} ${r?.type}", "true changed")
+}

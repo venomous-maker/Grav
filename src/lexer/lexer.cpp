@@ -74,6 +74,11 @@ const std::unordered_map<std::string, TokenType> &keywords() {
 
 Lexer::Lexer(std::string source) : source_(std::move(source)) {}
 
+bool Lexer::isKeyword(const Token &t) {
+    auto it = keywords().find(t.lexeme);
+    return it != keywords().end() && it->second == t.type;
+}
+
 bool Lexer::atEnd() const { return pos_ >= source_.size(); }
 
 char Lexer::peek() const { return atEnd() ? '\0' : source_[pos_]; }

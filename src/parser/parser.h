@@ -29,6 +29,10 @@ private:
     const Token &advance();
     bool matchToken(TokenType type);
     const Token &expect(TokenType type, const char *context);
+    // A member's name: an identifier, or any keyword. After `.` and as a method
+    // or field name the position says it is a name (`req.string()`, `fn in()`).
+    const Token &memberName(const char *context);
+    bool atMemberName() const;
     [[noreturn]] void fail(const Token &at, const std::string &message);
     // True when the current token begins a new source line (used to stop an
     // expression before a line-leading prefix operator like `*p` / `&x`, which

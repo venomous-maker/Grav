@@ -47,6 +47,36 @@ Identifiers start with a letter or `_` and continue with letters, digits and
 
 Names starting with `__` are reserved for the compiler and standard library.
 
+A member may be named by a keyword: after `.` (or `?.`, `->`), after `fn` in a
+class, interface or struct, and as a field's name after a modifier, the
+position already says it is a name. Locals, parameters and free functions
+cannot be.
+
+```grav
+import "std"
+
+class Rule {
+    public type: string = "regex"
+    static fn in(values: Array<string>) -> string { return "in:" + Str.join(values, ",") }
+    fn match(s: string) -> bool { return s == self.type }
+}
+
+fn main() {
+    let r = new Rule()
+    print(Rule.in(["a", "b"]))
+    print(r.match("regex"))
+    print(r.type)
+}
+```
+
+Output:
+
+```text
+in:a,b
+true
+regex
+```
+
 ## Keywords
 
 These words are reserved and cannot be used as names:

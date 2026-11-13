@@ -17,6 +17,8 @@ public:
     explicit Lexer(std::string source);
 
     std::vector<Token> tokenize();
+    // Whether `t` is a keyword token (a word the lexer gave a type of its own).
+    static bool isKeyword(const Token &t);
 
 private:
     char peek() const;
