@@ -58,6 +58,7 @@ One received datagram: its contents and who sent it.
 **Fields**
 
 - `readonly data: Bytes` — The bytes received.
+- `readonly from: string` — The sender as "host:port" ("[host]:port" for IPv6).
 
 **Methods**
 

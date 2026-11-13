@@ -64,6 +64,7 @@ One complete message.
 
 **Fields**
 
+- `binary: bool` — Whether the message was sent as binary (else text).
 - `data: Bytes` — The payload.
 
 **Methods**
