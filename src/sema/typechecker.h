@@ -49,6 +49,13 @@ public:
     };
     void recordBindings(bool on) { recordBindings_ = on; }
     const std::vector<Binding> &bindings() const { return bindings_; }
+    // A callee's parameter names and defaults (named arguments and defaults).
+    struct ParamList {
+        std::vector<std::string> names;
+        std::vector<std::shared_ptr<Expr>> defaults;
+        bool variadic = false;
+        std::string ns;
+    };
 
 private:
     // driver (typechecker.cpp)
@@ -118,12 +125,16 @@ private:
     TypeRef checkFnValueCall(CallExpr &e, const TypeRef &fnType);
 
     // typechecker_ops.cpp — operator overloading, element loops, printing.
-    // Picks among same-named method overloads for a call (exact match first, then
-    // a unique assignable one) and checks the arguments. Reports and returns null
-    // when nothing matches. `cands` must already be filtered to static/instance.
+    // Picks among same-named method overloads for a call and checks the
+    // arguments: an exact match of the call's arity first, then a unique
+    // assignable one, then (the same two ways) one whose left-out trailing
+    // parameters all have defaults. Reports and returns null when nothing
+    // matches. `cands` must already be filtered to static/instance; `pls`, when
+    // given, are their parameter lists (names and defaults: constructors).
     const MethodInfo *resolveMethodOverload(const std::vector<const MethodInfo *> &cands,
                                             std::vector<ExprPtr> &args, int line, int col,
-                                            const std::string &what);
+                                            const std::string &what,
+                                            const std::vector<ParamList> *pls = nullptr);
     // Chooses a constructor overload of `classFq` for `args` (checks them); returns
     // its index, or -1 after reporting an error.
     int resolveCtor(const std::string &classFq, std::vector<ExprPtr> &args, int line, int col,
@@ -182,8 +193,12 @@ private:
     TypeRef checkCall(CallExpr &e);
     std::optional<TypeRef> checkSuperCall(CallExpr &e);
     TypeRef resolveFreeCall(CallExpr &e, const std::string &fnFq);
+    // The overload of `cands` for `argTypes` (ranked as resolveMethodOverload does;
+    // `pls` given: also those whose left-out trailing parameters have defaults).
     const FunctionInfo *pickOverload(const std::vector<FunctionInfo> &cands,
-                                     const std::vector<TypeRef> &argTypes) const;
+                                     const std::vector<TypeRef> &argTypes,
+                                     const std::vector<ParamList> *pls = nullptr,
+                                     bool *tied = nullptr) const;
     void validateArgTypes(const std::vector<ExprPtr> &args,
                           const std::vector<TypeRef> &argTypes,
                           const std::vector<TypeRef> &params, bool variadic,
@@ -191,18 +206,18 @@ private:
     TypeRef checkMember(MemberExpr &e); // value position (field read)
     bool isLvalue(const Expr &e) const;
     // Named arguments and defaults (typechecker_args.cpp).
-public:
-    struct ParamList {
-        std::vector<std::string> names;
-        std::vector<std::shared_ptr<Expr>> defaults;
-        bool variadic = false;
-        std::string ns;
-    };
-private:
     static ParamList paramList(const std::vector<Param> &ps, const std::string &ns);
     static ParamList paramList(const GenericSig &sig);
+    // Matches named arguments to parameters and fills in left-out defaults for
+    // the one candidate the call fits (its index; -1 when nothing needed doing,
+    // -2 after an error). `byType`: a positional call several candidates fit is
+    // left as it is (-3), for the caller to choose by type and fillDefaults.
     int completeArgs(std::vector<ExprPtr> &args, const std::vector<ParamList> &cands, int line, int col,
-                     const std::string &what);
+                     const std::string &what, bool byType = false);
+    // Appends `pl`'s defaults for the parameters after the positional `args`.
+    static void fillDefaults(std::vector<ExprPtr> &args, const ParamList &pl, int line, int col);
+    // Whether every parameter of `pl` from `given` on has a default.
+    static bool defaultsFrom(const ParamList &pl, size_t given);
     TypeRef checkDefaultArg(DefaultArgExpr &e);
     void checkDefaults(const std::vector<Param> &params);
     static void unwrapDefaults(std::vector<ExprPtr> &args);

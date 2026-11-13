@@ -1,25 +1,30 @@
 gravc: tests/errors/arguments.grav:2:15: type error: the default value of 'a' is a string, but the parameter is an int
     fn g(a: int = "x") -> int { return a }
                   ^
-gravc: tests/errors/arguments.grav:4:12: type error: in the call to function 'f': the argument for 'a' is missing
+gravc: tests/errors/arguments.grav:6:12: type error: in the call to function 'f': the argument for 'a' is missing
         print(f(b: 1))
                ^
-gravc: tests/errors/arguments.grav:5:12: type error: in the call to function 'f': 'a' is given twice
+gravc: tests/errors/arguments.grav:7:12: type error: in the call to function 'f': 'a' is given twice
         print(f(1, a: 2))
                ^
-gravc: tests/errors/arguments.grav:6:12: type error: in the call to function 'f': there is no parameter named 'c'
+gravc: tests/errors/arguments.grav:8:12: type error: in the call to function 'f': there is no parameter named 'c'
         print(f(1, c: 2))
                ^
-gravc: tests/errors/arguments.grav:7:12: type error: in the call to function 'f': a positional argument cannot follow a named one
+gravc: tests/errors/arguments.grav:9:12: type error: in the call to function 'f': a positional argument cannot follow a named one
         print(f(a: 1, 2))
                ^
-gravc: tests/errors/arguments.grav:9:13: type error: named arguments ('x: ...') are for calls to functions, methods and constructors by name
+gravc: tests/errors/arguments.grav:11:13: type error: named arguments ('x: ...') are for calls to functions, methods and constructors by name
         print(h(x: 1))
                 ^
-gravc: tests/errors/arguments.grav:12:34: type error: there is no enclosing loop labeled 'nowhere'
+gravc: tests/errors/arguments.grav:13:12: type error: ambiguous call to 'q' matches (int); candidates are:
+    q(a: int, x: int) -> int
+    q(a: int, y: string) -> int
+        print(q(1))
+               ^
+gravc: tests/errors/arguments.grav:15:34: type error: there is no enclosing loop labeled 'nowhere'
             inner: for (j in 0..2) { break nowhere }
                                      ^
-gravc: tests/errors/arguments.grav:13:15: type error: an enclosing loop is already labeled 'loop'
+gravc: tests/errors/arguments.grav:16:15: type error: an enclosing loop is already labeled 'loop'
             loop: while (true) { break loop }
                   ^
-gravc: 8 error(s); aborting
+gravc: 9 error(s); aborting

@@ -65,10 +65,35 @@ bool fits(const std::vector<ExprPtr> &args, const TypeChecker::ParamList &pl, st
 }
 } // namespace
 
+bool TypeChecker::defaultsFrom(const ParamList &pl, size_t given) {
+    if (pl.variadic || given > pl.names.size()) return false;
+    for (size_t i = given; i < pl.defaults.size(); ++i)
+        if (!pl.defaults[i]) return false;
+    return true;
+}
+
+void TypeChecker::fillDefaults(std::vector<ExprPtr> &args, const ParamList &pl, int line, int col) {
+    for (size_t i = args.size(); i < pl.names.size(); ++i) {
+        auto d = std::make_unique<DefaultArgExpr>();
+        d->line = line;
+        d->col = col;
+        d->ns = pl.ns;
+        d->value = cloneExpression(pl.defaults[i].get());
+        args.push_back(std::move(d));
+    }
+}
+
 int TypeChecker::completeArgs(std::vector<ExprPtr> &args, const std::vector<ParamList> &cands, int line,
-                              int col, const std::string &what) {
+                              int col, const std::string &what, bool byType) {
     bool named = false;
     for (const auto &a : args) named = named || dynamic_cast<const NamedArgExpr *>(a.get());
+    // Positional arguments several candidates take (as they are, or with
+    // defaults): the types decide, so leave the choice to the caller.
+    if (!named && byType) {
+        size_t n = 0;
+        for (const auto &pl : cands) { std::string w; if (fits(args, pl, w)) ++n; }
+        if (n > 1) return -3;
+    }
     // Plain positional arguments that some candidate takes as they are.
     if (!named)
         for (const auto &pl : cands) {

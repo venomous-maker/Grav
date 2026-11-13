@@ -23,6 +23,24 @@ class Size {
 }
 class Tall extends Size { }
 fn label<T>(x: T, prefix: string = "item") -> string { return "${prefix}=${x}" }
+// Overloads of different arities, told apart with the help of defaults.
+class Conn {
+    static fn open(a: int, name: string = "d") -> string { return "one ${a} " + name }
+    static fn open(a: int, b: int, name: string = "d") -> string { return "two ${a} ${b} " + name }
+    fn bind(a: int, name: string = "d") -> string { return "m1 ${a} " + name }
+    fn bind(a: int, b: int, name: string = "d") -> string { return "m2 ${a} ${b} " + name }
+}
+class Pt {
+    public s: string
+    constructor(a: int, name: string = "d") { self.s = "c1 ${a} " + name }
+    constructor(a: int, b: int, name: string = "d") { self.s = "c2 ${a} ${b} " + name }
+}
+fn kind(a: int, x: int = 1) -> string { return "int ${a} ${x}" }
+fn kind(a: string, y: string = "y") -> string { return "str " + a + " " + y }
+fn widen(a: long) -> string { return "long ${a}" }
+fn widen(a: int, b: int = 0) -> string { return "int ${a} ${b}" }
+fn many(xs: Array<int>, tag: string = "t") -> string { return "list ${xs.size()} " + tag }
+fn many(n: int) -> string { return "one ${n}" }
 class Sub { public n: int = 7 }
 class Finder {
     fn whereIn(name: string, values: Array<any>) -> string { return name + " in ${values.size()}" }
@@ -92,4 +110,25 @@ test "a literal argument takes the type of the one overload it fits" {
     assertEq(q.whereIn("a", new Sub()), "a in sub 7")
     assertEq(q.apply(fn(x) => x * 10), 20)
     assertEq(q.apply(fn(x) => x + "!", "hi"), "hi!")
+}
+
+test "defaults let a call pick an overload of another arity" {
+    assertEq(Conn.open(1), "one 1 d")
+    assertEq(Conn.open(1, "x"), "one 1 x")
+    assertEq(Conn.open(1, 2), "two 1 2 d")
+    assertEq(Conn.open(1, 2, "y"), "two 1 2 y")
+    let c = new Conn()
+    assertEq(c.bind(1, 2), "m2 1 2 d")
+    assertEq(c.bind(1, 2, name: "n"), "m2 1 2 n")
+    assertEq(new Pt(1, 2).s, "c2 1 2 d")
+    assertEq(new Pt(1, "z").s, "c1 1 z")
+    // Types tell apart overloads that both fit by count.
+    assertEq(kind(1), "int 1 1")
+    assertEq(kind("s"), "str s y")
+    // One that takes the arguments as they are wins over one that needs defaults.
+    assertEq(widen(1), "long 1")
+    assertEq(widen(1, 2), "int 1 2")
+    // A literal takes its type from the overload it can go to.
+    assertEq(many([1, 2]), "list 2 t")
+    assertEq(many(3), "one 3")
 }

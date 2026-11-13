@@ -128,18 +128,28 @@ std::string withSignature(const std::string &what, const std::string &sig) {
 
 const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const MethodInfo *> &cands,
                                                      std::vector<ExprPtr> &args, int line, int col,
-                                                     const std::string &what) {
+                                                     const std::string &what,
+                                                     const std::vector<ParamList> *given) {
     if (cands.empty()) return nullptr;
-    {
-        std::vector<ParamList> pls;
+    std::vector<ParamList> pls;
+    if (given) pls = *given;
+    else
         for (const MethodInfo *m : cands)
             pls.push_back(m->decl ? paramList(m->decl->params, Registry::namespaceOf(m->definingClass))
                                   : ParamList{m->paramNames, std::vector<std::shared_ptr<Expr>>(m->paramNames.size()), false, ""});
-        if (completeArgs(args, pls, line, col, what) == -2) {
-            checkArgValues(args);
-            return nullptr;
-        }
+    int done = completeArgs(args, pls, line, col, what, true);
+    if (done == -2) {
+        checkArgValues(args);
+        return nullptr;
     }
+    // Several overloads take the arguments by count: a candidate of another
+    // arity is one whose left-out trailing parameters all have defaults.
+    bool withDefaults = done == -3;
+    size_t given0 = args.size();
+    auto takes = [&](size_t k) {
+        size_t np = cands[k]->paramTypes.size();
+        return np == given0 || (withDefaults && np > given0 && defaultsFrom(pls[k], given0));
+    };
     auto sigOf = [](const MethodInfo *m) {
         return signatureText(m->paramNames, m->paramTypes, m->returnType, false);
     };
@@ -155,9 +165,9 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
         bool list = dynamic_cast<const ArrayLiteralExpr *>(a) != nullptr, lambda = dynamic_cast<const LambdaExpr *>(a) != nullptr;
         if (!list && !lambda) return nullptr;
         const TypeRef *found = nullptr;
-        for (const MethodInfo *m : cands) {
-            if (m->paramTypes.size() != args.size()) continue;
-            const TypeRef &t = m->paramTypes[i];
+        for (size_t k = 0; k < cands.size(); ++k) {
+            if (!takes(k)) continue;
+            const TypeRef &t = cands[k]->paramTypes[i];
             bool fits = lambda ? t.isFunction()
                                : t.isArray() || (t.isNamed() && reg_->isClass(t.name) &&
                                                  (reg_->findMethod(t.name, "push") || reg_->findMethod(t.name, "add")));
@@ -173,21 +183,39 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
         argTypes.push_back(ctx ? checkExprExpect(*args[i], *ctx) : checkExpr(*args[i]));
     }
     for (const auto &t : argTypes) if (t.isError()) return nullptr;
-    const MethodInfo *exact = nullptr, *assignable = nullptr;
-    int nAssignable = 0;
-    for (const MethodInfo *m : cands) {
-        if (m->paramTypes.size() != argTypes.size()) continue;
+    // Tiers: 0 the call's arity, exact; 1 its arity, assignable; 2 and 3 the
+    // same with defaults. The first tier holding exactly one candidate wins
+    // (an exact tier with several, as can happen with defaults, is ambiguous).
+    int count[4] = {0, 0, 0, 0};
+    size_t pick[4] = {0, 0, 0, 0};
+    for (size_t k = 0; k < cands.size(); ++k) {
+        if (!takes(k)) continue;
+        const MethodInfo *m = cands[k];
         bool ok = true, same = true;
         for (size_t i = 0; ok && i < argTypes.size(); ++i) {
             ok = isAssignable(argTypes[i], m->paramTypes[i]);
             same = same && argTypes[i] == m->paramTypes[i];
         }
         if (!ok) continue;
-        if (same) exact = m;
-        assignable = m;
-        nAssignable++;
+        int tier = (m->paramTypes.size() == argTypes.size() ? 0 : 2) + (same ? 0 : 1);
+        count[tier]++;
+        pick[tier] = k;
     }
-    const MethodInfo *mi = exact ? exact : (nAssignable == 1 ? assignable : nullptr);
+    const MethodInfo *mi = nullptr;
+    int nAssignable = 0;
+    for (int tier = 0; tier < 4; ++tier) {
+        if (count[tier] == 0) continue;
+        if (count[tier] == 1) {
+            mi = cands[pick[tier]];
+            if (mi->paramTypes.size() > args.size()) {
+                fillDefaults(args, pls[pick[tier]], line, col);
+                for (size_t i = argTypes.size(); i < args.size(); ++i)
+                    argTypes.push_back(checkExprExpect(*args[i], mi->paramTypes[i]));
+            }
+        }
+        nAssignable = count[tier];
+        break;
+    }
     if (!mi) {
         std::string got;
         for (size_t i = 0; i < argTypes.size(); ++i)
@@ -205,14 +233,6 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
 int TypeChecker::resolveCtor(const std::string &classFq, std::vector<ExprPtr> &args, int line,
                              int col, const std::string &what) {
     const ClassInfo *ci = reg_->cls(classFq);
-    if (ci && !ci->ctors.empty()) {
-        std::vector<ParamList> pls;
-        for (const ConstructorDecl *c : ci->ctors) pls.push_back(paramList(c->params, Registry::namespaceOf(classFq)));
-        if (completeArgs(args, pls, line, col, what) == -2) {
-            checkArgValues(args);
-            return -1;
-        }
-    }
     if (!ci || ci->ctors.empty()) { // implicit no-argument constructor
         checkArgs(args, {}, line, col, what);
         return 0;
@@ -227,7 +247,9 @@ int TypeChecker::resolveCtor(const std::string &classFq, std::vector<ExprPtr> &a
         sigs[i].returnType = TypeRef::prim(TypeRef::Kind::Void);
         cands.push_back(&sigs[i]);
     }
-    const MethodInfo *mi = resolveMethodOverload(cands, args, line, col, what);
+    std::vector<ParamList> pls;
+    for (const ConstructorDecl *c : ci->ctors) pls.push_back(paramList(c->params, Registry::namespaceOf(classFq)));
+    const MethodInfo *mi = resolveMethodOverload(cands, args, line, col, what, &pls);
     return mi ? static_cast<int>(mi - sigs.data()) : -1;
 }
 

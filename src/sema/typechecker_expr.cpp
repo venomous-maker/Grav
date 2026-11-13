@@ -1028,16 +1028,21 @@ void TypeChecker::validateArgTypes(const std::vector<ExprPtr> &args,
 // Chooses the best overload for the given argument types: an exact-match wins;
 // otherwise a unique assignable candidate. Returns null if none or ambiguous.
 const FunctionInfo *TypeChecker::pickOverload(const std::vector<FunctionInfo> &cands,
-                                              const std::vector<TypeRef> &argTypes) const {
-    const FunctionInfo *exact = nullptr;
-    const FunctionInfo *assignable = nullptr;
-    int assignableCount = 0;
-    for (const auto &c : cands) {
+                                              const std::vector<TypeRef> &argTypes,
+                                              const std::vector<ParamList> *pls, bool *tied) const {
+    // Tiers as in resolveMethodOverload: the call's arity (exact, then assignable),
+    // then the same for candidates whose left-out trailing parameters have defaults.
+    int count[4] = {0, 0, 0, 0};
+    const FunctionInfo *pick[4] = {nullptr, nullptr, nullptr, nullptr};
+    for (size_t k = 0; k < cands.size(); ++k) {
+        const FunctionInfo &c = cands[k];
         size_t fixed = c.isVariadic && !c.paramTypes.empty() ? c.paramTypes.size() - 1
                                                              : c.paramTypes.size();
         bool arityOk = c.isVariadic ? argTypes.size() >= fixed
                                     : argTypes.size() == c.paramTypes.size();
-        if (!arityOk) continue;
+        bool defaulted = !arityOk && pls && !c.isVariadic && c.paramTypes.size() > argTypes.size() &&
+                         defaultsFrom((*pls)[k], argTypes.size());
+        if (!arityOk && !defaulted) continue;
         bool allAssignable = true, allExact = true;
         for (size_t i = 0; i < argTypes.size(); ++i) {
             const TypeRef &want =
@@ -1046,12 +1051,16 @@ const FunctionInfo *TypeChecker::pickOverload(const std::vector<FunctionInfo> &c
             if (!(argTypes[i] == want)) allExact = false;
         }
         if (!allAssignable) continue;
-        if (allExact) exact = &c;
-        assignable = &c;
-        assignableCount++;
+        int tier = (defaulted ? 2 : 0) + (allExact ? 0 : 1);
+        count[tier]++;
+        pick[tier] = &c;
     }
-    if (exact) return exact;
-    return assignableCount == 1 ? assignable : nullptr;
+    for (int tier = 0; tier < 4; ++tier) {
+        if (!count[tier]) continue;
+        if (tied) *tied = count[tier] > 1;
+        return count[tier] == 1 ? pick[tier] : nullptr;
+    }
+    return nullptr;
 }
 
 // Resolves a call to a free function, choosing among overloads of the name.
@@ -1102,29 +1111,51 @@ TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
         e.resolvedOverload = fi->overloadIndex;
         return fi->isAsync ? TypeRef::future(fi->returnType) : fi->returnType;
     }
-    {
-        std::vector<ParamList> pls;
-        for (const auto &c : cands)
-            pls.push_back(c.decl ? paramList(c.decl->params, Registry::namespaceOf(fnFq)) : ParamList{c.paramNames, std::vector<std::shared_ptr<Expr>>(c.paramNames.size()), c.isVariadic, ""});
-        if (completeArgs(e.args, pls, e.line, e.col, "function '" + fnFq + "'") == -2) {
-            checkArgValues(e.args);
-            return TypeRef::prim(TypeRef::Kind::Error);
-        }
+    std::vector<ParamList> pls;
+    for (const auto &c : cands)
+        pls.push_back(c.decl ? paramList(c.decl->params, Registry::namespaceOf(fnFq)) : ParamList{c.paramNames, std::vector<std::shared_ptr<Expr>>(c.paramNames.size()), c.isVariadic, ""});
+    int done = completeArgs(e.args, pls, e.line, e.col, "function '" + fnFq + "'", true);
+    if (done == -2) {
+        checkArgValues(e.args);
+        return TypeRef::prim(TypeRef::Kind::Error);
     }
     std::vector<TypeRef> argTypes;
     argTypes.reserve(e.args.size());
     for (size_t i = 0; i < e.args.size(); ++i) {
-        // With a single candidate its parameter types guide lambda inference.
+        // With a single candidate its parameter types guide lambda inference;
+        // with several, an array literal or a lambda takes the one type that the
+        // candidates taking this many arguments have for it, if they agree.
         const TypeRef *want = nullptr;
         if (cands.size() == 1) {
             const auto &ps = cands[0].paramTypes;
             if (i < ps.size()) want = &ps[i];
             else if (cands[0].isVariadic && !ps.empty()) want = &ps.back();
+        } else {
+            const Expr *a = e.args[i].get();
+            bool list = dynamic_cast<const ArrayLiteralExpr *>(a) != nullptr, lambda = dynamic_cast<const LambdaExpr *>(a) != nullptr;
+            for (size_t k = 0; (list || lambda) && k < cands.size(); ++k) {
+                const auto &c = cands[k];
+                bool takes = !c.isVariadic && (c.paramTypes.size() == e.args.size() ||
+                             (done == -3 && c.paramTypes.size() > e.args.size() && defaultsFrom(pls[k], e.args.size())));
+                if (!takes) continue;
+                const TypeRef &t = c.paramTypes[i];
+                bool fits = lambda ? t.isFunction()
+                                   : t.isArray() || (t.isNamed() && reg_->isClass(t.name) &&
+                                                     (reg_->findMethod(t.name, "push") || reg_->findMethod(t.name, "add")));
+                if (!fits) continue;
+                if (want && *want != t) { want = nullptr; break; }   // two different ones: no single context
+                want = &t;
+            }
         }
         argTypes.push_back(want ? checkExprExpect(*e.args[i], *want) : checkExpr(*e.args[i]));
     }
 
-    const FunctionInfo *fi = pickOverload(cands, argTypes);
+    bool tied = false;
+    const FunctionInfo *fi = pickOverload(cands, argTypes, done == -3 ? &pls : nullptr, &tied);
+    if (fi && !fi->isVariadic && fi->paramTypes.size() > e.args.size()) {   // chosen with its defaults
+        fillDefaults(e.args, pls[static_cast<size_t>(fi - cands.data())], e.line, e.col);
+        for (size_t i = argTypes.size(); i < e.args.size(); ++i) argTypes.push_back(checkExprExpect(*e.args[i], fi->paramTypes[i]));
+    }
     if (!fi) {
         if (cands.size() == 1) {
             fi = &cands[0]; // single overload: fall through to a precise mismatch error
@@ -1133,7 +1164,7 @@ TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
             for (size_t i = 0; i < argTypes.size(); ++i) got += (i ? ", " : "") + typeRefName(argTypes[i]);
             for (const auto &c : cands)
                 options += "\n    " + fnFq + signatureText(c.paramNames, c.paramTypes, c.returnType, c.isVariadic);
-            error(e.line, e.col, "no overload of '" + fnFq + "' matches (" + got +
+            error(e.line, e.col, std::string(tied ? "ambiguous call to '" : "no overload of '") + fnFq + "' matches (" + got +
                                      "); candidates are:" + options);
             return TypeRef::prim(TypeRef::Kind::Error);
         }
