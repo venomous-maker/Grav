@@ -1,0 +1,7 @@
+running 5 tests
+  ok    reads and writes go through the accessors
+  ok    static properties
+  ok    interfaces, traits, overrides and super
+  ok    objects, nested reads and generics
+  ok    reflection lists properties
+result: 5 passed, 0 failed

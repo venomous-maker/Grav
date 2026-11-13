@@ -1,0 +1,23 @@
+// Using properties wrongly: writing a read-only one, reading a write-only one,
+// `++` inside an expression, `+=` on a computed object outside a statement of
+// its own, and a private accessor from outside.
+import "std"
+
+class A {
+    private v: int = 0
+    get ro() -> int { return 1 }
+    set wo(x: int) { self.v = x }
+    get n() -> int { return self.v }
+    set n(x: int) { self.v = x }
+    private get hidden() -> int { return 2 }
+}
+fn mk() -> A { return new A() }
+
+fn main() {
+    let a = new A()
+    a.ro = 3
+    print(a.wo)
+    let y = a.n++
+    for (let i = 0; i < 1; mk().n += 1) { i++ }
+    print(a.hidden + y)
+}

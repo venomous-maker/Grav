@@ -1,0 +1,127 @@
+// Properties: `get name() -> T` and `set name(v: T)` read and written as
+// `obj.name`, with `+=` and `++`, statics, interfaces, traits, overriding,
+// generics, and reflection (ClassInfo.properties).
+import "std"
+
+class Temp {
+    private c: float = 0.0
+    get celsius() -> float { return self.c }
+    set celsius(v: float) { self.c = v }
+    get fahrenheit() -> float { return self.c * 9.0 / 5.0 + 32.0 }
+    set fahrenheit(f: float) { self.celsius = (f - 32.0) * 5.0 / 9.0 }
+    get label() -> string { return "${self.c}C" }
+}
+class Counter {
+    private static n: int = 0
+    static get count() -> int { return Counter.n }
+    static set count(v: int) { Counter.n = v }
+    private items: Array<string> = new Array<string>()
+    get size() -> int { return self.items.size() }
+    fn add(s: string) -> Counter { self.items.push(s); return self }
+}
+interface Shape { get area() -> float }
+class Square implements Shape {
+    public side: float = 2.0
+    get area() -> float { return self.side * self.side }
+}
+class Base { get name() -> string { return "base" } }
+class Derived extends Base { get name() -> string { return "derived:" + super.name } }
+trait Named {
+    private nm: string = "?"
+    get name() -> string { return self.nm }
+    set name(v: string) { self.nm = Str.trim(v) }
+    get shout() -> string
+}
+class Dog implements Named {
+    get shout() -> string { return Str.upper(self.name) }
+}
+class Node {
+    public kids: Array<Node> = new Array<Node>()
+    private nm: string = ""
+    get name() -> string { return self.nm }
+    set name(v: string) { self.nm = v + "!" }
+    get first() -> Node { return self.kids.size() > 0 ? self.kids[0] : null }
+}
+class Box<T> {
+    private v: T
+    constructor(v: T) { self.v = v }
+    get value() -> T { return self.v }
+    set value(x: T) { self.v = x }
+}
+@Entity
+class Person {
+    public first: string = "Ada"
+    public last: string = "Lovelace"
+    @Appended get fullName() -> string { return self.first + " " + self.last }
+    set fullName(v: string) { let i = Str.indexOf(v, " "); self.first = v[..i]; self.last = v[i + 1..] }
+    get age() -> int { return 36 }
+    fn greet() -> string { return "hi" }
+}
+class Kid extends Person { get age() -> int { return 8 } }
+fn mk() -> Temp { return new Temp() }
+
+test "reads and writes go through the accessors" {
+    let t = new Temp()
+    t.celsius = 100.0
+    assertEq(t.fahrenheit, 212.0)
+    t.fahrenheit = 32.0
+    assertEq(t.celsius, 0.0)
+    t.celsius += 5.0
+    t.celsius++
+    assertEq(t.label, "6C")
+    let f = fn() -> string { return t.label }
+    assertEq("${f()} ${t.celsius}", "6C 6")
+    mk().celsius += 1.0                         // (a computed object, evaluated once)
+}
+
+test "static properties" {
+    Counter.count = 3
+    Counter.count += 2
+    assertEq(Counter.count, 5)
+    for (let i = 0; i < 3; Counter.count += 1) { i++ }
+    assertEq(Counter.count, 8)
+    assertEq(new Counter().add("a").add("b").size, 2)
+}
+
+test "interfaces, traits, overrides and super" {
+    let s: Shape = new Square()
+    assertEq(s.area, 4.0)
+    let b: Base = new Derived()
+    assertEq(b.name, "derived:base")
+    let d = new Dog()
+    d.name = "  rex "
+    let n: Named = d
+    assertEq("${n.name}/${n.shout}", "rex/REX")
+    n.name = "max"
+    assertEq(d.name, "max")
+}
+
+test "objects, nested reads and generics" {
+    let n = new Node()
+    n.name = "n"
+    n.kids.push(new Node())
+    n.first.name = "kid"
+    n.name += "x"
+    assertEq("${n.name} ${n.first.name}", "n!x! kid!")
+    let bs = new Box<string>("a")
+    bs.value += "b"
+    let bi = new Box(3)
+    bi.value *= 7
+    assertEq("${bs.value} ${bi.value}", "ab 21")
+}
+
+test "reflection lists properties" {
+    let info = reflect(Person)
+    let out = new Array<string>()
+    for (p in info.properties()) { out.push("${p} ${p.canGet()} ${p.canSet()} ${p.has("Appended")}") }
+    assertEq("${out}", "[\"fullName: string true true true\", \"age: int true false false\"]")
+    assertEq("${info.methods().size()} ${info.method("greet").result}", "1 string")
+    let k = new Kid()
+    let ki = ClassInfo.of(k)
+    assertEq(ki.property("age").get(k), 8)
+    ki.property("fullName").set(k, "Grace Hopper")
+    assertEq("${k.first}|${k.last}|${ki.property("fullName").get(k)}|${ki.properties().size()}", "Grace|Hopper|Grace Hopper|2")
+    let msg = ""
+    try { ki.property("age").set(k, 3) } catch (e: StateError) { msg = e.message() }
+    assertEq(msg, "Kid.age is read-only: it has no setter")
+}

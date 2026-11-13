@@ -1,0 +1,16 @@
+gravc: tests/errors/property_access.grav:18:6: type error: property 'ro' of 'A' is read-only: it has a getter and no setter
+        a.ro = 3
+         ^
+gravc: tests/errors/property_access.grav:19:12: type error: property 'wo' of 'A' has no getter: it can only be set
+        print(a.wo)
+               ^
+gravc: tests/errors/property_access.grav:20:16: type error: '++'/'--' on property 'n' works only as a statement of its own, not inside an expression
+        let y = a.n++
+                   ^
+gravc: tests/errors/property_access.grav:21:35: type error: '+=' on property 'n' of a computed object must be a statement of its own: put the object in a variable
+        for (let i = 0; i < 1; mk().n += 1) { i++ }
+                                      ^
+gravc: tests/errors/property_access.grav:22:12: type error: property accessor 'get hidden' is private in 'A'
+        print(a.hidden + y)
+               ^
+gravc: 5 error(s); aborting

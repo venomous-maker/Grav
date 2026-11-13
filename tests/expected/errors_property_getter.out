@@ -1,0 +1,3 @@
+gravc: tests/errors/property_getter.grav:5:5: parse error: a getter takes no parameters: 'get n()'
+        get n(x: int) -> int { return x }
+        ^

@@ -1,0 +1,6 @@
+// A setter takes exactly one parameter, the new value.
+import "std"
+
+class A {
+    set n(a: int, b: int) { }
+}

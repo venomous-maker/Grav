@@ -1,0 +1,6 @@
+// A getter takes no parameters.
+import "std"
+
+class A {
+    get n(x: int) -> int { return x }
+}

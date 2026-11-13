@@ -1,0 +1,13 @@
+gravc: tests/errors/property_decl.grav:7:5: sema error: 'n' is both a field (in 'Clash') and a property of 'Clash'
+        get n() -> int { return 1 }
+        ^
+gravc: tests/errors/property_decl.grav:11:5: sema error: the setter of 'n' takes string, but its getter gives int
+        set n(x: string) { }
+        ^
+gravc: tests/errors/property_decl.grav:14:1: sema error: class 'Blob' does not implement property accessor 'get area' required by interface 'Shape'
+    class Blob implements Shape { }
+    ^
+gravc: tests/errors/property_decl.grav:16:1: sema error: class 'Derived' must implement abstract property accessor 'get name'
+    class Derived extends Base { }
+    ^
+gravc: 4 error(s); aborting

@@ -1,0 +1,16 @@
+// Declaring properties wrongly: a name that is also a field, a setter whose
+// type is not its getter's, and accessors a class owes its interface or base.
+import "std"
+
+class Clash {
+    public n: int = 0
+    get n() -> int { return 1 }
+}
+class Mismatch {
+    get n() -> int { return 1 }
+    set n(x: string) { }
+}
+interface Shape { get area() -> float }
+class Blob implements Shape { }
+abstract class Base { abstract get name() -> string }
+class Derived extends Base { }

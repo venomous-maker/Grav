@@ -1,0 +1,3 @@
+gravc: tests/errors/property_setter.grav:5:5: parse error: a setter takes one parameter, the new value: 'set n(value: T)'
+        set n(a: int, b: int) { }
+        ^
