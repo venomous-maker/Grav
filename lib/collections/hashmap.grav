@@ -83,8 +83,6 @@ namespace std.collections {
         private hs: int*          // string keys: each slot's hash (31 bits), so growing and removing re-place entries without touching keys
         private cap: int          // always a power of two
         private count: int
-        private lastTag: int      // the tag of the key slot() last looked for
-        private lastHash: int     // and its hash
 
         constructor() { self.count = 0; self.alloc(16); }
         // One reference per key and value (reference types).
@@ -128,20 +126,18 @@ namespace std.collections {
             %{ free((void*)k); if (!GRAV_HM_INTER(self)) free((void*)v); %};
         }
 
-        // The slot holding `key`, or the empty slot where it would go. used[i] is
-        // 0 for an empty slot, else a tag of 7 hash bits (with the high bit set):
-        // keys are compared only where the tags agree.
-        private fn slot(key: K) -> int {
+        // The slot holding `key` (whose hash is `h`), or the empty slot where it
+        // would go. used[i] is 0 for an empty slot, else a tag of 7 hash bits (with
+        // the high bit set): keys are compared only where the tags agree. It only
+        // reads the map, so threads may look keys up in a shared map at once.
+        private fn slot(key: K, h: long) -> int {
             let mask = self.cap - 1;
             let kst = %{ GRAV_HM_KST(self) %} as int;
-            let h = hashOf(key);
-            self.lastHash = (h & 2147483647) as int;
             let i = (h & (mask as long)) as int;
             // Tags spare string compares; other keys compare as cheaply as tags,
             // so their slots are just marked 1 (the type test is a C constant).
             if (%{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool) {
                 let tag = (((h >> 24) & 127) | 128) as int;
-                self.lastTag = tag;
                 while (self.used[i] != 0) {
                     if (self.used[i] == tag && self.ks[i * kst] == key) { return i; }
                     i = (i + 1) & mask;
@@ -201,10 +197,15 @@ namespace std.collections {
             if ((self.count + 1) * 4 > self.cap * 3) { self.grow(); }   // load factor 0.75
             let kst = %{ GRAV_HM_KST(self) %} as int;
             let vst = %{ GRAV_HM_VST(self) %} as int;
-            let i = self.slot(key);
+            let h = hashOf(key);
+            let i = self.slot(key, h);
             if (self.used[i] == 0) {
-                self.used[i] = %{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool ? self.lastTag : 1;
-                if (%{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool) { self.hs[i] = self.lastHash; }
+                if (%{ __builtin_types_compatible_p(__typeof__(*self->ks), const char*) %} as bool) {
+                    self.used[i] = (((h >> 24) & 127) | 128) as int;
+                    self.hs[i] = (h & 2147483647) as int;
+                } else {
+                    self.used[i] = 1;
+                }
                 self.ks[i * kst] = __retain(key);
                 self.vs[i * vst] = __retain(value);
                 self.count += 1;
@@ -215,14 +216,14 @@ namespace std.collections {
             __release(old);
         }
         // The value for `key`, or the zero value of V when absent.
-        public fn get(key: K) -> V { return self.vs[self.slot(key) * %{ GRAV_HM_VST(self) %} as int]; }
+        public fn get(key: K) -> V { return self.vs[self.slot(key, hashOf(key)) * %{ GRAV_HM_VST(self) %} as int]; }
         // The value for `key`, or `fallback` when the key is missing.
         public fn getOr(key: K, fallback: V) -> V {
-            let i = self.slot(key);
+            let i = self.slot(key, hashOf(key));
             return self.used[i] != 0 ? self.vs[i * %{ GRAV_HM_VST(self) %} as int] : fallback;
         }
         // Whether the map has `key`.
-        public fn containsKey(key: K) -> bool { return self.used[self.slot(key)] != 0; }
+        public fn containsKey(key: K) -> bool { return self.used[self.slot(key, hashOf(key))] != 0; }
         // `map[key]`: the value for key.
         fn operator[](key: K) -> V { return self.get(key); }
         // `map[key] = value`: sets the value for key.
@@ -232,7 +233,7 @@ namespace std.collections {
         public fn remove(key: K) -> bool {
             let kst = %{ GRAV_HM_KST(self) %} as int;
             let vst = %{ GRAV_HM_VST(self) %} as int;
-            let i = self.slot(key);
+            let i = self.slot(key, hashOf(key));
             if (self.used[i] == 0) { return false; }
             __release(self.ks[i * kst]);
             __release(self.vs[i * vst]);
@@ -294,7 +295,7 @@ namespace std.collections {
         }
         // The value for `key`, inserting `fallback` first when absent.
         public fn getOrPut(key: K, fallback: V) -> V {
-            let i = self.slot(key);
+            let i = self.slot(key, hashOf(key));
             if (self.used[i] != 0) { return self.vs[i * %{ GRAV_HM_VST(self) %} as int]; }
             self.put(key, fallback);
             return fallback;
