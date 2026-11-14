@@ -853,6 +853,27 @@ class Workspace {
   }
 
   // Resolve an import spec written in `fromFile`, like the compiler's loader.
+  // For each package name, the directory the whole program uses: the
+  // workspace's own declaration, else a local path anywhere in the graph, else
+  // the first one found (the compiler's chosenPackages()).
+  chosenPackages() {
+    if (this.chosenMemo) return this.chosenMemo;
+    const chosen = new Map(), rank = new Map(), walked = new Set();
+    const top = this.root ? this.project(this.root) : null;
+    const todo = top ? [[top, 0]] : [];
+    while (todo.length) {
+      const [proj, depth] = todo.pop();
+      for (const dep of proj.deps) {
+        const dir = this.packageDir(proj, dep);
+        if (!dir) continue;
+        const r = depth === 0 ? 0 : dep.local ? 1 : 2;
+        if (!rank.has(dep.name) || r < rank.get(dep.name)) { rank.set(dep.name, r); chosen.set(dep.name, dir); }
+        if (!walked.has(dir) && fs.existsSync(path.join(dir, "grav.toml"))) { walked.add(dir); todo.push([this.readProject(dir), depth + 1]); }
+      }
+    }
+    this.chosenMemo = chosen;
+    return chosen;
+  }
   resolveImport(fromFile, spec) {
     const tryFile = (p) => {
       if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
@@ -868,14 +889,11 @@ class Workspace {
     const own = this.project(fromDir);
     if (own) {
       const head = spec.split("/")[0];
-      // The workspace's own declaration of a package wins over a package's (as
-      // in the compiler: one copy for the whole program).
-      const top = this.root ? this.project(this.root) : null;
-      const topDep = top && top.deps.find((d) => d.name === head);
-      const proj = topDep ? top : own;
-      const dep = topDep || own.deps.find((d) => d.name === head);
+      const dep = own.deps.find((d) => d.name === head);
       if (dep) {
-        const dir = this.packageDir(proj, dep);
+        // One copy of each package for the whole program, as the compiler picks it.
+        const chosen = this.chosenPackages().get(head);
+        const dir = chosen || this.packageDir(own, dep);
         if (!dir) return null;
         if (spec === head) {
           const sub = this.readProject(dir);
@@ -1686,6 +1704,7 @@ class Workspace {
     if (!w) return [];
     const re = new RegExp(`(?<![A-Za-z0-9_])${w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "g");
     this.reachMemo = new Map();
+    this.chosenMemo = null;
     try {
       const target = this.declarationAt(file, pos);
       const same = (d) => d && path.resolve(d.file) === target.file && d.range.start.line === target.line && d.range.start.character === target.ch;
@@ -1715,7 +1734,7 @@ class Workspace {
         }
       }
       return out;
-    } finally { this.reachMemo = null; }
+    } finally { this.reachMemo = null; this.chosenMemo = null; }
   }
 
   // Can the name at a position be renamed? { range, placeholder } or { error }.
