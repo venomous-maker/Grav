@@ -865,10 +865,15 @@ class Workspace {
     if (spec === "std" || spec.startsWith("std/")) return std ? tryFile(spec === "std" ? path.join(std, "std.grav") : path.join(std, spec.slice(4))) : null;
     let r = tryFile(path.join(fromDir, spec));
     if (r) return r;
-    const proj = this.project(fromDir);
-    if (proj) {
+    const own = this.project(fromDir);
+    if (own) {
       const head = spec.split("/")[0];
-      const dep = proj.deps.find((d) => d.name === head);
+      // The workspace's own declaration of a package wins over a package's (as
+      // in the compiler: one copy for the whole program).
+      const top = this.root ? this.project(this.root) : null;
+      const topDep = top && top.deps.find((d) => d.name === head);
+      const proj = topDep ? top : own;
+      const dep = topDep || own.deps.find((d) => d.name === head);
       if (dep) {
         const dir = this.packageDir(proj, dep);
         if (!dir) return null;
@@ -880,7 +885,7 @@ class Workspace {
         }
         return tryFile(path.join(dir, spec.slice(head.length + 1)));
       }
-      for (const p of proj.paths) if ((r = tryFile(path.join(p, spec)))) return r;
+      for (const p of own.paths) if ((r = tryFile(path.join(p, spec)))) return r;
     }
     for (const p of (process.env.GRAV_PATH || "").split(":").filter(Boolean)) if ((r = tryFile(path.join(p, spec)))) return r;
     if (std && (r = tryFile(path.join(std, spec)))) return r;
