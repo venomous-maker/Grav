@@ -631,6 +631,10 @@ void CodeGen::emitTypeInfos() {
     for (const auto &declPtr : program_->decls) {
         if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
     }
+    std::vector<std::string> classes;
+    for (const auto &declPtr : program_->decls)
+        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) classes.push_back(c->fqName);
+    emitCollectionItems(classes);
     // Every class with reflection, for ClassInfo.forName/all (null-terminated).
     vtables_ += "static const GravTypeInfo* const grav_rf_types_[] = { " + reflectedTypes + "0 };\n"
                 "static const GravTypeInfo* const* grav_rf_all_types(void) { return grav_rf_types_; }\n";
@@ -665,14 +669,138 @@ bool CodeGen::reflected(const std::string &fq) const {
         for (const auto &d : program_->decls)
             if (auto *c = dynamic_cast<const ClassDecl *>(d.get()); c && hasDecorators(*c)) reflectRoots_.insert(root(c->fqName));
         visitExprs(const_cast<Program &>(*program_), [&](Expr &e) {
-            if (auto *c = dynamic_cast<CallExpr *>(&e); c && c->kind == CallKind::Builtin && c->targetName == "reflect")
-                reflectRoots_.insert(root(c->ownerClass));
+            auto *c = dynamic_cast<CallExpr *>(&e);
+            if (!c) return;
+            if (c->kind == CallKind::Builtin && c->targetName == "reflect") reflectRoots_.insert(root(c->ownerClass));
+            if (c->kind == CallKind::StaticMethod && c->ownerClass == "std.core.ClassInfo" &&
+                (c->methodName == "listItems" || c->methodName == "mapEntries"))
+                rfItemsUsed_ = true;
         });
     }
     return reflectRoots_.count(root(fq)) != 0;
 }
 
-std::string CodeGen::rfConvert(const TypeRef &k, const std::string &dst, const std::string &fail, bool own) const {
+// Arrays and string-keyed maps: what their buffers hold (the instance's fields
+// `data: E*`, or `ks: string*` and `vs: E*`).
+int CodeGen::rfCollection(const std::string &fq, TypeRef *elem) const {
+    bool arr = fq.rfind("std.collections.Array$", 0) == 0, map = fq.rfind("std.collections.HashMap$", 0) == 0;
+    const ClassInfo *ci = arr || map ? reg_->cls(fq) : nullptr;
+    if (!ci || !ci->decl) return 0;
+    auto buffer = [&](const char *name) -> const TypeRef * {
+        for (const auto &f : ci->decl->fields)
+            if (f.name == name && f.type.kind == TypeRef::Kind::Pointer && f.type.elem) return f.type.elem.get();
+        return nullptr;
+    };
+    if (arr) {
+        const TypeRef *e = buffer("data");
+        if (!e) return 0;
+        *elem = *e;
+        return 1;
+    }
+    const TypeRef *k = buffer("ks"), *v = buffer("vs");
+    if (!k || !v || k->kind != TypeRef::Kind::String) return 0;
+    *elem = *v;
+    return 2;
+}
+
+std::string CodeGen::rfCollectionFrom(const std::string &fq) {
+    if (auto it = rfFrom_.find(fq); it != rfFrom_.end()) return it->second;
+    rfFrom_[fq] = "";   // (an Array<Array<…>> of itself cannot happen, but stay finite)
+    TypeRef elem;
+    int kind = rfCollection(fq, &elem);
+    const std::string src = kind == 1 ? "std.collections.Array$any" : "std.collections.HashMap$string$any";
+    if (!kind || fq == src || !reg_->cls(src)) return "";
+    const std::string m = mangle(fq), st = structName(fq), ss = structName(src), ce = cTy(elem);
+    std::string fail = kind == 1 ? "{ grav_release(a_); return 0; }"
+                                 : "{ grav_any_release(v); grav_release(ks_); grav_release(a_); return 0; }";
+    std::string conv = rfConvert(elem, "it_", fail, false);
+    if (conv.empty()) return "";
+    std::string fn = m + "__rf_from";
+    vtables_ += "static int " + fn + "(GravAny v, " + st + "** out);\n";
+    std::string body = "static int " + fn + "(GravAny v, " + st + "** out) {\n"
+                       "    if (v.tag == GRAV_ANY_NULL) { *out = 0; return 1; }\n"
+                       "    if (v.tag != GRAV_ANY_OBJ) return 0;\n"
+                       "    if (grav_is_instance(v.v.p, &" + m + "_typeinfo)) { *out = (" + st + "*)grav_retain(v.v.p); return 1; }\n"
+                       "    if (!grav_is_instance(v.v.p, &" + mangle(src) + "_typeinfo)) return 0;\n"
+                       "    " + ss + "* src_ = (" + ss + "*)v.v.p;\n"
+                       "    " + st + "* a_ = " + ctorCName(fq) + "();\n";
+    if (kind == 1) {
+        body += "    for (int i_ = 0; i_ < src_->" + memberCName("len") + "; i_++) {\n"
+                "        GravAny v = src_->" + memberCName("data") + "[i_];\n"
+                "        " + ce + " it_; memset(&it_, 0, sizeof it_);\n"
+                "        " + conv + "\n"
+                "        " + methodCName(fq, "push") + "(a_, it_);\n"
+                "    }\n";
+    } else {
+        const std::string ks = structName("std.collections.Array$string");
+        body += "    " + ks + "* ks_ = " + methodCName(src, "keys") + "(src_);\n"
+                "    for (int i_ = 0; i_ < ks_->" + memberCName("len") + "; i_++) {\n"
+                "        const char* k_ = ks_->" + memberCName("data") + "[i_];\n"
+                "        GravAny v = " + methodCName(src, "get") + "(src_, k_);\n"
+                "        " + ce + " it_; memset(&it_, 0, sizeof it_);\n"
+                "        " + conv + "\n"
+                "        " + methodCName(fq, "put") + "(a_, k_, it_);\n"
+                "        grav_any_release(v);\n"
+                "    }\n"
+                "    grav_release(ks_);\n";
+    }
+    body += "    *out = a_;\n    return 1;\n}\n";
+    rfDefs_ += body;
+    rfFrom_[fq] = fn;
+    return fn;
+}
+
+void CodeGen::emitCollectionItems(const std::vector<std::string> &classes) {
+    const std::string anyList = "std.collections.Array$any", anyMap = "std.collections.HashMap$string$any";
+    std::string table;
+    // (only when the program asks: a reader per Array and map instance costs code)
+    if (rfItemsUsed_ && reg_->cls(anyList) && reg_->cls(anyMap)) {
+        const std::string al = structName(anyList), am = structName(anyMap), ks = structName("std.collections.Array$string");
+        for (const auto &fq : classes) {
+            TypeRef elem;
+            int kind = rfCollection(fq, &elem);
+            if (!kind || fq == anyList || fq == anyMap) continue;
+            // Items an `any` can hold: numbers, bools, strings, objects, enums and their T?.
+            const TypeRef &base = elem.isNullable() && elem.elem ? *elem.elem : elem;
+            bool boxable = base.kind == TypeRef::Kind::Int || base.kind == TypeRef::Kind::Float || base.kind == TypeRef::Kind::Bool ||
+                           base.kind == TypeRef::Kind::String || (!elem.isNullable() && base.kind == TypeRef::Kind::Any) ||
+                           (base.isNamed() && (reg_->isEnum(base.name) ||
+                                               (!elem.isNullable() && (reg_->isClass(base.name) || reg_->isInterface(base.name)))));
+            if (!boxable) continue;
+            const std::string st = structName(fq), fn = mangle(fq) + "__rf_items";
+            std::string body = "static int " + fn + "(void* o, GravAny* out) {\n    " + st + "* c_ = (" + st + "*)o;\n";
+            if (kind == 1) {
+                body += "    " + al + "* r_ = " + ctorCName(anyList) + "();\n"
+                        "    for (int i_ = 0; i_ < c_->" + memberCName("len") + "; i_++) " + methodCName(anyList, "push") + "(r_, " +
+                        boxAnyC("c_->" + memberCName("data") + "[i_]", elem) + ");\n";
+            } else {
+                body += "    " + am + "* r_ = " + ctorCName(anyMap) + "();\n"
+                        "    " + ks + "* ks_ = " + methodCName(fq, "keys") + "(c_);\n"
+                        "    for (int i_ = 0; i_ < ks_->" + memberCName("len") + "; i_++) {\n"
+                        "        const char* k_ = ks_->" + memberCName("data") + "[i_];\n"
+                        "        " + cTy(elem) + " x_ = " + methodCName(fq, "get") + "(c_, k_);\n"
+                        "        " + methodCName(anyMap, "put") + "(r_, k_, " + boxAnyC("x_", elem) + ");\n"
+                        "        " + releaseOf(elem, "x_") + "\n"
+                        "    }\n"
+                        "    grav_release(ks_);\n";
+            }
+            body += "    *out = grav_any_obj(r_);\n    return " + std::to_string(kind) + ";\n}\n";
+            rfDefs_ += body;
+            vtables_ += "static int " + fn + "(void* o, GravAny* out);\n";
+            table += "{ &" + mangle(fq) + "_typeinfo, " + fn + " }, ";
+        }
+    }
+    vtables_ += "static const struct GravRfItems { const GravTypeInfo* t; int (*items)(void*, GravAny*); } grav_rf_items_[] = { " +
+                table + "{ 0, 0 } };\n"
+                "static int grav_rf_items(GravAny v, GravAny* out) {\n"
+                "    if (v.tag != GRAV_ANY_OBJ || !v.v.p) return 0;\n"
+                "    const GravTypeInfo* t = ((const struct GravObject*)v.v.p)->__type;\n"
+                "    for (const struct GravRfItems* e = grav_rf_items_; e->t; e++) if (e->t == t) return e->items(v.v.p, out);\n"
+                "    return 0;\n"
+                "}\n";
+}
+
+std::string CodeGen::rfConvert(const TypeRef &k, const std::string &dst, const std::string &fail, bool own) {
     switch (k.kind) {
         case TypeRef::Kind::Int: {
             int bits = k.bits ? k.bits : 32;
@@ -707,6 +835,14 @@ std::string CodeGen::rfConvert(const TypeRef &k, const std::string &dst, const s
     if (k.isNamed() && reg_->isEnum(k.name))
         return "if (!((v.tag == GRAV_ANY_ENUM && v.tname && strcmp(v.tname, \"" + k.name + "\") == 0) || v.tag == GRAV_ANY_INT)) " + fail +
                " " + dst + " = (" + cTy(k) + ")v.v.i;";
+    // A list or map: the collection, or one made from an Array<any> / HashMap<string, any>
+    // (kept until the caller's statement ends).
+    if (!own && k.isNamed() && reg_->isClass(k.name)) {
+        std::string from = rfCollectionFrom(k.name);
+        if (!from.empty())
+            return "{ " + cTy(k) + " c_; if (!" + from + "(v, &c_)) " + fail + " " + dst + " = (" + cTy(k) +
+                   ")grav_autorelease((void*)c_); }";
+    }
     if (!own && k.isNamed() && reg_->isClass(k.name))
         return "if (v.tag != GRAV_ANY_NULL && (v.tag != GRAV_ANY_OBJ || !grav_is_instance(v.v.p, &" + mangle(k.name) + "_typeinfo))) " +
                fail + " " + dst + " = v.tag == GRAV_ANY_OBJ ? (" + cTy(k) + ")v.v.p : 0;";
@@ -793,6 +929,9 @@ std::string CodeGen::emitReflection(const std::string &fq) {
         std::string body;
         if (t.kind == TypeRef::Kind::Any) {
             body = "{ GravAny old_ = " + slot + "; " + slot + " = grav_any_retain(v); grav_any_release(old_); }";
+        } else if (cls && !f.isWeak && !rfCollectionFrom(t.name).empty()) {
+            body = "{ " + cTy(t) + " new_; if (!" + rfCollectionFrom(t.name) + "(v, &new_)) return 0; { " + cTy(t) + " old_ = " +
+                   slot + "; " + slot + " = new_; grav_release((void*)old_); } }";
         } else if (cls) {
             std::string ret = f.isWeak ? "grav_weak_retain" : "grav_retain", rel = f.isWeak ? "grav_weak_release" : "grav_release";
             body = "if (v.tag != GRAV_ANY_NULL && (v.tag != GRAV_ANY_OBJ || !grav_is_instance(v.v.p, &" + mangle(t.name) +

@@ -1078,6 +1078,9 @@ typedef struct GravClassMeta {
 } GravClassMeta;
 /* Every class with reflection (generated after the descriptors), null-terminated. */
 static GRAV_UNUSED const GravTypeInfo* const* grav_rf_all_types(void);
+/* A list or string-keyed map's items as an Array<any> / HashMap<string, any> in
+   *out (owned): 1 a list, 2 a map, 0 neither (ClassInfo.listItems, mapEntries). */
+static GRAV_UNUSED int grav_rf_items(GravAny v, GravAny* out);
 /* The reflected class named `name`: its fully-qualified name, or its bare name
    when exactly one reflected class has it; 0 when none (or the bare name is
    ambiguous: *ambiguous is set). */

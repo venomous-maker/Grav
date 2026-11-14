@@ -16,7 +16,9 @@
 // or parameter's type when they fit: a whole number into any integer type in
 // range (from an integer, a bool, a float without a fraction or a string such as
 // "42"), a number or numeric string into a float, a bool, 0/1 or
-// "true"/"false"/"t"/"f"/"yes"/"no" into a bool. Anything else is a ValueError.
+// "true"/"false"/"t"/"f"/"yes"/"no" into a bool, an Array<any> into any list
+// type (an Array<User>, each item converted the same way) and a HashMap<string,
+// any> into any map with string keys. Anything else is a ValueError.
 //
 // A class has fields, methods and decorators here when its hierarchy (its root
 // class and everything under it) has a decorator anywhere, or reflect(...) names
@@ -24,6 +26,7 @@
 // A ClassInfo is made once per class and shared, so looking one up is cheap.
 import "exception.grav"
 import "../collections/array.grav"
+import "../collections/hashmap.grav"
 import "../text/string.grav"
 
 namespace std.core {
@@ -488,6 +491,25 @@ namespace std.core {
         static fn of(value: any) -> ClassInfo {
             if (!(%{ value.tag == GRAV_ANY_OBJ %} as bool)) { return null; }
             return ClassInfo.__fromType(%{ (unsigned char*)((struct GravObject*)value.v.p)->__type %} as byte*);
+        }
+        // The items of `value` when it is a list of any element type (an
+        // Array<User> or Array<int>) as `any`s, for code that does not know the
+        // type: a serializer walking an object's fields. Null when it is not a list.
+        // (Going the other way, FieldInfo.set and invoke take an Array<any> for an
+        // Array<User> and convert each item.)
+        static fn listItems(value: any) -> Array<any> {
+            if (value is Array<any>) { return value as Array<any>; }
+            let out: any = null;
+            let kind = %{ grav_rf_items(value, &out) %} as int;
+            return kind == 1 ? out as Array<any> : null;
+        }
+        // The entries of `value` when it is a map with string keys (a
+        // HashMap<string, User>), as `any`s; null when it is not one.
+        static fn mapEntries(value: any) -> HashMap<string, any> {
+            if (value is HashMap<string, any>) { return value as HashMap<string, any>; }
+            let out: any = null;
+            let kind = %{ grav_rf_items(value, &out) %} as int;
+            return kind == 2 ? out as HashMap<string, any> : null;
         }
 
         // The name without its namespace ("User").

@@ -1,4 +1,4 @@
-running 8 tests
+running 10 tests
   ok    decorators and fields of a class hierarchy
   ok    reading and writing fields through any
   ok    ClassInfo.of, identity and classes without metadata
@@ -7,4 +7,6 @@ running 8 tests
   ok    ClassInfo.forName finds reflected classes by name, all() lists them
   ok    reflection passes interface arguments to constructors and methods
   ok    a constructor whose parameters all have literal defaults takes no arguments by reflection
-result: 8 passed, 0 failed
+  ok    a list or map of any type takes an Array<any> or HashMap<string, any>, item by item
+  ok    listItems and mapEntries read a list or map of any type as anys
+result: 10 passed, 0 failed

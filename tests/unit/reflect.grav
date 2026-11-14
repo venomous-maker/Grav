@@ -211,3 +211,45 @@ test "a constructor whose parameters all have literal defaults takes no argument
     assertEq((ci.create(["bob", 1, 5, false, 0.5, null]) as Defaults).who, "bob")    // all of them, as before
     assertEq(ClassInfo.forName("NotLiteral").canCreate(), false)                      // (only literal defaults)
 }
+
+@Made class Contact { public email: string = ""  constructor(email: string = "") { self.email = email } }
+@Made class Envelope {
+    public to: Array<Contact> = new Array<Contact>()
+    public counts: Array<int> = new Array<int>()
+    public byName: HashMap<string, Contact> = new HashMap<string, Contact>()
+    public rows: Array<Array<string>> = new Array<Array<string>>()
+    constructor() {}
+    fn count(list: Array<Contact>) -> int { return list.size() }
+}
+
+test "a list or map of any type takes an Array<any> or HashMap<string, any>, item by item" {
+    let env = new Envelope()
+    let info = ClassInfo.of(env)
+    let people: Array<any> = [new Contact("a@x") as any, new Contact("b@x") as any]
+    info.field("to").set(env, people)
+    assertEq("${env.to.size()} " + env.to[1].email, "2 b@x")
+    info.field("counts").set(env, [1 as any, 2.0 as any, "3" as any])           // (each converted as a field would be)
+    assertEq(env.counts.toString(), "[1, 2, 3]")
+    let m = new HashMap<string, any>()
+    m.put("ada", new Contact("ada@x"))
+    info.field("byName").set(env, m)
+    assertEq(env.byName.get("ada").email, "ada@x")
+    info.field("rows").set(env, [["x" as any, "y" as any] as any, new Array<any>() as any])
+    assertEq(env.rows.toString(), "[[\"x\", \"y\"], []]")
+    assertEq(info.invoke(env, "count", [people as any]) as int, 2)
+    let msg = ""
+    try { info.field("to").set(env, [42 as any]) } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg != "" && env.to.size() == 2, true)                                // (refused whole: nothing changed)
+}
+
+test "listItems and mapEntries read a list or map of any type as anys" {
+    let env = new Envelope()
+    env.to.push(new Contact("a@x"))
+    env.counts.push(7)
+    env.byName.put("ada", new Contact("ada@x"))
+    let items = ClassInfo.listItems(reflect(Envelope).field("to").get(env))
+    assertEq((items[0] as Contact).email, "a@x")
+    assertEq(ClassInfo.listItems(env.counts)[0] as int, 7)
+    assertEq((ClassInfo.mapEntries(env.byName).get("ada") as Contact).email, "ada@x")
+    assertEq(ClassInfo.listItems("text") == null && ClassInfo.mapEntries(env.to) == null, true)
+}

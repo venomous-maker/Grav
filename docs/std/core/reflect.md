@@ -274,6 +274,8 @@ What a class is at run time: reflect(User), or ClassInfo.of(anObject).
 - `static fn all() -> Array<ClassInfo>` — Every class with reflection (see forName), in declaration order; with a base, only the ones that are it or extend it (concrete or not).
 - `static fn all(base: ClassInfo) -> Array<ClassInfo>`
 - `static fn of(value: any) -> ClassInfo`
+- `static fn listItems(value: any) -> Array<any>` — The items of `value` when it is a list of any element type (an Array<User> or Array<int>) as `any`s, for code that does not know the type: a serializer walking an object's fields. Null when it is not a list. (Going the other way, FieldInfo.set and invoke take an Array<any> for an Array<User> and convert each item.)
+- `static fn mapEntries(value: any) -> HashMap<string, any>` — The entries of `value` when it is a map with string keys (a HashMap<string, User>), as `any`s; null when it is not one.
 
 **Fields**
 

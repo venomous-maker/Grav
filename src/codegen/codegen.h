@@ -115,10 +115,22 @@ private:
     // field writes and calls), running `fail` when it does not fit; `own`: the
     // destination keeps it (retained) rather than borrowing it. Empty when `k`
     // cannot come from an any.
-    std::string rfConvert(const TypeRef &k, const std::string &dst, const std::string &fail, bool own) const;
+    std::string rfConvert(const TypeRef &k, const std::string &dst, const std::string &fail, bool own);
+    // A list or map reflection takes and gives item by item: 1 for an Array<E>,
+    // 2 for a HashMap<string, E> (E in *elem), 0 for any other class.
+    int rfCollection(const std::string &fq, TypeRef *elem) const;
+    // The C function `int f(GravAny v, T** out)` taking an `any` into collection
+    // `fq` (owned): the collection itself, or a copy of an Array<any> /
+    // HashMap<string, any> with each item converted; "" when there is none.
+    std::string rfCollectionFrom(const std::string &fq);
+    std::map<std::string, std::string> rfFrom_;
+    // Whether ClassInfo.listItems / mapEntries see a collection's items as `any`s
+    // (`grav_rf_items`): each Array and HashMap<string, _> gets a reader for them.
+    void emitCollectionItems(const std::vector<std::string> &classes);
     bool reflected(const std::string &fq) const;
     mutable std::set<std::string> reflectRoots_;
     mutable bool reflectScanned_ = false;
+    mutable bool rfItemsUsed_ = false;
     void emitInterfaceTables();   // itable types + per-class instances
     // C type spelling, interface-aware (interfaces become a fat pointer struct).
     std::string cTy(const TypeRef &t) const;
