@@ -26,6 +26,38 @@ namespace std.sys {
         }
         b[n] = 0; *code = grav_exit_code(pclose(p)); return b;
     }
+    #include <signal.h>
+    #include <string.h>
+    #include <sys/resource.h>
+    /* The last trapped signal, until signalReceived() takes it (async-signal-safe: one store). */
+    static volatile sig_atomic_t grav_pending_signal = 0;
+    static void grav_on_signal(int sig) { grav_pending_signal = sig; }
+    static void grav_trap_signal(int sig) {
+        struct sigaction sa; memset(&sa, 0, sizeof sa);
+        sa.sa_handler = grav_on_signal; sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sigaction(sig, &sa, 0);
+    }
+    /* Resident memory in bytes (Linux /proc/self/statm), else the peak from getrusage. */
+    static long long grav_memory_rss(void) {
+        FILE* f = fopen("/proc/self/statm", "r");
+        if (f) {
+            long long size = 0, resident = 0;
+            int ok = fscanf(f, "%lld %lld", &size, &resident) == 2;
+            fclose(f);
+            if (ok) return resident * (long long)sysconf(_SC_PAGESIZE);
+        }
+        struct rusage u; getrusage(RUSAGE_SELF, &u);
+        return (long long)u.ru_maxrss * 1024LL;
+    }
+    static long long grav_memory_peak(void) {
+        struct rusage u; getrusage(RUSAGE_SELF, &u);
+    #ifdef __APPLE__
+        return (long long)u.ru_maxrss;
+    #else
+        return (long long)u.ru_maxrss * 1024LL;
+    #endif
+    }
     %}
 
     // The result of Process.run: the exit code and everything the command printed.
@@ -60,6 +92,33 @@ namespace std.sys {
         static fn sleepMs(ms: int) { %{ usleep((unsigned)ms * 1000); %}; }
         // Ends the program with an exit status.
         static fn exit(code: int) { exit(code); }
+
+        // ── signals and memory (for long-running workers) ───────────────────────
+        // The usual signal numbers.
+        static fn SIGHUP() -> int { return 1; }
+        static fn SIGINT() -> int { return 2; }
+        static fn SIGQUIT() -> int { return 3; }
+        static fn SIGUSR1() -> int { return %{ SIGUSR1 %} as int; }
+        static fn SIGUSR2() -> int { return %{ SIGUSR2 %} as int; }
+        static fn SIGTERM() -> int { return 15; }
+        // Catches these signals instead of letting them end the program: the
+        // program asks signalReceived() between units of work (a queue worker
+        // finishing its job before stopping on SIGTERM, say).
+        static fn trapSignals(signals: Array<int>) { for (s in signals) { %{ grav_trap_signal(s); %}; } }
+        // Lets a signal do what it does by default again.
+        static fn untrapSignal(sig: int) { %{ signal(sig, SIG_DFL); %}; }
+        // The last trapped signal received since the previous call (0: none); taking it clears it.
+        static fn signalReceived() -> int {
+            let s = %{ (int)grav_pending_signal %} as int;
+            %{ grav_pending_signal = 0; %};
+            return s;
+        }
+        // Sends `sig` to process `pid` (to itself: Process.pid()); whether it went.
+        static fn kill(pid: int, sig: int) -> bool { return %{ kill(pid, sig) == 0 %} as bool; }
+        // The memory this process holds now (resident set), in bytes.
+        static fn memoryUsage() -> long { return %{ grav_memory_rss() %} as long; }
+        // The most it has held at once, in bytes.
+        static fn peakMemoryUsage() -> long { return %{ grav_memory_peak() %} as long; }
     }
 
 }

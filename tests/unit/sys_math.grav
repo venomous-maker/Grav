@@ -114,6 +114,17 @@ test "logging to a file" {
     new File(p).delete()
 }
 
+test "trapped signals and memory usage" {
+    Process.trapSignals([Process.SIGUSR1(), Process.SIGUSR2()])
+    assertEq(Process.signalReceived(), 0)
+    assertEq(Process.kill(Process.pid(), Process.SIGUSR2()), true)
+    assertEq(Process.signalReceived() == Process.SIGUSR2(), true)
+    assertEq(Process.signalReceived(), 0)                                // taken once
+    Process.untrapSignal(Process.SIGUSR1())
+    Process.untrapSignal(Process.SIGUSR2())
+    assertEq(Process.memoryUsage() > 0 && Process.peakMemoryUsage() > 0, true)
+}
+
 test "command-line arguments" {
     let cli = new Args("resize", "Resize images.")
         .flag("verbose", "v", "print each file")

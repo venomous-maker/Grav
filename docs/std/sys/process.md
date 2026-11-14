@@ -69,5 +69,17 @@ The result of Process.run: the exit code and everything the command printed.
 - `static fn args() -> Array<string>` — The program's command-line arguments (without the program name).
 - `static fn sleepMs(ms: int)` — Pauses for `ms` milliseconds.
 - `static fn exit(code: int)` — Ends the program with an exit status.
+- `static fn SIGHUP() -> int` — The usual signal numbers.
+- `static fn SIGINT() -> int`
+- `static fn SIGQUIT() -> int`
+- `static fn SIGUSR1() -> int`
+- `static fn SIGUSR2() -> int`
+- `static fn SIGTERM() -> int`
+- `static fn trapSignals(signals: Array<int>)` — Catches these signals instead of letting them end the program: the program asks signalReceived() between units of work (a queue worker finishing its job before stopping on SIGTERM, say).
+- `static fn untrapSignal(sig: int)` — Lets a signal do what it does by default again.
+- `static fn signalReceived() -> int` — The last trapped signal received since the previous call (0: none); taking it clears it.
+- `static fn kill(pid: int, sig: int) -> bool` — Sends `sig` to process `pid` (to itself: Process.pid()); whether it went.
+- `static fn memoryUsage() -> long` — The memory this process holds now (resident set), in bytes.
+- `static fn peakMemoryUsage() -> long` — The most it has held at once, in bytes.
 
 <!-- api:end -->

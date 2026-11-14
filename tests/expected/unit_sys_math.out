@@ -1,10 +1,11 @@
-running 8 tests
+running 9 tests
   ok    Math extras
   ok    Stats
   ok    Array, HashMap, Map and SortedMap helpers
   ok    folders, FileReader and FileWriter
   ok    Duration and DateTime
   ok    logging to a file
+  ok    trapped signals and memory usage
   ok    command-line arguments
   ok    DateTime to the microsecond, with zones
-result: 8 passed, 0 failed
+result: 9 passed, 0 failed
