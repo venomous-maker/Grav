@@ -82,6 +82,15 @@ cp grav.toml grav.toml.bak && printf 'colors = { path = "%s/colors-dev" }\n' "$T
 "$GRAV" install >/dev/null 2>&1 || fail "install with a local override"
 [ "$("$GRAV" run 2>/dev/null)" = "[8]" ] || fail "the project's own package replaces a dependency's"
 mv grav.toml.bak grav.toml
+# Two dependencies declaring the same package, one as a local path and one from
+# git: the program gets one copy (the local one), not two.
+mkdir -p "$T/paint/src" && printf 'name = "paint"\nlib = "src/paint.grav"\n\n[dependencies]\ncolors = { path = "%s/colors-dev" }\n' "$T" > "$T/paint/grav.toml" &&
+  printf 'import "colors"\nfn paint(s: string) -> string { return red(s) }\n' > "$T/paint/src/paint.grav"
+cp grav.toml grav.toml.bak && printf 'paint = { path = "%s/paint" }\n' "$T" >> grav.toml
+printf 'import "shapes"\nimport "paint"\nfn main() { print(square(3) + paint("x")) }\n' > src/main.grav
+[ "$("$GRAV" run 2>/dev/null)" = "[6][x]" ] || fail "a package declared twice in the graph is loaded once (the local copy)"
+mv grav.toml.bak grav.toml
+printf 'import "shapes"\nfn main() { print(square(4)) }\n' > src/main.grav
 mv "$T/shapes" "$T/shapes-moved"
 "$GRAV" run 2>&1 | grep -q "local package 'shapes': no directory" || fail "a missing local package is named"
 echo "packages: ok"

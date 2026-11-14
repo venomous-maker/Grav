@@ -91,6 +91,12 @@ private:
                                   std::vector<std::string> &tried);
     // The project (or package) a directory belongs to, cached.
     const ProjectConfig &projectOf(const std::filesystem::path &dir);
+    // One copy of each package for the whole program: the directory chosen for
+    // a package name (the program's own declaration, else a local path anywhere
+    // in the graph, else the first one found), worked out once.
+    const std::map<std::string, std::filesystem::path> &chosenPackages();
+    std::map<std::string, std::filesystem::path> chosen_;
+    bool chosenReady_ = false;
 
     // What the loader learned about each file: the namespaces it opens, the
     // names it declares (name -> namespace), and the files it imports.

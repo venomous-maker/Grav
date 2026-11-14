@@ -228,6 +228,35 @@ const ProjectConfig &ModuleLoader::projectOf(const fs::path &dir) {
     return projects_.back().second;
 }
 
+// Walks the dependency graph from the program's project once: for each
+// package name, the copy the whole program uses.
+const std::map<std::string, fs::path> &ModuleLoader::chosenPackages() {
+    if (chosenReady_) return chosen_;
+    chosenReady_ = true;
+    std::map<std::string, int> rank;                        // 0 the program's own, 1 local, 2 remote
+    std::set<std::string> walked;
+    std::vector<std::pair<ProjectConfig, int>> todo{{project_, 0}};
+    std::error_code ec;
+    while (!todo.empty()) {
+        auto [proj, depth] = todo.back();
+        todo.pop_back();
+        for (const auto &dep : proj.deps) {
+            fs::path dir = installedPackage(proj, dep);
+            if (dir.empty()) continue;
+            dir = fs::weakly_canonical(dir, ec);
+            int r = depth == 0 ? 0 : (dep.local ? 1 : 2);
+            auto it = rank.find(dep.name);
+            if (it == rank.end() || r < it->second) { rank[dep.name] = r; chosen_[dep.name] = dir; }
+            if (walked.insert(dir.string()).second) {
+                std::string err;
+                ProjectConfig sub = findProject(dir, err);
+                if (sub.found && fs::weakly_canonical(sub.root, ec) == dir) todo.push_back({sub, depth + 1});
+            }
+        }
+    }
+    return chosen_;
+}
+
 // The entry file of an installed package: its grav.toml `lib`, else a
 // conventional name.
 static fs::path packageEntry(const fs::path &root, const std::string &name) {
@@ -266,13 +295,22 @@ fs::path ModuleLoader::resolve(const std::string &spec, const fs::path &fromDir,
     }
     if (fs::path p = attempt(fromDir / sp); !p.empty()) return p;
     // A dependency of the project this file belongs to: "name" or "name/sub/file".
-    // One the program's own project declares wins over a package's declaration
-    // of the same name, so the whole program uses one copy (a local checkout
-    // of a package replaces the one its dependents would fetch).
+    // The whole program uses one copy of each package (see chosenPackages()):
+    // a local checkout replaces the one its dependents would fetch.
     std::string head = spec.substr(0, spec.find('/'));
-    bool rootHas = false;
-    for (const auto &dep : project_.deps) if (dep.name == head) rootHas = true;
-    const ProjectConfig &owner = rootHas ? project_ : projectOf(fromDir);
+    const ProjectConfig &owner = projectOf(fromDir);
+    bool declared = false;
+    for (const auto &dep : owner.deps) if (dep.name == head) declared = true;
+    if (declared) {
+        const auto &chosen = chosenPackages();
+        if (auto it = chosen.find(head); it != chosen.end() && !it->second.empty()) {
+            fs::path root = it->second;
+            std::string r = root.string();
+            if (std::find(packageRoots_.begin(), packageRoots_.end(), r) == packageRoots_.end()) packageRoots_.push_back(r);
+            if (spec == head) return attempt(packageEntry(root, head));
+            return attempt(root / spec.substr(head.size() + 1));
+        }
+    }
     for (const auto &dep : owner.deps) {
         if (dep.name != head) continue;
         fs::path root = installedPackage(owner, dep);
