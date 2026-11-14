@@ -266,8 +266,13 @@ fs::path ModuleLoader::resolve(const std::string &spec, const fs::path &fromDir,
     }
     if (fs::path p = attempt(fromDir / sp); !p.empty()) return p;
     // A dependency of the project this file belongs to: "name" or "name/sub/file".
-    const ProjectConfig &owner = projectOf(fromDir);
+    // One the program's own project declares wins over a package's declaration
+    // of the same name, so the whole program uses one copy (a local checkout
+    // of a package replaces the one its dependents would fetch).
     std::string head = spec.substr(0, spec.find('/'));
+    bool rootHas = false;
+    for (const auto &dep : project_.deps) if (dep.name == head) rootHas = true;
+    const ProjectConfig &owner = rootHas ? project_ : projectOf(fromDir);
     for (const auto &dep : owner.deps) {
         if (dep.name != head) continue;
         fs::path root = installedPackage(owner, dep);

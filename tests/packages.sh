@@ -75,6 +75,13 @@ fi
 sed -i 's/n \* n/n + n/' "$T/shapes/src/shapes.grav"
 [ "$("$GRAV" run 2>/dev/null)" = "<8>" ] || fail "an edit to a local package shows without reinstalling"
 "$GRAV" packages 2>/dev/null | grep -q "shapes  path ../shapes  (local)" || fail "grav packages lists the local package"
+# The program's own declaration of a package wins over a package's: a local
+# checkout of colors replaces the git one shapes asks for (one copy for all).
+mkdir -p "$T/colors-dev" && printf 'fn red(s: string) -> string { return "[" + s + "]" }\n' > "$T/colors-dev/lib.grav"
+cp grav.toml grav.toml.bak && printf 'colors = { path = "%s/colors-dev" }\n' "$T" >> grav.toml
+"$GRAV" install >/dev/null 2>&1 || fail "install with a local override"
+[ "$("$GRAV" run 2>/dev/null)" = "[8]" ] || fail "the project's own package replaces a dependency's"
+mv grav.toml.bak grav.toml
 mv "$T/shapes" "$T/shapes-moved"
 "$GRAV" run 2>&1 | grep -q "local package 'shapes': no directory" || fail "a missing local package is named"
 echo "packages: ok"

@@ -225,6 +225,15 @@ ProjectConfig requireProject(bool create, std::string &err) {
     return findProject(fs::current_path(), err);
 }
 
+// The project being installed: a package it declares itself is the one the
+// whole graph uses, so a package's own declaration of it is not fetched.
+static const ProjectConfig *installRoot = nullptr;
+static bool rootDeclares(const ProjectConfig &owner, const std::string &name) {
+    if (!installRoot || &owner == installRoot) return false;
+    for (const auto &d : installRoot->deps) if (d.name == name) return true;
+    return false;
+}
+
 // Install one dependency (and, recursively, the dependencies of the package).
 bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLock,
                 std::vector<std::pair<std::string, LockEntry>> &lock, std::set<std::string> &seen,
@@ -243,7 +252,7 @@ bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLoc
         ProjectConfig sub = findProject(dir, e2);
         if (sub.found && fs::weakly_canonical(sub.root) == fs::weakly_canonical(dir))
             for (const auto &d : sub.deps)
-                if (!installDep(sub, d, true, lock, seen, err)) return false;
+                if (!rootDeclares(sub, d.name) && !installDep(sub, d, true, lock, seen, err)) return false;
         return true;
     }
     if (seen.count(dep.source)) return true;
@@ -264,7 +273,7 @@ bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLoc
     ProjectConfig sub = findProject(dir, e2);
     if (sub.found && fs::weakly_canonical(sub.root) == fs::weakly_canonical(dir))
         for (const auto &d : sub.deps)
-            if (!installDep(sub, d, true, lock, seen, err)) return false;
+            if (!rootDeclares(sub, d.name) && !installDep(sub, d, true, lock, seen, err)) return false;
     return true;
 }
 
@@ -371,6 +380,7 @@ int runPackageCommand(const std::vector<std::string> &args) {
     if (!project.found) { std::cerr << "grav: no grav.toml here or in a parent directory (create one with `grav new` or `grav add`)\n"; return 1; }
 
     if (cmd == "install" || cmd == "update") {
+        installRoot = &project;
         auto lock = project.lock;
         std::set<std::string> seen;
         bool any = false;
