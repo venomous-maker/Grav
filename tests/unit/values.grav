@@ -113,4 +113,7 @@ test "map and list literals take their types from where they go" {
     assertEq(plain["b"] + 1, 3)
     let fixed = [1, 2, 3]                                            // still a fixed array
     assertEq(fixed.length, 3)
+    let held = keepAny({"name": "Ada", "roles": ["admin", "dev"]}) as HashMap<string, any>   // a {...} passed as any
+    assertEq((held["roles"] as Array<any>)[1] as string, "dev")
 }
+fn keepAny(v: any) -> any { return v }

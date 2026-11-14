@@ -235,6 +235,16 @@ std::optional<TypeRef> TypeChecker::recordInference(int line, int col, const std
 std::optional<TypeRef> TypeChecker::tryInferCall(CallExpr &e, const std::string &name,
                                                  const std::vector<GenericSig> &sigs,
                                                  const TypeRef *expected) {
+    // A string-keyed {...} held as `any` (an argument of type any, say) is a
+    // HashMap<string, any>, so its nested values ([...], {...}) are typed too.
+    TypeRef asMap;
+    if (expected && expected->isAny() && stringKeyedMapLiteral(e)) {
+        TypeRef m = TypeRef::named("std.collections.HashMap");
+        m.args.push_back(TypeRef::prim(TypeRef::Kind::String));
+        m.args.push_back(TypeRef::prim(TypeRef::Kind::Any));
+        asMap = toCanonical(m);
+        expected = &asMap;
+    }
     std::vector<ParamList> pls;
     for (const auto &sig : sigs) pls.push_back(paramList(sig));
     if (completeArgs(e.args, pls, e.line, e.col, "'" + name + "'") == -2) return TypeRef::prim(TypeRef::Kind::Error);
