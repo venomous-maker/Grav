@@ -77,6 +77,8 @@ test "folders, FileReader and FileWriter" {
     w.close()
     assertEq(new File(Path.combine(root, "out.txt")).read(), "hello\nworld")
     assertEq(Path.matches("app.grav", "*.gr?v"), true)
+    assertEq(Path.realPath(Path.combine(root, "a/b/../x.grav")), Path.combine(Path.realPath(root), "a/x.grav"))
+    assertEq(Path.realPath(Path.combine(root, "missing")), "")
     assertEq(Dir.removeAll(root), true)
     assertEq(Dir.exists(root), false)
 }

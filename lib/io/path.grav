@@ -11,6 +11,16 @@ namespace std.io {
 
     %{ #include <fnmatch.h> %}
 
+    %{
+    #include <limits.h>
+    #include <stdlib.h>
+    static const char* grav_path_real(const char* p) {
+        char buf[PATH_MAX];
+        if (!realpath(p, buf)) return "";
+        char* out = grav_str_alloc(strlen(buf) + 1); strcpy(out, buf); return out;
+    }
+    %}
+
     class Path {
         private static fn lastIndex(s: string, ch: int) -> int { return %{ grav_path_last(s, ch) %} as int; }
 
@@ -85,6 +95,9 @@ namespace std.io {
             if (abs) { return "/" + body; }
             return Str.isEmpty(body) ? "." : body;
         }
+        // The absolute path with every symbolic link, "." and ".." resolved
+        // ("/etc/localtime" -> "/usr/share/zoneinfo/Africa/Nairobi"); "" when it does not exist.
+        static fn realPath(path: string) -> string { return %{ grav_path_real(path) %} as string; }
         // Whether `name` matches a glob pattern: * any text, ? one character, [abc] one of
         // the listed characters: Path.matches("app.grav", "*.grav").
         static fn matches(name: string, pattern: string) -> bool {
