@@ -115,5 +115,12 @@ test "map and list literals take their types from where they go" {
     assertEq(fixed.length, 3)
     let held = keepAny({"name": "Ada", "roles": ["admin", "dev"]}) as HashMap<string, any>   // a {...} passed as any
     assertEq((held["roles"] as Array<any>)[1] as string, "dev")
+    let box = new MetaBox()
+    box.meta = {"plan": "pro", "seats": 5, "nested": {"on": true}}     // assigned to a typed field
+    assertEq("${box.meta["plan"]} ${box.meta["seats"]} ${(box.meta["nested"] as HashMap<string, any>)["on"]}", "pro 5 true")
+    let later: HashMap<string, any> = new HashMap<string, any>()
+    later = {"x": 1, "y": "two"}                                       // and to a typed variable
+    assertEq(later["y"] as string, "two")
 }
+class MetaBox { public meta: HashMap<string, any> = new HashMap<string, any>()  constructor() {} }
 fn keepAny(v: any) -> any { return v }
