@@ -194,3 +194,20 @@ test "reflection passes interface arguments to constructors and methods" {
     try { info.create([new NotASink() as any]) } catch (e: ValueError) { msg = e.message() }
     assertEq(msg != "", true)
 }
+
+@Made class Defaults {
+    public who: string  public n: int  public neg: long  public on: bool  public f: double  public next: Defaults
+    constructor(who: string = "ada", n: int = 3, neg: long = -2, on: bool = true, f: double = 1.5, next: Defaults = null) {
+        self.who = who; self.n = n; self.neg = neg; self.on = on; self.f = f; self.next = next
+    }
+}
+@Made class NotLiteral { public xs: Array<int>  constructor(xs: Array<int> = new Array<int>()) { self.xs = xs } }
+
+test "a constructor whose parameters all have literal defaults takes no arguments by reflection" {
+    let ci = ClassInfo.forName("Defaults")
+    assertEq(ci.canCreate(), true)
+    let d = ci.create() as Defaults
+    assertEq("${d.who} ${d.n} ${d.neg} ${d.on} ${d.f} ${d.next == null}", "ada 3 -2 true 1.5 true")
+    assertEq((ci.create(["bob", 1, 5, false, 0.5, null]) as Defaults).who, "bob")    // all of them, as before
+    assertEq(ClassInfo.forName("NotLiteral").canCreate(), false)                      // (only literal defaults)
+}

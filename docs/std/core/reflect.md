@@ -297,7 +297,7 @@ What a class is at run time: reflect(User), or ClassInfo.of(anObject).
 - `fn method(name: string) -> MethodInfo` — The method called `name`: its own, else its base class's (the first overload; invoke picks among them). Null when there is none.
 - `fn invoke(obj: any, name: string, args: Array<any> = new Array<any>()) -> any` — Calls method `name` on `obj` with `args`: the overload (its own, else a base class's) taking that many arguments that they fit.
 - `fn constructors() -> Array<MethodInfo>` — Its constructors (none for an abstract class, or one without reflection).
-- `fn canCreate() -> bool` — Whether create can make one with no arguments.
+- `fn canCreate() -> bool` — Whether create can make one with no arguments (a constructor taking none, or one whose parameters all have literal defaults).
 - `fn create(args: Array<any> = new Array<any>()) -> any` — A new object of the class (`new C(args...)`): the constructor taking that many arguments that they fit.
 - `fn isSubclassOf(other: ClassInfo) -> bool` — Whether this class is `other` or extends it.
 - `fn isInstance(value: any) -> bool` — Whether `value` holds an object of this class (or a subclass).

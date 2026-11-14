@@ -557,7 +557,8 @@ namespace std.core {
         }
         // Its constructors (none for an abstract class, or one without reflection).
         fn constructors() -> Array<MethodInfo> { return self.ctorList; }
-        // Whether create can make one with no arguments.
+        // Whether create can make one with no arguments (a constructor taking
+        // none, or one whose parameters all have literal defaults).
         fn canCreate() -> bool {
             for (c in self.ctorList) { if (c.paramCount() == 0 && c.canInvoke()) { return true; } }
             return false;

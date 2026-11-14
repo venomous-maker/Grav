@@ -8,6 +8,22 @@
 
 namespace grav {
 
+// A parameter's default as C, when it is a literal the type takes as it is
+// (numbers, bools, text, and null for an object); "" otherwise.
+static std::string literalDefault(const Expr &e, const TypeRef &t, const std::function<std::string(const std::string &)> &esc) {
+    if (auto *i = dynamic_cast<const IntLiteralExpr *>(&e)) return t.isNullable() ? "" : i->raw;
+    if (auto *f = dynamic_cast<const FloatLiteralExpr *>(&e)) return t.isNullable() ? "" : f->raw;
+    if (auto *b = dynamic_cast<const BoolLiteralExpr *>(&e)) return t.isNullable() ? "" : (b->value ? "true" : "false");
+    if (auto *s = dynamic_cast<const StringLiteralExpr *>(&e)) return t.isNullable() ? "" : "\"" + esc(s->value) + "\"";
+    if (dynamic_cast<const NullLiteralExpr *>(&e)) return t.isNamed() || t.kind == TypeRef::Kind::String ? "0" : "";
+    // (`-1` is `0 - 1` by now)
+    if (auto *b = dynamic_cast<const BinaryExpr *>(&e))
+        if (b->op == BinaryOp::Sub && b->left && b->right)
+            if (auto *z = dynamic_cast<const IntLiteralExpr *>(b->left.get()); z && z->raw == "0")
+                if (std::string v = literalDefault(*b->right, t, esc); !v.empty() && v[0] != '"' && v != "true" && v != "false") return "(-" + v + ")";
+    return "";
+}
+
 std::string CodeGen::generate(const Program &program, const Registry &reg,
                               const std::vector<SourceMapEntry> &srcMap) {
     reg_ = &reg;
@@ -881,11 +897,33 @@ std::string CodeGen::emitReflection(const std::string &fq) {
             ++nctors;
         };
         if (ci->ctors.empty()) add({}, ctorCName(fq));
+        bool hasNoArgs = ci->ctors.empty();
         for (size_t k = 0; k < ci->ctors.size(); ++k) {
             std::vector<TypeRef> ps;
             bool ok = true;
             for (const auto &p : ci->ctors[k]->params) { if (p.variadic) ok = false; ps.push_back(p.type); }
             if (ok) add(ps, ctorCName(fq, static_cast<int>(k)));
+            if (ps.empty()) hasNoArgs = true;
+        }
+        // A constructor whose parameters all have literal defaults is also one
+        // that takes no arguments (`constructor(who: string = "", n: int = 0)`):
+        // reflection can make the object with create() alone.
+        for (size_t k = 0; k < ci->ctors.size() && !hasNoArgs; ++k) {
+            std::string vals;
+            bool ok = !ci->ctors[k]->params.empty();
+            for (const auto &p : ci->ctors[k]->params) {
+                std::string v = p.variadic || !p.defaultValue ? "" : literalDefault(*p.defaultValue, p.type, [](const std::string &x) { return escapeC(x); });
+                if (v.empty()) { ok = false; break; }
+                vals += (vals.empty() ? "" : ", ") + v;
+            }
+            if (!ok) continue;
+            std::string fname = m + "__rk" + std::to_string(counter++);
+            std::string cname = ctorCName(fq, static_cast<int>(k));
+            std::string fn = caller(fname, "", {}, TypeRef::named(fq),
+                                    [&](const std::string &) { return "(void*)" + cname + "(" + vals + ")"; });
+            ctors += (ctors.empty() ? "" : ",\n    ") + std::string("{ 0, \"\", ") + fn + " }";
+            ++nctors;
+            hasNoArgs = true;
         }
     }
     if (!ctors.empty()) vtables_ += "static const GravCtorMeta " + m + "__rctors[] = {\n    " + ctors + " };\n";
