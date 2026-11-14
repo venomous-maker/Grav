@@ -12,6 +12,24 @@ namespace std.io {
             return cols ? w.ws_col : w.ws_row;
         return cols ? 80 : 24;   /* not a terminal: a conventional default */
     }
+    #include <stdlib.h>
+    #include <termios.h>
+    #include <string.h>
+    /* A line from standard input with echo off (a password); the newline is not kept. */
+    static const char* grav_term_read_hidden(void) {
+        struct termios old, quiet;
+        int tty = isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old) == 0;
+        if (tty) { quiet = old; quiet.c_lflag &= ~(tcflag_t)ECHO; tcsetattr(STDIN_FILENO, TCSAFLUSH, &quiet); }
+        size_t cap = 128, n = 0; char* b = grav_str_alloc(cap); int c;
+        while ((c = fgetc(stdin)) != EOF && c != '\n') {
+            if (n + 1 >= cap) { cap *= 2; b = grav_str_grow(b, cap); }
+            b[n++] = (char)c;
+        }
+        if (n > 0 && b[n - 1] == '\r') n--;
+        b[n] = 0;
+        if (tty) { tcsetattr(STDIN_FILENO, TCSAFLUSH, &old); fputs("\n", stdout); }
+        return b;
+    }
     %}
     //
     //   print(Term.green("ok") + " " + Term.bold("done"))
@@ -72,6 +90,17 @@ namespace std.io {
         static fn hideCursor() { %{ fputs("\x1b[?25l", stdout); %}; }
         // Shows the cursor.
         static fn showCursor() { %{ fputs("\x1b[?25h", stdout); %}; }
+        // A line typed without showing it (a password), after `prompt`.
+        static fn readHidden(prompt: string = "") -> string {
+            %{ fputs(prompt, stdout); fflush(stdout); %};
+            return %{ grav_term_read_hidden() %} as string;
+        }
+        // Whether standard input is a terminal (someone can answer a question).
+        static fn isInteractive() -> bool { return %{ isatty(STDIN_FILENO) != 0 %} as bool; }
+        // Whether standard output is a terminal that takes colours (NO_COLOR unset, TERM not "dumb").
+        static fn supportsColor() -> bool {
+            return %{ isatty(STDOUT_FILENO) && !getenv("NO_COLOR") && !(getenv("TERM") && strcmp(getenv("TERM"), "dumb") == 0) %} as bool;
+        }
     }
 
 }

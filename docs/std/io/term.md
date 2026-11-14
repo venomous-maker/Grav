@@ -69,5 +69,8 @@ colouring output that may be piped to a file.
 - `static fn moveTo(row: int, col: int)` — Moves the cursor to row, col (1-based).
 - `static fn hideCursor()` — Hides the cursor.
 - `static fn showCursor()` — Shows the cursor.
+- `static fn readHidden(prompt: string = "") -> string` — A line typed without showing it (a password), after `prompt`.
+- `static fn isInteractive() -> bool` — Whether standard input is a terminal (someone can answer a question).
+- `static fn supportsColor() -> bool` — Whether standard output is a terminal that takes colours (NO_COLOR unset, TERM not "dumb").
 
 <!-- api:end -->
