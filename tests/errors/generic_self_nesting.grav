@@ -1,0 +1,12 @@
+// A method that would nest its class more than 3 deep is left out of that instance.
+import "std"
+class Coll<T> {
+    public items: Array<T>
+    constructor(items: Array<T>) { self.items = items }
+    fn chunk(n: int) -> Coll<Coll<T>> { return new Coll<Coll<T>>([self]) }
+}
+
+fn main() {
+    let c = new Coll<int>([1, 2, 3])
+    c.chunk(2).chunk(2).chunk(2)
+}

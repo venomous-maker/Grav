@@ -361,6 +361,20 @@ private:
     std::vector<GenericMethod> genericMethods_;
     std::vector<std::pair<std::string, std::vector<TypeRef>>> methodRequests_;
     int instanceDepth(const std::string &cls, int guard) const;
+    // A class whose method names a deeper instance of itself (Coll<T>.chunk() ->
+    // Coll<Coll<T>>) would expand without end: each instance's method makes the next.
+    // Such a method is made only in the instances the checker found calls to it on
+    // (InferenceTable::methods, the pass after), and an instance nesting itself more
+    // than kMaxSelfNesting deep is not made at all: the method that asked for it is
+    // left out of its instance (methodFrames_: the methods being copied, innermost
+    // last; refused_: the instances not made).
+    static constexpr int kMaxSelfNesting = 3;
+    struct MethodFrame { std::string tpl; bool tooDeep = false; };
+    std::vector<MethodFrame> methodFrames_;
+    std::unordered_map<std::string, bool> refused_;
+    int selfNesting(const std::string &tpl, const TypeRef &t, int guard) const;
+    bool namesDeeperSelf(const ClassDecl &tpl, const TypeRef &t) const;
+    bool refuseDeeper(const std::string &name, const std::vector<TypeRef> &args, const std::string &inst);
     std::unordered_map<std::string, bool> methodReqSeen_, methodDone_;
     void extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from, const Subst &classSubst);
     // Namespace-aware type arguments: `Array<Shape>` written inside namespace
@@ -644,6 +658,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     std::string inst = instName(name, args);
     if (rejectUnknownArgs(name, args, line, col)) return name;
     if (done_.count(inst)) return inst;
+    if (refuseDeeper(name, args, inst)) return inst;
     done_[inst] = true;
     knownTypes_[inst] = true;
     program_.generics.instances[inst] = {name, args};
@@ -735,13 +750,23 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
                 exportSig(m.typeParams, m.params, m.returnType, subst));
             continue;
         }
+        // (a method making a deeper instance of this class: only once a call needs it)
+        if (!infer_ || !infer_->methods.count(inst + "." + m.name)) {
+            bool deeper = namesDeeperSelf(*tpl, m.returnType);
+            for (const auto &p : m.params) deeper = deeper || namesDeeperSelf(*tpl, p.type);
+            if (deeper) { program_.generics.deferred.insert(inst + "." + m.name); continue; }
+        }
         NsScope own(currentNs_, at(m.ns));
         MethodDecl nm = cloneMethod(m);
+        methodFrames_.push_back({name});
         if (nm.isStatic && methodNamesSelf(nm)) bindSelf(nm, inst);   // (Self: this instance)
         else if (!nm.isStatic && !bindSelfValues(nm, inst)) selfInInstance(nm);
         rewriteParams(nm.params, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
         if (nm.hasBody) walkBlock(nm.body, subst);
+        bool tooDeep = methodFrames_.back().tooDeep;
+        methodFrames_.pop_back();
+        if (tooDeep) { program_.generics.tooDeep.insert(inst + "." + m.name); continue; }
         out->methods.push_back(std::move(nm));
     }
     std::vector<std::string> variants = out->enumVariants;
@@ -979,6 +1004,10 @@ bool Mono::rejectUnknownArgs(const std::string &generic, const std::vector<TypeR
     for (const auto &a : args) {
         const TypeRef *u = unknownIn(a);
         if (!u || u->name == "auto") continue;
+        if (refused_.count(u->name) && !methodFrames_.empty()) {   // (inside a method that is left out)
+            methodFrames_.back().tooDeep = true;
+            return true;
+        }
         std::string msg = "unknown type '" + u->name + "' in the type arguments of '" + generic + "'";
         if (u->name == "auto" || u->name == "any" || u->name == "var" || u->name == "dynamic" ||
             u->name == "Any" || u->name == "object")
@@ -1163,6 +1192,65 @@ int Mono::instanceDepth(const std::string &cls, int guard) const {
     int d = 0;
     for (const auto &a : it->second.second) d = std::max(d, depth(a));
     return 1 + d;
+}
+
+// How many times class template `tpl` nests in `t`: Coll<Coll<int>> is 2 for Coll.
+int Mono::selfNesting(const std::string &tpl, const TypeRef &t, int guard) const {
+    if (guard > 64) return 0;
+    int d = 0;
+    if (t.isNamed()) {
+        auto it = program_.generics.instances.find(t.name);
+        if (it != program_.generics.instances.end()) {
+            int inner = 0;
+            for (const auto &a : it->second.second) inner = std::max(inner, selfNesting(tpl, a, guard + 1));
+            d = (it->second.first == tpl ? 1 : 0) + inner;
+        } else if (t.name == tpl) {
+            d = 1;
+        }
+    }
+    int inner = 0;
+    for (const auto &a : t.args) inner = std::max(inner, selfNesting(tpl, a, guard + 1));
+    if (t.isNamed() && !t.args.empty() && t.name == tpl) d = std::max(d, 1 + inner);
+    else d = std::max(d, inner);
+    for (const auto &p : t.fnParams) d = std::max(d, selfNesting(tpl, p, guard + 1));
+    if (t.elem) d = std::max(d, selfNesting(tpl, *t.elem, guard + 1));
+    return d;
+}
+
+// Whether `t`, as written in template `tpl`, names `tpl` with other arguments than
+// its own parameters (Coll<Coll<T>>, Coll<Array<T>> in Coll<T>).
+bool Mono::namesDeeperSelf(const ClassDecl &tpl, const TypeRef &t) const {
+    if (t.isNamed() && !t.args.empty()) {
+        const std::string &n = t.name;
+        bool self = n == tpl.name || n == tpl.fqName ||
+                    (n.size() > tpl.name.size() && n.compare(n.size() - tpl.name.size(), std::string::npos, tpl.name) == 0 &&
+                     n[n.size() - tpl.name.size() - 1] == '.');
+        if (self) {
+            bool same = t.args.size() == tpl.typeParams.size();
+            for (size_t i = 0; same && i < t.args.size(); ++i)
+                same = t.args[i].isNamed() && t.args[i].args.empty() && t.args[i].name == tpl.typeParams[i];
+            if (!same) return true;
+        }
+    }
+    for (const auto &a : t.args) if (namesDeeperSelf(tpl, a)) return true;
+    for (const auto &p : t.fnParams) if (namesDeeperSelf(tpl, p)) return true;
+    return t.elem && namesDeeperSelf(tpl, *t.elem);
+}
+
+// Whether instance `inst` of `name` is one too deep for the method being copied
+// (which is then left out of its instance).
+bool Mono::refuseDeeper(const std::string &name, const std::vector<TypeRef> &args, const std::string &inst) {
+    int frame = -1;
+    for (int i = static_cast<int>(methodFrames_.size()) - 1; i >= 0; --i)
+        if (methodFrames_[i].tpl == name) { frame = i; break; }
+    if (frame < 0) return false;
+    int depth = 1;
+    for (const auto &a : args) depth = std::max(depth, 1 + selfNesting(name, a, 0));
+    if (depth <= kMaxSelfNesting) return false;
+    refused_[inst] = true;
+    methodFrames_[frame].tooDeep = true;
+    if (frame != static_cast<int>(methodFrames_.size()) - 1) methodFrames_.back().tooDeep = true;
+    return true;
 }
 
 void Mono::instantiateGenericMethods() {

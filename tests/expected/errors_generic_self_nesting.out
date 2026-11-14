@@ -1,0 +1,4 @@
+gravc: tests/errors/generic_self_nesting.grav:11:24: type error: type 'Coll<Coll<Coll<int>>>' has no method 'chunk' (it would make the class nest itself more than 3 deep)
+        c.chunk(2).chunk(2).chunk(2)
+                           ^
+gravc: 1 error(s); aborting

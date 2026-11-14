@@ -1,0 +1,43 @@
+// A generic class whose methods make deeper instances of itself
+// (Coll<T>.chunk() -> Coll<Coll<T>>): made as deep as the program uses them.
+import "std"
+
+class Coll<T> {
+    public items: Array<T>
+    constructor(items: Array<T>) { self.items = items }
+    fn chunk(n: int) -> Coll<Coll<T>> {
+        let out = new Array<Coll<T>>()
+        let i = 0
+        while (i < self.items.size()) { out.push(new Coll<T>(self.items.slice(i, i + n))); i = i + n }
+        return new Coll<Coll<T>>(out)
+    }
+    fn pairs() -> Duo<Coll<T>> { return new Duo<Coll<T>>(self, self) }
+    fn size() -> int { return self.items.size() }
+    fn first() -> T { return self.items[0] }
+}
+class Duo<T> {
+    public a: T
+    public b: T
+    constructor(a: T, b: T) { self.a = a; self.b = b }
+    fn wrap() -> Coll<Duo<T>> { return new Coll<Duo<T>>([self]) }
+}
+// (a method that is never called makes no deeper instance)
+class Tree<T> {
+    public value: T
+    constructor(value: T) { self.value = value }
+    fn nest() -> Tree<Tree<T>> { return new Tree<Tree<T>>(self) }
+}
+
+test "a method returning a deeper instance of its own class" {
+    let c = new Coll<int>([1, 2, 3, 4, 5])
+    assertEq(c.chunk(2).size(), 3)
+    assertEq(c.chunk(2).chunk(2).size(), 2)
+    assertEq(c.chunk(2).first().first(), 1)
+    assertEq(new Coll<string>(["a", "b"]).chunk(1).first().first(), "a")
+}
+
+test "classes that nest each other" {
+    let c = new Coll<int>([1])
+    assertEq(c.pairs().wrap().size(), 1)
+    assertEq(new Tree<int>(4).value, 4)
+}

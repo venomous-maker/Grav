@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -716,6 +717,10 @@ struct GenericTables {
     std::map<std::string, std::pair<std::string, std::vector<TypeRef>>> instances;
     // Generic method instances ("fold$string" -> ("fold", [string])), for diagnostics.
     std::map<std::string, std::pair<std::string, std::vector<TypeRef>>> methodInstances;
+    // "Instance.method" left out of an instance because it makes a deeper instance of
+    // its class (Coll<int>.chunk -> Coll<Coll<int>>): made when a call needs it
+    // (`deferred`), or never, nesting the class more than 3 deep (`tooDeep`).
+    std::set<std::string> deferred, tooDeep;
 };
 
 // `use` declarations, per namespace ("" = the global scope):

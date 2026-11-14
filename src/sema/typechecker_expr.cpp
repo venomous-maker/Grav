@@ -1752,8 +1752,12 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         }
     }
     if (cands.empty()) {
+        std::string why, key = objType.name + "." + mem->member;
+        if (program_ && program_->generics.tooDeep.count(key)) why = " (it would make the class nest itself more than 3 deep)";
+        // (one left out until a call needs it: made on the next pass)
+        if (program_ && infer_ && program_->generics.deferred.count(key) && infer_->methods.insert(key).second) infer_->added++;
         error(mem->line, mem->col, "type '" + objType.name + "' has no method '" +
-                                       mem->member + "'");
+                                       mem->member + "'" + why);
         for (auto &a : e.args) checkExpr(*a);
         return TypeRef::prim(TypeRef::Kind::Error);
     }

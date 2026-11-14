@@ -2,6 +2,7 @@
 #define GRAV_SEMA_TYPECHECKER_H
 
 #include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -23,6 +24,10 @@ namespace grav {
 // them filled in as explicit `::<...>` arguments.
 struct InferenceTable {
     std::map<std::string, std::vector<TypeRef>> entries; // "line:col:name" -> source-form args
+    // "Instance.method": methods left out of a generic class's instance (each would
+    // make a deeper instance of the class: Coll<T>.chunk() -> Coll<Coll<T>>) that a
+    // call needs, made on the next pass.
+    std::set<std::string> methods;
     int added = 0;                                       // new entries in the latest pass
 };
 // Fills recorded inferences into a freshly parsed program as explicit type arguments.

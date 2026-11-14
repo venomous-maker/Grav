@@ -1,0 +1,4 @@
+running 2 tests
+  ok    a method returning a deeper instance of its own class
+  ok    classes that nest each other
+result: 2 passed, 0 failed
