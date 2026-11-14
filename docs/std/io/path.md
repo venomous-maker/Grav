@@ -54,6 +54,7 @@ a/b/c.txt
 - `static fn combine(a: string, b: string) -> string` — `a` and `b` joined with "/".
 - `static fn combine(a: string, b: string, c: string) -> string` — `a`, `b` and `c` joined with "/".
 - `static fn normalize(path: string) -> string` — Resolves "." and ".." and repeated slashes: "a/./b/../c//d" -> "a/c/d".
+- `static fn realPath(path: string) -> string` — The absolute path with every symbolic link, "." and ".." resolved ("/etc/localtime" -> "/usr/share/zoneinfo/Africa/Nairobi"); "" when it does not exist.
 - `static fn matches(name: string, pattern: string) -> bool` — Whether `name` matches a glob pattern: * any text, ? one character, [abc] one of the listed characters: Path.matches("app.grav", "*.grav").
 
 <!-- api:end -->
