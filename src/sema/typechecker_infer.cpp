@@ -45,6 +45,13 @@ void TypeChecker::unify(const TypeRef &p, const TypeRef &a, const std::vector<st
         if (!s.count(p.name)) s[p.name] = a;
         return;
     }
+    // A list literal on its own is a fixed array (`int[3]`); passed for an
+    // `Array<T>` it becomes one, so its elements give T: collect([1, 2]).
+    if (p.kind == TypeRef::Kind::Named && p.args.size() == 1 && lastSegment(p.name) == "Array" &&
+        a.isArray() && a.elem) {
+        unify(p.args[0], *a.elem, tps, s);
+        return;
+    }
     if (p.kind == TypeRef::Kind::Named && !p.args.empty() && a.isNamed() && program_) {
         auto it = program_->generics.instances.find(a.name);
         if (it != program_->generics.instances.end() &&

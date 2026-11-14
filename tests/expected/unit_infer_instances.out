@@ -1,3 +1,4 @@
-running 1 test
+running 2 tests
   ok    inferred calls in each instance
-result: 1 passed, 0 failed
+  ok    a list literal passed for an Array<T> gives T
+result: 2 passed, 0 failed

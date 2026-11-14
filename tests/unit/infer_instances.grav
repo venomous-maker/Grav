@@ -28,3 +28,16 @@ test "inferred calls in each instance" {
     assertEq("${countBoth(ints)} ${countBoth(strs)}", "4 2")
     assertEq("${Util.firstOr(ints, 0)} ${Util.firstOr(strs, "")}", "1 p")       // (one string, two call sites)
 }
+
+class Bag<T> {
+    public items: Array<T>
+    constructor(items: Array<T>) { self.items = items }
+}
+fn bagOf<T>(items: Array<T>) -> Bag<T> { return new Bag<T>(items) }
+
+test "a list literal passed for an Array<T> gives T" {
+    let ints = bagOf([1, 2, 3])
+    let words = bagOf(["a", "b"])
+    ints.items.push(4)                                            // an Array<int>, not a fixed int[3]
+    assertEq("${ints.items.size()} ${words.items[1]} ${Util.count([1.5, 2.5])} ${Util.firstOr(["x"], "-")}", "4 b 2 x")
+}
