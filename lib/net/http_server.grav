@@ -38,6 +38,10 @@ namespace std.net {
     #include <ctype.h>
     #include <strings.h>
     #include <unistd.h>
+    #include <sys/resource.h>
+    #ifdef __APPLE__
+    #include <limits.h>
+    #endif
     #ifdef __linux__
     #include <sys/epoll.h>
     #include <sys/eventfd.h>
@@ -95,6 +99,25 @@ namespace std.net {
     #endif
     }
     static int grav_http_cpus(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 4; }
+    /* How many connections the descriptor limit leaves room for, after raising
+       the soft limit to the hard one (as Go and nginx do); some are kept back
+       for the program's files, sockets and database connections. */
+    static int grav_http_fd_room(void) {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return 1024;
+        if (rl.rlim_cur < rl.rlim_max) {
+            struct rlimit up = rl;
+    #ifdef __APPLE__
+            if (up.rlim_max > OPEN_MAX) up.rlim_max = OPEN_MAX;   /* (macOS refuses more) */
+    #endif
+            up.rlim_cur = up.rlim_max;
+            if (setrlimit(RLIMIT_NOFILE, &up) == 0) rl = up;
+        }
+        long n = rl.rlim_cur == RLIM_INFINITY ? 1048576 : (long)rl.rlim_cur;
+        if (n > 1048576) n = 1048576;
+        long room = n - (n > 2048 ? 256 : n / 8);
+        return room > 1 ? (int)room : 1;
+    }
 
     /* Where the parts of the last head grav_http_parse_head took apart lie: for
        piece k, offs[2k] from the buffer's read position and offs[2k + 1] long
@@ -507,6 +530,7 @@ namespace std.net {
         private notFoundHandler: fn(HttpRequest) -> HttpResponse
         private errorHandler: fn(HttpRequest, string) -> HttpResponse
         private loops: Array<HttpLoop>            // the event loops while serving, under loopLock
+        private connectionCap: int                // maxConnections, or what the descriptor limit allows
         private loopLock: Mutex
         // Event loops serving connections, each on its own thread (0: one per
         // CPU). Handlers run on their connection's loop, so handlers that block
@@ -522,6 +546,8 @@ namespace std.net {
         // are answered 408 and closed.
         public headerTimeoutMs: int
         // At most this many connections at once; more are answered 503 and closed.
+        // 0 (the default): as many as the process may open files for, less a
+        // few for its own use; serving raises the soft limit to the hard one.
         public maxConnections: int
         // Requests served on one connection before it is closed (0 = no limit).
         public maxRequestsPerConnection: int
@@ -552,7 +578,8 @@ namespace std.net {
             self.maxBodyBytes = 10 * 1024 * 1024;
             self.idleTimeoutMs = 15000;
             self.headerTimeoutMs = 20000;
-            self.maxConnections = 1024;
+            self.maxConnections = 0;
+            self.connectionCap = 1024;
             self.maxRequestsPerConnection = 0;
             self.loops = new Array<HttpLoop>();
             self.loopLock = new Mutex();
@@ -712,8 +739,11 @@ namespace std.net {
         private fn bind(host: string, port: int) {
             if (self.running.get() == 1) { throw new StateError("HttpServer is already running"); }
             self.listener = TcpListener.bind(host, port);
+            let room = %{ grav_http_fd_room() %} as int;
+            self.connectionCap = self.maxConnections > 0 && self.maxConnections < room ? self.maxConnections : room;
             self.running.set(1);
         }
+
         // A connection over maxConnections: a short answer, then closed.
         private fn refuse(conn: TcpStream) {
             try {
@@ -725,7 +755,11 @@ namespace std.net {
         // with a thread per connection.
         private fn run() {
             let probe = %{ grav_http_poll_open() %} as int;
-            if (probe < 0) { self.acceptLoop(); return; }
+            if (probe < 0) {
+                if (self.maxConnections <= 0 && self.connectionCap > 1024) { self.connectionCap = 1024; }   // (a thread each)
+                self.acceptLoop();
+                return;
+            }
             %{ close(probe); %};
             self.serveLoops();
         }
@@ -760,9 +794,10 @@ namespace std.net {
                     conn = self.listener.accept();
                 } catch (e: NetError) {
                     if (self.running.get() == 0) { break; }
+                    Time.sleepMs(10);                             // (out of descriptors, say: wait, don't spin)
                     continue;
                 }
-                if (self.active.get() >= self.maxConnections) { self.refuse(conn); continue; }
+                if (self.active.get() >= self.connectionCap) { self.refuse(conn); continue; }
                 conn.setNoDelay(true);
                 conn.setTimeoutMs(self.idleTimeoutMs);
                 let l = HttpServer.pickLoop(loops, next);
@@ -966,9 +1001,10 @@ namespace std.net {
                     conn = self.listener.accept();
                 } catch (e: NetError) {
                     if (self.running.get() == 0) { break; }
+                    Time.sleepMs(10);                             // (out of descriptors, say: wait, don't spin)
                     continue;
                 }
-                if (self.active.get() >= self.maxConnections) { self.refuse(conn); continue; }
+                if (self.active.get() >= self.connectionCap) { self.refuse(conn); continue; }
                 self.active.increment();
                 let c = conn;
                 Thread.spawn("http-conn", fn() {

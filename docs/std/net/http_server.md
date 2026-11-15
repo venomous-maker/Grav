@@ -89,7 +89,10 @@ https://app.example
   while developing. `isTls()` tells which kind is running.
 - `stop()` stops accepting; `stopAndWait(ms)` also waits for open connections.
   `activeConnections()` and `requestsServed()` report the load.
-- Limits: `maxBodyBytes` (413 above it), `maxConnections` (503 above it),
+- Limits: `maxBodyBytes` (413 above it), `maxConnections` (503 above it; by
+  default as many as the process may open files for, less a few: serving
+  raises the soft descriptor limit to the hard one, so tens of thousands of
+  connections at once need no setup),
   `idleTimeoutMs` for idle keep-alive connections (and bodies that stop
   arriving), `headerTimeoutMs` for a request's line and headers (408 when they
   take longer), `maxRequestsPerConnection`. Header lines longer than 16 KiB are
@@ -245,7 +248,7 @@ An HTTP/1.1 server with a router.
 - `maxBodyBytes: int` — Largest request body accepted (bytes); larger ones get 413.
 - `idleTimeoutMs: int` — Idle keep-alive connections are closed after this many milliseconds (and so are connections whose request body stops arriving for as long).
 - `headerTimeoutMs: int` — A request's line and headers (and an https connection's handshake) must arrive within this many milliseconds of their first byte; slower ones are answered 408 and closed.
-- `maxConnections: int` — At most this many connections at once; more are answered 503 and closed.
+- `maxConnections: int` — At most this many connections at once; more are answered 503 and closed. 0 (the default): as many as the process may open files for, less a few for its own use; serving raises the soft limit to the hard one.
 - `maxRequestsPerConnection: int` — Requests served on one connection before it is closed (0 = no limit).
 - `compressMinBytes: int` — Responses at least this large (bytes) are gzip-compressed for clients that accept it; 0 turns compression off (see compress).
 - `recoverPanics: bool` — A panic in a handler (or middleware, or WebSocket handler) is recovered: the client gets a 500, the panic is logged, and the server keeps running. false: panics on this server's threads stop the program. Panic.setRecovery(false) turns recovery off everywhere.
