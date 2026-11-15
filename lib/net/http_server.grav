@@ -988,7 +988,9 @@ namespace std.net {
                     try { conn.write("HTTP/1.1 100 Continue\r\n\r\n"); } catch (e: Exception) { self.drop(c); return; }
                     c.continued = true;
                 }
-                self.waiting(c, state == 0 ? (conn.bufferedBytes() > 0 ? 1 : 0) : 2);
+                let partial = conn.bufferedBytes() > 0;
+                if (!partial) { conn.shedBuffer(); }              // (idle: 50k idle connections need no 800 MB of buffers)
+                self.waiting(c, state == 0 ? (partial ? 1 : 0) : 2);
                 return;
             }
         }

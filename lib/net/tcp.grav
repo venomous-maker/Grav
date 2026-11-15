@@ -208,6 +208,10 @@ namespace std.net {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     }
+    /* Frees the read buffer when nothing unread is in it; a read makes a new one. */
+    static void grav_sock_shed(GravSock* s) {
+        if (s->buf && s->pos == s->len) { free(s->buf); s->buf = 0; s->cap = s->len = s->pos = 0; }
+    }
     /* Makes room at the end of the read buffer (moving its contents down, or growing it). */
     static void grav_sock_room(GravSock* s) {
         if (s->pos > 0 && s->pos == s->len) { s->pos = s->len = 0; }
@@ -562,6 +566,10 @@ namespace std.net {
         }
         // Bytes received and not read yet.
         public fn bufferedBytes() -> int { return %{ ((GravSock*)self->s)->len - ((GravSock*)self->s)->pos %} as int; }
+        // Frees the read buffer (16 KB or more) while nothing unread is in it;
+        // the next read makes a new one. A server holding many idle
+        // connections calls it as each goes quiet.
+        public fn shedBuffer() { %{ grav_sock_shed((GravSock*)self->s); %}; }
         // Whether the connection is encrypted with TLS (see lib/net/tls.grav).
         public fn isTls() -> bool { return %{ ((GravSock*)self->s)->tls != 0 %} as bool; }
         // Whether the TLS handshake resumed an earlier session (no full handshake).

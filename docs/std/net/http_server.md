@@ -110,7 +110,11 @@ https://app.example
   `workers`. Streamed responses (`HttpResponse.stream`, `eventStream`), bodies
   over 64 KiB, answers a slow reader has not taken in yet, and WebSocket and
   other upgraded connections go to threads of their own. Outside Linux each
-  connection gets its own thread instead.
+  connection gets its own thread instead (and `maxConnections` defaults to 1024).
+- Many connections: an idle connection costs about 1 KB (its read buffer is
+  given back while it waits), and the listening socket queues as many
+  connections not yet accepted as the system allows (`net.core.somaxconn` on
+  Linux), so a burst of thousands waits its turn instead of being retried.
 
 ## API
 
