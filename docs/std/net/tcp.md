@@ -127,7 +127,7 @@ A listening socket that accepts TCP connections.
 
 **Static members**
 
-- `static fn bind(host: string, port: int) -> TcpListener` — Listen on host:port. Port 0 picks a free port (see port()); host "" or "*" listens on every interface.
+- `static fn bind(host: string, port: int) -> TcpListener` — Listen on host:port. Port 0 picks a free port (see port()); host "" or "*" listens on every interface. Connections not yet accepted queue up to the system's limit (net.core.somaxconn on Linux), so a burst of thousands at once waits instead of being dropped and retried.
 - `static fn bind(port: int) -> TcpListener` — Listens on every interface at `port` (0 picks a free port).
 
 **Methods**

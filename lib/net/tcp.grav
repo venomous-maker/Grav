@@ -186,14 +186,19 @@ namespace std.net {
         return -1;
     }
     /* Accept one connection; -1 once the listener is closed. */
+#ifdef __linux__
+    extern int accept4(int, struct sockaddr*, socklen_t*, int);   /* (glibc declares it only under _GNU_SOURCE) */
+#endif
     static int grav_tcp_accept(int fd, const char** peer) {
         struct sockaddr_storage ss; socklen_t sl = sizeof ss;
         int c;
+#ifdef __linux__
+        do { c = accept4(fd, (struct sockaddr*)&ss, &sl, SOCK_CLOEXEC); } while (c < 0 && (errno == EINTR || errno == ECONNABORTED));
+#else
         do { c = accept(fd, (struct sockaddr*)&ss, &sl); } while (c < 0 && (errno == EINTR || errno == ECONNABORTED));
-        if (c >= 0) {
-            fcntl(c, F_SETFD, FD_CLOEXEC);
-            *peer = grav_addr_text((struct sockaddr*)&ss);
-        }
+        if (c >= 0) fcntl(c, F_SETFD, FD_CLOEXEC);
+#endif
+        if (c >= 0) *peer = grav_addr_text((struct sockaddr*)&ss);
         return c;
     }
     static void grav_sock_timeout(int fd, int ms) {
@@ -577,10 +582,12 @@ namespace std.net {
         destructor() { self.close(); }
 
         // Listen on host:port. Port 0 picks a free port (see port()); host "" or
-        // "*" listens on every interface.
+        // "*" listens on every interface. Connections not yet accepted queue up
+        // to the system's limit (net.core.somaxconn on Linux), so a burst of
+        // thousands at once waits instead of being dropped and retried.
         static fn bind(host: string, port: int) -> TcpListener {
             let err = "";
-            let fd = %{ grav_tcp_listen(host, port, 128, &err) %} as int;
+            let fd = %{ grav_tcp_listen(host, port, 65535, &err) %} as int;
             if (fd < 0) { throw new NetError(err + " (${host}:${port})"); }
             return new TcpListener(fd, host);
         }
