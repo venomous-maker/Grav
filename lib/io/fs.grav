@@ -26,6 +26,7 @@ namespace std.io {
     #include <sys/stat.h>
     #include <unistd.h>
     #include <fnmatch.h>
+    #include <sys/time.h>
     /* A whole line from f without its line break, or NULL at the end (a counted string). */
     static const char* grav_read_line(void* fp) {
         FILE* f = (FILE*)fp;
@@ -79,6 +80,11 @@ namespace std.io {
     static long long grav_file_mtime(const char* path) {
         struct stat st; return stat(path, &st) == 0 ? (long long)st.st_mtime : -1;
     }
+    static int grav_file_set_mtime(const char* path, long long t) {
+        struct timeval tv[2];
+        tv[0].tv_sec = tv[1].tv_sec = (time_t)t; tv[0].tv_usec = tv[1].tv_usec = 0;
+        return utimes(path, tv) == 0;
+    }
     static int grav_file_copy(const char* src, const char* dst) {
         GravBytes b = grav_file_read_bytes(src);
         int ok = b.data != 0 && grav_file_write_bytes(dst, b.data, b.len, "wb");
@@ -118,6 +124,10 @@ namespace std.io {
         public fn size() -> long { return %{ grav_file_size(self->path) %} as long; }
         // Last modification time (unix seconds), or -1.
         public fn modified() -> long { return %{ grav_file_mtime(self->path) %} as long; }
+        // Sets the last modification (and access) time to `unixSeconds`, which
+        // may lie in the future (a cache can stamp a file with when it
+        // expires); false when the file is missing or cannot be changed.
+        public fn setModified(unixSeconds: long) -> bool { return %{ grav_file_set_mtime(self->path, unixSeconds) %} as bool; }
 
         // The whole file as text; IOError when it cannot be read (missing, a directory, no permission).
         public fn read() -> string {

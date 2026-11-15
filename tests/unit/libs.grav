@@ -48,7 +48,10 @@ test "files: reading a missing file throws" {
     f.write("a\nb\n")
     assertEq(str(f.readLines()), "[\"a\", \"b\"]")
     assertEq(f.readBinary().length, 4)
+    assertEq(f.setModified(4102444800), true)               // (2100-01-01: the future is allowed)
+    assertEq(f.modified(), 4102444800 as long)
     f.delete()
+    assertEq(f.setModified(0), false)
 }
 
 test "bytes" {

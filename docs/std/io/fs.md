@@ -126,6 +126,7 @@ or `null` at the end of the file.
 - `fn exists() -> bool` — Whether a regular file exists at the path.
 - `fn size() -> long` — Size in bytes (-1 if it does not exist); 64-bit, so large files are fine.
 - `fn modified() -> long` — Last modification time (unix seconds), or -1.
+- `fn setModified(unixSeconds: long) -> bool` — Sets the last modification (and access) time to `unixSeconds`, which may lie in the future (a cache can stamp a file with when it expires); false when the file is missing or cannot be changed.
 - `fn read() -> string` — The whole file as text; IOError when it cannot be read (missing, a directory, no permission).
 - `fn readOr(fallback: string) -> string` — The whole file as text, or `fallback` when it cannot be read.
 - `fn write(data: string) -> bool` — Replaces the file's contents with `data`; whether it worked.
