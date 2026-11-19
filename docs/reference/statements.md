@@ -135,8 +135,9 @@ fn name(params) -> R { }       (a local function)
   through), in reverse order; it cannot `return`, `break` or `continue`.
 - `finally` runs on every exit, including exceptions.
 - A `catch` that can never run, because an earlier one catches a parent class, is an error.
-- Local functions see variables declared before them (copied in), may call
-  themselves, and cannot be generic or have defaults.
+- Local functions see variables declared before them (like a lambda), may call
+  themselves, and cannot have defaults. A generic one (`fn pair<T>(x: T)`) is a
+  hidden top-level function: it cannot use the block's variables.
 
 ## Expressions that contain statements
 

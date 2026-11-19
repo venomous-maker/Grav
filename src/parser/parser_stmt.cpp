@@ -7,6 +7,7 @@ namespace grav {
 Block Parser::parseBlock() {
     expect(TokenType::LBrace, "to open the block");
     Block block;
+    localGenerics_.emplace_back();
     while (!check(TokenType::RBrace) && !atEnd()) {
         if (matchToken(TokenType::Semicolon)) continue; // stray / empty statement
         block.statements.push_back(parseStatement());
@@ -17,6 +18,7 @@ Block Parser::parseBlock() {
         while (matchToken(TokenType::Semicolon)) {}
     }
     expect(TokenType::RBrace, "to close the block");
+    localGenerics_.pop_back();
     return block;
 }
 
@@ -467,10 +469,30 @@ StmtPtr Parser::parseDestructure(const Token &kw) {
 
 // A function declared inside a block: `const name = fn(params) -> R { body }`,
 // which can call itself (and see the block's variables, captured like a lambda's).
+// A generic one, `fn pair<T>(x: T)`, becomes a hidden top-level generic function
+// that the rest of the block calls by its name; it cannot use the block's variables.
 StmtPtr Parser::parseLocalFunction() {
     const Token &kw = advance(); // 'fn'
     const Token &name = expect(TokenType::Identifier, "after 'fn'");
-    if (check(TokenType::Less)) fail(peek(), "a function inside a block cannot have type parameters");
+    if (check(TokenType::Less)) {
+        auto fn = std::make_unique<FunctionDecl>();
+        fn->line = kw.line; fn->col = kw.col;
+        fn->name = "__local" + std::to_string(++localGenericCounter_) + "_" + name.lexeme;
+        fn->fqName = qualify(fn->name);
+        localGenerics_.back()[name.lexeme] = fn->name; // before the body: it may call itself
+        fn->typeParams = parseTypeParams(&fn->typeParamBounds);
+        fn->params = parseParams(/*allowVariadic=*/true);
+        fn->returnType = matchToken(TokenType::Arrow) ? parseType("as the return type")
+                                                      : TypeRef::prim(TypeRef::Kind::Void);
+        bool saved = extensionSelf_;
+        extensionSelf_ = false;
+        fn->body = parseFunctionBody(fn->returnType, kw);
+        extensionSelf_ = saved;
+        pendingDecls_.push_back(std::move(fn));
+        auto empty = std::make_unique<BlockStmt>();
+        empty->line = kw.line; empty->col = kw.col;
+        return empty;
+    }
     auto lam = std::make_unique<LambdaExpr>();
     lam->line = kw.line; lam->col = kw.col;
     lam->params = parseParams(/*allowVariadic=*/false);
@@ -502,6 +524,7 @@ StmtPtr Parser::parseLet() {
     stmt->col = kw.col;
     stmt->isConst = (kw.type == TokenType::Const);
     stmt->name = expectName("after 'let'").lexeme;
+    if (!localGenerics_.empty()) localGenerics_.back().erase(stmt->name); // it hides a generic local fn
     if (matchToken(TokenType::Colon)) {
         stmt->hasDeclaredType = true;
         stmt->declaredType = parseType("in the declaration");

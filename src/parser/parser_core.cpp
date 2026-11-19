@@ -173,9 +173,7 @@ void Parser::parseTopLevel(Program &program) {
         case TokenType::Interface:
         case TokenType::Trait: program.decls.push_back(parseInterface()); break;
         case TokenType::Struct:
-            program.decls.push_back(parseStruct());
-            for (auto &d : pendingDecls_) program.decls.push_back(std::move(d)); // its methods
-            pendingDecls_.clear();
+            program.decls.push_back(parseStruct()); // (its methods follow it, from pendingDecls_)
             break;
         case TokenType::Enum: parseEnum(program); break;
         case TokenType::Type: program.decls.push_back(parseTypeAlias()); break;
@@ -207,6 +205,8 @@ void Parser::parseTopLevel(Program &program) {
         d->decorators = std::move(decorators);
         d->exported = exported;
     }
+    for (auto &d : pendingDecls_) program.decls.push_back(std::move(d)); // hoisted generic local functions
+    pendingDecls_.clear();
 }
 
 void Parser::parseUse(Program &program) {

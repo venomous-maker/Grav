@@ -798,6 +798,10 @@ ExprPtr Parser::parsePrimary() {
             advance();
             auto e = at<NameExpr>(t);
             e->name = t.lexeme;
+            for (auto s = localGenerics_.rbegin(); s != localGenerics_.rend(); ++s) {
+                auto it = s->find(t.lexeme);
+                if (it != s->end()) { e->name = it->second; break; } // a generic local function
+            }
             return e;
         }
         case TokenType::New: {

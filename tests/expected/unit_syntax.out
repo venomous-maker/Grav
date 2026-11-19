@@ -1,4 +1,4 @@
-running 10 tests
+running 11 tests
   ok    raw strings keep backslashes and dollar signs
   ok    multi-line strings drop the shared indentation
   ok    character literals are their code points
@@ -10,4 +10,5 @@ local!
   ok    a case runs the statements up to the next case, without braces
   ok    if and try give values
   ok    type, match, trait, export and uses name variables
-result: 10 passed, 0 failed
+  ok    generic local functions
+result: 11 passed, 0 failed

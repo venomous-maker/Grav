@@ -130,7 +130,10 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         } else if (auto fr = tryFunctionRef(*e)) {
             t = *fr; // a named function used as a value
         } else {
-            error(e->line, e->col, "use of undeclared variable '" + e->name + "'");
+            error(e->line, e->col, "use of undeclared variable '" + e->name + "'" +
+                                   (currentFunction_.find("__local") != std::string::npos
+                                        ? " (a generic local function cannot use its block's variables: pass them in)"
+                                        : ""));
             t = TypeRef::prim(TypeRef::Kind::Error);
         }
     } else if (auto *e = dynamic_cast<BinaryExpr *>(&expr)) {

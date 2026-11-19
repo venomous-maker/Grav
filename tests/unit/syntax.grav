@@ -1,5 +1,5 @@
 // Literal and declaration syntax: raw and multi-line strings, character
-// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values.
+// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions.
 import "std"
 
 class Bag {
@@ -157,4 +157,17 @@ test "type, match, trait, export and uses name variables" {
     let trait = fn(type: string) => Str.upper(type)
     let r = match (match) { case 4: "four" default: "other" }
     assertEq(seen + describe(type, match) + " " + trait("t") + " " + r, "0users 1x users:4 T four")
+}
+
+test "generic local functions" {
+    fn twice<T>(x: T) -> Array<T> { return [x, x] }
+    fn depth<T>(x: T, n: int) -> int { return n == 0 ? 0 : 1 + depth(x, n - 1) }
+    let words = ""
+    if (true) {
+        fn wrap<T>(x: T) -> string { return "[${x}]" }
+        words = wrap(1) + wrap("b")
+    }
+    assertEq("${twice(3).size()} ${twice("a")[1]} ${depth(1.5, 4)} ${words}", "2 a 4 [1][b]")
+    let twice = 9
+    assertEq(twice, 9)
 }

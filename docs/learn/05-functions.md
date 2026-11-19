@@ -304,10 +304,30 @@ root
     3 2 1 go
 ```
 
-The variables it uses are *copied* in when the function is declared, just like
-a lambda's ([chapter 6](06-lambdas-and-closures.md)), so it sees their values
-at that point and cannot assign to them. A local function can call itself, but
-cannot have type parameters or default values.
+It uses the block's variables just like a lambda does
+([chapter 6](06-lambdas-and-closures.md)). A local function can call itself,
+but cannot have default values.
+
+A local function can be generic. A generic one becomes an ordinary top-level
+function with a hidden name, so it cannot use the block's variables; pass them
+in instead:
+
+```grav
+import "std"
+
+fn main() {
+    fn twice<T>(x: T) -> Array<T> { return [x, x] }
+    println(twice(4))
+    println(twice("ab"))
+}
+```
+
+Output:
+
+```text
+[4, 4]
+["ab", "ab"]
+```
 
 ## Functions are values
 
