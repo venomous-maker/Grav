@@ -751,6 +751,31 @@
           }
         },
         {
+          "comment": "fn Point.norm( / fn Array<int>.total(: an extension method of that type",
+          "match": "\\b(fn)\\s+((?:[A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*)(<[^>(]*>)?(\\.)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*[<(])",
+          "captures": {
+            "1": {
+              "name": "storage.type.function.grav"
+            },
+            "2": {
+              "name": "entity.name.type.grav"
+            },
+            "3": {
+              "patterns": [
+                {
+                  "include": "#type-params"
+                }
+              ]
+            },
+            "4": {
+              "name": "punctuation.accessor.grav"
+            },
+            "5": {
+              "name": "entity.name.function.declaration.grav"
+            }
+          }
+        },
+        {
           "comment": "fn name<T>(",
           "begin": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "end": "(?=\\()",

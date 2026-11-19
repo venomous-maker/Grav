@@ -91,11 +91,11 @@ const INTERNAL_BUILTINS = [
 ];
 // Hover explanations for keywords and built-in types: [summary, example].
 const KEYWORD_DOCS = {
-  fn: ["Declares a function or method; `fn(a) => e` is a lambda. Parameters may have defaults (`b: int = 1`). A lambda copies the variables it reads and shares the ones it assigns.", "fn add(a: int, b: int = 1) -> int { return a + b }"],
+  fn: ["Declares a function or method; `fn(a) => e` is a lambda. Parameters may have defaults (`b: int = 1`). A lambda copies the variables it reads and shares the ones it assigns. `fn Point.norm()` adds a method to a type from outside it (an extension method).", "fn add(a: int, b: int = 1) -> int { return a + b }"],
   class: ["A reference type with fields, constructors, methods, single inheritance and interfaces.", "class Dog extends Animal implements Named { ... }"],
   struct: ["A value type: named fields, copied on assignment. It may have methods; inside them `self` is the struct.", "struct Point { x: int  y: int  fn sum() -> int { return self.x + self.y } }"],
   enum: ["A set of named constants (members may have values), or a data enum whose variants carry fields.", "enum Http { Ok = 200, NotFound = 404 }\nenum Shape { Circle(r: float), Empty }"],
-  type: ["A type alias; fully interchangeable with what it names (`typedef` is a synonym).", "type Meters = double"],
+  type: ["A type alias; fully interchangeable with what it names (`typedef` is a synonym). Outside a declaration `type` may also name a variable.", "type Meters = double"],
   typedef: ["A synonym of `type`: a type alias.", "typedef Grid = int[3]"],
   interface: ["A set of method signatures a class can implement; `is` / `as` check and convert at run time.", "interface Shape { fn area() -> float }"],
   trait: ["An interface whose methods may have default bodies, and which may bring fields, static fields, private helpers and decorators: a class that implements it gets them all (a trait has no constructor: give its fields initializers). `Self` is the implementing class.",
@@ -149,7 +149,7 @@ const KEYWORD_DOCS = {
   sizeof: ["The size in bytes of a type or value.", "sizeof(Point)"],
   operator: ["Defines an operator for a class: + - * / % == < [] []= ...", "fn operator+(o: Vec) -> Vec { ... }"],
   test: ["A test block, run by `grav test`.", "test \"adds\" { assertEq(1 + 1, 2) }"],
-  self: ["The object (or struct) a method was called on. `this` is a synonym.", "self.count += 1"],
+  self: ["The object (or struct) a method, or an extension method, was called on. `this` is a synonym.", "self.count += 1"],
   this: ["A synonym of `self`: the object a method was called on.", "this.count += 1"],
   super: ["The parent class: `super(...)` runs its constructor, `super.m()` its method.", "super(name)"],
   true: ["The boolean true.", "let ok = true"],
@@ -361,6 +361,8 @@ const RE = {
   classLike: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(class|struct|interface|trait|enum)\\s+(${IDENT})\\s*(<[^>{]*>)?`),
   alias: new RegExp(`^\\s*${MODS}type\\s+(${IDENT})\\s*(<[^>=]*>)?\\s*=\\s*(.+)$`),
   fn: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}fn\\s+(operator\\s*\\S+?|${IDENT})\\s*(<[^>(]*>)?\\s*\\(`),
+  // fn Point.norm() / fn int.twice() / fn Array<int>.total(): an extension method of that type
+  ext: new RegExp(`^\\s*${MODS}fn\\s+((?:${IDENT}\\.)*${IDENT}(?:<[^>(]*>)?)\\.(${IDENT})\\s*(<[^>(]*>)?\\s*\\(`),
   prop: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(get|set)\\s+(${IDENT})\\s*\\(`),
   ctor: /^\s*constructor\s*\(/,
   dtor: /^\s*destructor\s*\(/,
@@ -469,6 +471,13 @@ function parseFile(text) {
     } else if ((mm = RE.test.exec(raw)) && !inBody && !inType) {
       opened = add({ name: `test "${mm[1]}"`, kind: KIND.Event, line: i, ch: raw.indexOf("test"), namespace: ns,
         detail: `test "${mm[1]}"`, doc: "", children: [] });
+    } else if ((mm = RE.ext.exec(m)) && !inBody && !inType) {
+      const paren = m.indexOf("(", mm.index + mm[0].length - 1);
+      const sig = signatureFrom(raw, paren);
+      opened = add({ name: mm[2], kind: KIND.Method, line: i, ch: m.indexOf("." + mm[2], mm.index) + 1, namespace: ns,
+        extends: mm[1], typeParams: mm[3] || "", params: sig.params, returns: sig.ret, isStatic: false,
+        detail: raw.trim().replace(/\s*(\{.*|=>.*)$/, ""), doc: docAbove(lines, i), children: [] });
+      addParams(opened, sig.params, i, raw, paren);
     } else if ((mm = RE.fn.exec(m)) && !inBody) {
       const name = mm[1].replace(/\s+/g, "");
       const paren = m.indexOf("(", mm.index + mm[0].length - 1);
@@ -1109,6 +1118,13 @@ class Workspace {
         for (const x of this.membersOf(file, t, seen)) if (!out.some((o) => o.sym.name === x.sym.name)) out.push(x);
       // a data enum variant's fields live on Shape$Circle: none in source; its methods on the base
       break;
+    }
+    // Extension methods (`fn Point.norm()`) of this type, from every file in reach.
+    for (const f of this.searchOrder(file)) {
+      const info = this.info(f);
+      for (const s of (info && info.symbols) || [])
+        if (s.extends && s.extends.replace(/<.*$/, "").split(".").pop() === short && !out.some((o) => o.sym.name === s.name))
+          out.push({ file: f, sym: s });
     }
     return out;
   }
