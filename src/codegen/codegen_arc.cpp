@@ -134,16 +134,16 @@ using RelevantFn = std::function<bool(const TypeRef &)>;
 bool visitsRelevant(const RelevantFn &g, const Block &b);
 bool visitsRelevantStmt(const RelevantFn &g, const Stmt *s) {
     if (!s) return false;
-    if (auto *x = dynamic_cast<const ExprStmt *>(s)) {
-        auto *c = dynamic_cast<const CallExpr *>(x->expr.get());
+    if (auto *x = as<const ExprStmt>(s)) {
+        auto *c = as<const CallExpr>(x->expr.get());
         return c && c->kind == CallKind::Builtin && c->targetName == "__visit" && c->args.size() == 1 &&
                g(c->args[0]->type);
     }
-    if (auto *x = dynamic_cast<const BlockStmt *>(s)) return visitsRelevant(g, x->block);
-    if (auto *x = dynamic_cast<const IfStmt *>(s)) return visitsRelevant(g, x->thenBlock) || visitsRelevantStmt(g, x->elseStmt.get());
-    if (auto *x = dynamic_cast<const WhileStmt *>(s)) return visitsRelevant(g, x->body);
-    if (auto *x = dynamic_cast<const ForStmt *>(s)) return visitsRelevant(g, x->body);
-    if (auto *x = dynamic_cast<const ForInStmt *>(s)) return visitsRelevant(g, x->body);
+    if (auto *x = as<const BlockStmt>(s)) return visitsRelevant(g, x->block);
+    if (auto *x = as<const IfStmt>(s)) return visitsRelevant(g, x->thenBlock) || visitsRelevantStmt(g, x->elseStmt.get());
+    if (auto *x = as<const WhileStmt>(s)) return visitsRelevant(g, x->body);
+    if (auto *x = as<const ForStmt>(s)) return visitsRelevant(g, x->body);
+    if (auto *x = as<const ForInStmt>(s)) return visitsRelevant(g, x->body);
     return false;
 }
 bool visitsRelevant(const RelevantFn &g, const Block &b) {
@@ -243,24 +243,24 @@ namespace {
 // Whether every return in a body is `return self` (counting them in `returns`).
 bool onlyReturnsSelf(const Block &b, int &returns);
 bool onlyReturnsSelfStmt(const Stmt *s, int &returns) {
-    if (auto *r = dynamic_cast<const ReturnStmt *>(s)) {
-        if (!r->value || !dynamic_cast<const SelfExpr *>(r->value.get())) return false;
+    if (auto *r = as<const ReturnStmt>(s)) {
+        if (!r->value || !as<const SelfExpr>(r->value.get())) return false;
         returns++;
         return true;
     }
-    if (auto *x = dynamic_cast<const BlockStmt *>(s)) return onlyReturnsSelf(x->block, returns);
-    if (auto *x = dynamic_cast<const IfStmt *>(s))
+    if (auto *x = as<const BlockStmt>(s)) return onlyReturnsSelf(x->block, returns);
+    if (auto *x = as<const IfStmt>(s))
         return onlyReturnsSelf(x->thenBlock, returns) && (!x->elseStmt || onlyReturnsSelfStmt(x->elseStmt.get(), returns));
-    if (auto *x = dynamic_cast<const WhileStmt *>(s)) return onlyReturnsSelf(x->body, returns);
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(s)) return onlyReturnsSelf(x->body, returns);
-    if (auto *x = dynamic_cast<const ForStmt *>(s)) return onlyReturnsSelf(x->body, returns);
-    if (auto *x = dynamic_cast<const ForInStmt *>(s)) return onlyReturnsSelf(x->body, returns);
-    if (auto *x = dynamic_cast<const SwitchStmt *>(s)) {
+    if (auto *x = as<const WhileStmt>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = as<const DoWhileStmt>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = as<const ForStmt>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = as<const ForInStmt>(s)) return onlyReturnsSelf(x->body, returns);
+    if (auto *x = as<const SwitchStmt>(s)) {
         for (const auto &c : x->cases) if (!onlyReturnsSelf(c.body, returns)) return false;
         return onlyReturnsSelf(x->defaultBody, returns);
     }
     // Keep the convention simple around unwinding.
-    if (dynamic_cast<const TryStmt *>(s) || dynamic_cast<const DeferStmt *>(s)) return false;
+    if (as<const TryStmt>(s) || as<const DeferStmt>(s)) return false;
     return true;
 }
 bool onlyReturnsSelf(const Block &b, int &returns) {
@@ -341,25 +341,25 @@ bool CodeGen::releaseFree(const MethodInfo *mi) const {
     auto refStore = [&](const TypeRef &t) { RefKind k = refKind(t); return k != RefKind::None && k != RefKind::Str; };
     auto onStmt = [&](Stmt &s) {
         if (!ok) return;
-        if (auto *a = dynamic_cast<AssignStmt *>(&s)) {
+        if (auto *a = as<AssignStmt>(&s)) {
             if (!a->target || refStore(a->target->type) || a->isCompound && refKind(a->target->type) != RefKind::None) ok = false;
-        } else if (dynamic_cast<ThrowStmt *>(&s)) {
+        } else if (as<ThrowStmt>(&s)) {
             ok = false;
         }
     };
     auto onExpr = [&](Expr &e) {
         if (!ok) return;
-        if (dynamic_cast<NewExpr *>(&e) || dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<AwaitExpr *>(&e) ||
-            dynamic_cast<StructLiteralExpr *>(&e) || dynamic_cast<SuperExpr *>(&e)) {
+        if (as<NewExpr>(&e) || as<LambdaExpr>(&e) || as<AwaitExpr>(&e) ||
+            as<StructLiteralExpr>(&e) || as<SuperExpr>(&e)) {
             ok = false;
-        } else if (auto *ix = dynamic_cast<IndexExpr *>(&e)) {
+        } else if (auto *ix = as<IndexExpr>(&e)) {
             if (!ix->overloadClass.empty() || ix->isSlice) ok = false;
-        } else if (auto *al = dynamic_cast<ArrayLiteralExpr *>(&e)) {
+        } else if (auto *al = as<ArrayLiteralExpr>(&e)) {
             // only fixed arrays of plain values (a collection literal builds an object)
             if (al->built || !al->type.isArray() || !al->type.elem || refKind(*al->type.elem) != RefKind::None) ok = false;
-        } else if (auto *cb = dynamic_cast<CBlockExpr *>(&e)) {
+        } else if (auto *cb = as<CBlockExpr>(&e)) {
             if (!cBlockReleaseFree(cb->code)) ok = false;
-        } else if (auto *c = dynamic_cast<CallExpr *>(&e)) {
+        } else if (auto *c = as<CallExpr>(&e)) {
             if (!releaseFreeCall(*c)) ok = false;
         }
     };
@@ -374,7 +374,7 @@ bool CodeGen::releaseFree(const MethodInfo *mi) const {
 bool CodeGen::releaseFreeCall(const CallExpr &call) const {
     if (call.kind == CallKind::StaticMethod) return releaseFree(reg_->findMethod(call.targetName, call.methodName));
     if (call.kind != CallKind::InstanceMethod || call.ifaceDispatch) return false;
-    auto *mem = dynamic_cast<const MemberExpr *>(call.callee.get());
+    auto *mem = as<const MemberExpr>(call.callee.get());
     if (!mem) return false;
     std::string recv = mem->object->type.isNamed() && reg_->isClass(mem->object->type.name) ? mem->object->type.name : call.ownerClass;
     if (!reg_->isClass(recv) || reg_->isOverridden(recv, call.methodName)) return false;
@@ -383,21 +383,21 @@ bool CodeGen::releaseFreeCall(const CallExpr &call) const {
 
 bool CodeGen::isRefProducer(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
-    if (dynamic_cast<const NewExpr *>(&e)) return true;
+    if (as<const NewExpr>(&e)) return true;
     // `a + b` through a class's operator method is a call too.
-    if (auto *b = dynamic_cast<const BinaryExpr *>(&e); b && !b->overloadMethod.empty()) return true;
+    if (auto *b = as<const BinaryExpr>(&e); b && !b->overloadMethod.empty()) return true;
     // `obj[k]` through operator[] is a method call: its result is the caller's.
-    if (auto *ix = dynamic_cast<const IndexExpr *>(&e); ix && !ix->overloadClass.empty()) return true;
-    if (auto *ix = dynamic_cast<const IndexExpr *>(&e); ix && ix->isSlice && e.type.kind == TypeRef::Kind::String)
+    if (auto *ix = as<const IndexExpr>(&e); ix && !ix->overloadClass.empty()) return true;
+    if (auto *ix = as<const IndexExpr>(&e); ix && ix->isSlice && e.type.kind == TypeRef::Kind::String)
         return true; // a fresh string
     // A struct or fixed-array literal holds its own references (+1 each).
     if (refKind(e.type) == RefKind::Value &&
-        (dynamic_cast<const StructLiteralExpr *>(&e) || dynamic_cast<const ArrayLiteralExpr *>(&e)))
+        (as<const StructLiteralExpr>(&e) || as<const ArrayLiteralExpr>(&e)))
         return true;
-    if (auto *l = dynamic_cast<const LambdaExpr *>(&e)) return !l->captures.empty();
-    if (auto *m = dynamic_cast<const MemberExpr *>(&e); m && m->bound) return isRefProducer(*m->bound);
-    if (auto *a = dynamic_cast<const ArrayLiteralExpr *>(&e); a && a->built) return isRefProducer(*a->built);
-    if (auto *c = dynamic_cast<const CallExpr *>(&e)) {
+    if (auto *l = as<const LambdaExpr>(&e)) return !l->captures.empty();
+    if (auto *m = as<const MemberExpr>(&e); m && m->bound) return isRefProducer(*m->bound);
+    if (auto *a = as<const ArrayLiteralExpr>(&e); a && a->built) return isRefProducer(*a->built);
+    if (auto *c = as<const CallExpr>(&e)) {
         if (c->kind == CallKind::Builtin) {
             if (c->targetName == "__retain") return true;
             if (c->targetName == "__unwrap") return false; // the operand, borrowed
@@ -412,8 +412,8 @@ bool CodeGen::isRefProducer(const Expr &e) const {
     }
     if (refKind(e.type) == RefKind::Str) {
         // Inline C yields a fresh string or a permanent one (literal, static, C library).
-        if (dynamic_cast<const CBlockExpr *>(&e)) return true;
-        if (auto *b = dynamic_cast<const BinaryExpr *>(&e); b && b->stringConcat && b->overloadMethod.empty())
+        if (as<const CBlockExpr>(&e)) return true;
+        if (auto *b = as<const BinaryExpr>(&e); b && b->stringConcat && b->overloadMethod.empty())
             return concatAllocates(e);
     }
     return false;
@@ -447,35 +447,35 @@ bool CodeGen::exprMayAutorelease(const Expr *e) const {
             if (!x || found) return;
             if (g->isRefProducer(*x)) { found = true; return; }
             if (g->isUnstableRef(*x)) unstable = true;
-            if (auto *b = dynamic_cast<const BinaryExpr *>(x)) { expr(b->left.get()); expr(b->right.get()); }
-            else if (auto *u = dynamic_cast<const UnaryExpr *>(x)) expr(u->operand.get());
-            else if (auto *t = dynamic_cast<const TernaryExpr *>(x)) { expr(t->cond.get()); expr(t->thenExpr.get()); expr(t->elseExpr.get()); }
-            else if (auto *a = dynamic_cast<const AsExpr *>(x)) expr(a->operand.get());
-            else if (auto *i = dynamic_cast<const IsExpr *>(x)) expr(i->operand.get());
-            else if (auto *c = dynamic_cast<const CastExpr *>(x)) expr(c->operand.get());
-            else if (auto *co = dynamic_cast<const CoalesceExpr *>(x)) { expr(co->left.get()); expr(co->right.get()); }
-            else if (auto *ix = dynamic_cast<const IndexExpr *>(x)) {
+            if (auto *b = as<const BinaryExpr>(x)) { expr(b->left.get()); expr(b->right.get()); }
+            else if (auto *u = as<const UnaryExpr>(x)) expr(u->operand.get());
+            else if (auto *t = as<const TernaryExpr>(x)) { expr(t->cond.get()); expr(t->thenExpr.get()); expr(t->elseExpr.get()); }
+            else if (auto *a = as<const AsExpr>(x)) expr(a->operand.get());
+            else if (auto *i = as<const IsExpr>(x)) expr(i->operand.get());
+            else if (auto *c = as<const CastExpr>(x)) expr(c->operand.get());
+            else if (auto *co = as<const CoalesceExpr>(x)) { expr(co->left.get()); expr(co->right.get()); }
+            else if (auto *ix = as<const IndexExpr>(x)) {
                 expr(ix->base.get()); expr(ix->index.get());
                 for (const auto &m : ix->more) expr(m.get());
             }
-            else if (auto *m = dynamic_cast<const MemberExpr *>(x)) {
+            else if (auto *m = as<const MemberExpr>(x)) {
                 if (g->isWeakField(*m)) { found = true; return; } // a weak read is held on the list
                 expr(m->object.get());
             }
-            else if (auto *ar = dynamic_cast<const ArrayLiteralExpr *>(x)) { for (const auto &el : ar->elements) expr(el.get()); }
-            else if (auto *sl = dynamic_cast<const StructLiteralExpr *>(x)) { for (const auto &f : sl->fields) expr(f.value.get()); }
-            else if (auto *n = dynamic_cast<const NewExpr *>(x)) {
+            else if (auto *ar = as<const ArrayLiteralExpr>(x)) { for (const auto &el : ar->elements) expr(el.get()); }
+            else if (auto *sl = as<const StructLiteralExpr>(x)) { for (const auto &f : sl->fields) expr(f.value.get()); }
+            else if (auto *n = as<const NewExpr>(x)) {
                 for (const auto &a : n->args) { if (g->isUnstableRef(*a)) { found = true; return; } expr(a.get()); }
-            } else if (auto *cl = dynamic_cast<const CallExpr *>(x)) {
+            } else if (auto *cl = as<const CallExpr>(x)) {
                 // emitStable holds field/element/global arguments and receivers on the list
-                if (auto *m = dynamic_cast<const MemberExpr *>(cl->callee.get()); m && g->isUnstableRef(*m->object)) { found = true; return; }
+                if (auto *m = as<const MemberExpr>(cl->callee.get()); m && g->isUnstableRef(*m->object)) { found = true; return; }
                 for (const auto &a : cl->args) if (g->isUnstableRef(*a)) { found = true; return; }
                 expr(cl->callee.get());
                 for (const auto &a : cl->args) expr(a.get());
-            } else if (auto *aw = dynamic_cast<const AwaitExpr *>(x)) expr(aw->operand.get());
-            else if (auto *ad = dynamic_cast<const AddrOfExpr *>(x)) expr(ad->operand.get());
-            else if (auto *d = dynamic_cast<const DerefExpr *>(x)) expr(d->operand.get());
-            else if (auto *id = dynamic_cast<const IncDecExpr *>(x)) expr(id->target.get());
+            } else if (auto *aw = as<const AwaitExpr>(x)) expr(aw->operand.get());
+            else if (auto *ad = as<const AddrOfExpr>(x)) expr(ad->operand.get());
+            else if (auto *d = as<const DerefExpr>(x)) expr(d->operand.get());
+            else if (auto *id = as<const IncDecExpr>(x)) expr(id->target.get());
             // lambda bodies are separate functions; literals and names produce nothing
         }
     } w{this, found};
@@ -490,22 +490,22 @@ bool CodeGen::exitSkipsDrain(const Block &b, bool under, bool loopExits) const {
 }
 
 bool CodeGen::exitSkipsDrainStmt(const Stmt &s, bool under, bool loopExits) const {
-    if (auto *x = dynamic_cast<const ReturnStmt *>(&s)) return under || exprMayAutorelease(x->value.get());
-    if (dynamic_cast<const BreakStmt *>(&s) || dynamic_cast<const ContinueStmt *>(&s)) return loopExits && under;
+    if (auto *x = as<const ReturnStmt>(&s)) return under || exprMayAutorelease(x->value.get());
+    if (as<const BreakStmt>(&s) || as<const ContinueStmt>(&s)) return loopExits && under;
     bool here = under || stmtNeedsDrain(s);              // this statement drains only when it falls through
-    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return exitSkipsDrain(x->block, here, loopExits);
-    if (auto *x = dynamic_cast<const IfStmt *>(&s))
+    if (auto *x = as<const BlockStmt>(&s)) return exitSkipsDrain(x->block, here, loopExits);
+    if (auto *x = as<const IfStmt>(&s))
         return exitSkipsDrain(x->thenBlock, here, loopExits) ||
                (x->elseStmt && exitSkipsDrainStmt(*x->elseStmt, here, loopExits));
-    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
-    if (auto *x = dynamic_cast<const ForStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
-    if (auto *x = dynamic_cast<const ForInStmt *>(&s)) return exitSkipsDrain(x->body, here, loopExits);
-    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+    if (auto *x = as<const WhileStmt>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = as<const DoWhileStmt>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = as<const ForStmt>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = as<const ForInStmt>(&s)) return exitSkipsDrain(x->body, here, loopExits);
+    if (auto *x = as<const SwitchStmt>(&s)) {
         for (const auto &c : x->cases) if (exitSkipsDrain(c.body, here, loopExits)) return true;
         return exitSkipsDrain(x->defaultBody, here, loopExits);
     }
-    if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+    if (auto *x = as<const TryStmt>(&s)) {
         if (exitSkipsDrain(x->tryBlock, here, loopExits) || exitSkipsDrain(x->finallyBlock, here, loopExits)) return true;
         for (const auto &c : x->catches) if (exitSkipsDrain(c.block, here, loopExits)) return true;
     }
@@ -515,42 +515,42 @@ bool CodeGen::exitSkipsDrainStmt(const Stmt &s, bool under, bool loopExits) cons
 // Whether a statement's own expressions (not nested blocks, which drain their
 // own statements) can put anything on the release list.
 bool CodeGen::stmtNeedsDrain(const Stmt &s) const {
-    if (auto *x = dynamic_cast<const LetStmt *>(&s)) return exprMayAutorelease(x->init.get());
-    if (auto *x = dynamic_cast<const AssignStmt *>(&s))
+    if (auto *x = as<const LetStmt>(&s)) return exprMayAutorelease(x->init.get());
+    if (auto *x = as<const AssignStmt>(&s))
         return exprMayAutorelease(x->target.get()) || exprMayAutorelease(x->value.get());
-    if (auto *x = dynamic_cast<const ExprStmt *>(&s)) return exprMayAutorelease(x->expr.get());
-    if (auto *x = dynamic_cast<const IfStmt *>(&s)) {
+    if (auto *x = as<const ExprStmt>(&s)) return exprMayAutorelease(x->expr.get());
+    if (auto *x = as<const IfStmt>(&s)) {
         if (exprMayAutorelease(x->cond.get())) return true;
         // `else if` conditions belong to this statement too
         for (const Stmt *e = x->elseStmt.get(); e;) {
-            auto *ei = dynamic_cast<const IfStmt *>(e);
+            auto *ei = as<const IfStmt>(e);
             if (!ei) break;
             if (exprMayAutorelease(ei->cond.get())) return true;
             e = ei->elseStmt.get();
         }
         return false;
     }
-    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exprMayAutorelease(x->cond.get());
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exprMayAutorelease(x->cond.get());
-    if (auto *x = dynamic_cast<const ForStmt *>(&s))
+    if (auto *x = as<const WhileStmt>(&s)) return exprMayAutorelease(x->cond.get());
+    if (auto *x = as<const DoWhileStmt>(&s)) return exprMayAutorelease(x->cond.get());
+    if (auto *x = as<const ForStmt>(&s))
         return (x->init && stmtNeedsDrain(*x->init)) || exprMayAutorelease(x->cond.get()) ||
                (x->update && stmtNeedsDrain(*x->update));
-    if (auto *x = dynamic_cast<const ForInStmt *>(&s))
+    if (auto *x = as<const ForInStmt>(&s))
         return exprMayAutorelease(x->lo.get()) || exprMayAutorelease(x->hi.get()) ||
                exprMayAutorelease(x->step.get());
-    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) return exprMayAutorelease(x->subject.get());
-    if (auto *x = dynamic_cast<const ThrowStmt *>(&s)) return exprMayAutorelease(x->value.get());
+    if (auto *x = as<const SwitchStmt>(&s)) return exprMayAutorelease(x->subject.get());
+    if (auto *x = as<const ThrowStmt>(&s)) return exprMayAutorelease(x->value.get());
     return false;
 }
 
 std::string CodeGen::emitOwned(const Expr &e, const TypeRef &target) const {
-    if (refKind(target) == RefKind::None || dynamic_cast<const NullLiteralExpr *>(&e) ||
-        dynamic_cast<const StringLiteralExpr *>(&e)) // literals are permanent
+    if (refKind(target) == RefKind::None || as<const NullLiteralExpr>(&e) ||
+        as<const StringLiteralExpr>(&e)) // literals are permanent
         return emitAs(e, target);
-    if (auto *as = dynamic_cast<const AsExpr *>(&e);
-        as && refKind(target) == RefKind::Str && dynamic_cast<const CBlockExpr *>(as->operand.get()) &&
-        as->operand->type.kind == TypeRef::Kind::String)
-        return emitOwned(*as->operand, target); // `%{ … %} as string`: take the C result over
+    if (auto *cast = as<const AsExpr>(&e);
+        cast && refKind(target) == RefKind::Str && as<const CBlockExpr>(cast->operand.get()) &&
+        cast->operand->type.kind == TypeRef::Kind::String)
+        return emitOwned(*cast->operand, target); // `%{ … %} as string`: take the C result over
     bool hoisted = !exprOverride_.empty() && exprOverride_.count(&e);
     if (!hoisted && isRefProducer(e)) {
         // The result is already +1: hand it over without the release list.
@@ -597,23 +597,23 @@ void CodeGen::ownAssignedParams(const Block &body, const std::vector<Param> &par
     std::function<void(const Block &)> scanBlock;
     std::function<void(const Stmt *)> scan = [&](const Stmt *s) {
         if (!s) return;
-        if (auto *a = dynamic_cast<const AssignStmt *>(s)) {
-            if (auto *n = dynamic_cast<const NameExpr *>(a->target.get()); n && n->resolvedGlobal.empty())
+        if (auto *a = as<const AssignStmt>(s)) {
+            if (auto *n = as<const NameExpr>(a->target.get()); n && n->resolvedGlobal.empty())
                 assigned.insert(n->name);
-        } else if (auto *b = dynamic_cast<const BlockStmt *>(s)) scanBlock(b->block);
-        else if (auto *i = dynamic_cast<const IfStmt *>(s)) { scanBlock(i->thenBlock); scan(i->elseStmt.get()); }
-        else if (auto *w = dynamic_cast<const WhileStmt *>(s)) scanBlock(w->body);
-        else if (auto *d = dynamic_cast<const DoWhileStmt *>(s)) scanBlock(d->body);
-        else if (auto *f = dynamic_cast<const ForStmt *>(s)) { scan(f->init.get()); scan(f->update.get()); scanBlock(f->body); }
-        else if (auto *fi = dynamic_cast<const ForInStmt *>(s)) scanBlock(fi->body);
-        else if (auto *sw = dynamic_cast<const SwitchStmt *>(s)) {
+        } else if (auto *b = as<const BlockStmt>(s)) scanBlock(b->block);
+        else if (auto *i = as<const IfStmt>(s)) { scanBlock(i->thenBlock); scan(i->elseStmt.get()); }
+        else if (auto *w = as<const WhileStmt>(s)) scanBlock(w->body);
+        else if (auto *d = as<const DoWhileStmt>(s)) scanBlock(d->body);
+        else if (auto *f = as<const ForStmt>(s)) { scan(f->init.get()); scan(f->update.get()); scanBlock(f->body); }
+        else if (auto *fi = as<const ForInStmt>(s)) scanBlock(fi->body);
+        else if (auto *sw = as<const SwitchStmt>(s)) {
             for (const auto &c : sw->cases) scanBlock(c.body);
             scanBlock(sw->defaultBody);
-        } else if (auto *t = dynamic_cast<const TryStmt *>(s)) {
+        } else if (auto *t = as<const TryStmt>(s)) {
             scanBlock(t->tryBlock);
             for (const auto &c : t->catches) scanBlock(c.block);
             scanBlock(t->finallyBlock);
-        } else if (auto *df = dynamic_cast<const DeferStmt *>(s)) scanBlock(df->body);
+        } else if (auto *df = as<const DeferStmt>(s)) scanBlock(df->body);
     };
     scanBlock = [&](const Block &b) { for (const auto &st : b.statements) scan(st.get()); };
     scanBlock(body);
@@ -642,11 +642,11 @@ bool CodeGen::isWeakField(const MemberExpr &m) const {
 
 bool CodeGen::isUnstableRef(const Expr &e) const {
     if (refKind(e.type) == RefKind::None) return false;
-    if (auto *ix = dynamic_cast<const IndexExpr *>(&e)) return ix->overloadClass.empty() && !ix->isSlice; // operator[] results and slices are fresh
-    if (auto *m = dynamic_cast<const MemberExpr *>(&e); m && m->bound) return false;
-    if (dynamic_cast<const MemberExpr *>(&e) || dynamic_cast<const DerefExpr *>(&e)) return true;
-    if (auto *n = dynamic_cast<const NameExpr *>(&e)) return !n->resolvedGlobal.empty();
-    if (auto *c = dynamic_cast<const CallExpr *>(&e); c && c->kind == CallKind::Builtin && c->targetName == "__unwrap")
+    if (auto *ix = as<const IndexExpr>(&e)) return ix->overloadClass.empty() && !ix->isSlice; // operator[] results and slices are fresh
+    if (auto *m = as<const MemberExpr>(&e); m && m->bound) return false;
+    if (as<const MemberExpr>(&e) || as<const DerefExpr>(&e)) return true;
+    if (auto *n = as<const NameExpr>(&e)) return !n->resolvedGlobal.empty();
+    if (auto *c = as<const CallExpr>(&e); c && c->kind == CallKind::Builtin && c->targetName == "__unwrap")
         return isUnstableRef(*c->args[0]);
     return false;
 }

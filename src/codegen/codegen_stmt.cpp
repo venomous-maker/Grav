@@ -65,7 +65,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
     // where the statement can call out; pure computation never shows in a trace).
     if (stmt.line > 0) curSrcLine_ = stmt.line;
     if (trace_ && stmtMayCall(stmt)) emitLineMark(stmt.line);
-    if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
+    if (auto *s = as<const LetStmt>(&stmt)) {
         auto temps = hoistTemps(s->init.get());
         // Written inside a `try` and read after a longjmp: must be volatile.
         const TypeRef &t = s->resolvedType;
@@ -85,18 +85,18 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         endTemps(temps);
         return;
     }
-    if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
+    if (auto *s = as<const AssignStmt>(&stmt)) {
         // `obj[k] op= v` (rewritten to obj[k] = obj[k] op v): evaluate obj and
         // the indices once, for both the read and the write.
         std::vector<const Expr *> once;
         std::vector<std::pair<const Expr *, const Expr *>> pairs; // (target part, read-back part)
         if (s->readBack) {
-            if (auto *ix = dynamic_cast<const IndexExpr *>(s->target.get())) {
+            if (auto *ix = as<const IndexExpr>(s->target.get())) {
                 auto *rb = static_cast<const IndexExpr *>(s->readBack);
                 pairs = {{ix->base.get(), rb->base.get()}, {ix->index.get(), rb->index.get()}};
                 for (size_t i = 0; i < ix->more.size() && i < rb->more.size(); ++i)
                     pairs.push_back({ix->more[i].get(), rb->more[i].get()});
-            } else if (auto *m = dynamic_cast<const MemberExpr *>(s->target.get());
+            } else if (auto *m = as<const MemberExpr>(s->target.get());
                        m && m->kind == MemberKind::InstanceField) {
                 pairs = {{m->object.get(), static_cast<const MemberExpr *>(s->readBack)->object.get()}};
             }
@@ -124,7 +124,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         }
         return;
     }
-    if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
+    if (auto *s = as<const ReturnStmt>(&stmt)) {
         bool cleanups = !fnPoolMark_.empty(); // try/finally/defer/a drain to run on the way out?
         for (const auto &c : cleanups_)
             if (c.kind == Cleanup::Try || c.kind == Cleanup::Finally || c.kind == Cleanup::Defer ||
@@ -158,17 +158,17 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         }
         return;
     }
-    if (auto *s = dynamic_cast<const ExprStmt *>(&stmt)) {
+    if (auto *s = as<const ExprStmt>(&stmt)) {
         auto temps = hoistTemps(s->expr.get());
         line(emitExpr(*s->expr) + ";");
         endTemps(temps);
         return;
     }
-    if (auto *s = dynamic_cast<const BlockStmt *>(&stmt)) {
+    if (auto *s = as<const BlockStmt>(&stmt)) {
         emitBraced(s->block);
         return;
     }
-    if (auto *s = dynamic_cast<const IfStmt *>(&stmt)) {
+    if (auto *s = as<const IfStmt>(&stmt)) {
         emitIf(*s);
         return;
     }
@@ -185,7 +185,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         if (!loopMarks_.back().empty()) line("grav_pool_drain(" + loopMarks_.back() + ");");
         loopMarks_.pop_back();
     };
-    if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
+    if (auto *s = as<const WhileStmt>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()) || exitSkipsDrain(s->body, false, true));
         std::string id = pushLoopLabel(s->label);
         line("while (" + emitOrdered(*s->cond) + ") {");
@@ -195,7 +195,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         loopEnd();
         return;
     }
-    if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
+    if (auto *s = as<const DoWhileStmt>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()) || exitSkipsDrain(s->body, false, true));
         std::string id = pushLoopLabel(s->label);
         line("do {");
@@ -205,7 +205,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         loopEnd();
         return;
     }
-    if (auto *s = dynamic_cast<const ForStmt *>(&stmt)) {
+    if (auto *s = as<const ForStmt>(&stmt)) {
         loopMark(exprMayAutorelease(s->cond.get()) || (s->update && stmtNeedsDrain(*s->update)) ||
                  exitSkipsDrain(s->body, false, true));
         std::string init = inlineSimple(s->init.get());
@@ -219,7 +219,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         loopEnd();
         return;
     }
-    if (auto *s = dynamic_cast<const SwitchStmt *>(&stmt)) {
+    if (auto *s = as<const SwitchStmt>(&stmt)) {
         std::string tmp = "__sw" + std::to_string(switchCounter_++);
         bool isStr = s->subject->type.kind == TypeRef::Kind::String;
         line("{");
@@ -260,11 +260,11 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         line("}");
         return;
     }
-    if (auto *s = dynamic_cast<const ForInStmt *>(&stmt)) {
+    if (auto *s = as<const ForInStmt>(&stmt)) {
         emitForIn(*s);
         return;
     }
-    if (auto *s = dynamic_cast<const ThrowStmt *>(&stmt)) {
+    if (auto *s = as<const ThrowStmt>(&stmt)) {
         const TypeRef &vt = s->value->type;
         const std::string &ty = vt.name;
         // Hoist the value into a temp so describe() isn't evaluated twice.
@@ -285,12 +285,12 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         line("grav_throw((void*)(" + tmp + "), &" + mangle(ty) + "_typeinfo, " + mt + ");");
         return;
     }
-    if (auto *s = dynamic_cast<const TryStmt *>(&stmt)) {
+    if (auto *s = as<const TryStmt>(&stmt)) {
         emitTry(*s);
         return;
     }
     // Leaving a loop early first unwinds any try/finally/defer inside it.
-    if (auto *b = dynamic_cast<const BreakStmt *>(&stmt)) {
+    if (auto *b = as<const BreakStmt>(&stmt)) {
         if (!b->label.empty()) {
             std::string id = loopLabelId(b->label);
             emitUnwind(true, id);
@@ -301,7 +301,7 @@ void CodeGen::emitStmt(const Stmt &stmt) {
         line("break;");
         return;
     }
-    if (auto *c = dynamic_cast<const ContinueStmt *>(&stmt)) {
+    if (auto *c = as<const ContinueStmt>(&stmt)) {
         if (!c->label.empty()) {
             std::string id = loopLabelId(c->label);
             emitUnwind(true, id);
@@ -321,11 +321,11 @@ void CodeGen::emitIf(const IfStmt &s) {
     // block `else` is emitted directly (no redundant inner braces).
     const Stmt *e = s.elseStmt.get();
     while (e) {
-        if (auto *elif = dynamic_cast<const IfStmt *>(e)) {
+        if (auto *elif = as<const IfStmt>(e)) {
             line("} else if (" + emitOrdered(*elif->cond) + ") {");
             indent_++; emitBlock(elif->thenBlock); indent_--;
             e = elif->elseStmt.get();
-        } else if (auto *blk = dynamic_cast<const BlockStmt *>(e)) {
+        } else if (auto *blk = as<const BlockStmt>(e)) {
             line("} else {");
             indent_++; emitBlock(blk->block); indent_--;
             e = nullptr;
@@ -348,11 +348,11 @@ void CodeGen::emitBraced(const Block &block) {
 
 std::string CodeGen::inlineSimple(const Stmt *s) const {
     if (!s) return "";
-    if (auto *l = dynamic_cast<const LetStmt *>(s))
+    if (auto *l = as<const LetStmt>(s))
         return cTy(l->resolvedType) + " " + l->name + " = " + emitAs(*l->init, l->resolvedType);
-    if (auto *a = dynamic_cast<const AssignStmt *>(s))
+    if (auto *a = as<const AssignStmt>(s))
         return emitAssign(*a);
-    if (auto *e = dynamic_cast<const ExprStmt *>(s))
+    if (auto *e = as<const ExprStmt>(s))
         return emitExpr(*e->expr);
     return "";
 }
@@ -364,12 +364,12 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
     if (!s.isCompound && refKind(s.target->type) != RefKind::None) {
         const TypeRef &tt = s.target->type;
         const Expr *tgt = s.target.get();
-        if (auto *n = dynamic_cast<const NameExpr *>(tgt)) {
+        if (auto *n = as<const NameExpr>(tgt)) {
             std::string v = n->resolvedGlobal.empty() ? n->name : n->resolvedGlobal;
             return "{ " + cTy(tt) + " __new = " + emitOwned(*s.value, tt) + "; " + cTy(tt) + " __old = " + v +
                    "; " + v + " = __new; " + releaseOf(tt, "__old") + " }";
         }
-        if (auto *m = dynamic_cast<const MemberExpr *>(tgt); m && isWeakField(*m)) {
+        if (auto *m = as<const MemberExpr>(tgt); m && isWeakField(*m)) {
             // A weak slot counts the target weakly: it never keeps it alive.
             std::string slot = "(" + emitExpr(*m->object) + ")->" + memberCName(m->member);
             return "{ " + cTy(tt) + "* __slot = &(" + slot + "); " + cTy(tt) + " __new = " + emitAs(*s.value, tt) +
@@ -377,8 +377,8 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
         }
         // Fields of objects and of value structs, and fixed-array elements, own
         // their references (value copies retain theirs).
-        if (dynamic_cast<const MemberExpr *>(tgt)) return storeOwned(emitExpr(*tgt), tt, *s.value);
-        if (auto *ix = dynamic_cast<const IndexExpr *>(tgt); ix && ix->overloadClass.empty()) {
+        if (as<const MemberExpr>(tgt)) return storeOwned(emitExpr(*tgt), tt, *s.value);
+        if (auto *ix = as<const IndexExpr>(tgt); ix && ix->overloadClass.empty()) {
             if (ix->base->type.isArray()) return storeOwned(emitExpr(*tgt), tt, *s.value);
             // A raw buffer slot (T*): containers manage these themselves with
             // __retain/__release, so the store is a move: a fresh result is
@@ -389,10 +389,10 @@ std::string CodeGen::emitAssign(const AssignStmt &s) const {
             ownedRoot_ = saved;
             return out;
         }
-        if (dynamic_cast<const DerefExpr *>(tgt)) return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
+        if (as<const DerefExpr>(tgt)) return emitExpr(*tgt) + " = " + emitOwned(*s.value, tt);
     }
     // `obj[k] = v` on a class with `operator[]=` calls its op_index_set(k, v).
-    if (auto *ix = dynamic_cast<const IndexExpr *>(s.target.get()); ix && !ix->overloadClass.empty()) {
+    if (auto *ix = as<const IndexExpr>(s.target.get()); ix && !ix->overloadClass.empty()) {
         std::vector<TypeRef> params;
         if (const MethodInfo *mi = reg_->findMethod(ix->overloadClass, ix->overloadMethod))
             params = mi->paramTypes;

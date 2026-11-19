@@ -31,11 +31,11 @@ void CodeGen::emitPrototypes(const Program &program) {
     for (const auto &declPtr : program.decls) {
         // Everything lives in one translation unit, so every generated function is
         // `static`: the C compiler may then inline, specialize, or drop it freely.
-        if (auto *fn = dynamic_cast<const FunctionDecl *>(declPtr.get())) {
+        if (auto *fn = as<const FunctionDecl>(declPtr.get())) {
             protos_ += "static " + cTy(fn->returnType) + " " +
                        funcCName(fn->fqName, fn->overloadIndex) + paramList(fn->params, "") + ";\n";
             if (fn->isAsync) emitAsyncSpawner(*fn);
-        } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
+        } else if (auto *c = as<const ClassDecl>(declPtr.get())) {
             std::string S = structName(c->fqName);
             if (!c->constructor.present)
                 protos_ += "static " + S + "* " + ctorCName(c->fqName) + "(void);\n";
@@ -120,11 +120,11 @@ void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) 
 
 void CodeGen::emitDefinitions(const Program &program) {
     for (const auto &declPtr : program.decls) {
-        if (auto *fn = dynamic_cast<const FunctionDecl *>(declPtr.get())) {
+        if (auto *fn = as<const FunctionDecl>(declPtr.get())) {
             emitFunction(*fn);
-        } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
+        } else if (auto *c = as<const ClassDecl>(declPtr.get())) {
             emitClassBodies(*c);
-        } else if (auto *t = dynamic_cast<const TestDecl *>(declPtr.get()); t && testMode_) {
+        } else if (auto *t = as<const TestDecl>(declPtr.get()); t && testMode_) {
             std::string fn = "grav_test_" + std::to_string(tests_.size());
             tests_.push_back({t->name, fn});
             defs_ += lineDirective(t->line);

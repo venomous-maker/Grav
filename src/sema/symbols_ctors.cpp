@@ -11,8 +11,8 @@ namespace {
 bool callsSuper(Block &body) {
     bool found = false;
     visitBlockExprs(body, [&](Expr &e) {
-        if (auto *c = dynamic_cast<CallExpr *>(&e))
-            if (dynamic_cast<SuperExpr *>(c->callee.get())) found = true;
+        if (auto *c = as<CallExpr>(&e))
+            if (as<SuperExpr>(c->callee.get())) found = true;
     });
     return found;
 }
@@ -63,9 +63,9 @@ StmtPtr fieldInit(const FieldDecl &f) {
 
 // Whether `s` is a `super(...)` call statement.
 bool isSuperCall(const Stmt *s) {
-    auto *es = dynamic_cast<const ExprStmt *>(s);
-    auto *c = es ? dynamic_cast<const CallExpr *>(es->expr.get()) : nullptr;
-    return c && dynamic_cast<const SuperExpr *>(c->callee.get());
+    auto *es = as<const ExprStmt>(s);
+    auto *c = es ? as<const CallExpr>(es->expr.get()) : nullptr;
+    return c && as<const SuperExpr>(c->callee.get());
 }
 } // namespace
 

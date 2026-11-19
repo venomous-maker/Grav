@@ -118,19 +118,19 @@ std::string CodeGen::enumNameFn(const std::string &enumFq) const {
 }
 
 void CodeGen::flattenString(const Expr &e, std::vector<FmtPart> &parts) const {
-    if (auto *b = dynamic_cast<const BinaryExpr *>(&e);
+    if (auto *b = as<const BinaryExpr>(&e);
         b && b->stringConcat && b->overloadMethod.empty()) {
         flattenString(*b->left, parts);
         flattenString(*b->right, parts);
         return;
     }
-    if (auto *lit = dynamic_cast<const StringLiteralExpr *>(&e)) {
+    if (auto *lit = as<const StringLiteralExpr>(&e)) {
         if (!lit->value.empty()) parts.push_back({true, lit->value, ""});
         return;
     }
     // `str(x)` (also what `${x}` desugars to): format the value in place
     // instead of allocating a temporary string for it.
-    if (auto *c = dynamic_cast<const CallExpr *>(&e);
+    if (auto *c = as<const CallExpr>(&e);
         c && c->kind == CallKind::Builtin && c->targetName == "str" && c->args.size() == 1) {
         const Expr &a = *c->args[0];
         const TypeRef &t = a.type;
@@ -156,7 +156,7 @@ void CodeGen::flattenString(const Expr &e, std::vector<FmtPart> &parts) const {
 }
 
 std::string CodeGen::emitStringExpr(const Expr &e) const {
-    auto *b = dynamic_cast<const BinaryExpr *>(&e);
+    auto *b = as<const BinaryExpr>(&e);
     if (!b || !b->stringConcat || !b->overloadMethod.empty()) return emitExpr(e);
 
     std::vector<FmtPart> raw, parts;
@@ -199,7 +199,7 @@ std::string CodeGen::emitToString(const Expr &e) const {
     const TypeRef &t = e.type;
     auto ar = [](const std::string &s) { return "grav_str_autorelease(" + s + ")"; };
     switch (t.kind) {
-        case TypeRef::Kind::String: return isRefProducer(e) && dynamic_cast<const BinaryExpr *>(&e) ? ar(emitStringExpr(e)) : emitStringExpr(e);
+        case TypeRef::Kind::String: return isRefProducer(e) && as<const BinaryExpr>(&e) ? ar(emitStringExpr(e)) : emitStringExpr(e);
         case TypeRef::Kind::Int:
             return ar(t.isUnsigned ? "grav_uint_to_str((unsigned long long)(" + emitExpr(e) + "))"
                                    : "grav_int_to_str((long long)(" + emitExpr(e) + "))");

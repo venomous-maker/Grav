@@ -18,6 +18,16 @@ namespace grav {
 // Expressions
 // ===========================================================================
 
+// `as<T>(node)`: the node as a T, or null: a dynamic_cast for the AST's node
+// classes, which are all leaves (nothing derives from a ConcreteExpr). The compiler
+// is one executable, so each class has one type_info, and the check is a single
+// pointer comparison instead of dynamic_cast's walk comparing type names (the
+// front end tries a node against dozens of classes, many times over).
+template <typename T, typename B>
+inline T *as(B *node) {
+    return node && &typeid(*node) == &typeid(T) ? static_cast<T *>(node) : nullptr;
+}
+
 struct Expr {
     int line = 0;
     int col = 0;

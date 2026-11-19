@@ -36,15 +36,15 @@ bool blockTerminates(const Block &b) {
 // Does a `break` inside this block exit *this* loop (not a nested one)?
 bool hasOwnBreak(const Block &b);
 bool stmtHasOwnBreak(const Stmt &s) {
-    if (dynamic_cast<const BreakStmt *>(&s)) return true;
-    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return hasOwnBreak(x->block);
-    if (auto *x = dynamic_cast<const IfStmt *>(&s))
+    if (as<const BreakStmt>(&s)) return true;
+    if (auto *x = as<const BlockStmt>(&s)) return hasOwnBreak(x->block);
+    if (auto *x = as<const IfStmt>(&s))
         return hasOwnBreak(x->thenBlock) || (x->elseStmt && stmtHasOwnBreak(*x->elseStmt));
-    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+    if (auto *x = as<const SwitchStmt>(&s)) {
         for (const auto &c : x->cases) if (hasOwnBreak(c.body)) return true;
         return x->hasDefault && hasOwnBreak(x->defaultBody);
     }
-    if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+    if (auto *x = as<const TryStmt>(&s)) {
         for (const auto &c : x->catches) if (hasOwnBreak(c.block)) return true;
         return hasOwnBreak(x->tryBlock) || hasOwnBreak(x->finallyBlock);
     }
@@ -57,36 +57,36 @@ bool hasOwnBreak(const Block &b) {
 }
 
 bool isTrueLiteral(const Expr *e) {
-    auto *b = dynamic_cast<const BoolLiteralExpr *>(e);
+    auto *b = as<const BoolLiteralExpr>(e);
     return b && b->value;
 }
 
 bool terminates(const Stmt &s) {
-    if (dynamic_cast<const ReturnStmt *>(&s) || dynamic_cast<const ThrowStmt *>(&s))
+    if (as<const ReturnStmt>(&s) || as<const ThrowStmt>(&s))
         return true;
-    if (auto *x = dynamic_cast<const ExprStmt *>(&s)) {
+    if (auto *x = as<const ExprStmt>(&s)) {
         // Inline C may return on its own; exit()/panic() never come back.
-        if (dynamic_cast<const CBlockExpr *>(x->expr.get())) return true;
-        if (auto *c = dynamic_cast<const CallExpr *>(x->expr.get()))
+        if (as<const CBlockExpr>(x->expr.get())) return true;
+        if (auto *c = as<const CallExpr>(x->expr.get()))
             return c->kind == CallKind::Builtin &&
                    (c->targetName == "exit" || c->targetName == "panic");
         return false;
     }
-    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return blockTerminates(x->block);
-    if (auto *x = dynamic_cast<const IfStmt *>(&s))
+    if (auto *x = as<const BlockStmt>(&s)) return blockTerminates(x->block);
+    if (auto *x = as<const IfStmt>(&s))
         return x->elseStmt && blockTerminates(x->thenBlock) && terminates(*x->elseStmt);
-    if (auto *x = dynamic_cast<const WhileStmt *>(&s))
+    if (auto *x = as<const WhileStmt>(&s))
         return isTrueLiteral(x->cond.get()) && !hasOwnBreak(x->body);
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s))
+    if (auto *x = as<const DoWhileStmt>(&s))
         return (blockTerminates(x->body) || isTrueLiteral(x->cond.get())) && !hasOwnBreak(x->body);
-    if (auto *x = dynamic_cast<const ForStmt *>(&s))
+    if (auto *x = as<const ForStmt>(&s))
         return !x->cond && !hasOwnBreak(x->body);
-    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+    if (auto *x = as<const SwitchStmt>(&s)) {
         if (!x->hasDefault || !blockTerminates(x->defaultBody)) return false;
         for (const auto &c : x->cases) if (!blockTerminates(c.body)) return false;
         return true;
     }
-    if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+    if (auto *x = as<const TryStmt>(&s)) {
         if (x->hasFinally && blockTerminates(x->finallyBlock)) return true;
         if (!blockTerminates(x->tryBlock)) return false;
         for (const auto &c : x->catches) if (!blockTerminates(c.block)) return false;
@@ -162,7 +162,7 @@ const MethodInfo *TypeChecker::resolveMethodOverload(const std::vector<const Met
     // Array, a collection with push/add, a fixed array) or one function type at
     // that position, check it against that (whereIn(name, [..]) beside whereIn(name, sub)).
     auto contextType = [&](size_t i, const Expr *a) -> const TypeRef * {
-        bool list = dynamic_cast<const ArrayLiteralExpr *>(a) != nullptr, lambda = dynamic_cast<const LambdaExpr *>(a) != nullptr;
+        bool list = as<const ArrayLiteralExpr>(a) != nullptr, lambda = as<const LambdaExpr>(a) != nullptr;
         if (!list && !lambda) return nullptr;
         const TypeRef *found = nullptr;
         for (size_t k = 0; k < cands.size(); ++k) {
@@ -380,11 +380,11 @@ std::optional<TypeRef> TypeChecker::tryIndexOverload(IndexExpr &e, const TypeRef
 // the element is a copy, so the store goes to the copy, which is written back:
 //   { let base = xs  let key = i  let elem = base[key]  elem.f = v  base[key] = elem }
 bool TypeChecker::rewriteElementStore(AssignStmt &s) {
-    auto *top = dynamic_cast<MemberExpr *>(s.target.get());
+    auto *top = as<MemberExpr>(s.target.get());
     if (!top) return false;
     MemberExpr *inner = top;
-    while (auto *m = dynamic_cast<MemberExpr *>(inner->object.get())) inner = m;
-    auto *ix = dynamic_cast<IndexExpr *>(inner->object.get());
+    while (auto *m = as<MemberExpr>(inner->object.get())) inner = m;
+    auto *ix = as<IndexExpr>(inner->object.get());
     if (!ix) return false;
     // Only containers with operator[]= qualify: probe the base's type on a copy,
     // leaving no diagnostics behind (the real check happens on the rewrite).
@@ -536,7 +536,7 @@ void TypeChecker::checkForIn(ForInStmt &s) {
             if (!st.isError() && st.kind != TypeRef::Kind::Int)
                 error(s.step->line, s.step->col,
                       "a range 'step' must be an integer, got " + typeRefName(st));
-            if (auto *lit = dynamic_cast<IntLiteralExpr *>(s.step.get()); lit && lit->value == 0)
+            if (auto *lit = as<IntLiteralExpr>(s.step.get()); lit && lit->value == 0)
                 error(s.step->line, s.step->col, "a range 'step' cannot be 0");
         }
         s.iterKind = ForInKind::Range;
@@ -629,7 +629,7 @@ void TypeChecker::checkForIn(ForInStmt &s) {
 std::optional<TypeRef> TypeChecker::checkTypeNameCast(CallExpr &e, NameExpr &name) {
     if (e.targetName == "__cast") return checkExpr(*e.args[0]);
     const TypeRef *bt = builtinTypeNamed(name.name);
-    if (!bt || bt->isAny() || e.args.size() != 1 || dynamic_cast<NamedArgExpr *>(e.args[0].get()) ||
+    if (!bt || bt->isAny() || e.args.size() != 1 || as<NamedArgExpr>(e.args[0].get()) ||
         lookupLocal(name.name) || !reg_->resolveFunc(name.name, currentNs_).empty() ||
         !reg_->resolveGlobal(name.name, currentNs_).empty())
         return std::nullopt;

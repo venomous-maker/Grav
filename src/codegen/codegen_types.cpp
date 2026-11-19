@@ -11,15 +11,15 @@ namespace grav {
 // A parameter's default as C, when it is a literal the type takes as it is
 // (numbers, bools, text, and null for an object); "" otherwise.
 static std::string literalDefault(const Expr &e, const TypeRef &t, const std::function<std::string(const std::string &)> &esc) {
-    if (auto *i = dynamic_cast<const IntLiteralExpr *>(&e)) return t.isNullable() ? "" : i->raw;
-    if (auto *f = dynamic_cast<const FloatLiteralExpr *>(&e)) return t.isNullable() ? "" : f->raw;
-    if (auto *b = dynamic_cast<const BoolLiteralExpr *>(&e)) return t.isNullable() ? "" : (b->value ? "true" : "false");
-    if (auto *s = dynamic_cast<const StringLiteralExpr *>(&e)) return t.isNullable() ? "" : "\"" + esc(s->value) + "\"";
-    if (dynamic_cast<const NullLiteralExpr *>(&e)) return t.isNamed() || t.kind == TypeRef::Kind::String ? "0" : "";
+    if (auto *i = as<const IntLiteralExpr>(&e)) return t.isNullable() ? "" : i->raw;
+    if (auto *f = as<const FloatLiteralExpr>(&e)) return t.isNullable() ? "" : f->raw;
+    if (auto *b = as<const BoolLiteralExpr>(&e)) return t.isNullable() ? "" : (b->value ? "true" : "false");
+    if (auto *s = as<const StringLiteralExpr>(&e)) return t.isNullable() ? "" : "\"" + esc(s->value) + "\"";
+    if (as<const NullLiteralExpr>(&e)) return t.isNamed() || t.kind == TypeRef::Kind::String ? "0" : "";
     // (`-1` is `0 - 1` by now)
-    if (auto *b = dynamic_cast<const BinaryExpr *>(&e))
+    if (auto *b = as<const BinaryExpr>(&e))
         if (b->op == BinaryOp::Sub && b->left && b->right)
-            if (auto *z = dynamic_cast<const IntLiteralExpr *>(b->left.get()); z && z->raw == "0")
+            if (auto *z = as<const IntLiteralExpr>(b->left.get()); z && z->raw == "0")
                 if (std::string v = literalDefault(*b->right, t, esc); !v.empty() && v[0] != '"' && v != "true" && v != "false") return "(-" + v + ")";
     return "";
 }
@@ -40,7 +40,7 @@ std::string CodeGen::generate(const Program &program, const Registry &reg,
     // Top-level inline C (`%{ ... %}`): emitted after prototypes so it can use
     // generated types and declare globals/helpers the rest of the program shares.
     for (const auto &declPtr : program.decls)
-        if (auto *cb = dynamic_cast<const CBlockDecl *>(declPtr.get()))
+        if (auto *cb = as<const CBlockDecl>(declPtr.get()))
             cblocks_ += "/* inline C */\n" + hoistIncludes(cb->code) + "\n";
     if (!cblocks_.empty()) cblocks_ += "\n";
     emitVTableInstances();
@@ -81,23 +81,23 @@ SourceMapEntry CodeGen::origin(int combinedLine) const {
 // Whether C can initialize a global with `e` itself: literals, arithmetic on
 // them, enum members, and array or struct literals of those.
 bool CodeGen::isStaticInit(const Expr &e) const {
-    if (dynamic_cast<const IntLiteralExpr *>(&e) || dynamic_cast<const FloatLiteralExpr *>(&e) ||
-        dynamic_cast<const BoolLiteralExpr *>(&e) || dynamic_cast<const NullLiteralExpr *>(&e) ||
-        dynamic_cast<const StringLiteralExpr *>(&e))
+    if (as<const IntLiteralExpr>(&e) || as<const FloatLiteralExpr>(&e) ||
+        as<const BoolLiteralExpr>(&e) || as<const NullLiteralExpr>(&e) ||
+        as<const StringLiteralExpr>(&e))
         return true;
-    if (auto *b = dynamic_cast<const BinaryExpr *>(&e))
+    if (auto *b = as<const BinaryExpr>(&e))
         return !b->stringConcat && b->overloadMethod.empty() && refKind(e.type) == RefKind::None &&
                isStaticInit(*b->left) && isStaticInit(*b->right);
-    if (auto *u = dynamic_cast<const UnaryExpr *>(&e)) return isStaticInit(*u->operand);
-    if (auto *t = dynamic_cast<const TernaryExpr *>(&e))
+    if (auto *u = as<const UnaryExpr>(&e)) return isStaticInit(*u->operand);
+    if (auto *t = as<const TernaryExpr>(&e))
         return refKind(e.type) == RefKind::None && isStaticInit(*t->cond) && isStaticInit(*t->thenExpr) && isStaticInit(*t->elseExpr);
-    if (auto *m = dynamic_cast<const MemberExpr *>(&e)) return m->kind == MemberKind::EnumValue;
-    if (auto *a = dynamic_cast<const ArrayLiteralExpr *>(&e)) {
+    if (auto *m = as<const MemberExpr>(&e)) return m->kind == MemberKind::EnumValue;
+    if (auto *a = as<const ArrayLiteralExpr>(&e)) {
         if (a->built) return false;
         for (const auto &x : a->elements) if (!isStaticInit(*x)) return false;
         return true;
     }
-    if (auto *s = dynamic_cast<const StructLiteralExpr *>(&e)) {
+    if (auto *s = as<const StructLiteralExpr>(&e)) {
         for (const auto &f : s->fields) if (!isStaticInit(*f.value)) return false;
         return true;
     }
@@ -126,9 +126,9 @@ void CodeGen::emitGlobals() {
                     gi->cName + " = " + emitOwned(*init, gi->type) + ";\n";
     };
     for (const auto &declPtr : program_->decls) {
-        if (auto *g = dynamic_cast<const GlobalVarDecl *>(declPtr.get())) {
+        if (auto *g = as<const GlobalVarDecl>(declPtr.get())) {
             one(g->fqName, g->init.get(), g->line);
-        } else if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
+        } else if (auto *c = as<const ClassDecl>(declPtr.get())) {
             for (const auto &sf : c->staticFields)
                 one(c->fqName + "." + sf.name, sf.init.get(), sf.line);
         }
@@ -202,48 +202,48 @@ void CodeGen::collectType(const TypeRef &t) {
 
 void CodeGen::collectInExpr(const Expr &expr) {
     collectType(expr.type);
-    if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
+    if (auto *e = as<const BinaryExpr>(&expr)) {
         collectInExpr(*e->left); collectInExpr(*e->right);
-    } else if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
+    } else if (auto *e = as<const UnaryExpr>(&expr)) {
         collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const TernaryExpr *>(&expr)) {
+    } else if (auto *e = as<const TernaryExpr>(&expr)) {
         collectInExpr(*e->cond); collectInExpr(*e->thenExpr); collectInExpr(*e->elseExpr);
-    } else if (auto *e = dynamic_cast<const AsExpr *>(&expr)) {
+    } else if (auto *e = as<const AsExpr>(&expr)) {
         collectType(e->target); collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
+    } else if (auto *e = as<const IsExpr>(&expr)) {
         collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const AwaitExpr *>(&expr)) {
+    } else if (auto *e = as<const AwaitExpr>(&expr)) {
         collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const AddrOfExpr *>(&expr)) {
+    } else if (auto *e = as<const AddrOfExpr>(&expr)) {
         collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const DerefExpr *>(&expr)) {
+    } else if (auto *e = as<const DerefExpr>(&expr)) {
         collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
+    } else if (auto *e = as<const CoalesceExpr>(&expr)) {
         collectInExpr(*e->left); collectInExpr(*e->right);
-    } else if (auto *e = dynamic_cast<const IncDecExpr *>(&expr)) {
+    } else if (auto *e = as<const IncDecExpr>(&expr)) {
         collectInExpr(*e->target);
-    } else if (auto *e = dynamic_cast<const CastExpr *>(&expr)) {
+    } else if (auto *e = as<const CastExpr>(&expr)) {
         collectType(e->target); collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const SizeofExpr *>(&expr)) {
+    } else if (auto *e = as<const SizeofExpr>(&expr)) {
         if (e->isType) collectType(e->target);
         else if (e->operand) collectInExpr(*e->operand);
-    } else if (auto *e = dynamic_cast<const ArrayLiteralExpr *>(&expr)) {
+    } else if (auto *e = as<const ArrayLiteralExpr>(&expr)) {
         if (e->built) { collectInExpr(*e->built); return; } // a collection literal
         for (const auto &el : e->elements) collectInExpr(*el);
-    } else if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
+    } else if (auto *e = as<const IndexExpr>(&expr)) {
         collectInExpr(*e->base); collectInExpr(*e->index);
         for (const auto &m : e->more) collectInExpr(*m);
-    } else if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
+    } else if (auto *e = as<const NewExpr>(&expr)) {
         for (const auto &a : e->args) collectInExpr(*a);
-    } else if (auto *e = dynamic_cast<const StructLiteralExpr *>(&expr)) {
+    } else if (auto *e = as<const StructLiteralExpr>(&expr)) {
         for (const auto &f : e->fields) collectInExpr(*f.value);
-    } else if (auto *e = dynamic_cast<const CallExpr *>(&expr)) {
+    } else if (auto *e = as<const CallExpr>(&expr)) {
         if (e->callee) collectInExpr(*e->callee);
         for (const auto &a : e->args) collectInExpr(*a);
-    } else if (auto *e = dynamic_cast<const MemberExpr *>(&expr)) {
+    } else if (auto *e = as<const MemberExpr>(&expr)) {
         if (e->bound) { collectInExpr(*e->bound); return; } // a method used as a value
         if (e->object) collectInExpr(*e->object);
-    } else if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) {
+    } else if (auto *e = as<const LambdaExpr>(&expr)) {
         // Inner lambdas first, so each is lifted before the code that creates it.
         for (const auto &p : e->params) collectType(p.type);
         for (const auto &c : e->captures) collectType(c.type);
@@ -255,44 +255,44 @@ void CodeGen::collectInExpr(const Expr &expr) {
 }
 
 void CodeGen::collectInStmt(const Stmt &stmt) {
-    if (auto *s = dynamic_cast<const LetStmt *>(&stmt)) {
+    if (auto *s = as<const LetStmt>(&stmt)) {
         collectType(s->resolvedType);
         if (s->init) collectInExpr(*s->init);
-    } else if (auto *s = dynamic_cast<const AssignStmt *>(&stmt)) {
+    } else if (auto *s = as<const AssignStmt>(&stmt)) {
         collectInExpr(*s->target); collectInExpr(*s->value);
-    } else if (auto *s = dynamic_cast<const ReturnStmt *>(&stmt)) {
+    } else if (auto *s = as<const ReturnStmt>(&stmt)) {
         if (s->value) collectInExpr(*s->value);
-    } else if (auto *s = dynamic_cast<const ExprStmt *>(&stmt)) {
+    } else if (auto *s = as<const ExprStmt>(&stmt)) {
         collectInExpr(*s->expr);
-    } else if (auto *s = dynamic_cast<const BlockStmt *>(&stmt)) {
+    } else if (auto *s = as<const BlockStmt>(&stmt)) {
         collectInBlock(s->block);
-    } else if (auto *s = dynamic_cast<const IfStmt *>(&stmt)) {
+    } else if (auto *s = as<const IfStmt>(&stmt)) {
         collectInExpr(*s->cond); collectInBlock(s->thenBlock);
         if (s->elseStmt) collectInStmt(*s->elseStmt);
-    } else if (auto *s = dynamic_cast<const WhileStmt *>(&stmt)) {
+    } else if (auto *s = as<const WhileStmt>(&stmt)) {
         collectInExpr(*s->cond); collectInBlock(s->body);
-    } else if (auto *s = dynamic_cast<const DoWhileStmt *>(&stmt)) {
+    } else if (auto *s = as<const DoWhileStmt>(&stmt)) {
         collectInBlock(s->body); collectInExpr(*s->cond);
-    } else if (auto *s = dynamic_cast<const ForStmt *>(&stmt)) {
+    } else if (auto *s = as<const ForStmt>(&stmt)) {
         if (s->init) collectInStmt(*s->init);
         if (s->cond) collectInExpr(*s->cond);
         if (s->update) collectInStmt(*s->update);
         collectInBlock(s->body);
-    } else if (auto *s = dynamic_cast<const ForInStmt *>(&stmt)) {
+    } else if (auto *s = as<const ForInStmt>(&stmt)) {
         collectInExpr(*s->lo);
         if (s->hi) collectInExpr(*s->hi);
         if (s->step) collectInExpr(*s->step);
         collectType(s->varType);
         collectInBlock(s->body);
-    } else if (auto *s = dynamic_cast<const DeferStmt *>(&stmt)) {
+    } else if (auto *s = as<const DeferStmt>(&stmt)) {
         collectInBlock(s->body);
-    } else if (auto *s = dynamic_cast<const ThrowStmt *>(&stmt)) {
+    } else if (auto *s = as<const ThrowStmt>(&stmt)) {
         collectInExpr(*s->value);
-    } else if (auto *s = dynamic_cast<const TryStmt *>(&stmt)) {
+    } else if (auto *s = as<const TryStmt>(&stmt)) {
         collectInBlock(s->tryBlock);
         for (const auto &c : s->catches) collectInBlock(c.block);
         collectInBlock(s->finallyBlock);
-    } else if (auto *s = dynamic_cast<const SwitchStmt *>(&stmt)) {
+    } else if (auto *s = as<const SwitchStmt>(&stmt)) {
         collectInExpr(*s->subject);
         for (const auto &c : s->cases) {
             for (const auto &v : c.values) collectInExpr(*v);
@@ -315,9 +315,9 @@ void CodeGen::collectArrayTypes() {
     };
     for (const auto &declPtr : program_->decls) {
         Decl *d = declPtr.get();
-        if (auto *st = dynamic_cast<const StructDecl *>(d)) {
+        if (auto *st = as<const StructDecl>(d)) {
             for (const auto &f : st->fields) collectType(f.type);
-        } else if (auto *c = dynamic_cast<const ClassDecl *>(d)) {
+        } else if (auto *c = as<const ClassDecl>(d)) {
             for (const auto &f : c->fields) collectType(f.type);
             if (c->constructor.present) {
                 for (const auto &p : c->constructor.params) collectType(p.type);
@@ -336,12 +336,12 @@ void CodeGen::collectArrayTypes() {
                 collectType(sf.type);
                 if (sf.init) collectInExpr(*sf.init);
             }
-        } else if (auto *g = dynamic_cast<const GlobalVarDecl *>(d)) {
+        } else if (auto *g = as<const GlobalVarDecl>(d)) {
             collectType(g->resolvedType);
             if (g->init) collectInExpr(*g->init);
-        } else if (auto *t = dynamic_cast<const TestDecl *>(d)) {
+        } else if (auto *t = as<const TestDecl>(d)) {
             collectInBlock(t->body);
-        } else if (auto *fn = dynamic_cast<const FunctionDecl *>(d)) {
+        } else if (auto *fn = as<const FunctionDecl>(d)) {
             sig(fn->params, fn->returnType);
             collectInBlock(fn->body);
         }
@@ -353,7 +353,7 @@ void CodeGen::collectArrayTypes() {
 void CodeGen::emitEnums() {
     bool any = false;
     for (const auto &declPtr : program_->decls) {
-        auto *en = dynamic_cast<const EnumDecl *>(declPtr.get());
+        auto *en = as<const EnumDecl>(declPtr.get());
         if (!en) continue;
         any = true;
         std::string s = structName(en->fqName);
@@ -405,10 +405,10 @@ void CodeGen::emitStructs() {
     // Forward typedefs so class/struct names can appear anywhere. Interfaces have
     // no storage of their own, so they alias the common object header.
     for (const auto &declPtr : program_->decls) {
-        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
+        if (auto *c = as<const ClassDecl>(declPtr.get())) {
             std::string s = structName(c->fqName);
             typedefs_ += "typedef struct " + s + " " + s + ";\n";
-        } else if (auto *st = dynamic_cast<const StructDecl *>(declPtr.get())) {
+        } else if (auto *st = as<const StructDecl>(declPtr.get())) {
             std::string s = structName(st->fqName);
             typedefs_ += "typedef struct " + s + " " + s + ";\n";
         }
@@ -421,7 +421,7 @@ void CodeGen::emitStructs() {
     emitValueStructs();
 
     for (const auto &declPtr : program_->decls) {
-        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) {
+        if (auto *c = as<const ClassDecl>(declPtr.get())) {
             emitStruct(c->fqName);
         }
     }
@@ -489,7 +489,7 @@ void CodeGen::emitValueStructs() {
         else if (t.isNamed() && reg_->isStruct(t.name)) emitStructFq(t.name);
     };
     for (const auto &declPtr : program_->decls)
-        if (auto *st = dynamic_cast<const StructDecl *>(declPtr.get())) emitStructFq(st->fqName);
+        if (auto *st = as<const StructDecl>(declPtr.get())) emitStructFq(st->fqName);
     for (const auto &[key, t] : arrayTypes_) emitArray(t);
     for (const auto &[key, t] : optTypes_) emitOpt(t);
 }
@@ -518,7 +518,7 @@ std::string CodeGen::slotFnType(const VTableSlot &slot) const {
 
 void CodeGen::emitVTableTypes() {
     for (const auto &declPtr : program_->decls) {
-        auto *c = dynamic_cast<const ClassDecl *>(declPtr.get());
+        auto *c = as<const ClassDecl>(declPtr.get());
         if (!c) continue;
         const ClassInfo *ci = reg_->cls(c->fqName);
         if (ci) emitVTableType(*ci);
@@ -541,7 +541,7 @@ void CodeGen::emitVTableType(const ClassInfo &ci) {
 
 void CodeGen::emitVTableInstances() {
     for (const auto &declPtr : program_->decls) {
-        auto *c = dynamic_cast<const ClassDecl *>(declPtr.get());
+        auto *c = as<const ClassDecl>(declPtr.get());
         if (!c) continue;
         const ClassInfo *ci = reg_->cls(c->fqName);
         if (ci) emitVTableInstance(*ci);
@@ -551,7 +551,7 @@ void CodeGen::emitVTableInstances() {
 void CodeGen::emitTypeInfos() {
     // Forward declarations: hooks may name another class's descriptor.
     for (const auto &declPtr : program_->decls)
-        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get()))
+        if (auto *c = as<const ClassDecl>(declPtr.get()))
             vtables_ += "static const GravTypeInfo " + mangle(c->fqName) + "_typeinfo;\n";
     std::unordered_set<std::string> done;
     std::string reflectedTypes; // "&A_typeinfo, &B_typeinfo, " for every reflected class
@@ -629,11 +629,11 @@ void CodeGen::emitTypeInfos() {
                     meta + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
-        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) emit(c->fqName);
+        if (auto *c = as<const ClassDecl>(declPtr.get())) emit(c->fqName);
     }
     std::vector<std::string> classes;
     for (const auto &declPtr : program_->decls)
-        if (auto *c = dynamic_cast<const ClassDecl *>(declPtr.get())) classes.push_back(c->fqName);
+        if (auto *c = as<const ClassDecl>(declPtr.get())) classes.push_back(c->fqName);
     emitCollectionItems(classes);
     // Every class with reflection, for ClassInfo.forName/all (null-terminated).
     vtables_ += "static const GravTypeInfo* const grav_rf_types_[] = { " + reflectedTypes + "0 };\n"
@@ -667,9 +667,9 @@ bool CodeGen::reflected(const std::string &fq) const {
     if (!reflectScanned_) {
         reflectScanned_ = true;
         for (const auto &d : program_->decls)
-            if (auto *c = dynamic_cast<const ClassDecl *>(d.get()); c && hasDecorators(*c)) reflectRoots_.insert(root(c->fqName));
+            if (auto *c = as<const ClassDecl>(d.get()); c && hasDecorators(*c)) reflectRoots_.insert(root(c->fqName));
         visitExprs(const_cast<Program &>(*program_), [&](Expr &e) {
-            auto *c = dynamic_cast<CallExpr *>(&e);
+            auto *c = as<CallExpr>(&e);
             if (!c) return;
             if (c->kind == CallKind::Builtin && c->targetName == "reflect") reflectRoots_.insert(root(c->ownerClass));
             if (c->kind == CallKind::StaticMethod && c->ownerClass == "std.core.ClassInfo" &&
@@ -1081,7 +1081,7 @@ void CodeGen::emitInterfaceTables() {
 
     // One method-table struct type per interface.
     for (const auto &declPtr : program_->decls) {
-        auto *id = dynamic_cast<const InterfaceDecl *>(declPtr.get());
+        auto *id = as<const InterfaceDecl>(declPtr.get());
         if (!id) continue;
         const InterfaceInfo *ii = reg_->iface(id->fqName);
         if (!ii) continue;
@@ -1100,7 +1100,7 @@ void CodeGen::emitInterfaceTables() {
     // One table instance per (class, interface-it-implements) pair.
     std::string thunks; // (defined after every table, which they may name)
     for (const auto &declPtr : program_->decls) {
-        auto *c = dynamic_cast<const ClassDecl *>(declPtr.get());
+        auto *c = as<const ClassDecl>(declPtr.get());
         if (!c) continue;
         std::vector<std::string> ifaces = classInterfaces(c->fqName);
         for (const auto &ifq : ifaces) {

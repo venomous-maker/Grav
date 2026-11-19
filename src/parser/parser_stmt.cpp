@@ -103,10 +103,10 @@ StmtPtr Parser::parseStatement() {
                 std::string label = advance().lexeme;
                 advance(); // ':'
                 StmtPtr loop = parseStatement();
-                if (auto *w = dynamic_cast<WhileStmt *>(loop.get())) w->label = label;
-                else if (auto *d = dynamic_cast<DoWhileStmt *>(loop.get())) d->label = label;
-                else if (auto *f = dynamic_cast<ForStmt *>(loop.get())) f->label = label;
-                else if (auto *fi = dynamic_cast<ForInStmt *>(loop.get())) fi->label = label;
+                if (auto *w = as<WhileStmt>(loop.get())) w->label = label;
+                else if (auto *d = as<DoWhileStmt>(loop.get())) d->label = label;
+                else if (auto *f = as<ForStmt>(loop.get())) f->label = label;
+                else if (auto *fi = as<ForInStmt>(loop.get())) fi->label = label;
                 return loop;
             }
             // `defer` is contextual (still usable as a name): it starts a defer
@@ -579,10 +579,10 @@ StmtPtr Parser::parseExprOrAssign() {
         const Token &eq = advance();
         // Names, member accesses, pointer dereferences, and element indexes are
         // assignable.
-        if (dynamic_cast<NameExpr *>(expr.get()) == nullptr &&
-            dynamic_cast<MemberExpr *>(expr.get()) == nullptr &&
-            dynamic_cast<DerefExpr *>(expr.get()) == nullptr &&
-            dynamic_cast<IndexExpr *>(expr.get()) == nullptr) {
+        if (as<NameExpr>(expr.get()) == nullptr &&
+            as<MemberExpr>(expr.get()) == nullptr &&
+            as<DerefExpr>(expr.get()) == nullptr &&
+            as<IndexExpr>(expr.get()) == nullptr) {
             fail(eq, std::string("the left-hand side of ") + tokenTypeName(eq.type) +
                          " is not assignable");
         }

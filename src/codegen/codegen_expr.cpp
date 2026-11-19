@@ -215,25 +215,25 @@ std::string CodeGen::emitExpr(const Expr &expr) const {
 }
 
 std::string CodeGen::emitExprRaw(const Expr &expr) const {
-    if (auto *e = dynamic_cast<const IntLiteralExpr *>(&expr)) return e->raw;
-    if (auto *e = dynamic_cast<const FloatLiteralExpr *>(&expr)) return e->raw;
-    if (auto *e = dynamic_cast<const BoolLiteralExpr *>(&expr))
+    if (auto *e = as<const IntLiteralExpr>(&expr)) return e->raw;
+    if (auto *e = as<const FloatLiteralExpr>(&expr)) return e->raw;
+    if (auto *e = as<const BoolLiteralExpr>(&expr))
         return e->value ? "true" : "false";
-    if (auto *e = dynamic_cast<const StringLiteralExpr *>(&expr))
+    if (auto *e = as<const StringLiteralExpr>(&expr))
         return "\"" + escapeC(e->value) + "\"";
-    if (dynamic_cast<const NullLiteralExpr *>(&expr)) return "0";
-    if (auto *e = dynamic_cast<const CBlockExpr *>(&expr)) return hoistIncludes(e->code);
-    if (auto *e = dynamic_cast<const NameExpr *>(&expr)) {
+    if (as<const NullLiteralExpr>(&expr)) return "0";
+    if (auto *e = as<const CBlockExpr>(&expr)) return hoistIncludes(e->code);
+    if (auto *e = as<const NameExpr>(&expr)) {
         if (!e->fnRef.empty()) return emitFnRef(*e);
         if (e->unwrapNullable) return "(" + e->name + ").v"; // a narrowed `T?` local
         return e->resolvedGlobal.empty() ? e->name : e->resolvedGlobal;
     }
-    if (auto *e = dynamic_cast<const LambdaExpr *>(&expr)) return emitLambdaValue(*e);
-    if (dynamic_cast<const SelfExpr *>(&expr)) return "self";
-    if (dynamic_cast<const SuperExpr *>(&expr))               // self, viewed as its parent
+    if (auto *e = as<const LambdaExpr>(&expr)) return emitLambdaValue(*e);
+    if (as<const SelfExpr>(&expr)) return "self";
+    if (as<const SuperExpr>(&expr))               // self, viewed as its parent
         return expr.type.isNamed() && reg_->isClass(expr.type.name) ? "((" + cTy(expr.type) + ")self)" : "self";
 
-    if (auto *e = dynamic_cast<const BinaryExpr *>(&expr)) {
+    if (auto *e = as<const BinaryExpr>(&expr)) {
         // Comparing an interface value against null tests its object pointer.
         if (e->op == BinaryOp::Eq || e->op == BinaryOp::NotEq) {
             if (e->left->type.isNullable() || e->right->type.isNullable()) return nullableEq(*e);
@@ -322,17 +322,17 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             return "((" + cTy(e->type) + ")fmod((double)(" + l + "), (double)(" + r + ")))";
         return "(" + l + " " + binaryOpSymbol(e->op) + " " + r + ")";
     }
-    if (auto *e = dynamic_cast<const UnaryExpr *>(&expr)) {
+    if (auto *e = as<const UnaryExpr>(&expr)) {
         const char *op = e->op == UnaryOp::BitNot ? "~" : "!";
         return std::string("(") + op + emitExpr(*e->operand) + ")";
     }
-    if (auto *e = dynamic_cast<const TernaryExpr *>(&expr)) {
+    if (auto *e = as<const TernaryExpr>(&expr)) {
         // Each branch runs only sometimes, so each is ordered on its own.
         return "(" + emitExpr(*e->cond) + " ? " +
                emitOrdered(*e->thenExpr, [&] { return emitAs(*e->thenExpr, e->type); }) + " : " +
                emitOrdered(*e->elseExpr, [&] { return emitAs(*e->elseExpr, e->type); }) + ")";
     }
-    if (auto *e = dynamic_cast<const AsExpr *>(&expr)) {
+    if (auto *e = as<const AsExpr>(&expr)) {
         // Into / out of `any`: box, or a checked unbox (panics on the wrong type).
         if (e->target.isAny()) return boxAny(*e->operand);
         if (e->operand->type.isAny()) return unboxAny(emitExpr(*e->operand), e->target);
@@ -371,7 +371,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         std::string inner = emitExpr(*e->operand);
         return emitPrimCast(e->target, *e->operand, inner);
     }
-    if (auto *e = dynamic_cast<const IsExpr *>(&expr)) {
+    if (auto *e = as<const IsExpr>(&expr)) {
         if (e->operand->type.isAny()) return isAnyTest(emitExpr(*e->operand), e->target);
         const TypeRef &from = e->operand->type;
         std::string obj = emitExpr(*e->operand);
@@ -380,18 +380,18 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             return "(grav_itab_find(" + obj + ", &" + mangle(e->className) + "__iface) != 0)";
         return "grav_is_instance(" + obj + ", &" + mangle(e->className) + "_typeinfo)";
     }
-    if (auto *e = dynamic_cast<const AwaitExpr *>(&expr)) {
+    if (auto *e = as<const AwaitExpr>(&expr)) {
         // `await f`: wait for the task (re-throwing its exception) and read the result.
         if (e->type.isVoid()) return "((void)grav_await(" + emitExpr(*e->operand) + "))";
         return "(*(" + cTy(e->type) + "*)grav_await(" + emitExpr(*e->operand) + "))";
     }
-    if (auto *e = dynamic_cast<const AddrOfExpr *>(&expr)) {
+    if (auto *e = as<const AddrOfExpr>(&expr)) {
         return "(&" + emitExpr(*e->operand) + ")";
     }
-    if (auto *e = dynamic_cast<const DerefExpr *>(&expr)) {
+    if (auto *e = as<const DerefExpr>(&expr)) {
         return "(*" + emitExpr(*e->operand) + ")";
     }
-    if (auto *e = dynamic_cast<const CoalesceExpr *>(&expr)) {
+    if (auto *e = as<const CoalesceExpr>(&expr)) {
         // `a ?? b` -> "is a null? then b else a", evaluating `a` once and `b`
         // (in its own left-to-right order) only when needed.
         std::string l = emitExpr(*e->left);
@@ -416,20 +416,20 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         else exprOverride_[e->left.get()] = saved;
         return "({ " + cTy(lt) + " grav_co_ = " + l + "; " + guard + " ? " + conv + " : " + r + "; })";
     }
-    if (auto *e = dynamic_cast<const IncDecExpr *>(&expr)) {
+    if (auto *e = as<const IncDecExpr>(&expr)) {
         std::string op = e->isIncrement ? "++" : "--";
         std::string t = emitExpr(*e->target);
         return e->isPrefix ? ("(" + op + t + ")") : ("(" + t + op + ")");
     }
-    if (auto *e = dynamic_cast<const CastExpr *>(&expr)) {
+    if (auto *e = as<const CastExpr>(&expr)) {
         std::string inner = emitExpr(*e->operand);
         return emitPrimCast(e->target, *e->operand, inner);
     }
-    if (auto *e = dynamic_cast<const SizeofExpr *>(&expr)) {
+    if (auto *e = as<const SizeofExpr>(&expr)) {
         if (e->isType) return "sizeof(" + sizeofSpelling(e->target) + ")";
         return "sizeof(" + emitExpr(*e->operand) + ")";
     }
-    if (auto *e = dynamic_cast<const ArrayLiteralExpr *>(&expr)) {
+    if (auto *e = as<const ArrayLiteralExpr>(&expr)) {
         if (e->built) { // a collection literal: the code that builds it, owned by this expression's user
             const Expr *saved = ownedRoot_;
             ownedRoot_ = e->built.get();
@@ -446,7 +446,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         }
         return out + " } }";
     }
-    if (auto *e = dynamic_cast<const IndexExpr *>(&expr)) {
+    if (auto *e = as<const IndexExpr>(&expr)) {
         // `obj[k]` on a class with `operator[]` -> obj.op_index(k).
         if (!e->overloadClass.empty()) {
             std::vector<TypeRef> params;
@@ -468,11 +468,11 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             return "(" + base + ").data[" + checkedIndex(idx, e->base->type.arrayLen) + "]";
         if (e->base->type.kind == TypeRef::Kind::String) return "grav_str_byte(" + base + ", " + idx + ")";
         // A slice (a variadic parameter) carries its length alongside.
-        if (e->base->type.isSlice() && dynamic_cast<const NameExpr *>(e->base.get()))
+        if (e->base->type.isSlice() && as<const NameExpr>(e->base.get()))
             return "(" + base + ")[grav_idx(" + idx + ", " + base + "__n)]";
         return "(" + base + ")[" + idx + "]";
     }
-    if (auto *e = dynamic_cast<const NewExpr *>(&expr)) {
+    if (auto *e = as<const NewExpr>(&expr)) {
         std::vector<TypeRef> params;
         if (const ClassInfo *ci = reg_->cls(e->className))
             if (e->ctorIndex < static_cast<int>(ci->ctors.size()))
@@ -489,7 +489,7 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
             out = "((" + cType(e->type) + ")" + out + ")";
         return out;
     }
-    if (auto *e = dynamic_cast<const StructLiteralExpr *>(&expr)) {
+    if (auto *e = as<const StructLiteralExpr>(&expr)) {
         std::string out = "(" + structName(e->typeName) + "){ ";
         if (e->fields.empty()) return out + "0 }"; // initializes the __empty member
         for (size_t i = 0; i < e->fields.size(); ++i) {
@@ -502,8 +502,8 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         }
         return out + " }";
     }
-    if (auto *e = dynamic_cast<const CallExpr *>(&expr)) return emitCall(*e);
-    if (auto *e = dynamic_cast<const MemberExpr *>(&expr)) {
+    if (auto *e = as<const CallExpr>(&expr)) return emitCall(*e);
+    if (auto *e = as<const MemberExpr>(&expr)) {
         // `EnumType.Member` lowers to the C enum constant.
         if (e->kind == MemberKind::EnumValue)
             return enumConst(e->qualified, e->member);
@@ -680,7 +680,7 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             return out + ")";
         }
         case CallKind::InstanceMethod: {
-            auto *mem = dynamic_cast<const MemberExpr *>(call.callee.get());
+            auto *mem = as<const MemberExpr>(call.callee.get());
             TypeRef recv = mem->object->type;
             if (!(recv.isNamed() && (reg_->isClass(recv.name) || reg_->isInterface(recv.name))))
                 recv = TypeRef::named(call.ownerClass);
@@ -703,8 +703,8 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
             // `a?.m(...)`: a side-effect-free receiver keeps the cheap inline guard
             // (and skips evaluating the arguments); anything else goes through a
             // null-checking thunk so the receiver is evaluated once.
-            bool simple = dynamic_cast<const NameExpr *>(mem->object.get()) ||
-                          dynamic_cast<const SelfExpr *>(mem->object.get());
+            bool simple = as<const NameExpr>(mem->object.get()) ||
+                          as<const SelfExpr>(mem->object.get());
             // Receiver and arguments in left-to-right order (the arguments of the
             // inline form run only for a non-null receiver).
             std::vector<const Expr *> ops, hs;

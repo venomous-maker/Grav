@@ -126,7 +126,7 @@ static inline const char* grav_str_slice(const char* p, int n) {
 namespace {
 // `x / k` with a literal k other than 0 and -1 cannot fault.
 bool safeDivisor(const Expr &e) {
-    auto *lit = dynamic_cast<const IntLiteralExpr *>(&e);
+    auto *lit = as<const IntLiteralExpr>(&e);
     return lit && lit->value != 0 && lit->value != -1;
 }
 } // namespace

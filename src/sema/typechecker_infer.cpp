@@ -135,21 +135,21 @@ TypeRef TypeChecker::toCanonical(const TypeRef &t) const {
 // Whether an expression's type is decided by where it is used: a generic
 // `new` without type arguments, a collection literal, or a map literal.
 static bool takesTypeFromContext(const Expr &e) {
-    if (auto *n = dynamic_cast<const NewExpr *>(&e)) return n->typeArgs.empty();
-    if (dynamic_cast<const ArrayLiteralExpr *>(&e)) return true;
-    if (auto *c = dynamic_cast<const CallExpr *>(&e))
-        if (auto *n = dynamic_cast<const NameExpr *>(c->callee.get())) return n->name == "mapOf" && c->typeArgs.empty();
+    if (auto *n = as<const NewExpr>(&e)) return n->typeArgs.empty();
+    if (as<const ArrayLiteralExpr>(&e)) return true;
+    if (auto *c = as<const CallExpr>(&e))
+        if (auto *n = as<const NameExpr>(c->callee.get())) return n->name == "mapOf" && c->typeArgs.empty();
     return false;
 }
 
 // `{"a": ..., "b": ...}`: a map literal whose keys are all string literals.
 static bool stringKeyedMapLiteral(const Expr &e) {
-    auto *c = dynamic_cast<const CallExpr *>(&e);
-    auto *n = c ? dynamic_cast<const NameExpr *>(c->callee.get()) : nullptr;
+    auto *c = as<const CallExpr>(&e);
+    auto *n = c ? as<const NameExpr>(c->callee.get()) : nullptr;
     if (!n || n->name != "mapOf" || !c->typeArgs.empty() || c->args.empty()) return false;
     for (const auto &a : c->args) {
-        auto *p = dynamic_cast<const NewExpr *>(a.get());
-        if (!p || p->args.size() != 2 || !dynamic_cast<const StringLiteralExpr *>(p->args[0].get())) return false;
+        auto *p = as<const NewExpr>(a.get());
+        if (!p || p->args.size() != 2 || !as<const StringLiteralExpr>(p->args[0].get())) return false;
     }
     return true;
 }
@@ -173,7 +173,7 @@ bool TypeChecker::inferArgs(const GenericSig &sig, std::vector<ExprPtr> &args,
     // type parameters they depend on are known.
     std::vector<size_t> later;
     for (size_t i = 0; i < args.size(); ++i) {
-        auto *lam = dynamic_cast<LambdaExpr *>(args[i].get());
+        auto *lam = as<LambdaExpr>(args[i].get());
         bool untyped = false;
         if (lam) for (bool b : lam->paramTyped) if (!b) untyped = true;
         if (untyped) { later.push_back(i); continue; }
@@ -294,16 +294,16 @@ void applyInferences(Program &program, const InferenceTable &table) {
     if (table.entries.empty()) return;
     for (auto &d : program.decls) {
         std::string scope;
-        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) scope = fn->fqName;
-        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) scope = c->fqName;
+        if (auto *fn = as<FunctionDecl>(d.get())) scope = fn->fqName;
+        else if (auto *c = as<ClassDecl>(d.get())) scope = c->fqName;
         visitDeclExprs(*d, [&](Expr &e) {
-            if (auto *c = dynamic_cast<CallExpr *>(&e)) {
+            if (auto *c = as<CallExpr>(&e)) {
                 std::string name;
-                if (auto *n = dynamic_cast<NameExpr *>(c->callee.get())) name = n->name;
-                else if (auto *m = dynamic_cast<MemberExpr *>(c->callee.get())) name = m->member;
+                if (auto *n = as<NameExpr>(c->callee.get())) name = n->name;
+                else if (auto *m = as<MemberExpr>(c->callee.get())) name = m->member;
                 auto it = table.entries.find(siteKey(scope, c->line, c->col, name));
                 if (it != table.entries.end()) c->typeArgs = it->second;
-            } else if (auto *n = dynamic_cast<NewExpr *>(&e)) {
+            } else if (auto *n = as<NewExpr>(&e)) {
                 auto it = table.entries.find(siteKey(scope, n->line, n->col, n->className));
                 if (it != table.entries.end()) n->typeArgs = it->second;
             }

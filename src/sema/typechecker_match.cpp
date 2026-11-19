@@ -35,16 +35,16 @@ struct Pattern {
 Pattern readPattern(const Expr *e) {
     Pattern p;
     const Expr *head = e;
-    if (auto *c = dynamic_cast<const CallExpr *>(e)) {
+    if (auto *c = as<const CallExpr>(e)) {
         head = c->callee.get();
         p.hasArgs = true;
         for (const auto &a : c->args) {
-            if (auto *n = dynamic_cast<const NameExpr *>(a.get())) p.binds.push_back(n->name);
+            if (auto *n = as<const NameExpr>(a.get())) p.binds.push_back(n->name);
             else p.ok = false;
         }
     }
-    if (auto *n = dynamic_cast<const NameExpr *>(head)) p.variant = n->name;
-    else if (auto *m = dynamic_cast<const MemberExpr *>(head)) p.variant = m->member; // Shape.Circle
+    if (auto *n = as<const NameExpr>(head)) p.variant = n->name;
+    else if (auto *m = as<const MemberExpr>(head)) p.variant = m->member; // Shape.Circle
     else p.ok = false;
     return p;
 }
@@ -169,7 +169,7 @@ void TypeChecker::lowerDataEnumMatch(SwitchStmt &s, const TypeRef &subj, const C
         if (c.guard) {
             arm.guard = std::move(c.guard);
             rewriteExpr(arm.guard, [&](ExprPtr &slot) {
-                if (auto *n = dynamic_cast<NameExpr *>(slot.get()))
+                if (auto *n = as<NameExpr>(slot.get()))
                     for (auto &[name, field] : fieldOf)
                         if (n->name == name) { slot = cloneExpression(field.get()); return; }
             });

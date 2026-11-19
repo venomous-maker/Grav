@@ -10,15 +10,15 @@ namespace grav {
 namespace {
 
 bool isTerminator(const Stmt &s) {
-    return dynamic_cast<const ReturnStmt *>(&s) || dynamic_cast<const BreakStmt *>(&s) ||
-           dynamic_cast<const ContinueStmt *>(&s) || dynamic_cast<const ThrowStmt *>(&s);
+    return as<const ReturnStmt>(&s) || as<const BreakStmt>(&s) ||
+           as<const ContinueStmt>(&s) || as<const ThrowStmt>(&s);
 }
 
 // Constant value of an integer literal, including the parser's `0 - n` form of
 // a negative literal.
 bool constInt(const Expr *e, long long &out) {
-    if (auto *lit = dynamic_cast<const IntLiteralExpr *>(e)) { out = lit->value; return true; }
-    if (auto *b = dynamic_cast<const BinaryExpr *>(e); b && b->op == BinaryOp::Sub) {
+    if (auto *lit = as<const IntLiteralExpr>(e)) { out = lit->value; return true; }
+    if (auto *b = as<const BinaryExpr>(e); b && b->op == BinaryOp::Sub) {
         long long l, r;
         if (constInt(b->left.get(), l) && constInt(b->right.get(), r)) { out = l - r; return true; }
     }
@@ -27,8 +27,8 @@ bool constInt(const Expr *e, long long &out) {
 
 // An expression C can evaluate repeatedly without side effects or cost.
 bool isSimpleLvalue(const Expr &e) {
-    if (dynamic_cast<const NameExpr *>(&e) || dynamic_cast<const SelfExpr *>(&e)) return true;
-    if (auto *m = dynamic_cast<const MemberExpr *>(&e))
+    if (as<const NameExpr>(&e) || as<const SelfExpr>(&e)) return true;
+    if (auto *m = as<const MemberExpr>(&e))
         return !m->optional && m->object && isSimpleLvalue(*m->object);
     return false;
 }
@@ -46,7 +46,7 @@ void CodeGen::emitBlock(const Block &block) {
     for (const auto &s : block.statements) {
         curBlock_ = &block; // nested blocks emitted by the previous statement moved it
         curStmt_ = static_cast<size_t>(&s - block.statements.data());
-        if (auto *d = dynamic_cast<const DeferStmt *>(s.get())) {
+        if (auto *d = as<const DeferStmt>(s.get())) {
             cleanups_.push_back({Cleanup::Defer, "", &d->body});
             continue;
         }
@@ -419,37 +419,37 @@ void CodeGen::collectTryAssigned(const Block &b, int tryDepth) {
 void CodeGen::collectTryAssignedStmt(const Stmt &s, int depth) {
     auto noteExpr = [&](const Expr *e) {
         if (!e || depth == 0) return;
-        if (auto *id = dynamic_cast<const IncDecExpr *>(e))
-            if (auto *n = dynamic_cast<const NameExpr *>(id->target.get()))
+        if (auto *id = as<const IncDecExpr>(e))
+            if (auto *n = as<const NameExpr>(id->target.get()))
                 volatileNames_.insert(n->name);
     };
-    if (auto *x = dynamic_cast<const AssignStmt *>(&s)) {
+    if (auto *x = as<const AssignStmt>(&s)) {
         if (depth > 0)
-            if (auto *n = dynamic_cast<const NameExpr *>(x->target.get()))
+            if (auto *n = as<const NameExpr>(x->target.get()))
                 volatileNames_.insert(n->name);
-    } else if (auto *x = dynamic_cast<const ExprStmt *>(&s)) {
+    } else if (auto *x = as<const ExprStmt>(&s)) {
         noteExpr(x->expr.get());
-    } else if (auto *x = dynamic_cast<const BlockStmt *>(&s)) {
+    } else if (auto *x = as<const BlockStmt>(&s)) {
         collectTryAssigned(x->block, depth);
-    } else if (auto *x = dynamic_cast<const IfStmt *>(&s)) {
+    } else if (auto *x = as<const IfStmt>(&s)) {
         collectTryAssigned(x->thenBlock, depth);
         if (x->elseStmt) collectTryAssignedStmt(*x->elseStmt, depth);
-    } else if (auto *x = dynamic_cast<const WhileStmt *>(&s)) {
+    } else if (auto *x = as<const WhileStmt>(&s)) {
         collectTryAssigned(x->body, depth);
-    } else if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) {
+    } else if (auto *x = as<const DoWhileStmt>(&s)) {
         collectTryAssigned(x->body, depth);
-    } else if (auto *x = dynamic_cast<const ForStmt *>(&s)) {
+    } else if (auto *x = as<const ForStmt>(&s)) {
         if (x->init) collectTryAssignedStmt(*x->init, depth);
         if (x->update) collectTryAssignedStmt(*x->update, depth);
         collectTryAssigned(x->body, depth);
-    } else if (auto *x = dynamic_cast<const ForInStmt *>(&s)) {
+    } else if (auto *x = as<const ForInStmt>(&s)) {
         collectTryAssigned(x->body, depth);
-    } else if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+    } else if (auto *x = as<const SwitchStmt>(&s)) {
         for (const auto &c : x->cases) collectTryAssigned(c.body, depth);
         if (x->hasDefault) collectTryAssigned(x->defaultBody, depth);
-    } else if (auto *x = dynamic_cast<const DeferStmt *>(&s)) {
+    } else if (auto *x = as<const DeferStmt>(&s)) {
         collectTryAssigned(x->body, depth);
-    } else if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+    } else if (auto *x = as<const TryStmt>(&s)) {
         collectTryAssigned(x->tryBlock, depth + 1);
         // Handlers run inside a setjmp region of their own when there is a finally.
         for (const auto &c : x->catches) collectTryAssigned(c.block, depth + (x->hasFinally ? 1 : 0));
@@ -481,37 +481,37 @@ void CodeGen::beginBody(const Block &body) {
 
 bool CodeGen::exprMayCall(const Expr *e) const {
     if (!e) return false;
-    if (dynamic_cast<const CallExpr *>(e) || dynamic_cast<const NewExpr *>(e) ||
-        dynamic_cast<const CBlockExpr *>(e))
+    if (as<const CallExpr>(e) || as<const NewExpr>(e) ||
+        as<const CBlockExpr>(e))
         return true;
-    if (dynamic_cast<const IntLiteralExpr *>(e) || dynamic_cast<const FloatLiteralExpr *>(e) ||
-        dynamic_cast<const BoolLiteralExpr *>(e) || dynamic_cast<const StringLiteralExpr *>(e) ||
-        dynamic_cast<const NullLiteralExpr *>(e) || dynamic_cast<const NameExpr *>(e) ||
-        dynamic_cast<const SelfExpr *>(e) || dynamic_cast<const SizeofExpr *>(e) ||
-        dynamic_cast<const LambdaExpr *>(e))
+    if (as<const IntLiteralExpr>(e) || as<const FloatLiteralExpr>(e) ||
+        as<const BoolLiteralExpr>(e) || as<const StringLiteralExpr>(e) ||
+        as<const NullLiteralExpr>(e) || as<const NameExpr>(e) ||
+        as<const SelfExpr>(e) || as<const SizeofExpr>(e) ||
+        as<const LambdaExpr>(e))
         return false;
-    if (auto *x = dynamic_cast<const BinaryExpr *>(e))
+    if (auto *x = as<const BinaryExpr>(e))
         return !x->overloadMethod.empty() || exprMayCall(x->left.get()) ||
                exprMayCall(x->right.get());
-    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) return exprMayCall(x->operand.get());
-    if (auto *x = dynamic_cast<const TernaryExpr *>(e))
+    if (auto *x = as<const UnaryExpr>(e)) return exprMayCall(x->operand.get());
+    if (auto *x = as<const TernaryExpr>(e))
         return exprMayCall(x->cond.get()) || exprMayCall(x->thenExpr.get()) ||
                exprMayCall(x->elseExpr.get());
-    if (auto *x = dynamic_cast<const AsExpr *>(e)) return exprMayCall(x->operand.get());
-    if (auto *x = dynamic_cast<const CastExpr *>(e)) return exprMayCall(x->operand.get());
-    if (auto *x = dynamic_cast<const IsExpr *>(e)) return exprMayCall(x->operand.get());
-    if (auto *x = dynamic_cast<const AddrOfExpr *>(e)) return exprMayCall(x->operand.get());
-    if (auto *x = dynamic_cast<const DerefExpr *>(e)) return exprMayCall(x->operand.get());
-    if (auto *x = dynamic_cast<const IncDecExpr *>(e)) return exprMayCall(x->target.get());
-    if (auto *x = dynamic_cast<const IndexExpr *>(e))
+    if (auto *x = as<const AsExpr>(e)) return exprMayCall(x->operand.get());
+    if (auto *x = as<const CastExpr>(e)) return exprMayCall(x->operand.get());
+    if (auto *x = as<const IsExpr>(e)) return exprMayCall(x->operand.get());
+    if (auto *x = as<const AddrOfExpr>(e)) return exprMayCall(x->operand.get());
+    if (auto *x = as<const DerefExpr>(e)) return exprMayCall(x->operand.get());
+    if (auto *x = as<const IncDecExpr>(e)) return exprMayCall(x->target.get());
+    if (auto *x = as<const IndexExpr>(e))
         return !x->overloadClass.empty() || exprMayCall(x->base.get()) ||
                exprMayCall(x->index.get());
-    if (auto *x = dynamic_cast<const MemberExpr *>(e)) return exprMayCall(x->object.get());
-    if (auto *x = dynamic_cast<const ArrayLiteralExpr *>(e)) {
+    if (auto *x = as<const MemberExpr>(e)) return exprMayCall(x->object.get());
+    if (auto *x = as<const ArrayLiteralExpr>(e)) {
         for (const auto &el : x->elements) if (exprMayCall(el.get())) return true;
         return false;
     }
-    if (auto *x = dynamic_cast<const StructLiteralExpr *>(e)) {
+    if (auto *x = as<const StructLiteralExpr>(e)) {
         for (const auto &f : x->fields) if (exprMayCall(f.value.get())) return true;
         return false;
     }
@@ -519,22 +519,22 @@ bool CodeGen::exprMayCall(const Expr *e) const {
 }
 
 bool CodeGen::stmtMayCall(const Stmt &s) const {
-    if (auto *x = dynamic_cast<const LetStmt *>(&s)) return exprMayCall(x->init.get());
-    if (auto *x = dynamic_cast<const AssignStmt *>(&s))
+    if (auto *x = as<const LetStmt>(&s)) return exprMayCall(x->init.get());
+    if (auto *x = as<const AssignStmt>(&s))
         return exprMayCall(x->target.get()) || exprMayCall(x->value.get());
-    if (auto *x = dynamic_cast<const ReturnStmt *>(&s)) return exprMayCall(x->value.get());
-    if (auto *x = dynamic_cast<const ExprStmt *>(&s)) return exprMayCall(x->expr.get());
-    if (auto *x = dynamic_cast<const IfStmt *>(&s)) return exprMayCall(x->cond.get());
-    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exprMayCall(x->cond.get());
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exprMayCall(x->cond.get());
-    if (auto *x = dynamic_cast<const ForStmt *>(&s))
+    if (auto *x = as<const ReturnStmt>(&s)) return exprMayCall(x->value.get());
+    if (auto *x = as<const ExprStmt>(&s)) return exprMayCall(x->expr.get());
+    if (auto *x = as<const IfStmt>(&s)) return exprMayCall(x->cond.get());
+    if (auto *x = as<const WhileStmt>(&s)) return exprMayCall(x->cond.get());
+    if (auto *x = as<const DoWhileStmt>(&s)) return exprMayCall(x->cond.get());
+    if (auto *x = as<const ForStmt>(&s))
         return (x->init && stmtMayCall(*x->init)) || exprMayCall(x->cond.get()) ||
                (x->update && stmtMayCall(*x->update));
-    if (auto *x = dynamic_cast<const ForInStmt *>(&s))
+    if (auto *x = as<const ForInStmt>(&s))
         return x->iterKind == ForInKind::Object || x->iterKind == ForInKind::Iterator || exprMayCall(x->lo.get()) ||
                exprMayCall(x->hi.get()) || exprMayCall(x->step.get());
-    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) return exprMayCall(x->subject.get());
-    if (dynamic_cast<const ThrowStmt *>(&s)) return true;
+    if (auto *x = as<const SwitchStmt>(&s)) return exprMayCall(x->subject.get());
+    if (as<const ThrowStmt>(&s)) return true;
     return false; // blocks, try, break/continue: their inner statements mark themselves
 }
 
@@ -545,20 +545,20 @@ bool CodeGen::exprMayThrow(const Expr *e) const {
     if (!e) return false;
     if (exprMayCall(e)) return true; // also true for any node it does not know
     // What is left is literals, names and built-in operators.
-    if (dynamic_cast<const IndexExpr *>(e) || dynamic_cast<const DerefExpr *>(e) ||
-        dynamic_cast<const AsExpr *>(e) || dynamic_cast<const CastExpr *>(e))
+    if (as<const IndexExpr>(e) || as<const DerefExpr>(e) ||
+        as<const AsExpr>(e) || as<const CastExpr>(e))
         return true;
-    if (auto *x = dynamic_cast<const BinaryExpr *>(e))
+    if (auto *x = as<const BinaryExpr>(e))
         return x->op == BinaryOp::Div || x->op == BinaryOp::Mod || exprMayThrow(x->left.get()) ||
                exprMayThrow(x->right.get());
-    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) return exprMayThrow(x->operand.get());
-    if (auto *x = dynamic_cast<const TernaryExpr *>(e))
+    if (auto *x = as<const UnaryExpr>(e)) return exprMayThrow(x->operand.get());
+    if (auto *x = as<const TernaryExpr>(e))
         return exprMayThrow(x->cond.get()) || exprMayThrow(x->thenExpr.get()) ||
                exprMayThrow(x->elseExpr.get());
-    if (auto *x = dynamic_cast<const IsExpr *>(e)) return exprMayThrow(x->operand.get());
-    if (auto *x = dynamic_cast<const AddrOfExpr *>(e)) return exprMayThrow(x->operand.get());
-    if (auto *x = dynamic_cast<const IncDecExpr *>(e)) return exprMayThrow(x->target.get());
-    if (auto *x = dynamic_cast<const MemberExpr *>(e)) {
+    if (auto *x = as<const IsExpr>(e)) return exprMayThrow(x->operand.get());
+    if (auto *x = as<const AddrOfExpr>(e)) return exprMayThrow(x->operand.get());
+    if (auto *x = as<const IncDecExpr>(e)) return exprMayThrow(x->target.get());
+    if (auto *x = as<const MemberExpr>(e)) {
         // Through a reference that may be null (`?.` checks first; a string or a
         // value struct is never null).
         const TypeRef &ot = x->object->type;
@@ -567,11 +567,11 @@ bool CodeGen::exprMayThrow(const Expr *e) const {
             return true;
         return exprMayThrow(x->object.get());
     }
-    if (auto *x = dynamic_cast<const ArrayLiteralExpr *>(e)) {
+    if (auto *x = as<const ArrayLiteralExpr>(e)) {
         for (const auto &el : x->elements) if (exprMayThrow(el.get())) return true;
         return false;
     }
-    if (auto *x = dynamic_cast<const StructLiteralExpr *>(e)) {
+    if (auto *x = as<const StructLiteralExpr>(e)) {
         for (const auto &f : x->fields) if (exprMayThrow(f.value.get())) return true;
         return false;
     }
@@ -581,25 +581,25 @@ bool CodeGen::exprMayThrow(const Expr *e) const {
 // Whether running `s`, including its nested blocks, can raise an exception or a
 // panic that unwinds this frame.
 bool CodeGen::stmtMayThrow(const Stmt &s) const {
-    if (auto *x = dynamic_cast<const LetStmt *>(&s)) return exprMayThrow(x->init.get());
-    if (auto *x = dynamic_cast<const AssignStmt *>(&s))
+    if (auto *x = as<const LetStmt>(&s)) return exprMayThrow(x->init.get());
+    if (auto *x = as<const AssignStmt>(&s))
         return exprMayThrow(x->target.get()) || exprMayThrow(x->value.get());
-    if (auto *x = dynamic_cast<const ReturnStmt *>(&s)) return exprMayThrow(x->value.get());
-    if (auto *x = dynamic_cast<const ExprStmt *>(&s)) return exprMayThrow(x->expr.get());
-    if (auto *x = dynamic_cast<const BlockStmt *>(&s)) return blockMayThrow(x->block);
-    if (auto *x = dynamic_cast<const IfStmt *>(&s))
+    if (auto *x = as<const ReturnStmt>(&s)) return exprMayThrow(x->value.get());
+    if (auto *x = as<const ExprStmt>(&s)) return exprMayThrow(x->expr.get());
+    if (auto *x = as<const BlockStmt>(&s)) return blockMayThrow(x->block);
+    if (auto *x = as<const IfStmt>(&s))
         return exprMayThrow(x->cond.get()) || blockMayThrow(x->thenBlock) ||
                (x->elseStmt && stmtMayThrow(*x->elseStmt));
-    if (auto *x = dynamic_cast<const WhileStmt *>(&s)) return exprMayThrow(x->cond.get()) || blockMayThrow(x->body);
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(&s)) return exprMayThrow(x->cond.get()) || blockMayThrow(x->body);
-    if (auto *x = dynamic_cast<const ForStmt *>(&s))
+    if (auto *x = as<const WhileStmt>(&s)) return exprMayThrow(x->cond.get()) || blockMayThrow(x->body);
+    if (auto *x = as<const DoWhileStmt>(&s)) return exprMayThrow(x->cond.get()) || blockMayThrow(x->body);
+    if (auto *x = as<const ForStmt>(&s))
         return (x->init && stmtMayThrow(*x->init)) || exprMayThrow(x->cond.get()) ||
                (x->update && stmtMayThrow(*x->update)) || blockMayThrow(x->body);
-    if (auto *x = dynamic_cast<const ForInStmt *>(&s))
+    if (auto *x = as<const ForInStmt>(&s))
         return x->iterKind == ForInKind::Object || x->iterKind == ForInKind::Iterator || exprMayThrow(x->lo.get()) || exprMayThrow(x->hi.get()) ||
                exprMayThrow(x->step.get()) || blockMayThrow(x->body);
-    if (auto *x = dynamic_cast<const DeferStmt *>(&s)) return blockMayThrow(x->body);
-    if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {
+    if (auto *x = as<const DeferStmt>(&s)) return blockMayThrow(x->body);
+    if (auto *x = as<const SwitchStmt>(&s)) {
         if (exprMayThrow(x->subject.get())) return true;
         for (const auto &c : x->cases) {
             if (exprMayThrow(c.guard.get()) || blockMayThrow(c.body)) return true;
@@ -608,12 +608,12 @@ bool CodeGen::stmtMayThrow(const Stmt &s) const {
         }
         return blockMayThrow(x->defaultBody);
     }
-    if (auto *x = dynamic_cast<const TryStmt *>(&s)) {
+    if (auto *x = as<const TryStmt>(&s)) {
         if (blockMayThrow(x->tryBlock) || blockMayThrow(x->finallyBlock)) return true;
         for (const auto &c : x->catches) if (blockMayThrow(c.block)) return true;
         return false;
     }
-    if (dynamic_cast<const BreakStmt *>(&s) || dynamic_cast<const ContinueStmt *>(&s)) return false;
+    if (as<const BreakStmt>(&s) || as<const ContinueStmt>(&s)) return false;
     return true; // throw, and anything unknown
 }
 

@@ -26,12 +26,12 @@ Block Parser::parseValueBranch(const char *what) {
         b = parseBlock();
         if (b.statements.empty()) fail(open, std::string("an empty block gives no value for ") + what);
         StmtPtr &last = b.statements.back();
-        if (auto *es = dynamic_cast<ExprStmt *>(last.get())) {
+        if (auto *es = as<ExprStmt>(last.get())) {
             auto ret = std::make_unique<ReturnStmt>();
             ret->line = es->line; ret->col = es->col;
             ret->value = std::move(es->expr);
             last = std::move(ret);
-        } else if (!dynamic_cast<ReturnStmt *>(last.get()) && !dynamic_cast<ThrowStmt *>(last.get())) {
+        } else if (!as<ReturnStmt>(last.get()) && !as<ThrowStmt>(last.get())) {
             fail(open, std::string("the last statement of a block giving ") + what +
                            " must be its value (an expression), or throw");
         }

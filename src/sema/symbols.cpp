@@ -499,7 +499,7 @@ void Registry::registerDecls(Program &program) {
         Decl *d = declPtr.get();
         noteNamespace(d->fqName);
 
-        if (auto *c = dynamic_cast<ClassDecl *>(d)) {
+        if (auto *c = as<ClassDecl>(d)) {
             if (isType(c->fqName) || isAlias(c->fqName)) { error(c->line, c->col, "duplicate type '" + c->fqName + "'"); continue; }
             ClassInfo info;
             info.fqName = c->fqName;
@@ -551,7 +551,7 @@ void Registry::registerDecls(Program &program) {
                 gi.line = sf.line; gi.col = sf.col;
                 globals_[fq] = gi;
             }
-        } else if (auto *st = dynamic_cast<StructDecl *>(d)) {
+        } else if (auto *st = as<StructDecl>(d)) {
             if (isType(st->fqName) || isAlias(st->fqName)) { error(st->line, st->col, "duplicate type '" + st->fqName + "'"); continue; }
             StructInfo info;
             info.fqName = st->fqName;
@@ -561,7 +561,7 @@ void Registry::registerDecls(Program &program) {
                 info.fields.push_back(std::move(fi));
             }
             structs_[st->fqName] = std::move(info);
-        } else if (auto *ifc = dynamic_cast<InterfaceDecl *>(d)) {
+        } else if (auto *ifc = as<InterfaceDecl>(d)) {
             if (isType(ifc->fqName) || isAlias(ifc->fqName)) { error(ifc->line, ifc->col, "duplicate type '" + ifc->fqName + "'"); continue; }
             InterfaceInfo info;
             info.fqName = ifc->fqName;
@@ -580,7 +580,7 @@ void Registry::registerDecls(Program &program) {
                 info.methods.push_back(std::move(mi));
             }
             interfaces_[ifc->fqName] = std::move(info);
-        } else if (auto *en = dynamic_cast<EnumDecl *>(d)) {
+        } else if (auto *en = as<EnumDecl>(d)) {
             if (isType(en->fqName) || isAlias(en->fqName)) { error(en->line, en->col, "duplicate type '" + en->fqName + "'"); continue; }
             EnumInfo info;
             info.fqName = en->fqName;
@@ -594,14 +594,14 @@ void Registry::registerDecls(Program &program) {
                     info.members.push_back(m.name);
             }
             enums_[en->fqName] = std::move(info);
-        } else if (auto *ta = dynamic_cast<TypeAliasDecl *>(d)) {
+        } else if (auto *ta = as<TypeAliasDecl>(d)) {
             if (isType(ta->fqName) || isAlias(ta->fqName)) { error(ta->line, ta->col, "duplicate type '" + ta->fqName + "'"); continue; }
             AliasInfo info;
             info.fqName = ta->fqName;
             info.target = ta->target; // raw; canonicalized in canonicalizeAliases()
             info.decl = ta;
             aliases_[ta->fqName] = std::move(info);
-        } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
+        } else if (auto *fn = as<FunctionDecl>(d)) {
             FunctionInfo info;
             info.fqName = fn->fqName;
             info.isAsync = fn->isAsync;
@@ -632,7 +632,7 @@ void Registry::registerDecls(Program &program) {
             fn->overloadIndex = info.overloadIndex;
             if (set.empty()) functions_[fn->fqName] = info; // back-compat single lookup
             set.push_back(std::move(info));
-        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
+        } else if (auto *g = as<GlobalVarDecl>(d)) {
             if (globals_.count(g->fqName)) { error(g->line, g->col, "duplicate global '" + g->fqName + "'"); continue; }
             if (!g->hasDeclaredType) {
                 error(g->line, g->col, "a top-level '" + std::string(g->isConst ? "const" : "let") +

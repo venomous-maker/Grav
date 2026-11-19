@@ -460,8 +460,8 @@ DeclPtr Parser::parseGlobalVar() {
 // The value of an integer expression made of literals, constants declared above
 // and + - * / % << >> & | ^, if it is one.
 bool Parser::foldInt(const Expr &e, long long &out) {
-    if (auto *i = dynamic_cast<const IntLiteralExpr *>(&e)) { out = i->value; return true; }
-    if (auto *n = dynamic_cast<const NameExpr *>(&e)) {
+    if (auto *i = as<const IntLiteralExpr>(&e)) { out = i->value; return true; }
+    if (auto *n = as<const NameExpr>(&e)) {
         if (!n->typeArgs.empty()) return false;
         for (auto s = localConsts_.rbegin(); s != localConsts_.rend(); ++s) {
             auto lc = s->find(n->name);
@@ -477,7 +477,7 @@ bool Parser::foldInt(const Expr &e, long long &out) {
         out = it->second;
         return true;
     }
-    auto *b = dynamic_cast<const BinaryExpr *>(&e);
+    auto *b = as<const BinaryExpr>(&e);
     long long l = 0, r = 0;
     if (!b || !foldInt(*b->left, l) || !foldInt(*b->right, r)) return false;
     switch (b->op) {
@@ -698,7 +698,7 @@ void Parser::parseStructMethod(StructDecl &st) {
     fn->params.insert(fn->params.begin(), std::move(self));
     for (auto &stmt : fn->body.statements)
         rewriteStmtExprs(*stmt, [](ExprPtr &slot) {
-            if (!dynamic_cast<SelfExpr *>(slot.get())) return;
+            if (!as<SelfExpr>(slot.get())) return;
             auto name = std::make_unique<NameExpr>();
             name->name = "self";
             name->line = slot->line; name->col = slot->col;
@@ -1010,7 +1010,7 @@ std::vector<Decorator> Parser::parseDecorators() {
             for (auto &e : parseArguments()) {
                 DecoratorArg a;
                 const Expr *x = e.get();
-                if (auto *na = dynamic_cast<const NamedArgExpr *>(x)) {    // `length: 255`
+                if (auto *na = as<const NamedArgExpr>(x)) {    // `length: 255`
                     a.key = na->name;
                     x = na->value.get();
                     for (const auto &o : d.args)
@@ -1028,25 +1028,25 @@ std::vector<Decorator> Parser::parseDecorators() {
                     fail(where, "a positional decorator argument cannot follow a named one");
                 }
                 bool neg = false;
-                if (auto *b = dynamic_cast<const BinaryExpr *>(x); b && b->op == BinaryOp::Sub) {
-                    auto *z = dynamic_cast<const IntLiteralExpr *>(b->left.get());
+                if (auto *b = as<const BinaryExpr>(x); b && b->op == BinaryOp::Sub) {
+                    auto *z = as<const IntLiteralExpr>(b->left.get());
                     if (z && z->raw == "0") { neg = true; x = b->right.get(); }   // `-5` is parsed as 0 - 5
                 }
                 std::function<std::string(const Expr *)> spelled = [&](const Expr *n) -> std::string {
-                    if (auto *nm = dynamic_cast<const NameExpr *>(n)) return nm->typeArgs.empty() ? nm->name : "";
-                    if (auto *m = dynamic_cast<const MemberExpr *>(n)) {
+                    if (auto *nm = as<const NameExpr>(n)) return nm->typeArgs.empty() ? nm->name : "";
+                    if (auto *m = as<const MemberExpr>(n)) {
                         std::string o = spelled(m->object.get());
                         return o.empty() ? "" : o + "." + m->member;
                     }
                     return "";
                 };
-                if (auto *s = dynamic_cast<const StringLiteralExpr *>(x); s && !neg) {
+                if (auto *s = as<const StringLiteralExpr>(x); s && !neg) {
                     a.kind = DecoratorArg::Kind::String; a.text = s->value;
-                } else if (auto *i = dynamic_cast<const IntLiteralExpr *>(x)) {
+                } else if (auto *i = as<const IntLiteralExpr>(x)) {
                     a.kind = DecoratorArg::Kind::Int; a.i = neg ? -i->value : i->value;
-                } else if (auto *f = dynamic_cast<const FloatLiteralExpr *>(x)) {
+                } else if (auto *f = as<const FloatLiteralExpr>(x)) {
                     a.kind = DecoratorArg::Kind::Float; a.text = (neg ? "-" : "") + f->raw; a.f = std::strtod(a.text.c_str(), nullptr);
-                } else if (auto *bl = dynamic_cast<const BoolLiteralExpr *>(x); bl && !neg) {
+                } else if (auto *bl = as<const BoolLiteralExpr>(x); bl && !neg) {
                     a.kind = DecoratorArg::Kind::Bool; a.b = bl->value;
                 } else if (std::string n = neg ? "" : spelled(x); !n.empty()) {
                     a.kind = DecoratorArg::Kind::Name; a.text = n;

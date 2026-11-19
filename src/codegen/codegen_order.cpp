@@ -13,14 +13,14 @@ namespace {
 
 // The pieces of a fused string chain (same shape as CodeGen::flattenString).
 void chainLeaves(const Expr &e, std::vector<const Expr *> &out) {
-    if (auto *b = dynamic_cast<const BinaryExpr *>(&e);
+    if (auto *b = as<const BinaryExpr>(&e);
         b && b->stringConcat && b->overloadMethod.empty()) {
         chainLeaves(*b->left, out);
         chainLeaves(*b->right, out);
         return;
     }
-    if (dynamic_cast<const StringLiteralExpr *>(&e)) return;
-    if (auto *c = dynamic_cast<const CallExpr *>(&e);
+    if (as<const StringLiteralExpr>(&e)) return;
+    if (auto *c = as<const CallExpr>(&e);
         c && c->kind == CallKind::Builtin && c->targetName == "str" && c->args.size() == 1 &&
         c->args[0]->type.kind == TypeRef::Kind::String) {
         chainLeaves(*c->args[0], out);
@@ -33,7 +33,7 @@ void chainLeaves(const Expr &e, std::vector<const Expr *> &out) {
 
 // The value a string-chain piece formats: `str(x)` of a non-string formats x itself.
 static const Expr *pieceValue(const Expr *l) {
-    if (auto *c = dynamic_cast<const CallExpr *>(l);
+    if (auto *c = as<const CallExpr>(l);
         c && c->kind == CallKind::Builtin && c->targetName == "str" && c->args.size() == 1 &&
         c->args[0]->type.kind != TypeRef::Kind::String)
         return c->args[0].get();
@@ -84,35 +84,35 @@ void CodeGen::orderOperands(const std::vector<const Expr *> &ops, std::vector<co
 // pointers, globals)? Locals cannot change: closures capture copies.
 bool CodeGen::readsMutable(const Expr *e) const {
     if (!e) return false;
-    if (dynamic_cast<const MemberExpr *>(e) || dynamic_cast<const IndexExpr *>(e) ||
-        dynamic_cast<const DerefExpr *>(e))
+    if (as<const MemberExpr>(e) || as<const IndexExpr>(e) ||
+        as<const DerefExpr>(e))
         return true;
-    if (auto *n = dynamic_cast<const NameExpr *>(e)) return !n->resolvedGlobal.empty();
-    if (auto *x = dynamic_cast<const BinaryExpr *>(e)) return readsMutable(x->left.get()) || readsMutable(x->right.get());
-    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) return readsMutable(x->operand.get());
-    if (auto *x = dynamic_cast<const AsExpr *>(e)) return readsMutable(x->operand.get());
-    if (auto *x = dynamic_cast<const CastExpr *>(e)) return readsMutable(x->operand.get());
-    if (auto *x = dynamic_cast<const TernaryExpr *>(e))
+    if (auto *n = as<const NameExpr>(e)) return !n->resolvedGlobal.empty();
+    if (auto *x = as<const BinaryExpr>(e)) return readsMutable(x->left.get()) || readsMutable(x->right.get());
+    if (auto *x = as<const UnaryExpr>(e)) return readsMutable(x->operand.get());
+    if (auto *x = as<const AsExpr>(e)) return readsMutable(x->operand.get());
+    if (auto *x = as<const CastExpr>(e)) return readsMutable(x->operand.get());
+    if (auto *x = as<const TernaryExpr>(e))
         return readsMutable(x->cond.get()) || readsMutable(x->thenExpr.get()) || readsMutable(x->elseExpr.get());
     return false;
 }
 
 void CodeGen::collectHoists(const Expr *e, std::vector<const Expr *> &out) const {
     if (!e) return;
-    if (auto *b = dynamic_cast<const BinaryExpr *>(e)) {
+    if (auto *b = as<const BinaryExpr>(e)) {
         if (b->stringConcat && b->overloadMethod.empty()) { orderChain(*e, out); return; }
         // The right side of && and || runs only sometimes: it is ordered on its own.
         if (b->op == BinaryOp::And || b->op == BinaryOp::Or) { collectHoists(b->left.get(), out); return; }
         orderOperands({b->left.get(), b->right.get()}, out);
         return;
     }
-    if (auto *c = dynamic_cast<const CallExpr *>(e)) {
-        auto *mem = dynamic_cast<const MemberExpr *>(c->callee.get());
+    if (auto *c = as<const CallExpr>(e)) {
+        auto *mem = as<const MemberExpr>(c->callee.get());
         // `a?.m(...)`: the arguments run only for a non-null receiver (ordered on their own).
         if (mem && mem->optional) { collectHoists(mem->object.get(), out); return; }
         if (c->kind == CallKind::Builtin && c->targetName == "print" && c->args.size() == 1) {
             const Expr *a = c->args[0].get();
-            if (auto *b = dynamic_cast<const BinaryExpr *>(a); b && b->stringConcat)
+            if (auto *b = as<const BinaryExpr>(a); b && b->stringConcat)
                 orderChain(*a, out); // printed piecewise
             else
                 collectHoists(a, out);
@@ -130,38 +130,38 @@ void CodeGen::collectHoists(const Expr *e, std::vector<const Expr *> &out) const
         orderOperands(ops, out);
         return;
     }
-    if (auto *x = dynamic_cast<const NewExpr *>(e)) {
+    if (auto *x = as<const NewExpr>(e)) {
         std::vector<const Expr *> ops;
         for (const auto &a : x->args) ops.push_back(a.get());
         orderOperands(ops, out);
         return;
     }
-    if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
+    if (auto *x = as<const IndexExpr>(e)) {
         std::vector<const Expr *> ops{x->base.get(), x->index.get()};
         for (const auto &m : x->more) ops.push_back(m.get());
         orderOperands(ops, out);
         return;
     }
-    if (auto *x = dynamic_cast<const ArrayLiteralExpr *>(e)) {
+    if (auto *x = as<const ArrayLiteralExpr>(e)) {
         std::vector<const Expr *> ops;
         for (const auto &el : x->elements) ops.push_back(el.get());
         orderOperands(ops, out);
         return;
     }
-    if (auto *x = dynamic_cast<const StructLiteralExpr *>(e)) {
+    if (auto *x = as<const StructLiteralExpr>(e)) {
         std::vector<const Expr *> ops;
         for (const auto &f : x->fields) ops.push_back(f.value.get());
         orderOperands(ops, out);
         return;
     }
     // A conditional's branches run only sometimes: they are ordered on their own.
-    if (auto *x = dynamic_cast<const TernaryExpr *>(e)) { collectHoists(x->cond.get(), out); return; }
-    if (auto *x = dynamic_cast<const CoalesceExpr *>(e)) { collectHoists(x->left.get(), out); return; }
-    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) { collectHoists(x->operand.get(), out); return; }
-    if (auto *x = dynamic_cast<const AsExpr *>(e)) { collectHoists(x->operand.get(), out); return; }
-    if (auto *x = dynamic_cast<const CastExpr *>(e)) { collectHoists(x->operand.get(), out); return; }
-    if (auto *x = dynamic_cast<const IsExpr *>(e)) { collectHoists(x->operand.get(), out); return; }
-    if (auto *x = dynamic_cast<const MemberExpr *>(e)) {
+    if (auto *x = as<const TernaryExpr>(e)) { collectHoists(x->cond.get(), out); return; }
+    if (auto *x = as<const CoalesceExpr>(e)) { collectHoists(x->left.get(), out); return; }
+    if (auto *x = as<const UnaryExpr>(e)) { collectHoists(x->operand.get(), out); return; }
+    if (auto *x = as<const AsExpr>(e)) { collectHoists(x->operand.get(), out); return; }
+    if (auto *x = as<const CastExpr>(e)) { collectHoists(x->operand.get(), out); return; }
+    if (auto *x = as<const IsExpr>(e)) { collectHoists(x->operand.get(), out); return; }
+    if (auto *x = as<const MemberExpr>(e)) {
         if (!x->optional) collectHoists(x->object.get(), out);
         return;
     }
@@ -209,11 +209,11 @@ std::vector<std::string> CodeGen::hoistAssignTemps(const Expr &target, const Exp
         else
             collectHoists(b, hs);
     };
-    if (auto *ix = dynamic_cast<const IndexExpr *>(&target)) {
+    if (auto *ix = as<const IndexExpr>(&target)) {
         refBase(ix->base.get());
         ops.push_back(ix->index.get());
         for (const auto &m : ix->more) ops.push_back(m.get());
-    } else if (auto *m = dynamic_cast<const MemberExpr *>(&target); m && !m->optional && m->object) {
+    } else if (auto *m = as<const MemberExpr>(&target); m && !m->optional && m->object) {
         refBase(m->object.get());
     }
     ops.push_back(value);

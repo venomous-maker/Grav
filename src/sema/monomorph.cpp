@@ -77,76 +77,76 @@ template <class T> std::unique_ptr<T> mkS(const Stmt *src) {
 
 ExprPtr cloneExpr(const Expr *e) {
     if (!e) return nullptr;
-    if (auto *x = dynamic_cast<const IntLiteralExpr *>(e)) {
+    if (auto *x = as<const IntLiteralExpr>(e)) {
         auto n = mkE<IntLiteralExpr>(e); n->value = x->value; n->raw = x->raw; return n;
     }
-    if (auto *x = dynamic_cast<const FloatLiteralExpr *>(e)) {
+    if (auto *x = as<const FloatLiteralExpr>(e)) {
         auto n = mkE<FloatLiteralExpr>(e); n->raw = x->raw; return n;
     }
-    if (auto *x = dynamic_cast<const BoolLiteralExpr *>(e)) {
+    if (auto *x = as<const BoolLiteralExpr>(e)) {
         auto n = mkE<BoolLiteralExpr>(e); n->value = x->value; return n;
     }
-    if (auto *x = dynamic_cast<const StringLiteralExpr *>(e)) {
+    if (auto *x = as<const StringLiteralExpr>(e)) {
         auto n = mkE<StringLiteralExpr>(e); n->value = x->value; return n;
     }
-    if (dynamic_cast<const NullLiteralExpr *>(e)) return mkE<NullLiteralExpr>(e);
-    if (auto *x = dynamic_cast<const CBlockExpr *>(e)) {
+    if (as<const NullLiteralExpr>(e)) return mkE<NullLiteralExpr>(e);
+    if (auto *x = as<const CBlockExpr>(e)) {
         auto n = mkE<CBlockExpr>(e); n->code = x->code; return n;
     }
-    if (auto *x = dynamic_cast<const NameExpr *>(e)) {
+    if (auto *x = as<const NameExpr>(e)) {
         auto n = mkE<NameExpr>(e); n->name = x->name; n->typeArgs = x->typeArgs; return n;
     }
-    if (dynamic_cast<const SelfExpr *>(e)) return mkE<SelfExpr>(e);
-    if (dynamic_cast<const SuperExpr *>(e)) return mkE<SuperExpr>(e);
-    if (auto *x = dynamic_cast<const BinaryExpr *>(e)) {
+    if (as<const SelfExpr>(e)) return mkE<SelfExpr>(e);
+    if (as<const SuperExpr>(e)) return mkE<SuperExpr>(e);
+    if (auto *x = as<const BinaryExpr>(e)) {
         auto n = mkE<BinaryExpr>(e); n->op = x->op; n->stringConcat = x->stringConcat;
         n->left = cloneExpr(x->left.get()); n->right = cloneExpr(x->right.get()); return n;
     }
-    if (auto *x = dynamic_cast<const UnaryExpr *>(e)) {
+    if (auto *x = as<const UnaryExpr>(e)) {
         auto n = mkE<UnaryExpr>(e); n->op = x->op; n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const TernaryExpr *>(e)) {
+    if (auto *x = as<const TernaryExpr>(e)) {
         auto n = mkE<TernaryExpr>(e); n->cond = cloneExpr(x->cond.get());
         n->thenExpr = cloneExpr(x->thenExpr.get()); n->elseExpr = cloneExpr(x->elseExpr.get()); return n;
     }
-    if (auto *x = dynamic_cast<const AsExpr *>(e)) {
+    if (auto *x = as<const AsExpr>(e)) {
         auto n = mkE<AsExpr>(e); n->target = x->target; n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const IsExpr *>(e)) {
+    if (auto *x = as<const IsExpr>(e)) {
         auto n = mkE<IsExpr>(e); n->typeName = x->typeName; n->className = x->className;
         n->target = x->target;
         n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const AwaitExpr *>(e)) {
+    if (auto *x = as<const AwaitExpr>(e)) {
         auto n = mkE<AwaitExpr>(e); n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const AddrOfExpr *>(e)) {
+    if (auto *x = as<const AddrOfExpr>(e)) {
         auto n = mkE<AddrOfExpr>(e); n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const DerefExpr *>(e)) {
+    if (auto *x = as<const DerefExpr>(e)) {
         auto n = mkE<DerefExpr>(e); n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const CoalesceExpr *>(e)) {
+    if (auto *x = as<const CoalesceExpr>(e)) {
         auto n = mkE<CoalesceExpr>(e); n->left = cloneExpr(x->left.get());
         n->right = cloneExpr(x->right.get()); return n;
     }
-    if (auto *x = dynamic_cast<const IncDecExpr *>(e)) {
+    if (auto *x = as<const IncDecExpr>(e)) {
         auto n = mkE<IncDecExpr>(e); n->isIncrement = x->isIncrement; n->isPrefix = x->isPrefix;
         n->target = cloneExpr(x->target.get()); return n;
     }
-    if (auto *x = dynamic_cast<const CastExpr *>(e)) {
+    if (auto *x = as<const CastExpr>(e)) {
         auto n = mkE<CastExpr>(e); n->target = x->target; n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const SizeofExpr *>(e)) {
+    if (auto *x = as<const SizeofExpr>(e)) {
         auto n = mkE<SizeofExpr>(e); n->isType = x->isType; n->target = x->target;
         n->operand = cloneExpr(x->operand.get()); return n;
     }
-    if (auto *x = dynamic_cast<const ArrayLiteralExpr *>(e)) {
+    if (auto *x = as<const ArrayLiteralExpr>(e)) {
         auto n = mkE<ArrayLiteralExpr>(e);
         for (const auto &el : x->elements) n->elements.push_back(cloneExpr(el.get()));
         return n;
     }
-    if (auto *x = dynamic_cast<const LambdaExpr *>(e)) {
+    if (auto *x = as<const LambdaExpr>(e)) {
         auto n = mkE<LambdaExpr>(e);
         n->params = x->params; n->paramTyped = x->paramTyped;
         n->hasReturnType = x->hasReturnType; n->returnType = x->returnType;
@@ -154,24 +154,24 @@ ExprPtr cloneExpr(const Expr *e) {
         n->body = cloneBlock(x->body);
         return n;
     }
-    if (auto *x = dynamic_cast<const IndexExpr *>(e)) {
+    if (auto *x = as<const IndexExpr>(e)) {
         auto n = mkE<IndexExpr>(e); n->base = cloneExpr(x->base.get());
         n->index = cloneExpr(x->index.get());
         n->isSlice = x->isSlice; n->sliceInclusive = x->sliceInclusive; n->sliceHi = cloneExpr(x->sliceHi.get());
         for (const auto &m : x->more) n->more.push_back(cloneExpr(m.get()));
         return n;
     }
-    if (auto *x = dynamic_cast<const MemberExpr *>(e)) {
+    if (auto *x = as<const MemberExpr>(e)) {
         auto n = mkE<MemberExpr>(e); n->member = x->member; n->optional = x->optional;
         n->kind = x->kind; n->ownerClass = x->ownerClass; n->qualified = x->qualified;
         n->object = cloneExpr(x->object.get()); return n;
     }
-    if (auto *x = dynamic_cast<const NewExpr *>(e)) {
+    if (auto *x = as<const NewExpr>(e)) {
         auto n = mkE<NewExpr>(e); n->className = x->className; n->typeArgs = x->typeArgs;
         for (const auto &a : x->args) n->args.push_back(cloneExpr(a.get()));
         return n;
     }
-    if (auto *x = dynamic_cast<const StructLiteralExpr *>(e)) {
+    if (auto *x = as<const StructLiteralExpr>(e)) {
         auto n = mkE<StructLiteralExpr>(e); n->typeName = x->typeName; n->typeArgs = x->typeArgs;
         for (const auto &f : x->fields) {
             StructFieldInit fi; fi.name = f.name; fi.line = f.line; fi.col = f.col;
@@ -179,7 +179,7 @@ ExprPtr cloneExpr(const Expr *e) {
         }
         return n;
     }
-    if (auto *x = dynamic_cast<const CallExpr *>(e)) {
+    if (auto *x = as<const CallExpr>(e)) {
         auto n = mkE<CallExpr>(e); n->typeArgs = x->typeArgs; n->kind = x->kind; n->spreadLast = x->spreadLast;
         n->targetName = x->targetName; n->methodName = x->methodName;
         n->ownerClass = x->ownerClass; n->slotOwner = x->slotOwner; n->ifaceDispatch = x->ifaceDispatch;
@@ -187,10 +187,10 @@ ExprPtr cloneExpr(const Expr *e) {
         for (const auto &a : x->args) n->args.push_back(cloneExpr(a.get()));
         return n;
     }
-    if (auto *x = dynamic_cast<const NamedArgExpr *>(e)) {
+    if (auto *x = as<const NamedArgExpr>(e)) {
         auto n = mkE<NamedArgExpr>(e); n->name = x->name; n->value = cloneExpr(x->value.get()); return n;
     }
-    if (auto *x = dynamic_cast<const DefaultArgExpr *>(e)) {
+    if (auto *x = as<const DefaultArgExpr>(e)) {
         auto n = mkE<DefaultArgExpr>(e); n->ns = x->ns; n->value = cloneExpr(x->value.get()); return n;
     }
     return nullptr; // unreachable for known nodes
@@ -198,35 +198,35 @@ ExprPtr cloneExpr(const Expr *e) {
 
 StmtPtr cloneStmt(const Stmt *s) {
     if (!s) return nullptr;
-    if (auto *x = dynamic_cast<const LetStmt *>(s)) {
+    if (auto *x = as<const LetStmt>(s)) {
         auto n = mkS<LetStmt>(s); n->name = x->name; n->isConst = x->isConst;
         n->hasDeclaredType = x->hasDeclaredType; n->declaredType = x->declaredType;
         n->resolvedType = x->resolvedType; n->quietUnused = x->quietUnused; n->init = cloneExpr(x->init.get()); return n;
     }
-    if (auto *x = dynamic_cast<const AssignStmt *>(s)) {
+    if (auto *x = as<const AssignStmt>(s)) {
         auto n = mkS<AssignStmt>(s); n->isCompound = x->isCompound; n->compoundOp = x->compoundOp;
         n->target = cloneExpr(x->target.get()); n->value = cloneExpr(x->value.get()); return n;
     }
-    if (auto *x = dynamic_cast<const ReturnStmt *>(s)) {
+    if (auto *x = as<const ReturnStmt>(s)) {
         auto n = mkS<ReturnStmt>(s); n->value = cloneExpr(x->value.get()); return n;
     }
-    if (auto *x = dynamic_cast<const ExprStmt *>(s)) {
+    if (auto *x = as<const ExprStmt>(s)) {
         auto n = mkS<ExprStmt>(s); n->expr = cloneExpr(x->expr.get()); return n;
     }
-    if (auto *x = dynamic_cast<const BlockStmt *>(s)) {
+    if (auto *x = as<const BlockStmt>(s)) {
         auto n = mkS<BlockStmt>(s); n->block = cloneBlock(x->block); n->ns = x->ns; return n;
     }
-    if (auto *x = dynamic_cast<const IfStmt *>(s)) {
+    if (auto *x = as<const IfStmt>(s)) {
         auto n = mkS<IfStmt>(s); n->cond = cloneExpr(x->cond.get());
         n->thenBlock = cloneBlock(x->thenBlock); n->elseStmt = cloneStmt(x->elseStmt.get()); return n;
     }
-    if (auto *x = dynamic_cast<const WhileStmt *>(s)) {
+    if (auto *x = as<const WhileStmt>(s)) {
         auto n = mkS<WhileStmt>(s); n->label = x->label; n->cond = cloneExpr(x->cond.get()); n->body = cloneBlock(x->body); return n;
     }
-    if (auto *x = dynamic_cast<const DoWhileStmt *>(s)) {
+    if (auto *x = as<const DoWhileStmt>(s)) {
         auto n = mkS<DoWhileStmt>(s); n->label = x->label; n->body = cloneBlock(x->body); n->cond = cloneExpr(x->cond.get()); return n;
     }
-    if (auto *x = dynamic_cast<const SwitchStmt *>(s)) {
+    if (auto *x = as<const SwitchStmt>(s)) {
         auto n = mkS<SwitchStmt>(s); n->subject = cloneExpr(x->subject.get());
         n->hasDefault = x->hasDefault; n->defaultBody = cloneBlock(x->defaultBody); n->isExpr = x->isExpr;
         for (const auto &c : x->cases) {
@@ -239,23 +239,23 @@ StmtPtr cloneStmt(const Stmt *s) {
         }
         return n;
     }
-    if (auto *x = dynamic_cast<const ForStmt *>(s)) {
+    if (auto *x = as<const ForStmt>(s)) {
         auto n = mkS<ForStmt>(s); n->label = x->label; n->init = cloneStmt(x->init.get()); n->cond = cloneExpr(x->cond.get());
         n->update = cloneStmt(x->update.get()); n->body = cloneBlock(x->body); return n;
     }
-    if (auto *x = dynamic_cast<const ForInStmt *>(s)) {
+    if (auto *x = as<const ForInStmt>(s)) {
         auto n = mkS<ForInStmt>(s); n->label = x->label; n->var = x->var; n->indexVar = x->indexVar;
         n->inclusive = x->inclusive;
         n->lo = cloneExpr(x->lo.get()); n->hi = cloneExpr(x->hi.get());
         n->step = cloneExpr(x->step.get()); n->body = cloneBlock(x->body); return n;
     }
-    if (auto *x = dynamic_cast<const DeferStmt *>(s)) {
+    if (auto *x = as<const DeferStmt>(s)) {
         auto n = mkS<DeferStmt>(s); n->body = cloneBlock(x->body); return n;
     }
-    if (auto *x = dynamic_cast<const ThrowStmt *>(s)) {
+    if (auto *x = as<const ThrowStmt>(s)) {
         auto n = mkS<ThrowStmt>(s); n->value = cloneExpr(x->value.get()); return n;
     }
-    if (auto *x = dynamic_cast<const TryStmt *>(s)) {
+    if (auto *x = as<const TryStmt>(s)) {
         auto n = mkS<TryStmt>(s);
         n->tryBlock = cloneBlock(x->tryBlock);
         for (const auto &c : x->catches) {
@@ -267,8 +267,8 @@ StmtPtr cloneStmt(const Stmt *s) {
         n->hasFinally = x->hasFinally; n->finallyBlock = cloneBlock(x->finallyBlock);
         return n;
     }
-    if (auto *x = dynamic_cast<const BreakStmt *>(s)) { auto n = mkS<BreakStmt>(s); n->label = x->label; return n; }
-    if (auto *x = dynamic_cast<const ContinueStmt *>(s)) { auto n = mkS<ContinueStmt>(s); n->label = x->label; return n; }
+    if (auto *x = as<const BreakStmt>(s)) { auto n = mkS<BreakStmt>(s); n->label = x->label; return n; }
+    if (auto *x = as<const ContinueStmt>(s)) { auto n = mkS<ContinueStmt>(s); n->label = x->label; return n; }
     return nullptr;
 }
 
@@ -802,24 +802,24 @@ void Mono::walkBlock(Block &b, const Subst &subst) {
 
 void Mono::walkStmt(Stmt *s, const Subst &subst) {
     if (!s) return;
-    if (auto *x = dynamic_cast<LetStmt *>(s)) {
+    if (auto *x = as<LetStmt>(s)) {
         if (x->hasDeclaredType) rewriteType(x->declaredType, subst, x->line, x->col);
         walkExpr(x->init.get(), subst);
-    } else if (auto *x = dynamic_cast<AssignStmt *>(s)) {
+    } else if (auto *x = as<AssignStmt>(s)) {
         walkExpr(x->target.get(), subst); walkExpr(x->value.get(), subst);
-    } else if (auto *x = dynamic_cast<ReturnStmt *>(s)) {
+    } else if (auto *x = as<ReturnStmt>(s)) {
         walkExpr(x->value.get(), subst);
-    } else if (auto *x = dynamic_cast<ExprStmt *>(s)) {
+    } else if (auto *x = as<ExprStmt>(s)) {
         walkExpr(x->expr.get(), subst);
-    } else if (auto *x = dynamic_cast<BlockStmt *>(s)) {
+    } else if (auto *x = as<BlockStmt>(s)) {
         walkBlock(x->block, subst);
-    } else if (auto *x = dynamic_cast<IfStmt *>(s)) {
+    } else if (auto *x = as<IfStmt>(s)) {
         walkExpr(x->cond.get(), subst); walkBlock(x->thenBlock, subst); walkStmt(x->elseStmt.get(), subst);
-    } else if (auto *x = dynamic_cast<WhileStmt *>(s)) {
+    } else if (auto *x = as<WhileStmt>(s)) {
         walkExpr(x->cond.get(), subst); walkBlock(x->body, subst);
-    } else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) {
+    } else if (auto *x = as<DoWhileStmt>(s)) {
         walkBlock(x->body, subst); walkExpr(x->cond.get(), subst);
-    } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+    } else if (auto *x = as<SwitchStmt>(s)) {
         walkExpr(x->subject.get(), subst);
         for (auto &c : x->cases) {
             for (auto &v : c.values) walkExpr(v.get(), subst);
@@ -828,17 +828,17 @@ void Mono::walkStmt(Stmt *s, const Subst &subst) {
             walkBlock(c.body, subst);
         }
         if (x->hasDefault) walkBlock(x->defaultBody, subst);
-    } else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+    } else if (auto *x = as<ForStmt>(s)) {
         walkStmt(x->init.get(), subst); walkExpr(x->cond.get(), subst);
         walkStmt(x->update.get(), subst); walkBlock(x->body, subst);
-    } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+    } else if (auto *x = as<ForInStmt>(s)) {
         walkExpr(x->lo.get(), subst); walkExpr(x->hi.get(), subst);
         walkExpr(x->step.get(), subst); walkBlock(x->body, subst);
-    } else if (auto *x = dynamic_cast<DeferStmt *>(s)) {
+    } else if (auto *x = as<DeferStmt>(s)) {
         walkBlock(x->body, subst);
-    } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) {
+    } else if (auto *x = as<ThrowStmt>(s)) {
         walkExpr(x->value.get(), subst);
-    } else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+    } else if (auto *x = as<TryStmt>(s)) {
         walkBlock(x->tryBlock, subst);
         for (auto &c : x->catches) { rewriteType(c.type, subst, c.line, c.col); walkBlock(c.block, subst); }
         if (x->hasFinally) walkBlock(x->finallyBlock, subst);
@@ -847,14 +847,14 @@ void Mono::walkStmt(Stmt *s, const Subst &subst) {
 
 void Mono::walkExpr(Expr *e, const Subst &subst) {
     if (!e) return;
-    if (auto *x = dynamic_cast<CastExpr *>(e)) {
+    if (auto *x = as<CastExpr>(e)) {
         rewriteType(x->target, subst, e->line, e->col); walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<AsExpr *>(e)) {
+    } else if (auto *x = as<AsExpr>(e)) {
         rewriteType(x->target, subst, e->line, e->col); walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<SizeofExpr *>(e)) {
+    } else if (auto *x = as<SizeofExpr>(e)) {
         // `sizeof(T)` parses T as a name; if T is a type parameter, treat it as a type.
         if (!x->isType) {
-            if (auto *nm = dynamic_cast<NameExpr *>(x->operand.get());
+            if (auto *nm = as<NameExpr>(x->operand.get());
                 nm && subst.count(nm->name)) {
                 x->isType = true;
                 x->target = TypeRef::named(nm->name);
@@ -863,7 +863,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         }
         if (x->isType) rewriteType(x->target, subst, e->line, e->col);
         else walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) {
+    } else if (auto *x = as<StructLiteralExpr>(e)) {
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty()) {
             std::string fq = findTpl(x->typeName, structTpl_);
@@ -871,7 +871,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
             x->typeArgs.clear();
         }
         for (auto &f : x->fields) walkExpr(f.value.get(), subst);
-    } else if (auto *x = dynamic_cast<NameExpr *>(e); x && !x->typeArgs.empty()) {
+    } else if (auto *x = as<NameExpr>(e); x && !x->typeArgs.empty()) {
         // `Stack<int>.of(3)` names the instance's static member.
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (std::string fq = findTpl(x->name, classTpl_); !fq.empty())
@@ -879,7 +879,7 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         else
             error(e->line, e->col, "unknown generic class '" + x->name + "'");
         x->typeArgs.clear();
-    } else if (auto *x = dynamic_cast<NewExpr *>(e)) {
+    } else if (auto *x = as<NewExpr>(e)) {
         applyInferred(e);
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
@@ -890,13 +890,13 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
             x->typeArgs.clear();
         }
         for (auto &a : x->args) walkExpr(a.get(), subst);
-    } else if (auto *x = dynamic_cast<CallExpr *>(e)) {
+    } else if (auto *x = as<CallExpr>(e)) {
         applyInferred(e);
         // `reflect(T)` / `nameof(T)` for a type parameter T: the type it stands for
         // here (nameof also takes a primitive, named as written: "int").
-        if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get());
+        if (auto *callee = as<NameExpr>(x->callee.get());
             callee && (callee->name == "reflect" || callee->name == "nameof") && x->args.size() == 1)
-            if (auto *arg = dynamic_cast<NameExpr *>(x->args[0].get()); arg && arg->typeArgs.empty())
+            if (auto *arg = as<NameExpr>(x->args[0].get()); arg && arg->typeArgs.empty())
                 if (auto it = subst.find(arg->name); it != subst.end()) {
                     TypeRef t = it->second;
                     rewriteType(t, subst, e->line, e->col);
@@ -906,13 +906,13 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
                 }
         for (auto &a : x->typeArgs) { rewriteType(a, subst, e->line, e->col); qualifyArg(a); }
         if (!x->typeArgs.empty() && !hasAuto(x->typeArgs)) {
-            if (auto *callee = dynamic_cast<NameExpr *>(x->callee.get())) {
+            if (auto *callee = as<NameExpr>(x->callee.get())) {
                 if (std::string fq = findTpl(callee->name, fnTpl_); !fq.empty()) {
                     callee->name = instantiateFn(fq, x->typeArgs, e->line, e->col);
                 } else {
                     error(e->line, e->col, "'" + callee->name + "' is not a generic function");
                 }
-            } else if (auto *mem = dynamic_cast<MemberExpr *>(x->callee.get())) {
+            } else if (auto *mem = as<MemberExpr>(x->callee.get())) {
                 // `obj.m::<Args>(...)` -> the method instance `m$Args`, requested for
                 // every class that declares a generic method `m`.
                 std::string key = instName(mem->member, x->typeArgs);
@@ -929,42 +929,42 @@ void Mono::walkExpr(Expr *e, const Subst &subst) {
         }
         walkExpr(x->callee.get(), subst);
         for (auto &a : x->args) walkExpr(a.get(), subst);
-    } else if (auto *x = dynamic_cast<BinaryExpr *>(e)) {
+    } else if (auto *x = as<BinaryExpr>(e)) {
         walkExpr(x->left.get(), subst); walkExpr(x->right.get(), subst);
-    } else if (auto *x = dynamic_cast<UnaryExpr *>(e)) {
+    } else if (auto *x = as<UnaryExpr>(e)) {
         walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<TernaryExpr *>(e)) {
+    } else if (auto *x = as<TernaryExpr>(e)) {
         walkExpr(x->cond.get(), subst); walkExpr(x->thenExpr.get(), subst); walkExpr(x->elseExpr.get(), subst);
-    } else if (auto *x = dynamic_cast<IsExpr *>(e)) {
+    } else if (auto *x = as<IsExpr>(e)) {
         rewriteType(x->target, subst, e->line, e->col);
         if (x->target.isNamed()) x->typeName = x->target.name;
         walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<AwaitExpr *>(e)) {
+    } else if (auto *x = as<AwaitExpr>(e)) {
         walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) {
+    } else if (auto *x = as<AddrOfExpr>(e)) {
         walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<DerefExpr *>(e)) {
+    } else if (auto *x = as<DerefExpr>(e)) {
         walkExpr(x->operand.get(), subst);
-    } else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) {
+    } else if (auto *x = as<CoalesceExpr>(e)) {
         walkExpr(x->left.get(), subst); walkExpr(x->right.get(), subst);
-    } else if (auto *x = dynamic_cast<IncDecExpr *>(e)) {
+    } else if (auto *x = as<IncDecExpr>(e)) {
         walkExpr(x->target.get(), subst);
-    } else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) {
+    } else if (auto *x = as<ArrayLiteralExpr>(e)) {
         for (auto &el : x->elements) walkExpr(el.get(), subst);
-    } else if (auto *x = dynamic_cast<LambdaExpr *>(e)) {
+    } else if (auto *x = as<LambdaExpr>(e)) {
         for (size_t i = 0; i < x->params.size(); ++i)
             if (i < x->paramTyped.size() && x->paramTyped[i])
                 rewriteType(x->params[i].type, subst, e->line, e->col);
         if (x->hasReturnType) rewriteType(x->returnType, subst, e->line, e->col);
         walkExpr(x->exprBody.get(), subst);
         walkBlock(x->body, subst);
-    } else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
+    } else if (auto *x = as<IndexExpr>(e)) {
         walkExpr(x->base.get(), subst); walkExpr(x->index.get(), subst);
         for (auto &m : x->more) walkExpr(m.get(), subst);
         walkExpr(x->sliceHi.get(), subst);
-    } else if (auto *x = dynamic_cast<MemberExpr *>(e)) {
+    } else if (auto *x = as<MemberExpr>(e)) {
         walkExpr(x->object.get(), subst);
-    } else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) {
+    } else if (auto *x = as<NamedArgExpr>(e)) {
         walkExpr(x->value.get(), subst);
     }
 }
@@ -1052,14 +1052,14 @@ void Mono::rewriteParams(std::vector<Param> &ps, const Subst &subst, int line, i
 
 void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
     NsScope nsScope(currentNs_, nsOf(d->fqName));
-    if (auto *t = dynamic_cast<TestDecl *>(d)) { walkBlock(t->body, subst); return; }
-    if (auto *st = dynamic_cast<StructDecl *>(d)) {
+    if (auto *t = as<TestDecl>(d)) { walkBlock(t->body, subst); return; }
+    if (auto *st = as<StructDecl>(d)) {
         for (auto &f : st->fields) rewriteType(f.type, subst, f.line, f.col);
-    } else if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
+    } else if (auto *fn = as<FunctionDecl>(d)) {
         rewriteParams(fn->params, subst, fn->line, fn->col);
         rewriteType(fn->returnType, subst, fn->line, fn->col);
         walkBlock(fn->body, subst);
-    } else if (auto *cd = dynamic_cast<ClassDecl *>(d)) {
+    } else if (auto *cd = as<ClassDecl>(d)) {
         extractGenericMethods(cd, cd->methods, subst);
         rewriteSuper(cd->baseName, cd->baseArgs, subst, /*isClass=*/true, cd->line, cd->col);
         for (size_t i = 0; i < cd->extraBases.size(); ++i)
@@ -1099,7 +1099,7 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             rewriteType(m.returnType, subst, m.line, m.col);
             if (m.hasBody) walkBlock(m.body, subst);
         }
-    } else if (auto *id = dynamic_cast<InterfaceDecl *>(d)) {
+    } else if (auto *id = as<InterfaceDecl>(d)) {
         extractInterfaceGenerics(id, id->methods, subst);
         // Signatures (and default bodies, copied into implementers afterwards)
         // may name generic instances such as Array<string>.
@@ -1108,10 +1108,10 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             rewriteType(m.returnType, subst, m.line, m.col);
             if (m.hasBody) walkBlock(m.body, subst);
         }
-    } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
+    } else if (auto *g = as<GlobalVarDecl>(d)) {
         if (g->hasDeclaredType) rewriteType(g->declaredType, subst, g->line, g->col);
         walkExpr(g->init.get(), subst);
-    } else if (auto *al = dynamic_cast<TypeAliasDecl *>(d)) {
+    } else if (auto *al = as<TypeAliasDecl>(d)) {
         rewriteType(al->target, subst, al->line, al->col);
     }
 }
@@ -1125,27 +1125,27 @@ void Mono::run() {
     instantiateSelfStatics();
     // 0) Every declared type's fully-qualified name (for qualifying type arguments).
     for (auto &d : program_.decls)
-        if (dynamic_cast<ClassDecl *>(d.get()) || dynamic_cast<StructDecl *>(d.get()) ||
-            dynamic_cast<InterfaceDecl *>(d.get()) || dynamic_cast<EnumDecl *>(d.get()) ||
-            dynamic_cast<TypeAliasDecl *>(d.get()))
+        if (as<ClassDecl>(d.get()) || as<StructDecl>(d.get()) ||
+            as<InterfaceDecl>(d.get()) || as<EnumDecl>(d.get()) ||
+            as<TypeAliasDecl>(d.get()))
             knownTypes_[d->fqName] = true;
     // Record class inheritance/implements (by simple name) for constraint checks.
     for (auto &d : program_.decls)
-        if (auto *cd = dynamic_cast<ClassDecl *>(d.get()))
+        if (auto *cd = as<ClassDecl>(d.get()))
             classImpl_[cd->name] = {cd->baseName, cd->interfaceNames};
 
     // 1) Split templates from concrete decls (templates kept alive in templates_).
     std::vector<DeclPtr> kept;
     for (auto &d : program_.decls) {
-        if (auto *st = dynamic_cast<StructDecl *>(d.get()); st && !st->typeParams.empty()) {
+        if (auto *st = as<StructDecl>(d.get()); st && !st->typeParams.empty()) {
             structTpl_[st->fqName] = st; templates_.push_back(std::move(d));
-        } else if (auto *fn = dynamic_cast<FunctionDecl *>(d.get()); fn && !fn->typeParams.empty()) {
+        } else if (auto *fn = as<FunctionDecl>(d.get()); fn && !fn->typeParams.empty()) {
             fnTpl_[fn->fqName] = fn; templates_.push_back(std::move(d));
-        } else if (auto *cd = dynamic_cast<ClassDecl *>(d.get()); cd && !cd->typeParams.empty()) {
+        } else if (auto *cd = as<ClassDecl>(d.get()); cd && !cd->typeParams.empty()) {
             classTpl_[cd->fqName] = cd; templates_.push_back(std::move(d));
-        } else if (auto *id = dynamic_cast<InterfaceDecl *>(d.get()); id && !id->typeParams.empty()) {
+        } else if (auto *id = as<InterfaceDecl>(d.get()); id && !id->typeParams.empty()) {
             ifaceTpl_[id->fqName] = id; templates_.push_back(std::move(d));
-        } else if (auto *al = dynamic_cast<TypeAliasDecl *>(d.get()); al && !al->typeParams.empty()) {
+        } else if (auto *al = as<TypeAliasDecl>(d.get()); al && !al->typeParams.empty()) {
             aliasTpl_[al->fqName] = al; templates_.push_back(std::move(d));
         } else {
             kept.push_back(std::move(d));
@@ -1364,7 +1364,7 @@ void Mono::instantiateGenericMethods() {
 void Mono::flattenBases() {
     std::unordered_map<std::string, ClassDecl *> classes;
     for (auto &d : program_.decls)
-        if (auto *c = dynamic_cast<ClassDecl *>(d.get())) classes[c->name] = c;
+        if (auto *c = as<ClassDecl>(d.get())) classes[c->name] = c;
 
     // Does `c` already provide a field/method `name` (own or via the primary chain)?
     std::function<bool(ClassDecl *, const std::string &, bool)> has =
@@ -1380,7 +1380,7 @@ void Mono::flattenBases() {
         return false;
     };
     for (auto &d : program_.decls) {
-        auto *c = dynamic_cast<ClassDecl *>(d.get());
+        auto *c = as<ClassDecl>(d.get());
         if (!c || c->extraBases.empty()) continue;
         // Collect each secondary base's full inheritance chain (deduped).
         std::vector<ClassDecl *> chain;
@@ -1410,8 +1410,8 @@ void Mono::synthesizeTraits() {
     std::unordered_map<std::string, InterfaceDecl *> ifaces;
     std::unordered_map<std::string, ClassDecl *> classes;
     for (auto &d : program_.decls) {
-        if (auto *i = dynamic_cast<InterfaceDecl *>(d.get())) { ifaces[i->fqName] = i; ifaces.emplace(i->name, i); }
-        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) classes[c->name] = c;
+        if (auto *i = as<InterfaceDecl>(d.get())) { ifaces[i->fqName] = i; ifaces.emplace(i->name, i); }
+        else if (auto *c = as<ClassDecl>(d.get())) classes[c->name] = c;
     }
     auto classHasMethod = [&](ClassDecl *c, const std::string &name) {
         std::string cur = c->name;
@@ -1424,7 +1424,7 @@ void Mono::synthesizeTraits() {
         return false;
     };
     for (auto &d : program_.decls) {
-        auto *c = dynamic_cast<ClassDecl *>(d.get());
+        auto *c = as<ClassDecl>(d.get());
         if (!c) continue;
         // Implemented interfaces across the whole base chain.
         std::vector<std::string> names;
@@ -1505,8 +1505,8 @@ ExprPtr classRef(const std::string &fq, int line, int col) {
 }
 // The dotted name an expression spells (`User`, `app.User`), or "".
 std::string spelledName(const Expr *e) {
-    if (auto *n = dynamic_cast<const NameExpr *>(e)) return n->typeArgs.empty() ? n->name : "";
-    if (auto *m = dynamic_cast<const MemberExpr *>(e)) {
+    if (auto *n = as<const NameExpr>(e)) return n->typeArgs.empty() ? n->name : "";
+    if (auto *m = as<const MemberExpr>(e)) {
         std::string o = spelledName(m->object.get());
         return o.empty() ? "" : o + "." + m->member;
     }
@@ -1521,19 +1521,19 @@ void eachTypeIn(MethodDecl &m, const std::function<void(TypeRef &)> &onType,
     onType(m.returnType);
     for (auto &st : m.body.statements) {
         visitStmt(*st, [&](Stmt &s) {
-            if (auto *l = dynamic_cast<LetStmt *>(&s)) { if (l->hasDeclaredType) onType(l->declaredType); }
-            else if (auto *f = dynamic_cast<ForInStmt *>(&s)) { onType(f->varType); onType(f->iterType); }
-            else if (auto *t = dynamic_cast<TryStmt *>(&s)) for (auto &c : t->catches) onType(c.type);
+            if (auto *l = as<LetStmt>(&s)) { if (l->hasDeclaredType) onType(l->declaredType); }
+            else if (auto *f = as<ForInStmt>(&s)) { onType(f->varType); onType(f->iterType); }
+            else if (auto *t = as<TryStmt>(&s)) for (auto &c : t->catches) onType(c.type);
         }, [&](Expr &e) {
-            if (auto *x = dynamic_cast<AsExpr *>(&e)) onType(x->target);
-            else if (auto *x = dynamic_cast<CastExpr *>(&e)) onType(x->target);
-            else if (auto *x = dynamic_cast<IsExpr *>(&e)) onType(x->target);
-            else if (auto *x = dynamic_cast<SizeofExpr *>(&e)) { if (x->isType) onType(x->target); }
-            else if (auto *x = dynamic_cast<NewExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
-            else if (auto *x = dynamic_cast<CallExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
-            else if (auto *x = dynamic_cast<NameExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
-            else if (auto *x = dynamic_cast<StructLiteralExpr *>(&e)) { for (auto &a : x->typeArgs) onType(a); }
-            else if (auto *x = dynamic_cast<LambdaExpr *>(&e)) { for (auto &p : x->params) onType(p.type); onType(x->returnType); }
+            if (auto *x = as<AsExpr>(&e)) onType(x->target);
+            else if (auto *x = as<CastExpr>(&e)) onType(x->target);
+            else if (auto *x = as<IsExpr>(&e)) onType(x->target);
+            else if (auto *x = as<SizeofExpr>(&e)) { if (x->isType) onType(x->target); }
+            else if (auto *x = as<NewExpr>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = as<CallExpr>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = as<NameExpr>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = as<StructLiteralExpr>(&e)) { for (auto &a : x->typeArgs) onType(a); }
+            else if (auto *x = as<LambdaExpr>(&e)) { for (auto &p : x->params) onType(p.type); onType(x->returnType); }
         });
         rewriteStmtExprs(*st, onSlot);
     }
@@ -1541,18 +1541,18 @@ void eachTypeIn(MethodDecl &m, const std::function<void(TypeRef &)> &onType,
 bool methodNamesSelf(MethodDecl &m) {
     bool found = false;
     eachTypeIn(m, [&](TypeRef &t) { if (typeNamesSelf(t)) found = true; }, [&](ExprPtr &e) {
-        if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self") found = true;
-        else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") found = true;
-        else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") found = true;
+        if (auto *n = as<NameExpr>(e.get()); n && n->name == "Self") found = true;
+        else if (auto *x = as<NewExpr>(e.get()); x && x->className == "Self") found = true;
+        else if (auto *x = as<IsExpr>(e.get()); x && x->typeName == "Self") found = true;
     });
     return found;
 }
 void bindSelf(MethodDecl &m, const std::string &fq) {
     eachTypeIn(m, [&](TypeRef &t) { substSelf(t, fq); }, [&](ExprPtr &e) {
-        if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self" && n->typeArgs.empty())
+        if (auto *n = as<NameExpr>(e.get()); n && n->name == "Self" && n->typeArgs.empty())
             e = classRef(fq, n->line, n->col);
-        else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") x->className = fq;
-        else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") x->typeName = fq;
+        else if (auto *x = as<NewExpr>(e.get()); x && x->className == "Self") x->className = fq;
+        else if (auto *x = as<IsExpr>(e.get()); x && x->typeName == "Self") x->typeName = fq;
     });
 }
 // In an instance method, `Self.count` and `Self.make()` name the class that
@@ -1564,10 +1564,10 @@ bool bindSelfValues(MethodDecl &m, const std::string &fq) {
     bool ok = true;
     for (auto &st : m.body.statements)
         rewriteStmtExprs(*st, [&](ExprPtr &e) {
-            if (auto *n = dynamic_cast<NameExpr *>(e.get()); n && n->name == "Self" && n->typeArgs.empty())
+            if (auto *n = as<NameExpr>(e.get()); n && n->name == "Self" && n->typeArgs.empty())
                 e = classRef(fq, n->line, n->col);
-            else if (auto *x = dynamic_cast<NewExpr *>(e.get()); x && x->className == "Self") ok = false;
-            else if (auto *x = dynamic_cast<IsExpr *>(e.get()); x && x->typeName == "Self") ok = false;
+            else if (auto *x = as<NewExpr>(e.get()); x && x->className == "Self") ok = false;
+            else if (auto *x = as<IsExpr>(e.get()); x && x->typeName == "Self") ok = false;
         });
     return ok;
 }
@@ -1587,10 +1587,10 @@ void Mono::copyTraitMembers() {
         return dot == std::string::npos ? n : n.substr(dot + 1);
     };
     for (auto &d : program_.decls) {
-        if (auto *t = dynamic_cast<InterfaceDecl *>(d.get()); t && t->isTrait) {
+        if (auto *t = as<InterfaceDecl>(d.get()); t && t->isTrait) {
             traits[t->fqName] = t;
             traits.emplace(t->name, t);
-        } else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+        } else if (auto *c = as<ClassDecl>(d.get())) {
             classes[c->fqName] = c;
             classes.emplace(c->name, c);
         }
@@ -1628,7 +1628,7 @@ void Mono::copyTraitMembers() {
         return false;
     };
     for (auto &d : program_.decls) {
-        auto *c = dynamic_cast<ClassDecl *>(d.get());
+        auto *c = as<ClassDecl>(d.get());
         if (!c) continue;
         for (const auto &in : c->interfaceNames) {
             InterfaceDecl *t = traitOf(in);
@@ -1681,7 +1681,7 @@ void Mono::selfInInstance(const MethodDecl &m) {
 void Mono::instantiateSelfStatics() {
     std::unordered_map<std::string, ClassDecl *> byName;      // simple and qualified names
     for (auto &d : program_.decls)
-        if (auto *c = dynamic_cast<ClassDecl *>(d.get()); c && c->typeParams.empty()) {
+        if (auto *c = as<ClassDecl>(d.get()); c && c->typeParams.empty()) {
             byName[c->fqName] = c;
             byName.emplace(c->name, c);
         }
@@ -1712,9 +1712,9 @@ void Mono::instantiateSelfStatics() {
     struct Pending { ClassDecl *owner; std::vector<MethodDecl> copies; };
     std::vector<Pending> pending;
     auto onCall = [&](ExprPtr &slot) {
-        auto *call = dynamic_cast<CallExpr *>(slot.get());
+        auto *call = as<CallExpr>(slot.get());
         if (!call) return;
-        auto *mem = dynamic_cast<MemberExpr *>(call->callee.get());
+        auto *mem = as<MemberExpr>(call->callee.get());
         if (!mem) return;
         std::string written = spelledName(mem->object.get());
         auto cit = written.empty() ? byName.end() : byName.find(written);
@@ -1773,14 +1773,14 @@ ExprPtr cloneExpression(const Expr *e) { return cloneExpr(e); }
 // Inferred type arguments for a call or `new` in the instance being walked.
 void Mono::applyInferred(Expr *e) {
     if (!infer_ || scope_.empty() || infer_->entries.empty()) return;
-    if (auto *c = dynamic_cast<CallExpr *>(e)) {
+    if (auto *c = as<CallExpr>(e)) {
         if (!c->typeArgs.empty()) return;
         std::string name;
-        if (auto *n = dynamic_cast<NameExpr *>(c->callee.get())) name = n->name;
-        else if (auto *m = dynamic_cast<MemberExpr *>(c->callee.get())) name = m->member;
+        if (auto *n = as<NameExpr>(c->callee.get())) name = n->name;
+        else if (auto *m = as<MemberExpr>(c->callee.get())) name = m->member;
         auto it = infer_->entries.find(siteKey(scope_, c->line, c->col, name));
         if (it != infer_->entries.end()) c->typeArgs = it->second;
-    } else if (auto *n = dynamic_cast<NewExpr *>(e)) {
+    } else if (auto *n = as<NewExpr>(e)) {
         if (!n->typeArgs.empty()) return;
         auto it = infer_->entries.find(siteKey(scope_, n->line, n->col, n->className));
         if (it != infer_->entries.end()) n->typeArgs = it->second;

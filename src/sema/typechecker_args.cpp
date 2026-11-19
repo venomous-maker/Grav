@@ -40,7 +40,7 @@ bool fits(const std::vector<ExprPtr> &args, const TypeChecker::ParamList &pl, st
     bool sawNamed = false;
     std::vector<bool> filled(pl.names.size(), false);
     for (const auto &a : args) {
-        auto *na = dynamic_cast<const NamedArgExpr *>(a.get());
+        auto *na = as<const NamedArgExpr>(a.get());
         if (!na) {
             if (sawNamed) { why = "a positional argument cannot follow a named one"; return false; }
             if (pl.variadic && positional + 1 >= pl.names.size()) { ++positional; continue; }
@@ -86,7 +86,7 @@ void TypeChecker::fillDefaults(std::vector<ExprPtr> &args, const ParamList &pl, 
 int TypeChecker::completeArgs(std::vector<ExprPtr> &args, const std::vector<ParamList> &cands, int line,
                               int col, const std::string &what, bool byType) {
     bool named = false;
-    for (const auto &a : args) named = named || dynamic_cast<const NamedArgExpr *>(a.get());
+    for (const auto &a : args) named = named || as<const NamedArgExpr>(a.get());
     // Positional arguments several candidates take (as they are, or with
     // defaults): the types decide, so leave the choice to the caller.
     if (!named && byType) {
@@ -123,7 +123,7 @@ int TypeChecker::completeArgs(std::vector<ExprPtr> &args, const std::vector<Para
     std::vector<ExprPtr> rest; // a variadic parameter's arguments
     size_t positional = 0;
     for (auto &a : args) {
-        if (auto *na = dynamic_cast<NamedArgExpr *>(a.get())) {
+        if (auto *na = as<NamedArgExpr>(a.get())) {
             size_t i = 0;
             while (pl.names[i] != na->name) ++i;
             out[i] = std::move(na->value);
@@ -188,7 +188,7 @@ void TypeChecker::checkDefaults(const std::vector<Param> &params) {
 // When the arguments fit no candidate: check what they say, named or not.
 void TypeChecker::checkArgValues(std::vector<ExprPtr> &args) {
     for (auto &a : args) {
-        if (auto *na = dynamic_cast<NamedArgExpr *>(a.get())) checkExpr(*na->value);
+        if (auto *na = as<NamedArgExpr>(a.get())) checkExpr(*na->value);
         else checkExpr(*a);
     }
 }
@@ -196,7 +196,7 @@ void TypeChecker::checkArgValues(std::vector<ExprPtr> &args) {
 // After resolution: the defaults stand in the argument list as plain expressions.
 void TypeChecker::unwrapDefaults(std::vector<ExprPtr> &args) {
     for (auto &a : args)
-        if (auto *d = dynamic_cast<DefaultArgExpr *>(a.get())) {
+        if (auto *d = as<DefaultArgExpr>(a.get())) {
             TypeRef t = d->type;
             a = std::move(d->value);
             if (a->type.isError()) a->type = t;

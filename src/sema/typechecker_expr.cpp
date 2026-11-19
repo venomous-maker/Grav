@@ -23,10 +23,10 @@ TypeChecker::flattenNames(const Expr *e) const {
     std::vector<std::string> out;
     const Expr *cur = e;
     while (true) {
-        if (auto *m = dynamic_cast<const MemberExpr *>(cur)) {
+        if (auto *m = as<const MemberExpr>(cur)) {
             out.push_back(m->member);
             cur = m->object.get();
-        } else if (auto *n = dynamic_cast<const NameExpr *>(cur)) {
+        } else if (auto *n = as<const NameExpr>(cur)) {
             out.push_back(n->name);
             break;
         } else {
@@ -81,21 +81,21 @@ void TypeChecker::checkVariadicArgs(const std::vector<ExprPtr> &args,
 TypeRef TypeChecker::checkExpr(Expr &expr) {
     TypeRef t = TypeRef::prim(TypeRef::Kind::Error);
     // An integer literal is an int, or a long when it needs 64 bits.
-    if (auto *lit = dynamic_cast<IntLiteralExpr *>(&expr))
+    if (auto *lit = as<IntLiteralExpr>(&expr))
         t = lit->value > 2147483647LL || lit->value < -2147483648LL ? TypeRef::integer(64, false)
                                                                    : TypeRef::prim(TypeRef::Kind::Int);
-    else if (dynamic_cast<FloatLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Float);
-    else if (dynamic_cast<BoolLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Bool);
-    else if (dynamic_cast<StringLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::String);
-    else if (dynamic_cast<NullLiteralExpr *>(&expr)) t = TypeRef::prim(TypeRef::Kind::Null);
-    else if (dynamic_cast<CBlockExpr *>(&expr)) {
+    else if (as<FloatLiteralExpr>(&expr)) t = TypeRef::prim(TypeRef::Kind::Float);
+    else if (as<BoolLiteralExpr>(&expr)) t = TypeRef::prim(TypeRef::Kind::Bool);
+    else if (as<StringLiteralExpr>(&expr)) t = TypeRef::prim(TypeRef::Kind::String);
+    else if (as<NullLiteralExpr>(&expr)) t = TypeRef::prim(TypeRef::Kind::Null);
+    else if (as<CBlockExpr>(&expr)) {
         // Inline C may reference any in-scope local by name; mark them all used so
         // we don't warn about "unused" variables consumed only by the C escape.
         for (auto &scope : scopes_)
             for (auto &[n, v] : scope) v.used = true;
         t = TypeRef::prim(TypeRef::Kind::Void); // typed by context
     }
-    else if (auto *e = dynamic_cast<SelfExpr *>(&expr)) {
+    else if (auto *e = as<SelfExpr>(&expr)) {
         if (currentClass_.empty() || inStatic_) {
             error(e->line, e->col, "'self' is only valid inside an instance method or constructor");
             t = TypeRef::prim(TypeRef::Kind::Error);
@@ -103,7 +103,7 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
             t = TypeRef::named(currentClass_);
             captureSelf();
         }
-    } else if (auto *e = dynamic_cast<SuperExpr *>(&expr)) {
+    } else if (auto *e = as<SuperExpr>(&expr)) {
         const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_);
         if (currentClass_.empty() || inStatic_ || !ci || ci->baseClass.empty()) {
             error(e->line, e->col,
@@ -114,7 +114,7 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
             t = TypeRef::named(ci->baseClass);
             captureSelf();                                 // (`super` is self, seen as its parent)
         }
-    } else if (auto *e = dynamic_cast<NameExpr *>(&expr)) {
+    } else if (auto *e = as<NameExpr>(&expr)) {
         size_t scopeIdx = 0;
         LocalVar *local = lookupLocalAt(e->name, scopeIdx);
         if (local) {
@@ -136,49 +136,49 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
                                         : ""));
             t = TypeRef::prim(TypeRef::Kind::Error);
         }
-    } else if (auto *e = dynamic_cast<BinaryExpr *>(&expr)) {
+    } else if (auto *e = as<BinaryExpr>(&expr)) {
         t = checkBinary(*e);
-    } else if (auto *e = dynamic_cast<UnaryExpr *>(&expr)) {
+    } else if (auto *e = as<UnaryExpr>(&expr)) {
         t = checkUnary(*e);
-    } else if (auto *e = dynamic_cast<TernaryExpr *>(&expr)) {
+    } else if (auto *e = as<TernaryExpr>(&expr)) {
         t = checkTernary(*e);
-    } else if (auto *e = dynamic_cast<AsExpr *>(&expr)) {
+    } else if (auto *e = as<AsExpr>(&expr)) {
         t = checkAs(*e);
-    } else if (auto *e = dynamic_cast<IsExpr *>(&expr)) {
+    } else if (auto *e = as<IsExpr>(&expr)) {
         t = checkIs(*e);
-    } else if (auto *e = dynamic_cast<AwaitExpr *>(&expr)) {
+    } else if (auto *e = as<AwaitExpr>(&expr)) {
         t = checkAwait(*e);
-    } else if (auto *e = dynamic_cast<AddrOfExpr *>(&expr)) {
+    } else if (auto *e = as<AddrOfExpr>(&expr)) {
         t = checkAddrOf(*e);
-    } else if (auto *e = dynamic_cast<DerefExpr *>(&expr)) {
+    } else if (auto *e = as<DerefExpr>(&expr)) {
         t = checkDeref(*e);
-    } else if (auto *e = dynamic_cast<CoalesceExpr *>(&expr)) {
+    } else if (auto *e = as<CoalesceExpr>(&expr)) {
         t = checkCoalesce(*e);
-    } else if (auto *e = dynamic_cast<IncDecExpr *>(&expr)) {
+    } else if (auto *e = as<IncDecExpr>(&expr)) {
         t = checkIncDec(*e);
-    } else if (auto *e = dynamic_cast<CastExpr *>(&expr)) {
+    } else if (auto *e = as<CastExpr>(&expr)) {
         t = checkCast(*e);
-    } else if (auto *e = dynamic_cast<SizeofExpr *>(&expr)) {
+    } else if (auto *e = as<SizeofExpr>(&expr)) {
         t = checkSizeof(*e);
-    } else if (auto *e = dynamic_cast<ArrayLiteralExpr *>(&expr)) {
+    } else if (auto *e = as<ArrayLiteralExpr>(&expr)) {
         t = checkArrayLiteral(*e);
-    } else if (auto *e = dynamic_cast<IndexExpr *>(&expr)) {
+    } else if (auto *e = as<IndexExpr>(&expr)) {
         t = checkIndex(*e);
-    } else if (auto *e = dynamic_cast<NewExpr *>(&expr)) {
+    } else if (auto *e = as<NewExpr>(&expr)) {
         t = checkNew(*e);
         unwrapDefaults(e->args);
-    } else if (auto *e = dynamic_cast<StructLiteralExpr *>(&expr)) {
+    } else if (auto *e = as<StructLiteralExpr>(&expr)) {
         t = checkStructLiteral(*e);
-    } else if (auto *e = dynamic_cast<CallExpr *>(&expr)) {
+    } else if (auto *e = as<CallExpr>(&expr)) {
         t = checkCall(*e);
         unwrapDefaults(e->args);
-    } else if (auto *e = dynamic_cast<MemberExpr *>(&expr)) {
+    } else if (auto *e = as<MemberExpr>(&expr)) {
         t = checkMember(*e);
-    } else if (auto *e = dynamic_cast<LambdaExpr *>(&expr)) {
+    } else if (auto *e = as<LambdaExpr>(&expr)) {
         t = checkLambda(*e);
-    } else if (auto *e = dynamic_cast<DefaultArgExpr *>(&expr)) {
+    } else if (auto *e = as<DefaultArgExpr>(&expr)) {
         t = checkDefaultArg(*e);
-    } else if (auto *e = dynamic_cast<NamedArgExpr *>(&expr)) {
+    } else if (auto *e = as<NamedArgExpr>(&expr)) {
         error(e->line, e->col, "named arguments ('" + e->name + ": ...') are for calls to functions, "
                                "methods and constructors by name");
         checkExpr(*e->value);
@@ -267,7 +267,7 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
         // by its width or more is undefined, so a constant count must be smaller.
         if (e.op == BinaryOp::Shl || e.op == BinaryOp::Shr) {
             TypeRef res = lt.numBits() < 32 ? TypeRef::prim(TypeRef::Kind::Int) : lt;
-            if (auto *n = dynamic_cast<IntLiteralExpr *>(e.right.get()); n && n->value >= res.numBits())
+            if (auto *n = as<IntLiteralExpr>(e.right.get()); n && n->value >= res.numBits())
                 error(e.right->line, e.right->col, "cannot shift " + aTypeName(res) + " by " + n->raw +
                                                        " bits (it has " + std::to_string(res.numBits()) +
                                                        "); shift a long instead, e.g. (1 as long) << " + n->raw);
@@ -305,10 +305,10 @@ TypeRef TypeChecker::checkBinary(BinaryExpr &e) {
 }
 
 bool TypeChecker::isLvalue(const Expr &e) const {
-    return dynamic_cast<const NameExpr *>(&e) != nullptr ||
-           dynamic_cast<const MemberExpr *>(&e) != nullptr ||
-           dynamic_cast<const DerefExpr *>(&e) != nullptr ||
-           dynamic_cast<const IndexExpr *>(&e) != nullptr;
+    return as<const NameExpr>(&e) != nullptr ||
+           as<const MemberExpr>(&e) != nullptr ||
+           as<const DerefExpr>(&e) != nullptr ||
+           as<const IndexExpr>(&e) != nullptr;
 }
 
 TypeRef TypeChecker::checkAddrOf(AddrOfExpr &e) {
@@ -418,7 +418,7 @@ TypeRef TypeChecker::checkTernary(TernaryExpr &e) {
 
 TypeRef TypeChecker::checkAs(AsExpr &e) {
     // `%{ c_expr %} as Type` — an inline C value adopts the annotated type.
-    if (dynamic_cast<CBlockExpr *>(e.operand.get())) {
+    if (as<CBlockExpr>(e.operand.get())) {
         checkExpr(*e.operand); // marks in-scope locals used (inline C may read them)
         TypeRef *inner = &e.target;
         while (inner->isPointer() && inner->elem) inner = inner->elem.get();
@@ -643,12 +643,12 @@ std::optional<TypeRef> TypeChecker::tryEnumValue(MemberExpr &e) {
 TypeRef TypeChecker::checkIncDec(IncDecExpr &e) {
     TypeRef t = checkExpr(*e.target);
     if (t.isError()) return TypeRef::prim(TypeRef::Kind::Error);
-    if (auto *m = dynamic_cast<MemberExpr *>(e.target.get()); m && dynamic_cast<CallExpr *>(m->bound.get())) {
+    if (auto *m = as<MemberExpr>(e.target.get()); m && as<CallExpr>(m->bound.get())) {
         error(e.line, e.col, "'++'/'--' on property '" + m->member + "' works only as a statement of its own, "
                              "not inside an expression");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
-    if (auto *n = dynamic_cast<NameExpr *>(e.target.get()); n && isCapturedHere(n->name))
+    if (auto *n = as<NameExpr>(e.target.get()); n && isCapturedHere(n->name))
         error(e.line, e.col, "cannot modify captured variable '" + n->name +
                                  "' inside a lambda (it is called as a function, has its address taken, or has no type to share it by; use an object field)");
     if (!isLvalue(*e.target)) {
@@ -881,14 +881,14 @@ TypeRef TypeChecker::checkSlice(IndexExpr &e, const TypeRef &base) {
     if (base.isError()) return base;
     if (base.kind == TypeRef::Kind::String) return base;
     if (base.isArray() && !base.isSlice()) {
-        auto *lo = dynamic_cast<IntLiteralExpr *>(e.index.get());
+        auto *lo = as<IntLiteralExpr>(e.index.get());
         long long hiV = 0;
-        auto *hiLit = dynamic_cast<IntLiteralExpr *>(e.more[0].get());
-        auto *hiSum = dynamic_cast<BinaryExpr *>(e.more[0].get());
+        auto *hiLit = as<IntLiteralExpr>(e.more[0].get());
+        auto *hiSum = as<BinaryExpr>(e.more[0].get());
         if (hiLit) hiV = openEnd ? base.arrayLen : hiLit->value;
-        else if (hiSum && dynamic_cast<IntLiteralExpr *>(hiSum->left.get()))
+        else if (hiSum && as<IntLiteralExpr>(hiSum->left.get()))
             hiV = static_cast<IntLiteralExpr *>(hiSum->left.get())->value + 1;
-        if (!lo || (!hiLit && !(hiSum && dynamic_cast<IntLiteralExpr *>(hiSum->left.get())))) {
+        if (!lo || (!hiLit && !(hiSum && as<IntLiteralExpr>(hiSum->left.get())))) {
             error(e.line, e.col, "a slice of a fixed-length array needs constant bounds (use Array<T> for others)");
             return TypeRef::prim(TypeRef::Kind::Error);
         }
@@ -1112,7 +1112,7 @@ TypeRef TypeChecker::spreadElement(Expr &arg) {
         const FieldInfo *data = reg_->findField(t.name, "data");
         const FieldInfo *len = reg_->findField(t.name, "len");
         if (data && len && data->type.isPointer() && data->type.elem && len->type.kind == TypeRef::Kind::Int) {
-            if (dynamic_cast<NameExpr *>(&arg)) return *data->type.elem;
+            if (as<NameExpr>(&arg)) return *data->type.elem;
             error(arg.line, arg.col, "spread an Array through a variable: `let xs = ...` then `f(...xs)`");
             return TypeRef::prim(TypeRef::Kind::Error);
         }
@@ -1169,7 +1169,7 @@ TypeRef TypeChecker::resolveFreeCall(CallExpr &e, const std::string &fnFq) {
             else if (cands[0].isVariadic && !ps.empty()) want = &ps.back();
         } else {
             const Expr *a = e.args[i].get();
-            bool list = dynamic_cast<const ArrayLiteralExpr *>(a) != nullptr, lambda = dynamic_cast<const LambdaExpr *>(a) != nullptr;
+            bool list = as<const ArrayLiteralExpr>(a) != nullptr, lambda = as<const LambdaExpr>(a) != nullptr;
             for (size_t k = 0; (list || lambda) && k < cands.size(); ++k) {
                 const auto &c = cands[k];
                 bool takes = !c.isVariadic && (c.paramTypes.size() == e.args.size() ||
@@ -1222,7 +1222,7 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
     std::string parent = ci ? ci->baseClass : "";
 
     // super(...) — parent constructor.
-    if (dynamic_cast<SuperExpr *>(e.callee.get())) {
+    if (as<SuperExpr>(e.callee.get())) {
         if (!ci || parent.empty()) {
             error(e.line, e.col, "'super(...)' requires a parent class (extends ...)");
             for (auto &a : e.args) checkExpr(*a);
@@ -1241,8 +1241,8 @@ std::optional<TypeRef> TypeChecker::checkSuperCall(CallExpr &e) {
     }
 
     // super.method(...) — parent method, dispatched statically to the parent impl.
-    auto *mem = dynamic_cast<MemberExpr *>(e.callee.get());
-    if (!mem || !dynamic_cast<SuperExpr *>(mem->object.get())) return std::nullopt;
+    auto *mem = as<MemberExpr>(e.callee.get());
+    if (!mem || !as<SuperExpr>(mem->object.get())) return std::nullopt;
     if (!ci || parent.empty()) {
         error(e.line, e.col, "'super' requires a parent class (extends ...)");
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -1291,7 +1291,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     if (auto sup = checkSuperCall(e)) return *sup;
 
     // A local/global holding a function value shadows functions and builtins.
-    if (auto *name = dynamic_cast<NameExpr *>(e.callee.get())) {
+    if (auto *name = as<NameExpr>(e.callee.get())) {
         LocalVar *lv = lookupLocal(name->name);
         const GlobalInfo *gv = nullptr;
         if (!lv)
@@ -1303,7 +1303,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         }
     }
     // Free function or builtin: callee is a bare name.
-    if (auto *name = dynamic_cast<NameExpr *>(e.callee.get())) {
+    if (auto *name = as<NameExpr>(e.callee.get())) {
         if (name->name == "print" || name->name == "println") {
             e.kind = CallKind::Builtin;
             e.targetName = "print";   // println is an alias (print already newlines)
@@ -1327,7 +1327,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             TypeRef t = checkExpr(*e.args[0]);
             return name->name == "__retain" ? t : TypeRef::prim(TypeRef::Kind::Void);
         }
-        if (name->name == "__fmt" && e.args.size() == 2 && dynamic_cast<StringLiteralExpr *>(e.args[1].get())) {
+        if (name->name == "__fmt" && e.args.size() == 2 && as<StringLiteralExpr>(e.args[1].get())) {
             // `${x:spec}` (lexer-made): the spec's type letter must suit the value.
             e.kind = CallKind::Builtin;
             e.targetName = "__fmt";
@@ -1574,7 +1574,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         return resolveFreeCall(e, fnFq);
     }
 
-    auto *mem = dynamic_cast<MemberExpr *>(e.callee.get());
+    auto *mem = as<MemberExpr>(e.callee.get());
     if (!mem) {
         // Any other expression producing a function value: `make()(x)`, `fs[i](x)`.
         TypeRef ft = checkExpr(*e.callee);
@@ -1701,7 +1701,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
         const StructInfo *si = reg_->strct(objType.name);
         auto it = si && si->decl ? si->decl->methodFns.find(mem->member) : std::map<std::string, std::string>::iterator();
         if (si && si->decl && it != si->decl->methodFns.end()) {
-            auto *ix = dynamic_cast<IndexExpr *>(mem->object.get());
+            auto *ix = as<IndexExpr>(mem->object.get());
             if (!isLvalue(*mem->object) || (ix && !ix->overloadClass.empty())) {
                 error(mem->line, mem->col, "call '" + mem->member + "' on a struct variable or field "
                                            "(the method may change it): `let v = ...` then `v." + mem->member + "()`");
@@ -1880,8 +1880,8 @@ std::optional<TypeRef> TypeChecker::tryStaticField(MemberExpr &e) {
 // those. An overloaded method needs the expected function type to pick one.
 TypeRef TypeChecker::bindMethod(MemberExpr &e, const TypeRef &objType, const TypeRef *want) {
     std::function<bool(const Expr *)> pure = [&](const Expr *x) {
-        if (dynamic_cast<const NameExpr *>(x) || dynamic_cast<const SelfExpr *>(x) || dynamic_cast<const SuperExpr *>(x)) return true;
-        if (auto *m = dynamic_cast<const MemberExpr *>(x)) return pure(m->object.get());
+        if (as<const NameExpr>(x) || as<const SelfExpr>(x) || as<const SuperExpr>(x)) return true;
+        if (auto *m = as<const MemberExpr>(x)) return pure(m->object.get());
         return false;
     };
     if (!pure(e.object.get())) {
@@ -2018,7 +2018,7 @@ TypeRef TypeChecker::checkMember(MemberExpr &e) {
         }
     }
     // `super.count` for a static field: the parent's (or an ancestor's).
-    if (dynamic_cast<SuperExpr *>(e.object.get()))
+    if (as<SuperExpr>(e.object.get()))
         if (const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_); ci && !ci->baseClass.empty())
             if (const GlobalInfo *gi = reg_->findStaticField(ci->baseClass, e.member)) {
                 if (!checkAccess(gi->access, gi->ownerClass))

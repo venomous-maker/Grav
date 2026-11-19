@@ -7,9 +7,9 @@ namespace grav {
 
 // The locals a condition proves non-null when it is `whenTrue`.
 void TypeChecker::nullFacts(Expr &cond, bool whenTrue, std::vector<std::string> &out) {
-    if (auto *u = dynamic_cast<UnaryExpr *>(&cond); u && u->op == UnaryOp::Not)
+    if (auto *u = as<UnaryExpr>(&cond); u && u->op == UnaryOp::Not)
         return nullFacts(*u->operand, !whenTrue, out);
-    auto *b = dynamic_cast<BinaryExpr *>(&cond);
+    auto *b = as<BinaryExpr>(&cond);
     if (!b) return;
     if ((b->op == BinaryOp::And && whenTrue) || (b->op == BinaryOp::Or && !whenTrue)) {
         nullFacts(*b->left, whenTrue, out);
@@ -19,9 +19,9 @@ void TypeChecker::nullFacts(Expr &cond, bool whenTrue, std::vector<std::string> 
     if (b->op != BinaryOp::Eq && b->op != BinaryOp::NotEq) return;
     // `x != null` holds a value when true; `x == null` when false.
     if ((b->op == BinaryOp::NotEq) != whenTrue) return;
-    Expr *side = dynamic_cast<NullLiteralExpr *>(b->right.get()) ? b->left.get()
-               : dynamic_cast<NullLiteralExpr *>(b->left.get()) ? b->right.get() : nullptr;
-    auto *n = dynamic_cast<NameExpr *>(side);
+    Expr *side = as<NullLiteralExpr>(b->right.get()) ? b->left.get()
+               : as<NullLiteralExpr>(b->left.get()) ? b->right.get() : nullptr;
+    auto *n = as<NameExpr>(side);
     if (!n) return;
     LocalVar *v = lookupLocal(n->name);
     if (v && v->type.isNullable()) out.push_back(n->name);
@@ -31,14 +31,14 @@ void TypeChecker::nullFacts(Expr &cond, bool whenTrue, std::vector<std::string> 
 bool TypeChecker::assignsName(Stmt &s, const std::string &name) {
     bool found = false;
     auto isIt = [&](const Expr *e) {
-        auto *n = dynamic_cast<const NameExpr *>(e);
+        auto *n = as<const NameExpr>(e);
         return n && n->name == name;
     };
     visitStmt(s, [&](Stmt &st) {
-        if (auto *a = dynamic_cast<AssignStmt *>(&st); a && isIt(a->target.get())) found = true;
+        if (auto *a = as<AssignStmt>(&st); a && isIt(a->target.get())) found = true;
     }, [&](Expr &e) {
-        if (auto *x = dynamic_cast<IncDecExpr *>(&e); x && isIt(x->target.get())) found = true;
-        if (auto *x = dynamic_cast<AddrOfExpr *>(&e); x && isIt(x->operand.get())) found = true;
+        if (auto *x = as<IncDecExpr>(&e); x && isIt(x->target.get())) found = true;
+        if (auto *x = as<AddrOfExpr>(&e); x && isIt(x->operand.get())) found = true;
     });
     return found;
 }
@@ -47,9 +47,9 @@ bool TypeChecker::exprAssignsName(Expr &e, const std::string &name) {
     bool found = false;
     visitExpr(e, [&](Expr &x) {
         const Expr *t = nullptr;
-        if (auto *i = dynamic_cast<IncDecExpr *>(&x)) t = i->target.get();
-        if (auto *a = dynamic_cast<AddrOfExpr *>(&x)) t = a->operand.get();
-        if (auto *n = dynamic_cast<const NameExpr *>(t); n && n->name == name) found = true;
+        if (auto *i = as<IncDecExpr>(&x)) t = i->target.get();
+        if (auto *a = as<AddrOfExpr>(&x)) t = a->operand.get();
+        if (auto *n = as<const NameExpr>(t); n && n->name == name) found = true;
     });
     return found;
 }
@@ -114,14 +114,14 @@ void TypeChecker::checkIf(IfStmt &s) {
 static bool alwaysExits(const Block &b) {
     if (b.statements.empty()) return false;
     const Stmt *last = b.statements.back().get();
-    return dynamic_cast<const ReturnStmt *>(last) || dynamic_cast<const ThrowStmt *>(last) ||
-           dynamic_cast<const BreakStmt *>(last) || dynamic_cast<const ContinueStmt *>(last);
+    return as<const ReturnStmt>(last) || as<const ThrowStmt>(last) ||
+           as<const BreakStmt>(last) || as<const ContinueStmt>(last);
 }
 
 // After `if (x == null) { return }` (no else), the rest of the block sees x as a T.
 // Returns whether a narrowing scope was opened (closed at the end of the block).
 bool TypeChecker::narrowAfterGuard(Stmt &s, Block &block, size_t index) {
-    auto *ifs = dynamic_cast<IfStmt *>(&s);
+    auto *ifs = as<IfStmt>(&s);
     if (!ifs || ifs->elseStmt || !alwaysExits(ifs->thenBlock)) return false;
     std::vector<std::string> facts;
     nullFacts(*ifs->cond, false, facts);

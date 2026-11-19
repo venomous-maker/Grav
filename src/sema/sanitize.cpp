@@ -31,22 +31,22 @@ void walkExpr(Expr *e);
 
 void walkStmt(Stmt *s) {
     if (!s) return;
-    if (auto *x = dynamic_cast<LetStmt *>(s)) { fix(x->name); walkExpr(x->init.get()); }
-    else if (auto *x = dynamic_cast<AssignStmt *>(s)) { walkExpr(x->target.get()); walkExpr(x->value.get()); }
-    else if (auto *x = dynamic_cast<ReturnStmt *>(s)) walkExpr(x->value.get());
-    else if (auto *x = dynamic_cast<ExprStmt *>(s)) walkExpr(x->expr.get());
-    else if (auto *x = dynamic_cast<BlockStmt *>(s)) walkBlock(x->block);
-    else if (auto *x = dynamic_cast<IfStmt *>(s)) {
+    if (auto *x = as<LetStmt>(s)) { fix(x->name); walkExpr(x->init.get()); }
+    else if (auto *x = as<AssignStmt>(s)) { walkExpr(x->target.get()); walkExpr(x->value.get()); }
+    else if (auto *x = as<ReturnStmt>(s)) walkExpr(x->value.get());
+    else if (auto *x = as<ExprStmt>(s)) walkExpr(x->expr.get());
+    else if (auto *x = as<BlockStmt>(s)) walkBlock(x->block);
+    else if (auto *x = as<IfStmt>(s)) {
         walkExpr(x->cond.get()); walkBlock(x->thenBlock); walkStmt(x->elseStmt.get());
-    } else if (auto *x = dynamic_cast<WhileStmt *>(s)) { walkExpr(x->cond.get()); walkBlock(x->body); }
-    else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) { walkBlock(x->body); walkExpr(x->cond.get()); }
-    else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+    } else if (auto *x = as<WhileStmt>(s)) { walkExpr(x->cond.get()); walkBlock(x->body); }
+    else if (auto *x = as<DoWhileStmt>(s)) { walkBlock(x->body); walkExpr(x->cond.get()); }
+    else if (auto *x = as<ForStmt>(s)) {
         walkStmt(x->init.get()); walkExpr(x->cond.get()); walkStmt(x->update.get()); walkBlock(x->body);
-    } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+    } else if (auto *x = as<ForInStmt>(s)) {
         fix(x->var);
         if (!x->indexVar.empty()) fix(x->indexVar);
         walkExpr(x->lo.get()); walkExpr(x->hi.get()); walkExpr(x->step.get()); walkBlock(x->body);
-    } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+    } else if (auto *x = as<SwitchStmt>(s)) {
         walkExpr(x->subject.get());
         for (auto &c : x->cases) {
             for (auto &v : c.values) walkExpr(v.get());
@@ -55,48 +55,48 @@ void walkStmt(Stmt *s) {
             walkBlock(c.body);
         }
         walkBlock(x->defaultBody);
-    } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) walkExpr(x->value.get());
-    else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+    } else if (auto *x = as<ThrowStmt>(s)) walkExpr(x->value.get());
+    else if (auto *x = as<TryStmt>(s)) {
         walkBlock(x->tryBlock);
         for (auto &c : x->catches) { fix(c.var); walkBlock(c.block); }
         walkBlock(x->finallyBlock);
-    } else if (auto *x = dynamic_cast<DeferStmt *>(s)) walkBlock(x->body);
+    } else if (auto *x = as<DeferStmt>(s)) walkBlock(x->body);
 }
 
 void walkBlock(Block &b) { for (auto &s : b.statements) walkStmt(s.get()); }
 
 void walkExpr(Expr *e) {
     if (!e) return;
-    if (auto *x = dynamic_cast<NameExpr *>(e)) {
+    if (auto *x = as<NameExpr>(e)) {
         // Globals and function references are emitted under their own C names.
         if (x->resolvedGlobal.empty() && x->fnRef.empty()) fix(x->name);
-    } else if (auto *x = dynamic_cast<BinaryExpr *>(e)) { walkExpr(x->left.get()); walkExpr(x->right.get()); }
-    else if (auto *x = dynamic_cast<UnaryExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<TernaryExpr *>(e)) {
+    } else if (auto *x = as<BinaryExpr>(e)) { walkExpr(x->left.get()); walkExpr(x->right.get()); }
+    else if (auto *x = as<UnaryExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<TernaryExpr>(e)) {
         walkExpr(x->cond.get()); walkExpr(x->thenExpr.get()); walkExpr(x->elseExpr.get());
-    } else if (auto *x = dynamic_cast<AsExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<IsExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<AwaitExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<DerefExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) { walkExpr(x->left.get()); walkExpr(x->right.get()); }
-    else if (auto *x = dynamic_cast<IncDecExpr *>(e)) walkExpr(x->target.get());
-    else if (auto *x = dynamic_cast<CastExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<SizeofExpr *>(e)) walkExpr(x->operand.get());
-    else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) walkExpr(el.get()); walkExpr(x->built.get()); }
-    else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
+    } else if (auto *x = as<AsExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<IsExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<AwaitExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<AddrOfExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<DerefExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<CoalesceExpr>(e)) { walkExpr(x->left.get()); walkExpr(x->right.get()); }
+    else if (auto *x = as<IncDecExpr>(e)) walkExpr(x->target.get());
+    else if (auto *x = as<CastExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<SizeofExpr>(e)) walkExpr(x->operand.get());
+    else if (auto *x = as<ArrayLiteralExpr>(e)) { for (auto &el : x->elements) walkExpr(el.get()); walkExpr(x->built.get()); }
+    else if (auto *x = as<IndexExpr>(e)) {
         walkExpr(x->base.get()); walkExpr(x->index.get());
         for (auto &m : x->more) walkExpr(m.get());
     }
-    else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) walkExpr(a.get()); }
-    else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &f : x->fields) walkExpr(f.value.get()); }
-    else if (auto *x = dynamic_cast<CallExpr *>(e)) {
+    else if (auto *x = as<NewExpr>(e)) { for (auto &a : x->args) walkExpr(a.get()); }
+    else if (auto *x = as<StructLiteralExpr>(e)) { for (auto &f : x->fields) walkExpr(f.value.get()); }
+    else if (auto *x = as<CallExpr>(e)) {
         // A bare-name callee of a free function/builtin is not a local.
-        if (x->kind == CallKind::FnValue || !dynamic_cast<NameExpr *>(x->callee.get()))
+        if (x->kind == CallKind::FnValue || !as<NameExpr>(x->callee.get()))
             walkExpr(x->callee.get());
         for (auto &a : x->args) walkExpr(a.get());
-    } else if (auto *x = dynamic_cast<MemberExpr *>(e)) { walkExpr(x->object.get()); walkExpr(x->bound.get()); }
-    else if (auto *x = dynamic_cast<LambdaExpr *>(e)) {
+    } else if (auto *x = as<MemberExpr>(e)) { walkExpr(x->object.get()); walkExpr(x->bound.get()); }
+    else if (auto *x = as<LambdaExpr>(e)) {
         for (auto &p : x->params) fix(p.name);
         for (auto &c : x->captures) fix(c.name);
         walkExpr(x->exprBody.get());
@@ -110,19 +110,19 @@ void fixParams(std::vector<Param> &ps) { for (auto &p : ps) fix(p.name); }
 
 void sanitizeIdentifiers(Program &program) {
     for (auto &d : program.decls) {
-        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) {
+        if (auto *fn = as<FunctionDecl>(d.get())) {
             fixParams(fn->params);
             walkBlock(fn->body);
-        } else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+        } else if (auto *c = as<ClassDecl>(d.get())) {
             fixParams(c->constructor.params);
             walkBlock(c->constructor.body);
             for (auto &x : c->extraCtors) { fixParams(x.params); walkBlock(x.body); }
             walkBlock(c->destructor.body);
             for (auto &m : c->methods) { fixParams(m.params); walkBlock(m.body); }
             for (auto &sf : c->staticFields) walkExpr(sf.init.get());
-        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) {
+        } else if (auto *g = as<GlobalVarDecl>(d.get())) {
             walkExpr(g->init.get());
-        } else if (auto *t = dynamic_cast<TestDecl *>(d.get())) {
+        } else if (auto *t = as<TestDecl>(d.get())) {
             walkBlock(t->body);
         }
     }

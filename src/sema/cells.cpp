@@ -81,7 +81,7 @@ private:
     }
     // `target` is assigned: from inside a lambda, its variable needs a cell.
     void assigned(Expr *target) {
-        if (auto *n = dynamic_cast<NameExpr *>(target))
+        if (auto *n = as<NameExpr>(target))
             if (Var *v = lookup(n->name); v && v->depth < depth_) v->assignedInside = true;
     }
 
@@ -92,30 +92,30 @@ private:
     }
     void stmt(Stmt *s) {
         if (!s) return;
-        if (auto *x = dynamic_cast<LetStmt *>(s)) {
+        if (auto *x = as<LetStmt>(s)) {
             expr(x->init);
             Var *v = declare(x->name);
             v->let = x;
             v->line = x->line;
             v->col = x->col;
-        } else if (auto *x = dynamic_cast<AssignStmt *>(s)) {
+        } else if (auto *x = as<AssignStmt>(s)) {
             assigned(x->target.get());
             expr(x->target);
             expr(x->value);
-        } else if (auto *x = dynamic_cast<ReturnStmt *>(s)) expr(x->value);
-        else if (auto *x = dynamic_cast<ExprStmt *>(s)) expr(x->expr);
-        else if (auto *x = dynamic_cast<BlockStmt *>(s)) block(x->block);
-        else if (auto *x = dynamic_cast<IfStmt *>(s)) { expr(x->cond); block(x->thenBlock); stmt(x->elseStmt.get()); }
-        else if (auto *x = dynamic_cast<WhileStmt *>(s)) { expr(x->cond); block(x->body); }
-        else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) { block(x->body); expr(x->cond); }
-        else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+        } else if (auto *x = as<ReturnStmt>(s)) expr(x->value);
+        else if (auto *x = as<ExprStmt>(s)) expr(x->expr);
+        else if (auto *x = as<BlockStmt>(s)) block(x->block);
+        else if (auto *x = as<IfStmt>(s)) { expr(x->cond); block(x->thenBlock); stmt(x->elseStmt.get()); }
+        else if (auto *x = as<WhileStmt>(s)) { expr(x->cond); block(x->body); }
+        else if (auto *x = as<DoWhileStmt>(s)) { block(x->body); expr(x->cond); }
+        else if (auto *x = as<ForStmt>(s)) {
             scopes_.emplace_back();
             stmt(x->init.get());
             expr(x->cond);
             stmt(x->update.get());
             block(x->body);
             scopes_.pop_back();
-        } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+        } else if (auto *x = as<ForInStmt>(s)) {
             expr(x->lo);
             expr(x->hi);
             expr(x->step);
@@ -130,7 +130,7 @@ private:
             }
             block(x->body);
             scopes_.pop_back();
-        } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+        } else if (auto *x = as<SwitchStmt>(s)) {
             expr(x->subject);
             for (auto &c : x->cases) {
                 for (auto &v : c.values) expr(v);
@@ -139,8 +139,8 @@ private:
                 block(c.body);
             }
             block(x->defaultBody);
-        } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value);
-        else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+        } else if (auto *x = as<ThrowStmt>(s)) expr(x->value);
+        else if (auto *x = as<TryStmt>(s)) {
             block(x->tryBlock);
             for (auto &c : x->catches) {
                 scopes_.emplace_back();
@@ -154,48 +154,48 @@ private:
                 scopes_.pop_back();
             }
             block(x->finallyBlock);
-        } else if (auto *x = dynamic_cast<DeferStmt *>(s)) block(x->body);
+        } else if (auto *x = as<DeferStmt>(s)) block(x->body);
     }
     void expr(ExprPtr &slot) {
         if (!slot) return;
         Expr *e = slot.get();
-        if (auto *x = dynamic_cast<NameExpr *>(e)) {
+        if (auto *x = as<NameExpr>(e)) {
             if (x->typeArgs.empty())
                 if (Var *v = lookup(x->name)) v->uses.push_back(&slot);
-        } else if (auto *x = dynamic_cast<BinaryExpr *>(e)) { expr(x->left); expr(x->right); }
-        else if (auto *x = dynamic_cast<UnaryExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<TernaryExpr *>(e)) { expr(x->cond); expr(x->thenExpr); expr(x->elseExpr); }
-        else if (auto *x = dynamic_cast<AsExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<IsExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<AwaitExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) {
+        } else if (auto *x = as<BinaryExpr>(e)) { expr(x->left); expr(x->right); }
+        else if (auto *x = as<UnaryExpr>(e)) expr(x->operand);
+        else if (auto *x = as<TernaryExpr>(e)) { expr(x->cond); expr(x->thenExpr); expr(x->elseExpr); }
+        else if (auto *x = as<AsExpr>(e)) expr(x->operand);
+        else if (auto *x = as<IsExpr>(e)) expr(x->operand);
+        else if (auto *x = as<AwaitExpr>(e)) expr(x->operand);
+        else if (auto *x = as<AddrOfExpr>(e)) {
             // `&x` takes the variable's own address: it must stay where it is.
-            if (auto *n = dynamic_cast<NameExpr *>(x->operand.get()))
+            if (auto *n = as<NameExpr>(x->operand.get()))
                 if (Var *v = lookup(n->name)) v->called = true;
             expr(x->operand);
-        } else if (auto *x = dynamic_cast<DerefExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) { expr(x->left); expr(x->right); }
-        else if (auto *x = dynamic_cast<IncDecExpr *>(e)) { assigned(x->target.get()); expr(x->target); }
-        else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el); expr(x->built); }
-        else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
+        } else if (auto *x = as<DerefExpr>(e)) expr(x->operand);
+        else if (auto *x = as<CoalesceExpr>(e)) { expr(x->left); expr(x->right); }
+        else if (auto *x = as<IncDecExpr>(e)) { assigned(x->target.get()); expr(x->target); }
+        else if (auto *x = as<CastExpr>(e)) expr(x->operand);
+        else if (auto *x = as<SizeofExpr>(e)) expr(x->operand);
+        else if (auto *x = as<ArrayLiteralExpr>(e)) { for (auto &el : x->elements) expr(el); expr(x->built); }
+        else if (auto *x = as<IndexExpr>(e)) {
             expr(x->base);
             expr(x->index);
             for (auto &m : x->more) expr(m);
             expr(x->sliceHi);
-        } else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a); }
-        else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value); }
-        else if (auto *x = dynamic_cast<CallExpr *>(e)) {
+        } else if (auto *x = as<NewExpr>(e)) { for (auto &a : x->args) expr(a); }
+        else if (auto *x = as<StructLiteralExpr>(e)) { for (auto &fi : x->fields) expr(fi.value); }
+        else if (auto *x = as<CallExpr>(e)) {
             // `f(...)` with a local `f`: calls stay calls of the variable itself.
-            if (auto *n = dynamic_cast<NameExpr *>(x->callee.get())) {
+            if (auto *n = as<NameExpr>(x->callee.get())) {
                 if (Var *v = lookup(n->name)) v->called = true;
             } else {
                 expr(x->callee);
             }
             for (auto &a : x->args) expr(a);
-        } else if (auto *x = dynamic_cast<MemberExpr *>(e)) { expr(x->object); expr(x->bound); }
-        else if (auto *x = dynamic_cast<LambdaExpr *>(e)) {
+        } else if (auto *x = as<MemberExpr>(e)) { expr(x->object); expr(x->bound); }
+        else if (auto *x = as<LambdaExpr>(e)) {
             ++depth_;
             scopes_.emplace_back();
             for (size_t i = 0; i < x->params.size(); ++i) {
@@ -210,8 +210,8 @@ private:
             block(x->body);
             scopes_.pop_back();
             --depth_;
-        } else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value);
-        else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value);
+        } else if (auto *x = as<NamedArgExpr>(e)) expr(x->value);
+        else if (auto *x = as<DefaultArgExpr>(e)) expr(x->value);
     }
 };
 
@@ -239,16 +239,16 @@ ExprPtr newCell(ExprPtr init, const TypeRef *type, int line, int col) {
 void boxAssignedCaptures(Program &program) {
     Boxer b;
     for (auto &d : program.decls) {
-        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) b.function(fn->params, fn->body);
-        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+        if (auto *fn = as<FunctionDecl>(d.get())) b.function(fn->params, fn->body);
+        else if (auto *c = as<ClassDecl>(d.get())) {
             b.function(c->constructor.params, c->constructor.body);
             for (auto &x : c->extraCtors) b.function(x.params, x.body);
             std::vector<Param> none;
             b.function(none, c->destructor.body);
             for (auto &m : c->methods) b.function(m.params, m.body);
             for (auto &sf : c->staticFields) b.expression(sf.init);
-        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) b.expression(g->init);
-        else if (auto *t = dynamic_cast<TestDecl *>(d.get())) {
+        } else if (auto *g = as<GlobalVarDecl>(d.get())) b.expression(g->init);
+        else if (auto *t = as<TestDecl>(d.get())) {
             std::vector<Param> none;
             b.function(none, t->body);
         }

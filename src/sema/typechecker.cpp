@@ -149,12 +149,12 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
     program_ = &program;
     for (auto &declPtr : program.decls) {
         Decl *d = declPtr.get();
-        if (auto *fn = dynamic_cast<FunctionDecl *>(d)) {
+        if (auto *fn = as<FunctionDecl>(d)) {
             checkFunction(*fn);
-        } else if (auto *cls = dynamic_cast<ClassDecl *>(d)) {
+        } else if (auto *cls = as<ClassDecl>(d)) {
             checkStaticFields(*cls);
             checkClass(*cls);
-        } else if (auto *t = dynamic_cast<TestDecl *>(d)) {
+        } else if (auto *t = as<TestDecl>(d)) {
             // A test is checked like a parameterless void function.
             currentClass_.clear();
             currentFunction_.clear();
@@ -165,7 +165,7 @@ const std::vector<GravError> &TypeChecker::check(Program &program,
             checkBlock(t->body);
             popScope();
             inAsync_ = false;
-        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d)) {
+        } else if (auto *g = as<GlobalVarDecl>(d)) {
             checkGlobal(*g);
         }
         // interfaces have no bodies to check
@@ -292,12 +292,12 @@ void TypeChecker::checkBlock(Block &block) {
         auto &s = block.statements[si];
         // `a[i]++` as a statement is `a[i] += 1`, which also works through
         // operator[] / operator[]= and on fields of an element.
-        if (auto *es = dynamic_cast<ExprStmt *>(s.get()))
-            if (auto *id = dynamic_cast<IncDecExpr *>(es->expr.get())) {
+        if (auto *es = as<ExprStmt>(s.get()))
+            if (auto *id = as<IncDecExpr>(es->expr.get())) {
                 const Expr *root = id->target.get();
-                while (auto *m = dynamic_cast<const MemberExpr *>(root)) root = m->object.get();
-                auto *top = dynamic_cast<MemberExpr *>(id->target.get());
-                if (dynamic_cast<const IndexExpr *>(root) || (top && isPropertyTarget(*top))) {
+                while (auto *m = as<const MemberExpr>(root)) root = m->object.get();
+                auto *top = as<MemberExpr>(id->target.get());
+                if (as<const IndexExpr>(root) || (top && isPropertyTarget(*top))) {
                     auto as = std::make_unique<AssignStmt>();
                     as->line = s->line;
                     as->col = s->col;
@@ -324,22 +324,22 @@ void TypeChecker::checkBlock(Block &block) {
 
 void TypeChecker::checkStmt(Stmt &stmt) {
     bool blockLevel = std::exchange(stmtAtBlockLevel_, false);
-    if (auto *s = dynamic_cast<LetStmt *>(&stmt)) return checkLet(*s);
-    if (auto *s = dynamic_cast<AssignStmt *>(&stmt)) {
+    if (auto *s = as<LetStmt>(&stmt)) return checkLet(*s);
+    if (auto *s = as<AssignStmt>(&stmt)) {
         assignAtBlockLevel_ = blockLevel;
         return checkAssign(*s);
     }
-    if (auto *s = dynamic_cast<ReturnStmt *>(&stmt)) return checkReturn(*s);
-    if (auto *s = dynamic_cast<IfStmt *>(&stmt)) return checkIf(*s);
-    if (auto *s = dynamic_cast<WhileStmt *>(&stmt)) return checkWhile(*s);
-    if (auto *s = dynamic_cast<DoWhileStmt *>(&stmt)) return checkDoWhile(*s);
-    if (auto *s = dynamic_cast<ForStmt *>(&stmt)) return checkFor(*s);
-    if (auto *s = dynamic_cast<ForInStmt *>(&stmt)) return checkForIn(*s);
-    if (auto *s = dynamic_cast<SwitchStmt *>(&stmt)) return checkSwitch(*s);
-    if (auto *s = dynamic_cast<ThrowStmt *>(&stmt)) return checkThrow(*s);
-    if (auto *s = dynamic_cast<TryStmt *>(&stmt)) return checkTry(*s);
-    if (auto *s = dynamic_cast<DeferStmt *>(&stmt)) return checkDefer(*s);
-    if (auto *s = dynamic_cast<BlockStmt *>(&stmt)) {
+    if (auto *s = as<ReturnStmt>(&stmt)) return checkReturn(*s);
+    if (auto *s = as<IfStmt>(&stmt)) return checkIf(*s);
+    if (auto *s = as<WhileStmt>(&stmt)) return checkWhile(*s);
+    if (auto *s = as<DoWhileStmt>(&stmt)) return checkDoWhile(*s);
+    if (auto *s = as<ForStmt>(&stmt)) return checkFor(*s);
+    if (auto *s = as<ForInStmt>(&stmt)) return checkForIn(*s);
+    if (auto *s = as<SwitchStmt>(&stmt)) return checkSwitch(*s);
+    if (auto *s = as<ThrowStmt>(&stmt)) return checkThrow(*s);
+    if (auto *s = as<TryStmt>(&stmt)) return checkTry(*s);
+    if (auto *s = as<DeferStmt>(&stmt)) return checkDefer(*s);
+    if (auto *s = as<BlockStmt>(&stmt)) {
         if (s->ns.empty()) return checkBlock(s->block);
         std::string saved = currentNs_;
         currentNs_ = s->ns;
@@ -347,18 +347,18 @@ void TypeChecker::checkStmt(Stmt &stmt) {
         currentNs_ = saved;
         return;
     }
-    if (dynamic_cast<BreakStmt *>(&stmt) || dynamic_cast<ContinueStmt *>(&stmt)) {
+    if (as<BreakStmt>(&stmt) || as<ContinueStmt>(&stmt)) {
         if (loopDepth_ == 0) {
             error(stmt.line, stmt.col, "'break'/'continue' is only valid inside a loop");
             return;
         }
-        auto *br = dynamic_cast<BreakStmt *>(&stmt);
+        auto *br = as<BreakStmt>(&stmt);
         const std::string &label = br ? br->label : static_cast<ContinueStmt &>(stmt).label;
         if (!label.empty() && std::find(loopLabels_.end() - loopDepth_, loopLabels_.end(), label) == loopLabels_.end())
             error(stmt.line, stmt.col, "there is no enclosing loop labeled '" + label + "'");
         return;
     }
-    if (auto *s = dynamic_cast<ExprStmt *>(&stmt)) {
+    if (auto *s = as<ExprStmt>(&stmt)) {
         checkExpr(*s->expr);
         return;
     }
@@ -478,7 +478,7 @@ void TypeChecker::checkSwitch(SwitchStmt &s) {
         std::vector<std::string> seen;
         for (auto &c : s.cases)
             for (auto &v : c.values)
-                if (auto *m = dynamic_cast<MemberExpr *>(v.get()); m && m->kind == MemberKind::EnumValue && !c.guard) {
+                if (auto *m = as<MemberExpr>(v.get()); m && m->kind == MemberKind::EnumValue && !c.guard) {
                     if (std::find(seen.begin(), seen.end(), m->member) != seen.end())
                         error(v->line, v->col, "'" + m->member + "' is already handled by an earlier case");
                     seen.push_back(m->member);
@@ -521,7 +521,7 @@ void TypeChecker::unreachableDefault(SwitchStmt &s) {
 }
 
 void TypeChecker::checkLet(LetStmt &s) {
-    if (auto *lam = dynamic_cast<LambdaExpr *>(s.init.get()); lam && lam->selfName.empty() && lambdaMentions(*lam, s.name))
+    if (auto *lam = as<LambdaExpr>(s.init.get()); lam && lam->selfName.empty() && lambdaMentions(*lam, s.name))
         lam->selfName = s.name; // a lambda that calls itself
     if (s.hasDeclaredType) {
         bool ok = true;
@@ -536,7 +536,7 @@ void TypeChecker::checkLet(LetStmt &s) {
     TypeRef initType = s.hasDeclaredType ? checkExprExpect(*s.init, s.declaredType)
                                          : checkExpr(*s.init);
     // An inline C expression adopts the declared type of the binding it feeds.
-    bool isCBlock = dynamic_cast<CBlockExpr *>(s.init.get()) != nullptr;
+    bool isCBlock = as<CBlockExpr>(s.init.get()) != nullptr;
     if (isCBlock && s.hasDeclaredType && !s.declaredType.isError()) {
         s.init->type = s.declaredType;
         initType = s.declaredType;
@@ -570,13 +570,13 @@ void TypeChecker::checkLet(LetStmt &s) {
 void TypeChecker::checkAssign(AssignStmt &s) {
     bool blockLevel = std::exchange(assignAtBlockLevel_, false);
     if (blockLevel && rewriteElementStore(s)) return;
-    if (auto *mem = dynamic_cast<MemberExpr *>(s.target.get()); mem && tryPropertyWrite(s, *mem, blockLevel)) return;
-    if (auto *lam = dynamic_cast<LambdaExpr *>(s.value.get()))
-        if (auto *n = dynamic_cast<NameExpr *>(s.target.get()); n && !s.isCompound && lam->selfName.empty() &&
+    if (auto *mem = as<MemberExpr>(s.target.get()); mem && tryPropertyWrite(s, *mem, blockLevel)) return;
+    if (auto *lam = as<LambdaExpr>(s.value.get()))
+        if (auto *n = as<NameExpr>(s.target.get()); n && !s.isCompound && lam->selfName.empty() &&
                                                                 lambdaMentions(*lam, n->name))
             lam->selfName = n->name; // `fib = fn(...) { ... fib(...) ... }`
     // `obj[k] = value` on a class with `operator[]=` calls `op_index_set(k, value)`.
-    if (auto *ix = dynamic_cast<IndexExpr *>(s.target.get())) {
+    if (auto *ix = as<IndexExpr>(s.target.get())) {
         TypeRef bt = checkExpr(*ix->base);
         if (bt.isNamed() && reg_->isClass(bt.name)) { checkIndexAssign(s, *ix, bt); return; }
     }
@@ -599,12 +599,12 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
     // A lambda assigned to a typed variable/field takes its parameter types from it.
     TypeRef valueType;
-    auto *call = dynamic_cast<CallExpr *>(s.value.get());
-    auto *callee = call ? dynamic_cast<NameExpr *>(call->callee.get()) : nullptr;
+    auto *call = as<CallExpr>(s.value.get());
+    auto *callee = call ? as<NameExpr>(call->callee.get()) : nullptr;
     bool mapLiteral = callee && callee->name == "mapOf" && call->typeArgs.empty();   // `meta = {"a": 1}`
-    if (dynamic_cast<LambdaExpr *>(s.value.get()) || dynamic_cast<NewExpr *>(s.value.get()) ||
-        (!s.isCompound && (dynamic_cast<IntLiteralExpr *>(s.value.get()) ||
-                           dynamic_cast<ArrayLiteralExpr *>(s.value.get()) || mapLiteral))) {   // (`xs = [1, 2]` builds an Array)
+    if (as<LambdaExpr>(s.value.get()) || as<NewExpr>(s.value.get()) ||
+        (!s.isCompound && (as<IntLiteralExpr>(s.value.get()) ||
+                           as<ArrayLiteralExpr>(s.value.get()) || mapLiteral))) {   // (`xs = [1, 2]` builds an Array)
         TypeRef tt = checkExpr(*s.target);
         valueType = checkExprExpect(*s.value, tt);
     } else {
@@ -612,7 +612,7 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
 
     // `*p = value` — write through a pointer.
-    if (dynamic_cast<DerefExpr *>(s.target.get())) {
+    if (as<DerefExpr>(s.target.get())) {
         TypeRef targetType = checkExpr(*s.target); // validates the pointer, sets type
         if (targetType.isError()) return;
         if (s.isCompound)
@@ -625,7 +625,7 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
 
     // `a[i] = value` — write through an array/pointer element.
-    if (dynamic_cast<IndexExpr *>(s.target.get())) {
+    if (as<IndexExpr>(s.target.get())) {
         TypeRef targetType = checkExpr(*s.target); // validates indexability, sets type
         if (targetType.isError()) return;
         if (static_cast<IndexExpr *>(s.target.get())->base->type.kind == TypeRef::Kind::String) {
@@ -642,7 +642,7 @@ void TypeChecker::checkAssign(AssignStmt &s) {
     }
 
     // Resolve the target as an lvalue.
-    if (auto *name = dynamic_cast<NameExpr *>(s.target.get())) {
+    if (auto *name = as<NameExpr>(s.target.get())) {
         LocalVar *local = lookupLocal(name->name);
         if (!local) {
             // Maybe a (mutable) module-level global.
@@ -684,7 +684,7 @@ void TypeChecker::checkAssign(AssignStmt &s) {
         return;
     }
 
-    if (auto *mem = dynamic_cast<MemberExpr *>(s.target.get())) {
+    if (auto *mem = as<MemberExpr>(s.target.get())) {
         // Static field assignment: `Class.field = value`, or `super.field` for the parent's.
         auto chain = flattenNames(mem);
         std::string clsFq;
@@ -693,7 +693,7 @@ void TypeChecker::checkAssign(AssignStmt &s) {
             for (size_t i = 0; i + 1 < chain->size(); ++i)
                 prefix += (i ? "." : "") + (*chain)[i];
             clsFq = reg_->resolveType(prefix, currentNs_);
-        } else if (dynamic_cast<SuperExpr *>(mem->object.get())) {
+        } else if (as<SuperExpr>(mem->object.get())) {
             if (const ClassInfo *ci = currentClass_.empty() ? nullptr : reg_->cls(currentClass_))
                 clsFq = ci->baseClass;
             chain = std::vector<std::string>{"super", mem->member};
@@ -818,7 +818,7 @@ void TypeChecker::checkReturn(ReturnStmt &s) {
                                                    typeRefName(currentReturn_) +
                                                    ", got " + typeRefName(vt) + nullHint(vt, currentReturn_));
         } else if (currentReturnsSelf_ && !isSelfValue(*s.value) &&
-                   !dynamic_cast<const NullLiteralExpr *>(s.value.get())) {
+                   !as<const NullLiteralExpr>(s.value.get())) {
             // Callers type the result as their receiver's class, which only `self`
             // (or what a Self method returns for it) is sure to be.
             error(s.value->line, s.value->col, "a method returning Self must return self, null, or the result of "
@@ -831,20 +831,20 @@ void TypeChecker::checkReturn(ReturnStmt &s) {
 }
 
 bool TypeChecker::isSelfValue(const Expr &e) const {
-    if (dynamic_cast<const SelfExpr *>(&e)) return true;
-    if (auto *t = dynamic_cast<const TernaryExpr *>(&e)) {
-        auto ok = [&](const Expr *x) { return x && (isSelfValue(*x) || dynamic_cast<const NullLiteralExpr *>(x)); };
+    if (as<const SelfExpr>(&e)) return true;
+    if (auto *t = as<const TernaryExpr>(&e)) {
+        auto ok = [&](const Expr *x) { return x && (isSelfValue(*x) || as<const NullLiteralExpr>(x)); };
         return ok(t->thenExpr.get()) && ok(t->elseExpr.get()) &&
                (isSelfValue(*t->thenExpr) || isSelfValue(*t->elseExpr));
     }
-    auto *c = dynamic_cast<const CallExpr *>(&e);
+    auto *c = as<const CallExpr>(&e);
     if (!c || c->ifaceDispatch) return false;
     if (c->kind == CallKind::SuperMethod) {
         const MethodInfo *mi = reg_->findMethod(c->ownerClass, c->methodName);
         return mi && mi->returnsSelf;
     }
     if (c->kind != CallKind::InstanceMethod) return false;
-    auto *mem = dynamic_cast<const MemberExpr *>(c->callee.get());
+    auto *mem = as<const MemberExpr>(c->callee.get());
     if (!mem || mem->optional) return false;
     const MethodInfo *mi = reg_->findMethod(c->ownerClass, c->methodName);
     return mi && mi->returnsSelf && isSelfValue(*mem->object);

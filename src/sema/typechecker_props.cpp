@@ -43,9 +43,9 @@ std::unique_ptr<CallExpr> accessorCall(ExprPtr object, const std::string &method
 // An object that can be evaluated twice without a difference: a name, self or
 // super (fields of those are read again, which is what `x.f.n += 1` means too).
 bool stableObject(const Expr *x) {
-    if (dynamic_cast<const NameExpr *>(x) || dynamic_cast<const SelfExpr *>(x) || dynamic_cast<const SuperExpr *>(x))
+    if (as<const NameExpr>(x) || as<const SelfExpr>(x) || as<const SuperExpr>(x))
         return true;
-    if (auto *m = dynamic_cast<const MemberExpr *>(x)) return stableObject(m->object.get());
+    if (auto *m = as<const MemberExpr>(x)) return stableObject(m->object.get());
     return false;
 }
 
@@ -189,7 +189,7 @@ bool TypeChecker::tryPropertyWrite(AssignStmt &s, MemberExpr &mem, bool blockLev
             out = std::move(block);
         }
     }
-    if (auto *b = dynamic_cast<BlockStmt *>(out.get())) checkBlock(b->block);
+    if (auto *b = as<BlockStmt>(out.get())) checkBlock(b->block);
     else checkStmt(*out);
     matchReplacement_ = std::move(out);
     return true;

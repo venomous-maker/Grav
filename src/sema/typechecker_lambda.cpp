@@ -36,16 +36,16 @@ bool TypeChecker::isCapturedHere(const std::string &name) {
 
 TypeRef TypeChecker::checkExprExpect(Expr &e, const TypeRef &expected) {
     const TypeRef *saved = expected_;
-    expected_ = dynamic_cast<LambdaExpr *>(&e) || dynamic_cast<NameExpr *>(&e) ||
-                        dynamic_cast<NewExpr *>(&e) || dynamic_cast<CallExpr *>(&e) ||
-                        dynamic_cast<TernaryExpr *>(&e) || dynamic_cast<ArrayLiteralExpr *>(&e) ||
-                        dynamic_cast<DefaultArgExpr *>(&e) || dynamic_cast<MemberExpr *>(&e)
+    expected_ = as<LambdaExpr>(&e) || as<NameExpr>(&e) ||
+                        as<NewExpr>(&e) || as<CallExpr>(&e) ||
+                        as<TernaryExpr>(&e) || as<ArrayLiteralExpr>(&e) ||
+                        as<DefaultArgExpr>(&e) || as<MemberExpr>(&e)
                     ? &expected
                     : nullptr;
     TypeRef t = checkExpr(e);
     expected_ = saved;
     // An integer literal must fit the integer type it initializes.
-    if (auto *lit = dynamic_cast<IntLiteralExpr *>(&e); lit && expected.kind == TypeRef::Kind::Int) {
+    if (auto *lit = as<IntLiteralExpr>(&e); lit && expected.kind == TypeRef::Kind::Int) {
         int bits = expected.numBits();
         // (A 64-bit unsigned target takes any literal: 0xFFFFFFFFFFFFFFFF wraps to -1.)
         bool fits = expected.isUnsigned
@@ -185,7 +185,7 @@ TypeRef TypeChecker::checkLambda(LambdaExpr &e) {
 bool TypeChecker::lambdaMentions(LambdaExpr &lam, const std::string &name) {
     bool found = false;
     auto look = [&](Expr &x) {
-        if (auto *n = dynamic_cast<NameExpr *>(&x); n && n->name == name) found = true;
+        if (auto *n = as<NameExpr>(&x); n && n->name == name) found = true;
     };
     if (lam.exprBody) {
         Block tmp;

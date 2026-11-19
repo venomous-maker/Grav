@@ -94,19 +94,19 @@ struct Visitor {
     void stmt(Stmt *s) {
         if (!s) return;
         if (onStmt) (*onStmt)(*s);
-        if (auto *x = dynamic_cast<LetStmt *>(s)) expr(x->init.get());
-        else if (auto *x = dynamic_cast<AssignStmt *>(s)) { expr(x->target.get()); expr(x->value.get()); }
-        else if (auto *x = dynamic_cast<ReturnStmt *>(s)) expr(x->value.get());
-        else if (auto *x = dynamic_cast<ExprStmt *>(s)) expr(x->expr.get());
-        else if (auto *x = dynamic_cast<BlockStmt *>(s)) block(x->block);
-        else if (auto *x = dynamic_cast<IfStmt *>(s)) { expr(x->cond.get()); block(x->thenBlock); stmt(x->elseStmt.get()); }
-        else if (auto *x = dynamic_cast<WhileStmt *>(s)) { expr(x->cond.get()); block(x->body); }
-        else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) { block(x->body); expr(x->cond.get()); }
-        else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+        if (auto *x = as<LetStmt>(s)) expr(x->init.get());
+        else if (auto *x = as<AssignStmt>(s)) { expr(x->target.get()); expr(x->value.get()); }
+        else if (auto *x = as<ReturnStmt>(s)) expr(x->value.get());
+        else if (auto *x = as<ExprStmt>(s)) expr(x->expr.get());
+        else if (auto *x = as<BlockStmt>(s)) block(x->block);
+        else if (auto *x = as<IfStmt>(s)) { expr(x->cond.get()); block(x->thenBlock); stmt(x->elseStmt.get()); }
+        else if (auto *x = as<WhileStmt>(s)) { expr(x->cond.get()); block(x->body); }
+        else if (auto *x = as<DoWhileStmt>(s)) { block(x->body); expr(x->cond.get()); }
+        else if (auto *x = as<ForStmt>(s)) {
             stmt(x->init.get()); expr(x->cond.get()); stmt(x->update.get()); block(x->body);
-        } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+        } else if (auto *x = as<ForInStmt>(s)) {
             expr(x->lo.get()); expr(x->hi.get()); expr(x->step.get()); block(x->body);
-        } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+        } else if (auto *x = as<SwitchStmt>(s)) {
             expr(x->subject.get());
             for (auto &c : x->cases) {
                 for (auto &v : c.values) expr(v.get());
@@ -115,41 +115,41 @@ struct Visitor {
                 block(c.body);
             }
             block(x->defaultBody);
-        } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value.get());
-        else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+        } else if (auto *x = as<ThrowStmt>(s)) expr(x->value.get());
+        else if (auto *x = as<TryStmt>(s)) {
             block(x->tryBlock);
             for (auto &c : x->catches) block(c.block);
             block(x->finallyBlock);
-        } else if (auto *x = dynamic_cast<DeferStmt *>(s)) block(x->body);
+        } else if (auto *x = as<DeferStmt>(s)) block(x->body);
     }
     void expr(Expr *e) {
         if (!e) return;
         f(*e);
-        if (auto *x = dynamic_cast<BinaryExpr *>(e)) { expr(x->left.get()); expr(x->right.get()); }
-        else if (auto *x = dynamic_cast<UnaryExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<TernaryExpr *>(e)) { expr(x->cond.get()); expr(x->thenExpr.get()); expr(x->elseExpr.get()); }
-        else if (auto *x = dynamic_cast<AsExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<IsExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<AwaitExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<DerefExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) { expr(x->left.get()); expr(x->right.get()); }
-        else if (auto *x = dynamic_cast<IncDecExpr *>(e)) expr(x->target.get());
-        else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand.get());
-        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el.get()); expr(x->built.get()); }
-        else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
+        if (auto *x = as<BinaryExpr>(e)) { expr(x->left.get()); expr(x->right.get()); }
+        else if (auto *x = as<UnaryExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<TernaryExpr>(e)) { expr(x->cond.get()); expr(x->thenExpr.get()); expr(x->elseExpr.get()); }
+        else if (auto *x = as<AsExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<IsExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<AwaitExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<AddrOfExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<DerefExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<CoalesceExpr>(e)) { expr(x->left.get()); expr(x->right.get()); }
+        else if (auto *x = as<IncDecExpr>(e)) expr(x->target.get());
+        else if (auto *x = as<CastExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<SizeofExpr>(e)) expr(x->operand.get());
+        else if (auto *x = as<ArrayLiteralExpr>(e)) { for (auto &el : x->elements) expr(el.get()); expr(x->built.get()); }
+        else if (auto *x = as<IndexExpr>(e)) {
             expr(x->base.get()); expr(x->index.get());
             for (auto &m : x->more) expr(m.get());
             expr(x->sliceHi.get());
         }
-        else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a.get()); }
-        else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value.get()); }
-        else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee.get()); for (auto &a : x->args) expr(a.get()); }
-        else if (auto *x = dynamic_cast<MemberExpr *>(e)) { expr(x->object.get()); expr(x->bound.get()); }
-        else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody.get()); block(x->body); }
-        else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value.get());
-        else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value.get());
+        else if (auto *x = as<NewExpr>(e)) { for (auto &a : x->args) expr(a.get()); }
+        else if (auto *x = as<StructLiteralExpr>(e)) { for (auto &fi : x->fields) expr(fi.value.get()); }
+        else if (auto *x = as<CallExpr>(e)) { expr(x->callee.get()); for (auto &a : x->args) expr(a.get()); }
+        else if (auto *x = as<MemberExpr>(e)) { expr(x->object.get()); expr(x->bound.get()); }
+        else if (auto *x = as<LambdaExpr>(e)) { expr(x->exprBody.get()); block(x->body); }
+        else if (auto *x = as<NamedArgExpr>(e)) expr(x->value.get());
+        else if (auto *x = as<DefaultArgExpr>(e)) expr(x->value.get());
     }
 };
 // Like Visitor, but hands out the owning ExprPtr so expressions can be replaced.
@@ -158,58 +158,58 @@ struct Rewriter {
     void block(Block &b) { for (auto &s : b.statements) stmt(s.get()); }
     void stmt(Stmt *s) {
         if (!s) return;
-        if (auto *x = dynamic_cast<LetStmt *>(s)) expr(x->init);
-        else if (auto *x = dynamic_cast<AssignStmt *>(s)) { expr(x->target); expr(x->value); }
-        else if (auto *x = dynamic_cast<ReturnStmt *>(s)) expr(x->value);
-        else if (auto *x = dynamic_cast<ExprStmt *>(s)) expr(x->expr);
-        else if (auto *x = dynamic_cast<BlockStmt *>(s)) block(x->block);
-        else if (auto *x = dynamic_cast<IfStmt *>(s)) { expr(x->cond); block(x->thenBlock); stmt(x->elseStmt.get()); }
-        else if (auto *x = dynamic_cast<WhileStmt *>(s)) { expr(x->cond); block(x->body); }
-        else if (auto *x = dynamic_cast<DoWhileStmt *>(s)) { block(x->body); expr(x->cond); }
-        else if (auto *x = dynamic_cast<ForStmt *>(s)) {
+        if (auto *x = as<LetStmt>(s)) expr(x->init);
+        else if (auto *x = as<AssignStmt>(s)) { expr(x->target); expr(x->value); }
+        else if (auto *x = as<ReturnStmt>(s)) expr(x->value);
+        else if (auto *x = as<ExprStmt>(s)) expr(x->expr);
+        else if (auto *x = as<BlockStmt>(s)) block(x->block);
+        else if (auto *x = as<IfStmt>(s)) { expr(x->cond); block(x->thenBlock); stmt(x->elseStmt.get()); }
+        else if (auto *x = as<WhileStmt>(s)) { expr(x->cond); block(x->body); }
+        else if (auto *x = as<DoWhileStmt>(s)) { block(x->body); expr(x->cond); }
+        else if (auto *x = as<ForStmt>(s)) {
             stmt(x->init.get()); expr(x->cond); stmt(x->update.get()); block(x->body);
-        } else if (auto *x = dynamic_cast<ForInStmt *>(s)) {
+        } else if (auto *x = as<ForInStmt>(s)) {
             expr(x->lo); expr(x->hi); expr(x->step); block(x->body);
-        } else if (auto *x = dynamic_cast<SwitchStmt *>(s)) {
+        } else if (auto *x = as<SwitchStmt>(s)) {
             expr(x->subject);
             for (auto &c : x->cases) { expr(c.guard); block(c.body); }
             block(x->defaultBody);
-        } else if (auto *x = dynamic_cast<ThrowStmt *>(s)) expr(x->value);
-        else if (auto *x = dynamic_cast<TryStmt *>(s)) {
+        } else if (auto *x = as<ThrowStmt>(s)) expr(x->value);
+        else if (auto *x = as<TryStmt>(s)) {
             block(x->tryBlock);
             for (auto &c : x->catches) block(c.block);
             block(x->finallyBlock);
-        } else if (auto *x = dynamic_cast<DeferStmt *>(s)) block(x->body);
+        } else if (auto *x = as<DeferStmt>(s)) block(x->body);
     }
     void expr(ExprPtr &slot) {
         if (!slot) return;
         f(slot);
         Expr *e = slot.get();
-        if (auto *x = dynamic_cast<BinaryExpr *>(e)) { expr(x->left); expr(x->right); }
-        else if (auto *x = dynamic_cast<UnaryExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<TernaryExpr *>(e)) { expr(x->cond); expr(x->thenExpr); expr(x->elseExpr); }
-        else if (auto *x = dynamic_cast<AsExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<IsExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<AwaitExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<AddrOfExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<DerefExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<CoalesceExpr *>(e)) { expr(x->left); expr(x->right); }
-        else if (auto *x = dynamic_cast<IncDecExpr *>(e)) expr(x->target);
-        else if (auto *x = dynamic_cast<CastExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<SizeofExpr *>(e)) expr(x->operand);
-        else if (auto *x = dynamic_cast<ArrayLiteralExpr *>(e)) { for (auto &el : x->elements) expr(el); expr(x->built); }
-        else if (auto *x = dynamic_cast<IndexExpr *>(e)) {
+        if (auto *x = as<BinaryExpr>(e)) { expr(x->left); expr(x->right); }
+        else if (auto *x = as<UnaryExpr>(e)) expr(x->operand);
+        else if (auto *x = as<TernaryExpr>(e)) { expr(x->cond); expr(x->thenExpr); expr(x->elseExpr); }
+        else if (auto *x = as<AsExpr>(e)) expr(x->operand);
+        else if (auto *x = as<IsExpr>(e)) expr(x->operand);
+        else if (auto *x = as<AwaitExpr>(e)) expr(x->operand);
+        else if (auto *x = as<AddrOfExpr>(e)) expr(x->operand);
+        else if (auto *x = as<DerefExpr>(e)) expr(x->operand);
+        else if (auto *x = as<CoalesceExpr>(e)) { expr(x->left); expr(x->right); }
+        else if (auto *x = as<IncDecExpr>(e)) expr(x->target);
+        else if (auto *x = as<CastExpr>(e)) expr(x->operand);
+        else if (auto *x = as<SizeofExpr>(e)) expr(x->operand);
+        else if (auto *x = as<ArrayLiteralExpr>(e)) { for (auto &el : x->elements) expr(el); expr(x->built); }
+        else if (auto *x = as<IndexExpr>(e)) {
             expr(x->base); expr(x->index);
             for (auto &m : x->more) expr(m);
             expr(x->sliceHi);
         }
-        else if (auto *x = dynamic_cast<NewExpr *>(e)) { for (auto &a : x->args) expr(a); }
-        else if (auto *x = dynamic_cast<StructLiteralExpr *>(e)) { for (auto &fi : x->fields) expr(fi.value); }
-        else if (auto *x = dynamic_cast<CallExpr *>(e)) { expr(x->callee); for (auto &a : x->args) expr(a); }
-        else if (auto *x = dynamic_cast<MemberExpr *>(e)) { expr(x->object); expr(x->bound); }
-        else if (auto *x = dynamic_cast<LambdaExpr *>(e)) { expr(x->exprBody); block(x->body); }
-        else if (auto *x = dynamic_cast<NamedArgExpr *>(e)) expr(x->value);
-        else if (auto *x = dynamic_cast<DefaultArgExpr *>(e)) expr(x->value);
+        else if (auto *x = as<NewExpr>(e)) { for (auto &a : x->args) expr(a); }
+        else if (auto *x = as<StructLiteralExpr>(e)) { for (auto &fi : x->fields) expr(fi.value); }
+        else if (auto *x = as<CallExpr>(e)) { expr(x->callee); for (auto &a : x->args) expr(a); }
+        else if (auto *x = as<MemberExpr>(e)) { expr(x->object); expr(x->bound); }
+        else if (auto *x = as<LambdaExpr>(e)) { expr(x->exprBody); block(x->body); }
+        else if (auto *x = as<NamedArgExpr>(e)) expr(x->value);
+        else if (auto *x = as<DefaultArgExpr>(e)) expr(x->value);
     }
 };
 } // namespace
@@ -258,15 +258,15 @@ void rewriteExpr(ExprPtr &slot, const std::function<void(ExprPtr &)> &f) {
 void rewriteExprs(Program &program, const std::function<void(ExprPtr &)> &f) {
     Rewriter v{f};
     for (auto &d : program.decls) {
-        if (auto *fn = dynamic_cast<FunctionDecl *>(d.get())) v.block(fn->body);
-        else if (auto *c = dynamic_cast<ClassDecl *>(d.get())) {
+        if (auto *fn = as<FunctionDecl>(d.get())) v.block(fn->body);
+        else if (auto *c = as<ClassDecl>(d.get())) {
             v.block(c->constructor.body);
             for (auto &x : c->extraCtors) v.block(x.body);
             v.block(c->destructor.body);
             for (auto &m : c->methods) v.block(m.body);
             for (auto &sf : c->staticFields) v.expr(sf.init);
-        } else if (auto *g = dynamic_cast<GlobalVarDecl *>(d.get())) v.expr(g->init);
-        else if (auto *t = dynamic_cast<TestDecl *>(d.get())) v.block(t->body);
+        } else if (auto *g = as<GlobalVarDecl>(d.get())) v.expr(g->init);
+        else if (auto *t = as<TestDecl>(d.get())) v.block(t->body);
     }
 }
 
@@ -288,15 +288,15 @@ void visitExpr(Expr &expr, const std::function<void(Expr &)> &f) {
 
 void visitDeclExprs(Decl &d, const std::function<void(Expr &)> &f) {
     Visitor v{f};
-    if (auto *fn = dynamic_cast<FunctionDecl *>(&d)) v.block(fn->body);
-    else if (auto *c = dynamic_cast<ClassDecl *>(&d)) {
+    if (auto *fn = as<FunctionDecl>(&d)) v.block(fn->body);
+    else if (auto *c = as<ClassDecl>(&d)) {
         v.block(c->constructor.body);
         for (auto &x : c->extraCtors) v.block(x.body);
         v.block(c->destructor.body);
         for (auto &m : c->methods) v.block(m.body);
         for (auto &sf : c->staticFields) v.expr(sf.init.get());
-    } else if (auto *g = dynamic_cast<GlobalVarDecl *>(&d)) v.expr(g->init.get());
-    else if (auto *t = dynamic_cast<TestDecl *>(&d)) v.block(t->body);
+    } else if (auto *g = as<GlobalVarDecl>(&d)) v.expr(g->init.get());
+    else if (auto *t = as<TestDecl>(&d)) v.block(t->body);
 }
 
 void visitExprs(Program &program, const std::function<void(Expr &)> &f) {
