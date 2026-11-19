@@ -1,9 +1,11 @@
 #include "driver/modules.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -159,6 +161,45 @@ static void readLock(ProjectConfig &cfg) {
     }
 }
 
+// "1.7.2" (or "1.7", "v1.7.2-rc1") -> {1, 7, 2}.
+static std::array<long, 3> versionParts(const std::string &v) {
+    std::array<long, 3> out{0, 0, 0};
+    size_t i = (!v.empty() && (v[0] == 'v' || v[0] == 'V')) ? 1 : 0;
+    for (int part = 0; part < 3 && i < v.size(); part++) {
+        long n = 0;
+        while (i < v.size() && std::isdigit((unsigned char)v[i])) n = n * 10 + (v[i++] - '0');
+        out[part] = n;
+        if (i < v.size() && v[i] == '.') i++;
+        else break;
+    }
+    return out;
+}
+
+bool versionSatisfies(const std::string &version, const std::string &requirement) {
+    auto have = versionParts(version);
+    std::stringstream ss(requirement);
+    std::string clause;
+    while (std::getline(ss, clause, ',')) {
+        std::string c = trim(clause);
+        if (c.empty()) continue;
+        size_t n = 0;
+        while (n < c.size() && std::string("<>=^~").find(c[n]) != std::string::npos) n++;
+        std::string op = c.substr(0, n);
+        auto want = versionParts(trim(c.substr(n)));
+        bool ok;
+        if (op.empty() || op == ">=") ok = have >= want;
+        else if (op == ">") ok = have > want;
+        else if (op == "<") ok = have < want;
+        else if (op == "<=") ok = have <= want;
+        else if (op == "=" || op == "==") ok = have == want;
+        else if (op == "^") ok = have >= want && have[0] == want[0];
+        else if (op == "~") ok = have >= want && have[0] == want[0] && have[1] == want[1];
+        else return false;
+        if (!ok) return false;
+    }
+    return true;
+}
+
 ProjectConfig findProject(const fs::path &start, std::string &err) {
     ProjectConfig cfg;
     std::error_code ec;
@@ -192,9 +233,15 @@ ProjectConfig findProject(const fs::path &start, std::string &err) {
         if (key == "name" && !values.empty()) cfg.name = values[0];
         else if (key == "main" && !values.empty()) cfg.main = dir / values[0];
         else if (key == "lib" && !values.empty()) cfg.lib = dir / values[0];
+        else if (key == "grav" && !values.empty()) cfg.grav = values[0];
         else if (key == "paths") for (const auto &v : values) cfg.paths.push_back(dir / v);
     }
     readLock(cfg);
+    if (!cfg.grav.empty() && !versionSatisfies(GRAV_VERSION, cfg.grav)) {
+        err = (dir / "grav.toml").string() + ": " + (cfg.name.empty() ? dir.filename().string() : cfg.name) +
+              " needs grav " + cfg.grav + ", and this is grav " + GRAV_VERSION +
+              " (update it with: grav self-update)";
+    }
     return cfg;
 }
 
@@ -250,7 +297,10 @@ const std::map<std::string, fs::path> &ModuleLoader::chosenPackages() {
             if (walked.insert(dir.string()).second) {
                 std::string err;
                 ProjectConfig sub = findProject(dir, err);
-                if (sub.found && fs::weakly_canonical(sub.root, ec) == dir) todo.push_back({sub, depth + 1});
+                if (sub.found && fs::weakly_canonical(sub.root, ec) == dir) {
+                    if (!err.empty() && packageErr_.empty()) packageErr_ = err;
+                    todo.push_back({sub, depth + 1});
+                }
             }
         }
     }
@@ -518,6 +568,10 @@ bool ModuleLoader::load(const fs::path &path, std::string &out, std::vector<SrcL
     std::string key = ec ? path.string() : canon.string();
     if (visited_.count(key)) return true;
     visited_.insert(key);
+    if (visited_.size() == 1) {   // the program itself: can this grav build every package it uses?
+        chosenPackages();
+        if (!packageErr_.empty()) { err = packageErr_; return false; }
+    }
     bool library = isLibrary(key);
     // The standard library's prelude (its internal `use` lines) comes first.
     if (library && !preludeLoaded_) {

@@ -48,6 +48,7 @@ struct ProjectConfig {
     std::string name;
     std::filesystem::path main;
     std::filesystem::path lib;
+    std::string grav; // `grav = ">=1.7.0"`: the compiler versions it builds with
     std::vector<std::filesystem::path> paths;
     std::vector<Dependency> deps;
     std::vector<std::pair<std::string, LockEntry>> lock; // from grav.lock
@@ -56,6 +57,11 @@ struct ProjectConfig {
         return nullptr;
     }
 };
+
+// Whether `version` meets a grav.toml `grav` requirement: comma-separated
+// ">=1.7.0", ">1.7", "<2", "<=1.9", "=1.7.2", "^1.7" (same major), "~1.7.2"
+// (same minor), or a bare version meaning at least that one.
+bool versionSatisfies(const std::string &version, const std::string &requirement);
 
 // Where packages are cloned: $GRAV_PACKAGES, else ~/.local/grav/packages.
 std::filesystem::path packagesDir();
@@ -97,6 +103,7 @@ private:
     const std::map<std::string, std::filesystem::path> &chosenPackages();
     std::map<std::string, std::filesystem::path> chosen_;
     bool chosenReady_ = false;
+    std::string packageErr_; // a chosen package this grav cannot build (its `grav` requirement)
 
     // What the loader learned about each file: the namespaces it opens, the
     // names it declares (name -> namespace), and the files it imports.

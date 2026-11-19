@@ -93,4 +93,28 @@ mv grav.toml.bak grav.toml
 printf 'import "shapes"\nfn main() { print(square(4)) }\n' > src/main.grav
 mv "$T/shapes" "$T/shapes-moved"
 "$GRAV" run 2>&1 | grep -q "local package 'shapes': no directory" || fail "a missing local package is named"
+
+# `grav = "..."` in grav.toml: the compiler versions a project or package builds with.
+have="$("$GRAV" env | awk '/^GRAV_VERSION/ {print $2}')"
+IFS=. read -r maj min pat <<<"$have"
+mkdir -p "$T/vers/src" && cd "$T/vers" && printf 'fn main() { print("ok") }\n' > src/main.grav
+need() { printf 'name = "vers"\nmain = "src/main.grav"\ngrav = "%s"\n' "$1" > grav.toml; }
+for req in ">=$have" "$have" "=$have" "^$maj" "~$maj.$min" "<99" ">=1.0, <99" ">$maj.$((min - 1))"; do
+  need "$req"; [ "$("$GRAV" run 2>/dev/null)" = "ok" ] || fail "grav = \"$req\" should build with grav $have"
+done
+for req in ">$have" "<$have" "^$((maj + 1))" "~$maj.$((min + 1))" ">=1.0, <$maj" "=$maj.$min.$((pat + 1))"; do
+  need "$req"; "$GRAV" run >/dev/null 2>&1 && fail "grav = \"$req\" should not build with grav $have"
+done
+need ">=99.0"
+"$GRAV" run 2>&1 | grep -q "vers needs grav >=99.0, and this is grav $have (update it with: grav self-update)" ||
+  fail "an unmet requirement of the project names both versions"
+mkdir -p "$T/future" && printf 'name = "future"\nlib = "lib.grav"\ngrav = "^99"\n' > "$T/future/grav.toml" &&
+  printf 'fn soon() -> string { return "soon" }\n' > "$T/future/lib.grav"
+need ">=$have"
+"$GRAV" add ../future 2>&1 | grep -q "future needs grav ^99" || fail "adding a package this grav cannot build is an error"
+need ">=$have" && printf '\n[dependencies]\nfuture = { path = "../future" }\n' >> grav.toml
+printf 'import "future"\nfn main() { print(soon()) }\n' > src/main.grav
+"$GRAV" run 2>&1 | grep -q "future needs grav ^99" || fail "building with a package this grav cannot build is an error"
+sed -i "s/\\^99/>=$have/" "$T/future/grav.toml"
+[ "$("$GRAV" run 2>/dev/null)" = "soon" ] || fail "a package whose requirement is met builds"
 echo "packages: ok"

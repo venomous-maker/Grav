@@ -250,6 +250,7 @@ bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLoc
         std::cerr << "grav: " << dep.name << " (local) -> " << dir.string() << "\n";
         std::string e2;
         ProjectConfig sub = findProject(dir, e2);
+        if (!e2.empty()) { err = e2; return false; }
         if (sub.found && fs::weakly_canonical(sub.root) == fs::weakly_canonical(dir))
             for (const auto &d : sub.deps)
                 if (!rootDeclares(sub, d.name) && !installDep(sub, d, true, lock, seen, err)) return false;
@@ -271,6 +272,7 @@ bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLoc
     // Its own dependencies.
     std::string e2;
     ProjectConfig sub = findProject(dir, e2);
+    if (!e2.empty()) { err = e2; return false; }
     if (sub.found && fs::weakly_canonical(sub.root) == fs::weakly_canonical(dir))
         for (const auto &d : sub.deps)
             if (!rootDeclares(sub, d.name) && !installDep(sub, d, true, lock, seen, err)) return false;
