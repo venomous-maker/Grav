@@ -4,7 +4,8 @@
 //   - indents with 4 spaces per open bracket level, where brackets opened on the
 //     same line count once (so `spawn(fn() {` indents its body one level);
 //   - indents a continuation line one extra level after a line ending in a binary
-//     operator, `:` (a `case` label) or `=>`;
+//     operator, `:` or `=>`, and every line of a case body after a bare
+//     `case ...:` / `default:` line, up to the next case;
 //   - strips trailing whitespace, turns tabs in indentation into spaces, keeps at
 //     most one blank line in a row, uses "\n" line ends and ends with a newline.
 // Strings (with `${...}`), comments and inline C (`%{ ... %}`) are left as they
@@ -141,6 +142,7 @@ std::string formatGrav(const std::string &src) {
     Scanner sc;
     std::string out;
     bool prevBlank = true, continuation = false;
+    std::vector<long> cases; // bracket depths of case bodies begun by a bare `case ...:` line (nested switches)
     for (const std::string &raw : lines) {
         std::string line = rtrim(raw);
         bool verbatim = sc.inCBlock || sc.inBlockComment; // inside multi-line C or a comment
@@ -168,6 +170,12 @@ std::string formatGrav(const std::string &src) {
             ++k;
             while (k < body.size() && body[k] == ' ') ++k;
         }
+        // A case body's lines sit one level in, until the next case or its switch's `}`.
+        bool label = body.compare(0, 5, "case ") == 0 || body.compare(0, 7, "default") == 0;
+        while (!cases.empty() && static_cast<long>(probe.size()) < cases.back()) cases.pop_back();
+        if (label && !cases.empty() && static_cast<long>(sc.stack.size()) == cases.back()) cases.pop_back();
+        bool inCase = !cases.empty() && static_cast<long>(sc.stack.size()) == cases.back();
+        if (inCase) { level += 1; continuation = false; }
         // A line that starts with `.` continues a method chain.
         bool chain = body.size() > 1 && body[0] == '.' && body[1] != '.';
         // Inside ( ) or [ ] the bracket already indents continuation lines.
@@ -178,6 +186,10 @@ std::string formatGrav(const std::string &src) {
         std::string code = sc.scan(body, bumped ? level - 1 : level);
         out += std::string(static_cast<size_t>(level) * 4, ' ') + body + "\n";
         continuation = endsWithContinuation(code);
+        if (label && !rtrim(code).empty() && rtrim(code).back() == ':') {
+            cases.push_back(static_cast<long>(sc.stack.size()));
+            continuation = false;
+        }
         prevBlank = false;
     }
     while (out.size() >= 2 && out[out.size() - 1] == '\n' && out[out.size() - 2] == '\n') out.pop_back();
