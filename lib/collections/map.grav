@@ -7,7 +7,7 @@ import "../core/iter.grav"
 
 namespace std.collections {
 
-    class Map<K, V> implements Iterable<Pair<K, V>> {
+    class Map<K, V> implements Iterable<Entry<K, V>> {
         private ks: Array<K>
         private vs: Array<V>
         constructor() { self.ks = new Array<K>(); self.vs = new Array<V>(); }
@@ -77,7 +77,7 @@ namespace std.collections {
             return fallback;
         }
         // Every key with its value, one at a time, in insertion order: what `for ((k, v) in map)` uses.
-        public fn iterator() -> Iterator<Pair<K, V>> { return new EntryIterator<K, V>(self.ks, self.vs); }
+        public fn iterator() -> EntryIterator<K, V> { return new EntryIterator<K, V>(self.ks, self.vs); }
         // Every key with its value, as pairs, in insertion order.
         public fn entries() -> Array<Pair<K, V>> {
             let out = new Array<Pair<K, V>>();
@@ -89,16 +89,16 @@ namespace std.collections {
     }
 
     // Walks keys and values kept side by side in two arrays (Map, SortedMap), as pairs.
-    class EntryIterator<K, V> implements Iterator<Pair<K, V>> {
+    class EntryIterator<K, V> implements Iterator<Entry<K, V>> {
         private ks: Array<K>
         private vs: Array<V>
         private i: int = 0
         constructor(ks: Array<K>, vs: Array<V>) { self.ks = ks; self.vs = vs; }
         public fn hasNext() -> bool { return self.i < self.ks.size(); }
-        public fn next() -> Pair<K, V> {
+        public fn next() -> Entry<K, V> {
             if (self.i >= self.ks.size()) { throw new StateError("map iterator: no more entries"); }
             self.i += 1;
-            return new Pair<K, V>(self.ks.get(self.i - 1), self.vs.get(self.i - 1));
+            return Entry<K, V> { first: self.ks.get(self.i - 1), second: self.vs.get(self.i - 1) };
         }
     }
 

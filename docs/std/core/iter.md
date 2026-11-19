@@ -10,7 +10,7 @@ they are there so a function can take "anything that can be walked".
 
 The standard collections without positions are iterable: `LinkedList<T>` and
 `HashSet<T>` give their elements; `HashMap<K, V>`, `Map<K, V>` and
-`SortedMap<K, V>` give their entries as `Pair<K, V>`, so a loop can take them
+`SortedMap<K, V>` give their entries as `Entry<K, V>` (a value with `first` = key and `second` = value, so walking a map allocates nothing), and a loop can take them
 apart.
 
 ```grav

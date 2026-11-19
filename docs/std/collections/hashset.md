@@ -62,7 +62,7 @@ false
 - `fn clear()` — Removes every element.
 - `fn toString() -> string` — As text: {1, 2, 3} (strings in quotes).
 - `fn toArray() -> Array<T>` — The elements as a new Array (in no particular order).
-- `fn iterator() -> Iterator<T>` — Walks the elements (in no particular order): what `for (x in set)` uses.
+- `fn iterator() -> HashKeyIterator<T, bool>` — Walks the elements (in no particular order): what `for (x in set)` uses.
 - `fn forEach(f: fn(T))` — Calls f on each element (in no particular order).
 - `fn union(other: HashSet<T>) -> HashSet<T>` — A new set with the elements of both sets.
 - `fn intersect(other: HashSet<T>) -> HashSet<T>` — A new set with the elements in both sets.

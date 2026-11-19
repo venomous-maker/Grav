@@ -124,7 +124,7 @@ namespace std.collections {
             while (n != null) { f(n.value); n = n.next; }
         }
         // Walks the elements front to back, one node at a time (what `for (x in list)` uses).
-        public fn iterator() -> Iterator<T> { return new LinkedListIterator<T>(self.head); }
+        public fn iterator() -> LinkedListIterator<T> { return new LinkedListIterator<T>(self.head); }
         // Reverses the order of the elements in place.
         public fn reverse() {
             let n = self.head;

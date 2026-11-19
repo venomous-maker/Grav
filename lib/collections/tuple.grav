@@ -6,6 +6,13 @@
 
 namespace std.collections {
 
+    // A key and its value, as a map's iterator gives them: a value, not an object,
+    // so walking a map allocates nothing. `for ((k, v) in map)` takes it apart.
+    struct Entry<K, V> {
+        first: K     // the key
+        second: V    // the value
+    }
+
     class Pair<A, B> {
         readonly first: A
         readonly second: B
