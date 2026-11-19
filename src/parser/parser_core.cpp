@@ -324,11 +324,16 @@ TypeRef Parser::parseType(const char *context) {
             base = TypeRef::pointer(base);
         } else if (check(TokenType::LBracket)) {
             advance(); // '['
-            const Token &n = expect(TokenType::IntLiteral,
-                                    "as the array length in a `T[N]` type");
+            // The length: an integer literal, or a constant expression (`N * 2`).
+            const Token &n = peek();
             long long len = 0;
-            std::from_chars(n.lexeme.data(), n.lexeme.data() + n.lexeme.size(), len);
+            if (n.type == TokenType::RBracket) fail(n, "expected the array length in a `T[N]` type");
+            ExprPtr lenExpr = parseExpression();
+            if (!foldInt(*lenExpr, len))
+                fail(n, "a `T[N]` array length must be an integer literal, or a constant "
+                        "expression of `const`s declared above it");
             if (len <= 0) fail(n, "array length must be a positive integer");
+            if (len > 0x7fffffff) fail(n, "array length is too large");
             expect(TokenType::RBracket, "to close the array length");
             base = TypeRef::array(base, static_cast<int>(len));
         } else if (check(TokenType::Question) && nullableMarkAhead()) {
@@ -445,9 +450,49 @@ DeclPtr Parser::parseGlobalVar() {
     }
     expect(TokenType::Assign, "after the global name");
     g->init = parseExpression();
+    if (long long v = 0; g->isConst && foldInt(*g->init, v)) constInts_[g->fqName] = constInts_[g->name] = v;
     matchToken(TokenType::Semicolon); // optional terminator
     return g;
 }
+
+// The value of an integer expression made of literals, constants declared above
+// and + - * / % << >> & | ^, if it is one.
+bool Parser::foldInt(const Expr &e, long long &out) {
+    if (auto *i = dynamic_cast<const IntLiteralExpr *>(&e)) { out = i->value; return true; }
+    if (auto *n = dynamic_cast<const NameExpr *>(&e)) {
+        if (!n->typeArgs.empty()) return false;
+        for (auto s = localConsts_.rbegin(); s != localConsts_.rend(); ++s) {
+            auto lc = s->find(n->name);
+            if (lc == s->end()) continue;
+            if (!lc->second.second) return false;
+            out = lc->second.first;
+            lc->second.second->quietUnused = true;
+            return true;
+        }
+        auto it = constInts_.find(qualify(n->name));
+        if (it == constInts_.end()) it = constInts_.find(n->name);
+        if (it == constInts_.end()) return false;
+        out = it->second;
+        return true;
+    }
+    auto *b = dynamic_cast<const BinaryExpr *>(&e);
+    long long l = 0, r = 0;
+    if (!b || !foldInt(*b->left, l) || !foldInt(*b->right, r)) return false;
+    switch (b->op) {
+        case BinaryOp::Add: out = l + r; return true;
+        case BinaryOp::Sub: out = l - r; return true;
+        case BinaryOp::Mul: out = l * r; return true;
+        case BinaryOp::Div: if (r == 0) return false; out = l / r; return true;
+        case BinaryOp::Mod: if (r == 0) return false; out = l % r; return true;
+        case BinaryOp::Shl: if (r < 0 || r > 62) return false; out = l << r; return true;
+        case BinaryOp::Shr: if (r < 0 || r > 62) return false; out = l >> r; return true;
+        case BinaryOp::BitAnd: out = l & r; return true;
+        case BinaryOp::BitOr: out = l | r; return true;
+        case BinaryOp::BitXor: out = l ^ r; return true;
+        default: return false;
+    }
+}
+
 
 // After `fn`: whether this declares an extension method, `fn Type.name(...)`
 // (`Type` a built-in type, a dotted class name, or one with type arguments).

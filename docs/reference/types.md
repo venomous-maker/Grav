@@ -25,7 +25,7 @@ kind of type, how they convert into each other, and what their zero values are.
 
 | Written | Meaning |
 |---------|---------|
-| `T[N]` | a fixed array of `N` elements, stored by value |
+| `T[N]` | a fixed array of `N` elements, stored by value; `N` is a literal or a constant expression of `const`s declared above (`int[SIZE * 2]`) |
 | `T[N][M]` | `M` arrays of `N` |
 | `T*` | a pointer to `T` |
 | `T?` | a nullable value: a `T` or `null` |

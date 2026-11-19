@@ -103,6 +103,12 @@ private:
     // top-level function's name (see parseLocalFunction).
     std::vector<std::map<std::string, std::string>> localGenerics_;
     int localGenericCounter_ = 0;
+    // Integer constants declared so far, which a fixed array's length may use
+    // (`int[N * 2]`): top-level ones by name and qualified name, and local ones
+    // per block, innermost last (a length counts as a use of the local).
+    std::map<std::string, long long> constInts_;
+    std::vector<std::map<std::string, std::pair<long long, LetStmt *>>> localConsts_;
+    bool foldInt(const Expr &e, long long &out);
     bool extensionSelf_ = false;  // parsing an extension method: `self` is a parameter
     bool asyncMethods_ = false;   // an `async fn` method was parsed: add its helpers
     // Function bodies being parsed, innermost last: 0 cannot yield (a lambda), 1 may, 2 did.

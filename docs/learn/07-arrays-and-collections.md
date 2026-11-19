@@ -49,6 +49,8 @@ Output:
   `IndexError` instead of reading random memory, as C would.
 - Fixed arrays are *values*, like numbers: assigning one to another variable, or
   passing it to a function, copies all the elements.
+- The `N` in `T[N]` may be a constant expression instead of a literal:
+  `const SIZE: int = 8` above it lets you write `byte[SIZE]` or `int[SIZE * 2]`.
 
 Arrays can hold arrays, which gives you a grid. `int[3][2]` is 2 rows of 3:
 

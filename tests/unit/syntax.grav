@@ -1,5 +1,5 @@
 // Literal and declaration syntax: raw and multi-line strings, character
-// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions.
+// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions, constant array lengths.
 import "std"
 
 class Bag {
@@ -170,4 +170,14 @@ test "generic local functions" {
     assertEq("${twice(3).size()} ${twice("a")[1]} ${depth(1.5, 4)} ${words}", "2 a 4 [1][b]")
     let twice = 9
     assertEq(twice, 9)
+}
+
+const CELLS: int = 4
+class Board { public cells: int[CELLS * 2] }
+
+test "fixed array lengths may be constant expressions" {
+    const HALF = CELLS / 2
+    let a: int[HALF + 1] = [1, 2, 3]
+    let b = new Board()
+    assertEq("${a[2]} ${b.cells.length}", "3 8")
 }

@@ -8,6 +8,7 @@ Block Parser::parseBlock() {
     expect(TokenType::LBrace, "to open the block");
     Block block;
     localGenerics_.emplace_back();
+    localConsts_.emplace_back();
     while (!check(TokenType::RBrace) && !atEnd()) {
         if (matchToken(TokenType::Semicolon)) continue; // stray / empty statement
         block.statements.push_back(parseStatement());
@@ -19,6 +20,7 @@ Block Parser::parseBlock() {
     }
     expect(TokenType::RBrace, "to close the block");
     localGenerics_.pop_back();
+    localConsts_.pop_back();
     return block;
 }
 
@@ -535,6 +537,11 @@ StmtPtr Parser::parseLet() {
     }
     expect(TokenType::Assign, "after the variable name");
     stmt->init = parseExpression();
+    if (!localConsts_.empty()) {
+        long long v = 0; // (a variable that is not a constant hides one of the same name)
+        bool known = stmt->isConst && foldInt(*stmt->init, v);
+        localConsts_.back()[stmt->name] = {v, known ? stmt.get() : nullptr};
+    }
     return stmt;
 }
 
