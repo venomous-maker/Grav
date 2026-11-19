@@ -254,6 +254,14 @@ code that depends on capabilities rather than on specific classes.
 A class that says it implements an interface but misses a method is a compile
 error that names the method.
 
+A method's parameters must match the interface's exactly, but its result may be
+narrower: where the interface gives an interface, the class may give a class that
+implements it; where it gives a class, a subclass. Callers through the interface
+get the interface's type; callers holding the class get its own, with all its
+members, and their calls go straight to it. The standard collections use this:
+`LinkedList<T>` is an `Iterable<T>`, and its `iterator()` gives a
+`LinkedListIterator<T>`.
+
 ### Traits: interfaces with default methods
 
 A `trait` is an interface whose methods may have bodies. Classes that implement

@@ -1118,7 +1118,14 @@ void Registry::checkHierarchies() {
                     if (!(w.isNamed() && w.name == "Self")) return h == w;
                     return h == TypeRef::named(fq) || h == TypeRef::named(have->definingClass);
                 };
-                bool ok = matches(have->returnType, want.returnType) &&
+                // A narrower result also fits: a class implementing the interface asked
+                // for, or a subclass of the class asked for (the table converts it).
+                auto narrower = [&](const TypeRef &h, const TypeRef &w) {
+                    if (!h.isNamed() || !w.isNamed() || !isClass(h.name)) return false;
+                    return isInterface(w.name) ? classImplements(h.name, w.name)
+                                               : isClass(w.name) && isSubclass(h.name, w.name);
+                };
+                bool ok = (matches(have->returnType, want.returnType) || narrower(have->returnType, want.returnType)) &&
                           have->paramTypes.size() == want.paramTypes.size();
                 for (size_t i = 0; ok && i < want.paramTypes.size(); ++i)
                     ok = matches(have->paramTypes[i], want.paramTypes[i]);

@@ -112,3 +112,26 @@ test "interface signatures and default bodies can name generic instances" {
     let b: Store = new BatchStore()
     assertEq("${b.getMany(["q"])[0]} ${b.boxed().second}", "batch:q 1")
 }
+
+interface Made { fn label() -> string }
+interface Maker { fn make(n: int) -> Made }
+class Widget implements Made {
+    public n: int
+    constructor(n: int) { self.n = n }
+    fn label() -> string { return "widget ${self.n}" }
+}
+class WidgetMaker implements Maker {
+    fn make(n: int) -> Widget { return new Widget(n) }   // narrower than Made
+}
+class Base { fn name() -> string { return "base" } }
+class Derived extends Base { fn name() -> string { return "derived" } }
+interface BaseSource { fn get() -> Base }
+class DerivedSource implements BaseSource { fn get() -> Derived { return new Derived() } }
+
+test "an implementation may give a narrower type than its interface" {
+    let maker: Maker = new WidgetMaker()
+    assertEq(maker.make(2).label(), "widget 2")
+    assertEq(new WidgetMaker().make(3).n, 3)                // the class's own type, with its fields
+    let src: BaseSource = new DerivedSource()
+    assertEq(src.get().name(), "derived")
+}

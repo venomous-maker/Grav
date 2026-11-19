@@ -1098,6 +1098,7 @@ void CodeGen::emitInterfaceTables() {
     }
 
     // One table instance per (class, interface-it-implements) pair.
+    std::string thunks; // (defined after every table, which they may name)
     for (const auto &declPtr : program_->decls) {
         auto *c = dynamic_cast<const ClassDecl *>(declPtr.get());
         if (!c) continue;
@@ -1115,10 +1116,28 @@ void CodeGen::emitInterfaceTables() {
                 std::string sig = cTy(m.returnType) + " (*)(void*";
                 for (const auto &pt : m.paramTypes) sig += ", " + cTy(pt);
                 sig += ")";
-                if (impl.empty())
+                const MethodInfo *have = impl.empty() ? nullptr : reg_->findMethod(c->fqName, mname);
+                if (impl.empty()) {
                     vtables_ += "    0,\n";
-                else
+                } else if (have && m.returnType.isNamed() && reg_->isInterface(m.returnType.name) &&
+                           have->returnType.isNamed() && reg_->isClass(have->returnType.name)) {
+                    // It gives a class where the interface gives an interface: a thunk
+                    // makes the interface value (the same object, with its table).
+                    std::string thunk = mangle(c->fqName) + "__ithunk__" + mangle(ifq) + "__" + memberCName(m.name);
+                    std::string params = "void* self", args = "(" + structName(impl) + "*)self";
+                    for (size_t i = 0; i < m.paramTypes.size(); ++i) {
+                        params += ", " + cTy(m.paramTypes[i]) + " a" + std::to_string(i);
+                        args += ", a" + std::to_string(i);
+                    }
+                    std::string head = "static " + cTy(m.returnType) + " " + thunk + "(" + params + ")";
+                    vtables_ = head + ";\n" + vtables_;
+                    thunks += head + " {\n    return (struct GravIface){ (void*)" + methodCName(impl, mname) + "(" +
+                              args + "), &" + mangle(have->returnType.name) + "__itab__" +
+                              mangle(m.returnType.name) + " };\n}\n";
+                    vtables_ += "    " + thunk + ",\n";
+                } else {
                     vtables_ += "    (" + sig + ")" + methodCName(impl, mname) + ",\n";
+                }
             }
             vtables_ += "};\n\n";
         }
@@ -1130,6 +1149,7 @@ void CodeGen::emitInterfaceTables() {
             vtables_ += " };\n\n";
         }
     }
+    vtables_ += thunks;
 }
 
 // Every interface `classFq` implements, through its whole chain of bases.
