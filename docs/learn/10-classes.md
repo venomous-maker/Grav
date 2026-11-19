@@ -363,6 +363,29 @@ A class with no constructor gets an empty one that takes no arguments. Its
 fields start at their type's zero: `0`, `false`, `""`, and `null` for objects
 and `T?`.
 
+A `private constructor` can only be called from the class's own code, so the
+class decides how its objects are made: through static methods that check, cache
+or name them. Subclasses do not inherit it.
+
+```grav
+class Temperature {
+    public celsius: float
+    private constructor(celsius: float) { self.celsius = celsius }
+    static fn fromCelsius(c: float) -> Temperature { return new Temperature(c) }
+    static fn fromFahrenheit(f: float) -> Temperature { return new Temperature((f - 32.0) * 5.0 / 9.0) }
+}
+
+fn main() {
+    print(Temperature.fromFahrenheit(212.0).celsius)
+}
+```
+
+Output:
+
+```text
+100
+```
+
 ### Field initializers
 
 A field can say what it starts as. Its initializer runs in every constructor,

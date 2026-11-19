@@ -726,6 +726,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
         out->staticFields.push_back(std::move(ns));
     }
     out->constructor.present = tpl->constructor.present;
+    out->constructor.isPrivate = tpl->constructor.isPrivate;
     out->constructor.line = tpl->constructor.line; out->constructor.col = tpl->constructor.col;
     out->constructor.params = tpl->constructor.params;
     rewriteParams(out->constructor.params, subst, tpl->constructor.line, tpl->constructor.col);
@@ -733,7 +734,7 @@ std::string Mono::instantiateClass(const std::string &name, const std::vector<Ty
     walkBlock(out->constructor.body, subst);
     for (const auto &x : tpl->extraCtors) {
         ConstructorDecl nc;
-        nc.present = true; nc.line = x.line; nc.col = x.col; nc.params = x.params;
+        nc.present = true; nc.line = x.line; nc.col = x.col; nc.params = x.params; nc.isPrivate = x.isPrivate;
         rewriteParams(nc.params, subst, x.line, x.col);
         nc.body = cloneBlock(x.body);
         walkBlock(nc.body, subst);

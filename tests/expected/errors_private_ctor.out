@@ -1,0 +1,7 @@
+gravc: tests/errors/private_ctor.grav:7:5: warning: unused variable 'c'
+        let c = new Config()
+        ^
+gravc: tests/errors/private_ctor.grav:7:13: type error: the constructor of 'Config' is private: only its own class can create one (look for a static method that does)
+        let c = new Config()
+                ^
+gravc: 1 error(s); aborting

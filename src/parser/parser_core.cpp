@@ -91,6 +91,15 @@ Program Parser::parseProgram() {
     while (!atEnd()) {
         parseTopLevel(program);
     }
+    if (asyncMethods_) {
+        // What an `async fn` method runs its body through (see asyncMethod).
+        Token at = tokens_.back();
+        auto saved = nsStack_;
+        nsStack_.clear();
+        parseGenerated("async fn __gravAsync<T>(body: fn() -> T) -> T { return body() }\n"
+                       "async fn __gravAsyncVoid(body: fn()) { body() }\n", at, program);
+        nsStack_ = saved;
+    }
     return program;
 }
 
@@ -649,11 +658,14 @@ DeclPtr Parser::parseClass(bool isAbstract) {
         else if (matchToken(TokenType::Protected)) { access = Access::Protected; sawAccess = true; }
 
         if (check(TokenType::Constructor)) {
-            if (sawAccess) fail(peek(), "constructors cannot have an access modifier");
+            if (sawAccess && access == Access::Protected)
+                fail(peek(), "a constructor is public or private, not protected");
             // A second `constructor(...)` is an overload (resolved by argument types).
             if (cls->constructor.present) cls->extraCtors.push_back(parseConstructor());
             else cls->constructor = parseConstructor();
-            (cls->extraCtors.empty() ? cls->constructor : cls->extraCtors.back()).decorators = std::move(decos);
+            ConstructorDecl &made = cls->extraCtors.empty() ? cls->constructor : cls->extraCtors.back();
+            made.decorators = std::move(decos);
+            made.isPrivate = access == Access::Private;
             continue;
         }
         // `destructor() { ... }` (contextual) — runs when `free(obj)` releases it.
@@ -684,6 +696,10 @@ DeclPtr Parser::parseClass(bool isAbstract) {
         bool isAbstractMethod = matchToken(TokenType::Abstract);
         bool isStatic = matchToken(TokenType::Static);
         bool isReadonly = matchToken(TokenType::Readonly);
+        const Token &asyncTok = peek();
+        bool isAsyncMethod = matchToken(TokenType::Async);
+        if (isAsyncMethod && !check(TokenType::Fn)) fail(peek(), "expected 'fn' after 'async'");
+        if (isAsyncMethod && isAbstractMethod) fail(asyncTok, "an abstract method cannot be 'async' (its overrides may be)");
 
         if (check(TokenType::Fn) || atProperty()) {
             // Abstract methods have no body (parsed like an interface signature).
@@ -699,6 +715,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                 fail(peek(), "a method cannot be both 'abstract' and 'static'");
             if (isReadonly) fail(peek(), "'readonly' cannot be applied to a method");
             m.decorators = std::move(decos);
+            if (isAsyncMethod) asyncMethod(m, asyncTok);
             cls->methods.push_back(std::move(m));
         } else if (check(TokenType::Identifier) || (Lexer::isKeyword(peek()) && peekAt(1).type == TokenType::Colon)) {
             if (isStatic) {
@@ -725,6 +742,82 @@ DeclPtr Parser::parseClass(bool isAbstract) {
     }
     expect(TokenType::RBrace, "to close the class body");
     return cls;
+}
+
+// `async fn m(args) -> R { body }` becomes `fn m(args) -> Future<R>` whose body
+// hands the old one, as a closure (of `self` and the arguments), to an async free
+// function: calling it starts the work on the worker pool, as for `async fn f()`.
+void Parser::asyncMethod(MethodDecl &m, const Token &at) {
+    asyncMethods_ = true;
+    TypeRef r = m.returnType;
+    auto lam = std::make_unique<LambdaExpr>();
+    lam->line = at.line;
+    lam->col = at.col;
+    lam->body = std::move(m.body);
+    auto callee = std::make_unique<NameExpr>();
+    callee->line = at.line;
+    callee->col = at.col;
+    auto call = std::make_unique<CallExpr>();
+    call->line = at.line;
+    call->col = at.col;
+    if (r.isVoid()) {
+        callee->name = "__gravAsyncVoid";
+    } else {
+        callee->name = "__gravAsync";
+        lam->hasReturnType = true;
+        lam->returnType = r;
+        call->typeArgs.push_back(r);
+    }
+    call->callee = std::move(callee);
+    call->args.push_back(std::move(lam));
+    auto ret = std::make_unique<ReturnStmt>();
+    ret->line = at.line;
+    ret->col = at.col;
+    ret->value = std::move(call);
+    m.body = Block{};
+    m.body.statements.push_back(std::move(ret));
+    m.returnType = TypeRef::future(r);
+}
+
+// A function or method body. One that uses `yield` is a generator: it must return
+// Iterator<T>, and becomes `return new Generator<T>(fn(__yield: Yielder<T>) { body })`,
+// each `yield v` being `__yield.put(v)` (see std/concurrency/generator.grav).
+Block Parser::parseFunctionBody(TypeRef &returnType, const Token &at) {
+    yieldScopes_.push_back(1);
+    Block body = parseBlock();
+    bool yielded = yieldScopes_.back() == 2;
+    yieldScopes_.pop_back();
+    if (!yielded) return body;
+    const std::string &n = returnType.name;
+    bool iter = returnType.isNamed() && returnType.args.size() == 1 &&
+                (n == "Iterator" || (n.size() > 9 && n.compare(n.size() - 9, 9, ".Iterator") == 0));
+    if (!iter) fail(at, "a function that uses 'yield' returns Iterator<T> (T: what it yields)");
+    TypeRef elem = returnType.args[0];
+    auto lam = std::make_unique<LambdaExpr>();
+    lam->line = at.line;
+    lam->col = at.col;
+    Param p;
+    p.name = "__yield";
+    p.type = TypeRef::named("std.concurrency.Yielder");
+    p.type.args.push_back(elem);
+    lam->params.push_back(std::move(p));
+    lam->paramTyped.push_back(true);
+    lam->hasReturnType = true;
+    lam->returnType = TypeRef::prim(TypeRef::Kind::Void);
+    lam->body = std::move(body);
+    auto gen = std::make_unique<NewExpr>();
+    gen->line = at.line;
+    gen->col = at.col;
+    gen->className = "std.concurrency.Generator";
+    gen->typeArgs.push_back(elem);
+    gen->args.push_back(std::move(lam));
+    auto ret = std::make_unique<ReturnStmt>();
+    ret->line = at.line;
+    ret->col = at.col;
+    ret->value = std::move(gen);
+    Block out;
+    out.statements.push_back(std::move(ret));
+    return out;
 }
 
 std::vector<Decorator> Parser::parseDecorators() {

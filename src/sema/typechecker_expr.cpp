@@ -958,6 +958,9 @@ TypeRef TypeChecker::checkNew(NewExpr &e) {
     }
     int idx = resolveCtor(fq, e.args, e.line, e.col, "constructor of '" + fq + "'");
     e.ctorIndex = idx < 0 ? 0 : idx;
+    if (idx >= 0 && idx < static_cast<int>(ci->ctors.size()) && ci->ctors[idx]->isPrivate && currentClass_ != fq)
+        error(e.line, e.col, "the constructor of '" + fq + "' is private: only its own class can create one " +
+                                 "(look for a static method that does)");
     // A data enum variant's constructor yields the enum (`Shape.Circle(1.0)` is a
     // Shape), so variants mix freely in arrays, returns and reassignments.
     if (ci->decl && ci->decl->variantTag >= 0 && !ci->baseClass.empty())

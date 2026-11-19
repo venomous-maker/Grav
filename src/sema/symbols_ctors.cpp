@@ -101,6 +101,7 @@ void Registry::inheritConstructors() {
 
         if (ci.ctors.empty()) {
             for (const ConstructorDecl *bc : base.ctors) {
+                if (bc->isPrivate) continue; // (not inherited: only its own class may use it)
                 ConstructorDecl nc;
                 nc.present = true;
                 nc.line = cd->line;

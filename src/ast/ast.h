@@ -529,6 +529,7 @@ struct MethodDecl {
 
 struct ConstructorDecl {
     std::vector<Param> params;
+    bool isPrivate = false; // `private constructor`: only the class's own code may `new` it
     Block body;
     std::vector<Decorator> decorators;
     bool present = false;

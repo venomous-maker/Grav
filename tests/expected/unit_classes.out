@@ -1,6 +1,8 @@
-running 4 tests
+running 6 tests
   ok    a class without a constructor inherits its parent's
   ok    a constructor without super(...) runs the parent's parameterless one first
   ok    super(...) inside a branch counts as the parent call
   ok    string fields start empty
-result: 4 passed, 0 failed
+  ok    async methods run on the worker pool
+  ok    a private constructor is used through the class's own methods
+result: 6 passed, 0 failed

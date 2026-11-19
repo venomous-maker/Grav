@@ -1,0 +1,8 @@
+// A private constructor can only be called by its own class.
+class Config {
+    private constructor() {}
+    static fn make() -> Config { return new Config() }
+}
+fn main() {
+    let c = new Config()
+}

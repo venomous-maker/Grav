@@ -1,4 +1,5 @@
-// Constructors through a class hierarchy, and the initial values of fields.
+// Constructors through a class hierarchy, the initial values of fields, async methods
+// and private constructors.
 import "std"
 
 class Log { static text: string = "" }
@@ -58,4 +59,39 @@ test "string fields start empty" {
     assertEq(d.names[1], "")
     assertEq(d.inner.label, "")
     assertEq(d.s + "!", "!")
+}
+
+class Notes {
+    public lines: Array<string> = new Array<string>()
+}
+
+class Fetcher {
+    private base: int
+    constructor(base: int) { self.base = base }
+    async fn fetch(n: int) -> int {
+        Async.sleepMs(5)
+        return self.base + n
+    }
+    async fn note(log: Notes) { log.lines.push("noted") }
+    static async fn twice(n: int) -> int { return n * 2 }
+}
+
+class Config {
+    public name: string
+    private constructor(name: string) { self.name = name }
+    static fn defaults() -> Config { return new Config("default") }
+}
+
+test "async methods run on the worker pool" {
+    let f = new Fetcher(100)
+    let a = f.fetch(1)
+    let b = f.fetch(2)
+    assertEq(await a + await b, 203)
+    let log = new Notes()
+    await f.note(log)
+    assertEq("${Str.join(log.lines, "")} ${await Fetcher.twice(21)}", "noted 42")
+}
+
+test "a private constructor is used through the class's own methods" {
+    assertEq(Config.defaults().name, "default")
 }

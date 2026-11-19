@@ -78,6 +78,35 @@ Output:
 When `main` returns, the program waits for any tasks still running before it
 exits.
 
+Methods can be `async` too, static ones included. The task gets the object
+(`self`) along with the arguments:
+
+```grav
+import "std"
+
+class Downloader {
+    private host: string
+    constructor(host: string) { self.host = host }
+    async fn fetch(path: string) -> string {
+        Async.sleepMs(50)                       // pretend to wait for the network
+        return self.host + path
+    }
+}
+
+fn main() {
+    let d = new Downloader("example.com")
+    let a = d.fetch("/a")
+    let b = d.fetch("/b")
+    print(await a + " " + await b)
+}
+```
+
+Output:
+
+```text
+example.com/a example.com/b
+```
+
 ### The worker pool
 
 Tasks run on a pool of worker threads. The pool's size is `GRAV_MAXPROCS`:
