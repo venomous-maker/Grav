@@ -27,7 +27,8 @@ Packages state the compiler versions they need in `grav.toml`
   packages, 1.5 million lines of C) went from 7 minutes to under 1.5.
 - **Edits rebuild faster**: generated C no longer changes outside the code that
   changed (temporaries are numbered per function, lambdas and call adapters are
-  named after where they are, and a build's C file keeps its name), and GCC 15+
+  named after where they are, and a build's C names itself the same way each
+  time), and GCC 15+
   keeps its optimized partitions between builds (`-flto-incremental`). Editing
   one function of the example app rebuilds it in about 40 seconds.
 - **One front-end pass instead of three** for most edits: inferred generic type
