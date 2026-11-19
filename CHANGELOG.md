@@ -33,6 +33,12 @@ Packages state the compiler versions they need in `grav.toml`
   method of the same name wins.
 - `type`, `typedef`, `trait`, `match`, `export` and `uses` can name locals,
   parameters, loop and catch variables.
+- **Nested types**: a class, struct, enum or interface declared inside a class
+  body; `Inner` inside the class, `Outer.Inner` outside it.
+- **Generic local functions**: `fn twice<T>(x: T)` inside a block (they cannot
+  use the block's variables).
+- A fixed array's length may be a constant expression: `int[SIZE * 2]`.
+- Tuples of four: `(a, b, c, d)`, the std `Quad<A, B, C, D>`.
 
 ### Fixes
 
@@ -43,7 +49,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 - VS Code extension 1.15.0: `yield` highlighted everywhere; hover and snippets
   for generators, `if`/`try` values, async methods and private constructors;
-  extension methods highlighted, outlined and offered after `.`.
+  extension methods highlighted, outlined and offered after `.`; nested types
+  outlined as `Outer.Inner`.
 
 ## 1.7.0 (2026-11-19)
 
