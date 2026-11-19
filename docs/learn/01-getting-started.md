@@ -15,9 +15,21 @@ In this chapter you will:
 
 ## Installing
 
-The compiler is a C++20 program built with CMake. Programs it compiles are
-finished by your C compiler (`cc`, or whatever `$CC` names), so you need both a
-C++20 compiler and a C compiler.
+On Linux, run the installer from a checkout. It checks your system, installs
+what is missing (on Debian and Ubuntu), asks where to put things, and builds
+the compiler:
+
+```bash
+./install.sh
+```
+
+On Windows, `install.ps1` does the same inside WSL, and there are Docker images
+too: [Installing Grav](../tools/install.md) covers all of them, along with
+`grav self-update` and uninstalling.
+
+To build by hand instead: the compiler is a C++20 program built with CMake.
+Programs it compiles are finished by your C compiler (`cc`, or whatever `$CC`
+names), so you need both a C++20 compiler and a C compiler.
 
 ```bash
 cmake -S . -B build

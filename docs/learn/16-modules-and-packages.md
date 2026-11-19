@@ -263,7 +263,10 @@ grav packages                                     # list dependencies and where 
   `grav install`.
 
 To publish a package, push a repository with a `grav.toml` (with a `lib = "..."`
-entry) and tag a version: `git tag v1.0.0 && git push --tags`.
+entry and a `grav = ">=1.7.0"` requirement: the compiler versions it builds
+with) and tag a version: `tools/release.sh 1.0.0 path/to/package` checks it,
+tags it with its changelog entry and creates the GitHub release. See
+[Versions and releases](../tools/releasing.md).
 
 ## export and decorators
 

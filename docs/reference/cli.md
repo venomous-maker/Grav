@@ -13,6 +13,7 @@ installed, it is `build/gravc`; both behave the same.)
 | `grav check [--json] [file.grav]` | type-checks without building; prints `gravc: ok` or the errors |
 | `grav fmt [--check] [paths]` | formats source files; `grav fmt -` formats standard input |
 | `grav env [--json]` | shows where the compiler, standard library and packages are |
+| `grav self-update [--check] [--force] [--ref REF]` | updates a grav that `install.sh` installed ([Installing](../tools/install.md#updating-grav-self-update)) |
 | `grav new <name>` | creates a project folder with `grav.toml` and `src/main.grav` |
 | `grav add <repo>[@version]` | adds a dependency and installs it |
 | `grav add <directory>` | uses a package from a folder on this machine, as it is (`--git` clones its commits instead) |

@@ -86,7 +86,10 @@ Every runnable snippet in the docs is compiled and checked by `tests/docs.sh`.
 ## Quick start
 
 ```bash
-# build the compiler
+# install grav (Linux; on Windows: install.ps1, see docs/tools/install.md)
+./install.sh
+
+# or build the compiler in place
 cmake -S . -B build && cmake --build build
 
 # transpile a program to C

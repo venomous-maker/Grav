@@ -58,7 +58,7 @@ Hello, Grace!
 | [**Learn Grav**](learn/README.md) | you want to learn the language, from your first program to concurrency, one chapter at a time, with exercises |
 | [**Language reference**](reference/README.md) | you need the precise rules: syntax, keywords, types, operators, statements, built-in functions, the command line |
 | [**Standard library**](std/README.md) | you want to know what a module offers: one page per module, with examples and its full API |
-| [**Tools**](tools/editors.md) | you are setting up an editor, or the [MCP server](tools/mcp.md) for AI assistants |
+| [**Tools**](tools/editors.md) | you are [installing Grav](tools/install.md), [releasing](tools/releasing.md), setting up an editor, or the [MCP server](tools/mcp.md) for AI assistants |
 
 New to Grav? Start with [Getting started](learn/01-getting-started.md).
 
