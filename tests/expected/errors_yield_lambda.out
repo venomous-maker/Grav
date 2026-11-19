@@ -1,0 +1,3 @@
+gravc: tests/errors/yield_lambda.grav:4:33: parse error: 'yield' belongs to a function or method body, not a lambda
+        [1, 2].forEach(fn(x: int) { yield x * 2 })
+                                    ^

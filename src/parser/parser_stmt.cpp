@@ -20,7 +20,48 @@ Block Parser::parseBlock() {
     return block;
 }
 
+// `yield v` (contextual): in a function body, an identifier `yield` starting a
+// statement that is not an assignment to, or a member or element of, a `yield`.
+bool Parser::atYield() const {
+    if (!check(TokenType::Identifier) || peek().lexeme != "yield" || yieldScopes_.empty()) return false;
+    switch (peekAt(1).type) {
+        case TokenType::Assign: case TokenType::PlusEq: case TokenType::MinusEq: case TokenType::StarEq:
+        case TokenType::SlashEq: case TokenType::PercentEq: case TokenType::Dot: case TokenType::LBracket:
+        case TokenType::Semicolon: case TokenType::RBrace: case TokenType::PlusPlus: case TokenType::MinusMinus:
+            return false;
+        default:
+            return true;
+    }
+}
+
+StmtPtr Parser::parseYield() {
+    const Token &kw = advance(); // 'yield'
+    if (yieldScopes_.back() == 0)
+        fail(kw, "'yield' belongs to a function or method body, not a lambda");
+    yieldScopes_.back() = 2;
+    auto put = std::make_unique<MemberExpr>();
+    put->line = kw.line;
+    put->col = kw.col;
+    auto self = std::make_unique<NameExpr>();
+    self->line = kw.line;
+    self->col = kw.col;
+    self->name = "__yield";
+    put->object = std::move(self);
+    put->member = "put";
+    auto call = std::make_unique<CallExpr>();
+    call->line = kw.line;
+    call->col = kw.col;
+    call->callee = std::move(put);
+    call->args.push_back(parseExpression());
+    auto st = std::make_unique<ExprStmt>();
+    st->line = kw.line;
+    st->col = kw.col;
+    st->expr = std::move(call);
+    return st;
+}
+
 StmtPtr Parser::parseStatement() {
+    if (atYield()) return parseYield();
     switch (peek().type) {
         case TokenType::Let:
         case TokenType::Const: return parseLet();
@@ -439,7 +480,9 @@ StmtPtr Parser::parseLocalFunction() {
     }
     lam->hasReturnType = true;
     lam->returnType = matchToken(TokenType::Arrow) ? parseType("as the return type") : TypeRef::prim(TypeRef::Kind::Void);
+    yieldScopes_.push_back(0); // (a local function is a lambda: it cannot yield)
     lam->body = parseBlock();
+    yieldScopes_.pop_back();
     lam->selfName = name.lexeme;
     auto let = std::make_unique<LetStmt>();
     let->line = kw.line; let->col = kw.col;

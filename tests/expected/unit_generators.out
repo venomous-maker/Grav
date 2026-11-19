@@ -1,0 +1,6 @@
+running 4 tests
+  ok    a function that yields is walked by for-in
+  ok    endless generators, stopped by the loop
+  ok    a dropped generator runs its finally; a failing one throws from the loop
+  ok    methods yield too, recursively
+result: 4 passed, 0 failed

@@ -705,12 +705,14 @@ ExprPtr Parser::parsePrimary() {
                 e->hasReturnType = true;
                 e->returnType = parseType("as the lambda's return type");
             }
+            yieldScopes_.push_back(0); // (`yield` belongs to functions, not lambdas)
             if (matchToken(TokenType::FatArrow)) {
                 e->isArrow = true;
                 e->exprBody = parseExpression();
             } else {
                 e->body = parseBlock();
             }
+            yieldScopes_.pop_back();
             return e;
         }
         case TokenType::LBracket: { // `[a, b, c]` — an array literal

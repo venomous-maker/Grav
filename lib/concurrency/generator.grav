@@ -1,0 +1,117 @@
+// lib/concurrency/generator.grav — Generator<T>: an Iterator<T> whose values a
+// function produces with `yield`, one at a time, as the loop asks for them.
+//
+//   fn countdown(n: int) -> Iterator<int> {
+//       while (n > 0) { yield n; n -= 1 }
+//   }
+//   for (x in countdown(3)) { print(x) }        // 3 2 1
+//
+// A function that yields returns an Iterator<T>; the compiler turns its body into
+// a Generator's. The body runs on a thread of its own, but never at the same time
+// as the loop: each `yield` hands over one value and waits until the next is
+// asked for. So it may keep any state in its locals, and it costs a thread switch
+// per value: right for values that come from files, sockets, queries or long
+// computations, not for tight numeric loops.
+//
+// A loop that stops early (break, return, an exception) drops the generator, which
+// ends its body: the paused `yield` throws GeneratorClosed, so the body's `finally`
+// blocks run. An exception the body throws comes out of the loop's next step.
+import "../core/exception.grav"
+import "../core/iter.grav"
+import "async.grav"
+import "thread.grav"
+
+namespace std.concurrency {
+
+    // Thrown at a paused `yield` when its generator is dropped: the body unwinds.
+    class GeneratorClosed extends Exception {
+        constructor() { super("generator closed"); }
+    }
+
+    // What a generator's body and its loop share.
+    class GeneratorState<T> {
+        public value: T
+        public has: bool = false        // `value` holds a value not yet taken
+        public done: bool = false       // the body has finished
+        public closed: bool = false     // the generator was dropped: stop at the next yield
+        public failure: Exception = null
+        public toLoop: Semaphore = new Semaphore(0)  // a value (or the end) is ready
+        public toBody: Semaphore = new Semaphore(0)  // the loop wants the next one
+    }
+
+    // The body's end of a generator: `yield v` is `put(v)`.
+    class Yielder<T> {
+        private st: GeneratorState<T>
+        constructor(st: GeneratorState<T>) { self.st = st; }
+        // Hands `v` to the loop and waits until the loop asks for the next value.
+        public fn put(v: T) {
+            self.st.value = v;
+            self.st.has = true;
+            self.st.toLoop.release();
+            self.st.toBody.acquire();
+            if (self.st.closed) { throw new GeneratorClosed(); }
+        }
+    }
+
+    // The values a body yields, as an Iterator.
+    class Generator<T> implements Iterator<T> {
+        private st: GeneratorState<T>
+        private body: fn(Yielder<T>)
+        private worker: Thread = null
+        private ready: bool = false     // st holds the answer to the next hasNext()
+
+        constructor(body: fn(Yielder<T>)) {
+            self.st = new GeneratorState<T>();
+            self.body = body;
+        }
+        destructor() {
+            if (self.worker == null) { return; }
+            if (!self.st.done) {
+                self.st.closed = true;
+                self.st.toBody.release();
+            }
+            self.worker.join();
+        }
+
+        // Whether the body yields another value (running it up to that yield).
+        public fn hasNext() -> bool {
+            if (!self.ready) { self.step(); }
+            return self.st.has;
+        }
+        // The next value the body yields.
+        public fn next() -> T {
+            if (!self.hasNext()) { throw new StateError("generator: no more values"); }
+            self.ready = false;
+            self.st.has = false;
+            return self.st.value;
+        }
+
+        private fn step() {
+            if (self.st.done) { self.ready = true; return; }
+            if (self.worker == null) {
+                let st = self.st;
+                let body = self.body;
+                let y = new Yielder<T>(st);
+                self.worker = Thread.spawn("generator", fn() {
+                    try { body(y); }
+                    catch (e: GeneratorClosed) { }
+                    catch (e: Exception) { st.failure = e; }
+                    finally {
+                        st.done = true;
+                        st.has = false;
+                        st.toLoop.release();
+                    }
+                });
+            } else {
+                self.st.toBody.release();
+            }
+            self.st.toLoop.acquire();
+            self.ready = true;
+            if (self.st.failure != null) {
+                let f = self.st.failure;
+                self.st.failure = null;
+                throw f;
+            }
+        }
+    }
+}

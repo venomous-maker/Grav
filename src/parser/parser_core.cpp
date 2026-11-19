@@ -445,7 +445,7 @@ DeclPtr Parser::parseFunction(bool isAsync) {
     } else {
         fn->returnType = TypeRef::prim(TypeRef::Kind::Void);
     }
-    fn->body = parseBlock();
+    fn->body = parseFunctionBody(fn->returnType, kw);
     return fn;
 }
 
@@ -953,11 +953,11 @@ MethodDecl Parser::parseMethod(bool inInterface) {
     if (inInterface) {
         // An interface/trait method with a `{ ... }` body is a *default* method
         // that implementers inherit unless they override it.
-        if (check(TokenType::LBrace)) { m.hasBody = true; m.body = parseBlock(); }
+        if (check(TokenType::LBrace)) { m.hasBody = true; m.body = parseFunctionBody(m.returnType, kw); }
         else m.hasBody = false;
     } else {
         m.hasBody = true;
-        m.body = parseBlock();
+        m.body = parseFunctionBody(m.returnType, kw);
     }
     return m;
 }

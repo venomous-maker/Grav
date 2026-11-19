@@ -1,0 +1,95 @@
+// Generators: functions and methods whose bodies `yield`, walked by for-in, left
+// early, failing, and holding resources.
+import "std"
+
+fn countdown(n: int) -> Iterator<int> {
+    while (n > 0) {
+        yield n
+        n -= 1
+    }
+}
+
+fn fib() -> Iterator<long> {                  // endless: the loop decides when to stop
+    let a = 0 as long
+    let b = 1 as long
+    while (true) {
+        yield a
+        let t = a + b
+        a = b
+        b = t
+    }
+}
+
+fn words(text: string) -> Iterator<string> {
+    for (w in Str.split(text, " ")) {
+        if (w == "") { continue }
+        if (w == "STOP") { return }
+        yield Str.upper(w)
+    }
+}
+
+fn failing() -> Iterator<int> {
+    yield 1
+    throw new ValueError("broken after one")
+}
+
+class Log {
+    public lines: Array<string> = new Array<string>()
+}
+
+fn guarded(log: Log) -> Iterator<int> {
+    try {
+        for (i in 0..1000) { yield i }
+    } finally {
+        log.lines.push("closed")
+    }
+}
+
+class Tree {
+    public value: int
+    public kids: Array<Tree> = new Array<Tree>()
+    constructor(value: int) { self.value = value }
+    fn add(t: Tree) -> Tree { self.kids.push(t); return self }
+    // Depth first, each node before its children.
+    fn walk() -> Iterator<int> {
+        yield self.value
+        for (k in self.kids) { for (v in k.walk()) { yield v } }
+    }
+}
+
+test "a function that yields is walked by for-in" {
+    let got = new Array<string>()
+    for (x in countdown(3)) { got.push("${x}") }
+    for (i, w in words("to be  or STOP not")) { got.push("${i}${w}") }
+    assertEq(Str.join(got, " "), "3 2 1 0TO 1BE 2OR")
+    let it = countdown(2)
+    assertEq("${it.hasNext()} ${it.next()} ${it.next()} ${it.hasNext()}", "true 2 1 false")
+}
+
+test "endless generators, stopped by the loop" {
+    let firsts = new Array<string>()
+    for (f in fib()) {
+        if (f > 50) { break }
+        firsts.push("${f}")
+    }
+    assertEq(Str.join(firsts, ","), "0,1,1,2,3,5,8,13,21,34")
+}
+
+test "a dropped generator runs its finally; a failing one throws from the loop" {
+    let log = new Log()
+    let n = 0
+    for (i in guarded(log)) { n += 1; if (i == 4) { break } }
+    GC.collect()
+    assertEq("${n} ${Str.join(log.lines, ",")}", "5 closed")
+    let seen = 0
+    let why = ""
+    try { for (x in failing()) { seen += x } } catch (e: ValueError) { why = e.message() }
+    assertEq("${seen} ${why}", "1 broken after one")
+}
+
+test "methods yield too, recursively" {
+    let t = new Tree(1).add(new Tree(2).add(new Tree(3))).add(new Tree(4))
+    let order = new Array<string>()
+    for (v in t.walk()) { order.push("${v}") }
+    assertEq(Str.join(order, " "), "1 2 3 4")
+}

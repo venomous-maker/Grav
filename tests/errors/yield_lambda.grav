@@ -1,0 +1,5 @@
+// `yield` belongs to the function, not to a lambda inside it.
+import "std"
+fn evens() -> Iterator<int> {
+    [1, 2].forEach(fn(x: int) { yield x * 2 })
+}

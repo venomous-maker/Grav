@@ -262,6 +262,60 @@ Output:
 When a class has both, `iterator()` wins: `get(i)` on a linked list walks from
 one end each time, and on a map it takes a key rather than a position.
 
+### Generators: functions that yield
+
+Writing an iterator class means keeping track, in fields, of where you are. A
+*generator* lets a function do it in its locals instead: a function that returns
+`Iterator<T>` and uses `yield` hands out one value at each `yield`, and carries
+on from there when the loop asks for the next:
+
+```grav
+import "std"
+
+fn countdown(n: int) -> Iterator<int> {
+    while (n > 0) {
+        yield n
+        n -= 1
+    }
+}
+
+fn evens() -> Iterator<int> {               // no end: the loop decides when to stop
+    let i = 0
+    while (true) {
+        yield i
+        i += 2
+    }
+}
+
+fn main() {
+    for (x in countdown(3)) { print(x) }
+    for (e in evens()) {
+        if (e > 6) { break }
+        print("even ${e}")
+    }
+}
+```
+
+Output:
+
+```text
+3
+2
+1
+even 0
+even 2
+even 4
+even 6
+```
+
+A bare `return` ends a generator early; a `finally` in it runs even when the
+loop stops early. Methods can yield too, and a generator can loop over another,
+which makes walking trees and other nested structures short. The body runs on a
+thread of its own, one step at a time with the loop, so each value costs a thread
+switch: use generators for values that come from files, sockets, queries or long
+computations, and plain loops for tight arithmetic. See
+[generator](../std/concurrency/generator.md).
+
 ### The C-style for
 
 The three-part loop from C is there too: a start statement, a condition checked

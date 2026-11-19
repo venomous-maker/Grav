@@ -1,0 +1,3 @@
+gravc: tests/errors/yield_misuse.grav:2:1: parse error: a function that uses 'yield' returns Iterator<T> (T: what it yields)
+    fn notAnIterator() -> int {
+    ^

@@ -1,0 +1,4 @@
+// `yield` needs a function that returns Iterator<T>.
+fn notAnIterator() -> int {
+    yield 1
+}
