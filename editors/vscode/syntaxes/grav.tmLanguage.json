@@ -845,7 +845,7 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(if|else|while|for|in|step|do|switch|match|case|default|break|continue|return|try|catch|finally|throw|defer)\\b",
+          "match": "\\b(if|else|while|for|in|step|do|switch|match|case|default|break|continue|return|try|catch|finally|throw|defer|yield)\\b",
           "name": "keyword.control.grav"
         },
         {

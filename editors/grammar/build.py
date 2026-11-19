@@ -183,7 +183,7 @@ repo = {
          "name": "variable.parameter.grav"},
     ]},
     "keywords": {"patterns": [
-        {"match": r"\b(if|else|while|for|in|step|do|switch|match|case|default|break|continue|return|try|catch|finally|throw|defer)\b", "name": "keyword.control.grav"},
+        {"match": r"\b(if|else|while|for|in|step|do|switch|match|case|default|break|continue|return|try|catch|finally|throw|defer|yield)\b", "name": "keyword.control.grav"},
         {"match": r"\b(async|await)\b", "name": "keyword.control.async.grav"},
         {"match": r"\b(public|private|protected|static|readonly|abstract|final|export|weak)\b", "name": "storage.modifier.grav"},
         {"match": r"\b(operator)\b", "name": "keyword.other.operator.grav"},

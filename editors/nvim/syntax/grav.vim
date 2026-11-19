@@ -29,7 +29,7 @@ syn keyword gravKeyword async await
 " Control flow
 syn keyword gravConditional if else switch case default match
 syn keyword gravRepeat     while for do in step
-syn keyword gravStatement  break continue defer
+syn keyword gravStatement  break continue defer yield
 syn keyword gravException  try catch finally throw
 syn keyword gravOperatorKw as is
 
