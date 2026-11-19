@@ -89,6 +89,8 @@ private:
     StmtPtr parseFor();
     StmtPtr parseSwitch(bool asExpr = false); // also handles 'match' (asExpr: a match expression)
     Block parseArmValue();
+    Block parseValueBranch(const char *what);
+    StmtPtr parseIfValue();
     StmtPtr parseDestructure(const Token &kw);
     StmtPtr parseLocalFunction();
     bool destructureAhead() const;

@@ -143,6 +143,29 @@ error: negative
 Unlike `defer` ([chapter 4](04-control-flow.md#clean-up-with-defer)), `finally`
 also runs when an exception passes through.
 
+### try as a value
+
+When all a `catch` would do is pick a fallback value, `try` can be written as an
+expression: the value, or the fallback when working it out throws. `catch` alone
+catches any `Exception`; `catch (e: T)` only a `T`, and names it:
+
+```grav
+import "std"
+
+fn main() {
+    let port = try Format.toInt("80a") catch 8080
+    let size = try Format.toInt("12") catch 0
+    let why = try "${Format.toInt("x")}" catch (e: ValueError) { "invalid: " + e.message() }
+    print("${port} ${size} ${why}")
+}
+```
+
+Output:
+
+```text
+8080 12 invalid: 'x' is not an integer
+```
+
 ### Passing an exception on
 
 A `catch` can do something and then throw the same exception again, for

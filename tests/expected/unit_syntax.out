@@ -1,4 +1,4 @@
-running 8 tests
+running 9 tests
   ok    raw strings keep backslashes and dollar signs
   ok    multi-line strings drop the shared indentation
   ok    character literals are their code points
@@ -8,4 +8,5 @@ local!
   ok    lambdas that call themselves
   ok    keywords as member names: methods, fields, static members, after . and ?.
   ok    a case runs the statements up to the next case, without braces
-result: 8 passed, 0 failed
+  ok    if and try give values
+result: 9 passed, 0 failed

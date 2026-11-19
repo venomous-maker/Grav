@@ -17,6 +17,53 @@ std::unique_ptr<T> at(const Token &tok) {
 }
 } // namespace
 
+// A branch of an `if`/`try` used as a value: `{ statements; value }` (its last
+// statement gives the value) or a bare expression. Becomes statements that return it.
+Block Parser::parseValueBranch(const char *what) {
+    Block b;
+    if (check(TokenType::LBrace)) {
+        const Token &open = peek();
+        b = parseBlock();
+        if (b.statements.empty()) fail(open, std::string("an empty block gives no value for ") + what);
+        StmtPtr &last = b.statements.back();
+        if (auto *es = dynamic_cast<ExprStmt *>(last.get())) {
+            auto ret = std::make_unique<ReturnStmt>();
+            ret->line = es->line; ret->col = es->col;
+            ret->value = std::move(es->expr);
+            last = std::move(ret);
+        } else if (!dynamic_cast<ReturnStmt *>(last.get()) && !dynamic_cast<ThrowStmt *>(last.get())) {
+            fail(open, std::string("the last statement of a block giving ") + what +
+                           " must be its value (an expression), or throw");
+        }
+        return b;
+    }
+    const Token &t = peek();
+    auto ret = at<ReturnStmt>(t);
+    ret->value = parseExpression();
+    b.statements.push_back(std::move(ret));
+    return b;
+}
+
+// `if (c) a else b` as a value; `else if` chains. The branches become an if
+// statement in a lambda called on the spot (like a `match` expression).
+StmtPtr Parser::parseIfValue() {
+    const Token &kw = advance(); // 'if'
+    auto st = at<IfStmt>(kw);
+    expect(TokenType::LParen, "after 'if'");
+    st->cond = parseExpression();
+    expect(TokenType::RParen, "after the condition");
+    st->thenBlock = parseValueBranch("an 'if' value");
+    if (!matchToken(TokenType::Else)) fail(peek(), "an 'if' used as a value needs an 'else'");
+    if (check(TokenType::If)) {
+        st->elseStmt = parseIfValue();
+    } else {
+        auto blk = at<BlockStmt>(previous());
+        blk->block = parseValueBranch("an 'if' value");
+        st->elseStmt = std::move(blk);
+    }
+    return st;
+}
+
 ExprPtr Parser::parseExpression() { return parseTernary(); }
 
 ExprPtr Parser::parseTernary() {
@@ -404,7 +451,9 @@ ExprPtr Parser::parsePostfix() {
             call->spreadLast = lastArgsSpread_;
             call->callee = std::move(expr);
             expr = std::move(call);
-        } else if (check(TokenType::LParen)) {
+        } else if (check(TokenType::LParen) && !onNewLine()) {
+            // `f(args)`. A line-leading `(` (or interpolated string) begins a new
+            // statement, not a call of the previous line's value.
             const Token &lp = peek();
             auto call = at<CallExpr>(lp);
             call->args = parseArguments();
@@ -588,6 +637,42 @@ ExprPtr Parser::parsePrimary() {
             }
             expect(TokenType::RParen, "to close 'sizeof'");
             return e;
+        }
+        case TokenType::If: {
+            auto lam = at<LambdaExpr>(t);
+            lam->body.statements.push_back(parseIfValue());
+            auto call = at<CallExpr>(t);
+            call->callee = std::move(lam);
+            return call;
+        }
+        case TokenType::Try: {
+            // `try value catch fallback`, `try value catch (e: T) fallback`: the
+            // value, or the fallback when evaluating it throws (Exception, or T).
+            advance(); // 'try'
+            auto lam = at<LambdaExpr>(t);
+            auto st = at<TryStmt>(t);
+            st->tryBlock = parseValueBranch("a 'try' value");
+            if (!check(TokenType::Catch)) fail(peek(), "a 'try' used as a value needs a 'catch' with its fallback");
+            while (matchToken(TokenType::Catch)) {
+                CatchClause c;
+                c.line = previous().line;
+                c.col = previous().col;
+                c.var = "__caught";
+                c.type = TypeRef::named("Exception");
+                if (check(TokenType::LParen) && !check(TokenType::LBrace)) {
+                    advance();
+                    c.var = expect(TokenType::Identifier, "as the caught exception's name").lexeme;
+                    expect(TokenType::Colon, "after the caught exception's name");
+                    c.type = parseType("for the caught exception");
+                    expect(TokenType::RParen, "after the caught exception's type");
+                }
+                c.block = parseValueBranch("a 'catch' fallback");
+                st->catches.push_back(std::move(c));
+            }
+            lam->body.statements.push_back(std::move(st));
+            auto call = at<CallExpr>(t);
+            call->callee = std::move(lam);
+            return call;
         }
         case TokenType::Match:
         case TokenType::Switch: {

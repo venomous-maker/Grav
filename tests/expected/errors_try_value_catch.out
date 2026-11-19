@@ -1,0 +1,3 @@
+gravc: tests/errors/try_value_catch.grav:4:1: parse error: a 'try' used as a value needs a 'catch' with its fallback
+    }
+    ^

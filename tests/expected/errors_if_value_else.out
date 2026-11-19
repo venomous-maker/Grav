@@ -1,0 +1,3 @@
+gravc: tests/errors/if_value_else.grav:4:1: parse error: an 'if' used as a value needs an 'else'
+    }
+    ^

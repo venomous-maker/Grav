@@ -142,8 +142,16 @@ fn name(params) -> R { }       (a local function)
 
 ```text
 match (value) { case a: expr1  case b, c: expr2  default: expr3 }
+if (cond) value1 else if (cond2) value2 else value3
+try value catch fallback       try value catch (e: Type) fallback
 fn(params) -> R { statements }
 ```
+
+Each value or fallback of `if` and `try` is an expression, or a `{ block }` whose
+last statement is the value. An `if` value needs its `else`, a `try` value a
+`catch`; a `try` value has no `finally`. A line that starts with `(` (or an
+interpolated string) begins a new statement: it never calls the previous line's
+value.
 
 A `match` expression needs a `default` unless its cases cover every enum member
 or data-enum variant.

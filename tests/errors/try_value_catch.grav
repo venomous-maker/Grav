@@ -1,0 +1,4 @@
+// if and try used as values need their other half.
+fn main() {
+    let b = try 1
+}

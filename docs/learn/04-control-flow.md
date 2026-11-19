@@ -55,6 +55,31 @@ Output:
 1 item
 ```
 
+When working out the value takes more than one expression, `if` itself can give
+a value. Each branch is an expression, or a block whose last line is the value;
+the `else` is required, since there must always be a value:
+
+```grav
+fn grade(score: int) -> string {
+    return if (score >= 90) "A" else if (score >= 75) "B" else "C"
+}
+
+fn main() {
+    let score = 82
+    let note = if (score >= 75) {
+        let margin = score - 75
+        "passed by ${margin}"
+    } else "try again"
+    print("${grade(score)}: ${note}")
+}
+```
+
+Output:
+
+```text
+B: passed by 7
+```
+
 ## Loops
 
 ### while

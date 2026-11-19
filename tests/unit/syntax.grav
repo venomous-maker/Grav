@@ -1,5 +1,5 @@
 // Literal and declaration syntax: raw and multi-line strings, character
-// literals, collection literals, local functions, lambdas that call themselves, case bodies.
+// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values.
 import "std"
 
 class Bag {
@@ -124,4 +124,22 @@ test "a case runs the statements up to the next case, without braces" {
         }
     }
     assertEq(n, 23)
+}
+
+fn sign(n: int) -> string { return if (n < 0) "minus" else if (n == 0) "zero" else "plus" }
+
+test "if and try give values" {
+    let big = 7
+    let label = if (big > 5) {
+        let t = big * 2
+        "big ${t}"
+    } else "small"
+    assertEq("${label} ${sign(-3)} ${sign(0)} ${sign(4)}", "big 14 minus zero plus")
+    let n = try Format.toInt("12") catch 0
+    let m = try Format.toInt("q") catch -1
+    let why = try "${Format.toInt("q")}" catch (e: ValueError) { "bad: " + e.message() }
+    assertEq("${n} ${m} ${why}", "12 -1 bad: 'q' is not an integer")
+    let tries = 0
+    let v = try { tries += 1; Format.toInt("z") } catch { tries += 10; 5 }
+    assertEq("${v} ${tries}", "5 11")
 }
