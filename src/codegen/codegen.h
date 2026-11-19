@@ -328,6 +328,15 @@ private:
 
     // codegen_lambda.cpp — closures and function values.
     std::vector<const LambdaExpr *> lambdas_; // every lambda, inner before outer
+    // Each lambda's C name suffix: its enclosing declaration and its place in it, so
+    // adding a lambda elsewhere leaves the others' generated code unchanged.
+    std::string lambdaOwner_;
+    std::map<std::string, int> lambdaOrdinal_;
+    std::map<const LambdaExpr *, std::string> lambdaNames_;
+    const std::string &lambdaName(const LambdaExpr &lam) const { return lambdaNames_.at(&lam); }
+    // Restarts the numbering of a function's temporaries (__ap, __sw, ...), so a
+    // function's C does not change when code before it does.
+    void resetLocalNames() { poolCounter_ = throwCounter_ = switchCounter_ = tryCounter_ = 0; orderCounter_ = 0; }
     std::string lambdaDecls_;                 // env structs, prototypes, constructors
     std::string asyncDecls_;                  // per-async-fn task record + spawner
     void emitAsyncSpawner(const FunctionDecl &fn);

@@ -23,7 +23,9 @@ void CodeGen::emitLambdas() {
 }
 
 void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
-    std::string n = std::to_string(id);
+    resetLocalNames();
+    (void)id;
+    std::string n = lambdaName(lam);
     std::string fn = "grav_lambda_" + n, env = "GravEnv_" + n;
     const TypeRef &ret = lam.returnType;
     std::string params = "void* grav_envp";
@@ -121,7 +123,7 @@ void CodeGen::emitLambda(const LambdaExpr &lam, int id) {
 }
 
 std::string CodeGen::emitLambdaValue(const LambdaExpr &lam) const {
-    std::string n = std::to_string(lam.liftId);
+    const std::string &n = lambdaName(lam);
     if (lam.captures.empty())
         return "((GravFn){ (void (*)(void))grav_lambda_" + n + ", 0 })";
     std::string args;
@@ -158,7 +160,13 @@ std::string CodeGen::emitFnCall(const CallExpr &call) const {
     if (it != fnCallers_.end()) {
         name = it->second;
     } else {
-        name = "grav_call_" + std::to_string(fnCallers_.size());
+        // Named after the signature, not the order it was first met in, so the
+        // generated code elsewhere does not change when a new one appears.
+        unsigned long long h = 1469598103934665603ULL;
+        for (unsigned char ch : sig) h = (h ^ ch) * 1099511628211ULL;
+        char hex[17];
+        std::snprintf(hex, sizeof hex, "%016llx", h);
+        name = std::string("grav_call_") + hex;
         fnCallers_[sig] = name;
         std::string params = "GravFn grav_f", fwd = "grav_f.env";
         for (size_t i = 0; i < ft.fnParams.size(); ++i) {

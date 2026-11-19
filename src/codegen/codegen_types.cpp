@@ -251,6 +251,7 @@ void CodeGen::collectInExpr(const Expr &expr) {
         if (e->exprBody) collectInExpr(*e->exprBody);
         collectInBlock(e->body);
         lambdas_.push_back(e);
+        lambdaNames_[e] = lambdaOwner_ + "_" + std::to_string(lambdaOrdinal_[lambdaOwner_]++);
     }
 }
 
@@ -313,36 +314,53 @@ void CodeGen::collectArrayTypes() {
         for (const auto &p : ps) collectType(p.type);
         collectType(ret);
     };
+    // (a test's name as an identifier: a hash of it, so tests may be renamed or reordered)
+    auto nameHash = [](const std::string &s) {
+        unsigned long long h = 1469598103934665603ULL;
+        for (unsigned char ch : s) h = (h ^ ch) * 1099511628211ULL;
+        char buf[17];
+        std::snprintf(buf, sizeof buf, "%016llx", h);
+        return std::string(buf);
+    };
     for (const auto &declPtr : program_->decls) {
         Decl *d = declPtr.get();
         if (auto *st = as<const StructDecl>(d)) {
             for (const auto &f : st->fields) collectType(f.type);
         } else if (auto *c = as<const ClassDecl>(d)) {
+            std::string cls = mangle(c->fqName);
             for (const auto &f : c->fields) collectType(f.type);
             if (c->constructor.present) {
                 for (const auto &p : c->constructor.params) collectType(p.type);
+                lambdaOwner_ = cls + "_new";
                 collectInBlock(c->constructor.body);
             }
-            for (const auto &x : c->extraCtors) {
-                for (const auto &p : x.params) collectType(p.type);
-                collectInBlock(x.body);
+            for (size_t i = 0; i < c->extraCtors.size(); ++i) {
+                for (const auto &p : c->extraCtors[i].params) collectType(p.type);
+                lambdaOwner_ = cls + "_new" + std::to_string(i + 1);
+                collectInBlock(c->extraCtors[i].body);
             }
+            lambdaOwner_ = cls + "_drop";
             if (c->destructor.present) collectInBlock(c->destructor.body);
             for (const auto &m : c->methods) {
                 sig(m.params, m.returnType);
+                lambdaOwner_ = cls + "_m_" + memberCName(m.name);
                 if (m.hasBody) collectInBlock(m.body);
             }
             for (const auto &sf : c->staticFields) {        // (initializers may hold lambdas: `= [..]` builds)
                 collectType(sf.type);
+                lambdaOwner_ = cls + "_s_" + sf.name;
                 if (sf.init) collectInExpr(*sf.init);
             }
         } else if (auto *g = as<const GlobalVarDecl>(d)) {
             collectType(g->resolvedType);
+            lambdaOwner_ = mangle(g->fqName);
             if (g->init) collectInExpr(*g->init);
         } else if (auto *t = as<const TestDecl>(d)) {
+            lambdaOwner_ = "test_" + nameHash(t->name);
             collectInBlock(t->body);
         } else if (auto *fn = as<const FunctionDecl>(d)) {
             sig(fn->params, fn->returnType);
+            lambdaOwner_ = mangle(fn->fqName) + (fn->overloadIndex ? "__ov" + std::to_string(fn->overloadIndex) : "");
             collectInBlock(fn->body);
         }
     }

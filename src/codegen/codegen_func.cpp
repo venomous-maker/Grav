@@ -82,6 +82,7 @@ std::string CodeGen::accessorSig(const std::string &classFq,
 }
 
 void CodeGen::emitAccessorBody(const std::string &classFq, const MethodInfo &m) {
+    resetLocalNames();
     defs_ += "GRAV_FN " + accessorSig(classFq, m) + " {\n";
     const FieldInfo *af = m.accessor == AccessorKind::Delegate ? nullptr : reg_->findField(classFq, m.accessorField);
     bool weak = af && af->isWeak;
@@ -148,6 +149,7 @@ void CodeGen::emitEnter(const std::string &displayName, int declLine) {
 }
 
 void CodeGen::emitFunction(const FunctionDecl &fn) {
+    resetLocalNames();
     if (fn.fqName == "main") hasMain_ = true;
     defs_ += lineDirective(fn.line);
     defs_ += "GRAV_FN " + cTy(fn.returnType) + " " + funcCName(fn.fqName, fn.overloadIndex) +
@@ -189,6 +191,7 @@ void CodeGen::emitConstructor(const ClassDecl &cls) {
 }
 
 void CodeGen::emitConstructorAt(const ClassDecl &cls, const ConstructorDecl *ctor, int idx) {
+    resetLocalNames();
     std::string S = structName(cls.fqName);
     const std::vector<Param> noParams;
     const auto &params = ctor ? ctor->params : noParams;
@@ -257,6 +260,7 @@ std::string CodeGen::stringDefaults(const std::string &lv, const TypeRef &t, int
 }
 
 void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
+    resetLocalNames();
     std::string S = structName(cls.fqName);
     std::string self = m.isStatic ? "" : S;
     defs_ += lineDirective(m.line);
@@ -279,6 +283,7 @@ void CodeGen::emitMethod(const ClassDecl &cls, const MethodDecl &m) {
 // `destructor() { ... }` -> `Class__drop(self)`: the body, then the nearest base
 // destructor, so `free(obj)` tears down most-derived first.
 void CodeGen::emitDestructor(const ClassDecl &cls) {
+    resetLocalNames();
     if (!cls.destructor.present) return;
     std::string S = structName(cls.fqName);
     defs_ += lineDirective(cls.destructor.line);
@@ -303,6 +308,7 @@ void CodeGen::emitDestructor(const ClassDecl &cls) {
 // `vf_f__spawn(a)`, which copies the arguments into a task record, queues it on
 // the worker pool, and returns the GravTask handle that `await` waits on.
 void CodeGen::emitAsyncSpawner(const FunctionDecl &fn) {
+    resetLocalNames();
     std::string base = funcCName(fn.fqName, fn.overloadIndex);
     std::string rec = "GravAsync_" + base;
     bool isVoid = fn.returnType.isVoid();
@@ -325,6 +331,7 @@ void CodeGen::emitAsyncSpawner(const FunctionDecl &fn) {
 
 // The non-constant initializers of globals and static fields, in declaration order.
 void CodeGen::emitGlobalInits() {
+    resetLocalNames();
     if (dynamicGlobals_.empty()) return;
     defs_ += "static void grav_init_globals(void) {\n";
     cur_ = &defs_;
@@ -346,6 +353,7 @@ void CodeGen::emitGlobalInits() {
 }
 
 void CodeGen::emitMainWrapper() {
+    resetLocalNames();
     if (testMode_) {
         // The test runner: each test runs in isolation; a failed assert, panic,
         // or uncaught exception fails that test and the runner moves on.
