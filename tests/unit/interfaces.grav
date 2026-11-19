@@ -135,3 +135,63 @@ test "an implementation may give a narrower type than its interface" {
     let src: BaseSource = new DerivedSource()
     assertEq(src.get().name(), "derived")
 }
+
+interface KVStore {
+    fn put<T>(key: string, value: T) -> string
+    fn first<T>(xs: Array<T>) -> T
+}
+class MemoryStore implements KVStore {
+    fn put<T>(key: string, value: T) -> string { return "${key}=${value}" }
+    fn first<T>(xs: Array<T>) -> T { return xs[0] }
+}
+class LoudStore implements KVStore {
+    fn put<T>(key: string, value: T) -> string { return Str.upper("${key}=${value}") }
+    fn first<T>(xs: Array<T>) -> T { return xs[xs.size() - 1] }
+}
+interface Naming { fn name() -> string }
+class Kitten implements Naming { fn name() -> string { return "cat" } }
+trait Welcomer {
+    fn prefix() -> string
+    fn greet<T: Naming>(x: T) -> string { return self.prefix() + " " + x.name() }
+}
+class Gentle implements Welcomer { fn prefix() -> string { return "hello" } }
+class Blunt implements Welcomer {
+    fn prefix() -> string { return "oi" }
+    fn greet<T: Naming>(x: T) -> string { return "OI " + Str.upper(x.name()) }
+}
+interface Wrapping { fn wrap<T>(x: T) -> string }
+class BaseWrapper { fn wrap<T>(x: T) -> string { return "[${x}]" } }
+class SubWrapper extends BaseWrapper implements Wrapping { }
+class FancyWrapper extends BaseWrapper implements Wrapping { fn wrap<T>(x: T) -> string { return "<${x}>" } }
+fn wrapAny<T>(w: Wrapping, x: T) -> string { return w.wrap(x) }
+interface ListMapper<A> { fn mapAll<B>(xs: Array<A>, f: fn(A) -> B) -> Array<B> }
+class IntMapper implements ListMapper<int> {
+    fn mapAll<B>(xs: Array<int>, f: fn(int) -> B) -> Array<B> {
+        let out = new Array<B>()
+        for (x in xs) { out.push(f(x)) }
+        return out
+    }
+}
+
+test "generic methods called through an interface reach each class's own copy" {
+    let stores: Array<KVStore> = [new MemoryStore(), new LoudStore()]
+    let got = new Array<string>()
+    let names: Array<string> = ["a", "b"]
+    for (s in stores) {
+        got.push("${s.put("n", 1)} ${s.put::<string>("w", "x")} ${s.put("f", 2.5)} ${s.first(names)} ${s.first::<int>([7, 8])}")
+    }
+    assertEq(Str.join(got, " | "), "n=1 w=x f=2.5 a 7 | N=1 W=X F=2.5 b 8")
+}
+
+test "trait defaults, inherited and overridden implementations, generic callers, generic interfaces" {
+    let gs: Array<Welcomer> = [new Gentle(), new Blunt()]
+    assertEq("${gs[0].greet(new Kitten())} / ${gs[1].greet(new Kitten())}", "hello cat / OI CAT")
+    let ws: Array<Wrapping> = [new SubWrapper(), new FancyWrapper()]
+    assertEq("${ws[0].wrap(1)} ${ws[1].wrap("s")} ${wrapAny(ws[0], 2.5)} ${wrapAny(ws[1], true)}", "[1] <s> [2.5] <true>")
+    let base: BaseWrapper = new FancyWrapper()
+    assertEq(base.wrap(9), "<9>")
+    let m: ListMapper<int> = new IntMapper()
+    let xs: Array<int> = [1, 2, 3]
+    assertEq("${m.mapAll(xs, fn(x: int) -> string { return "#${x}" })} ${m.mapAll(xs, fn(x: int) -> int { return x * x })}",
+             "[\"#1\", \"#2\", \"#3\"] [1, 4, 9]")
+}

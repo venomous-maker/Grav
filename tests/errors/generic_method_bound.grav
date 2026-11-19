@@ -1,0 +1,10 @@
+// Type arguments of a generic method must satisfy its bounds, through an interface or not.
+import "std"
+interface Named { fn name() -> string }
+interface Greeter { fn greet<T: Named>(x: T) -> string }
+class G implements Greeter { fn greet<T: Named>(x: T) -> string { return x.name() } }
+fn main() {
+    let g: Greeter = new G()
+    print(g.greet(5))
+    print(new G().greet("x"))
+}

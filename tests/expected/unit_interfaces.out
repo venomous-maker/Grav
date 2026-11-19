@@ -1,4 +1,4 @@
-running 8 tests
+running 10 tests
   ok    an interface value converts to another interface its object implements
   ok    an interface value converts to its object's class
   ok    a class value converts to an interface a subclass implements
@@ -7,4 +7,6 @@ running 8 tests
   ok    sibling classes unify to their common base
   ok    interface signatures and default bodies can name generic instances
   ok    an implementation may give a narrower type than its interface
-result: 8 passed, 0 failed
+  ok    generic methods called through an interface reach each class's own copy
+  ok    trait defaults, inherited and overridden implementations, generic callers, generic interfaces
+result: 10 passed, 0 failed

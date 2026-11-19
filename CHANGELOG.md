@@ -12,6 +12,18 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Language
+
+- **Generic methods in interfaces** (and traits, with default bodies): calls
+  through the interface reach each implementing class's own copy for the type
+  arguments the program uses.
+
+### Fixes
+
+- A generic method's type bounds (`fn m<T: Named>(...)`) are checked: a call
+  with a type that breaks them is an error at the call, instead of an error
+  inside the method body (or in an unrelated class with a method of that name).
+
 ## 1.7.0 (2026-11-19)
 
 ### Breaking changes

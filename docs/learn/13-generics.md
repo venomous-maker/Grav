@@ -217,6 +217,53 @@ Output:
 (1, true)
 ```
 
+### Generic methods in interfaces
+
+An interface can declare generic methods too. Each class implementing it gives a
+generic method of the same name, and calls through the interface reach that
+class's version:
+
+```grav
+import "std"
+
+interface Encoder {
+    fn encode<T>(value: T) -> string
+}
+
+class Json implements Encoder {
+    fn encode<T>(value: T) -> string { return "{\"value\": ${__repr(value)}}" }
+}
+
+class Csv implements Encoder {
+    fn encode<T>(value: T) -> string { return "value\n${value}" }
+}
+
+fn main() {
+    let encoders: Array<Encoder> = [new Json(), new Csv()]
+    for (e in encoders) {
+        print(e.encode(42))
+        print(e.encode("hi"))
+    }
+}
+```
+
+Output:
+
+```text
+{"value": 42}
+{"value": "hi"}
+value
+42
+value
+hi
+```
+
+The compiler sees the whole program, so it knows every type argument these calls
+use: for each one (`int` and `string` here) it makes a copy of the method in every
+implementing class, and gives the interface a slot for it. A bound
+(`fn greet<T: Named>(x: T)`) is checked where the method is called. A trait may
+give such a method a default body.
+
 ## How type arguments are inferred
 
 The compiler fills in missing type arguments from:

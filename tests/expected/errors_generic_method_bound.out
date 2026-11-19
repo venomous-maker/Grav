@@ -1,0 +1,7 @@
+gravc: tests/errors/generic_method_bound.grav:8:12: type error: type argument 'int' for 'T' in method 'greet' does not satisfy the bound 'Named'
+        print(g.greet(5))
+               ^
+gravc: tests/errors/generic_method_bound.grav:9:18: type error: type argument 'string' for 'T' in method 'greet' does not satisfy the bound 'Named'
+        print(new G().greet("x"))
+                     ^
+gravc: 2 error(s); aborting

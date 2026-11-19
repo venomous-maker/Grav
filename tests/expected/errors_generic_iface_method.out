@@ -1,0 +1,4 @@
+gravc: tests/errors/generic_iface_method.grav:5:1: sema error: class 'Plain' does not implement method 'wrap<int>' required by interface 'Box'
+    class Plain implements Box { fn wrap(x: int) -> string { return "${x}" } }
+    ^
+gravc: 1 error(s); aborting

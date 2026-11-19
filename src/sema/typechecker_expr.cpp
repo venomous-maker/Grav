@@ -1727,6 +1727,20 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     // Interface-typed receiver: dispatch through the interface's itable.
     if (objType.isNamed() && reg_->isInterface(objType.name)) {
         const MethodInfo *mi = reg_->findInterfaceMethod(objType.name, mem->member);
+        if (!mi && program_) {
+            // A generic method of the interface called without type arguments: they are
+            // inferred, and the next pass calls (and makes) the instance `m$Args`.
+            auto gm = program_->generics.methods.find(objType.name + "." + mem->member);
+            if (gm != program_->generics.methods.end())
+                return *tryInferCall(e, mem->member, gm->second, expCall);
+        }
+        if (!mi && program_) {
+            auto bf = program_->generics.boundFailures.find(objType.name + "." + mem->member);
+            if (bf != program_->generics.boundFailures.end()) {
+                error(mem->line, mem->col, bf->second);
+                return TypeRef::prim(TypeRef::Kind::Error);
+            }
+        }
         if (!mi) {
             if (useExtension(e, *mem, objType)) return checkCall(e);
             error(mem->line, mem->col, "interface '" + objType.name +
@@ -1766,6 +1780,14 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
                 return *tryInferCall(e, mem->member, gm->second, expCall);
             const ClassInfo *ci = reg_->cls(cur);
             cur = ci ? ci->baseClass : "";
+        }
+    }
+    if (cands.empty() && program_) {
+        auto bf = program_->generics.boundFailures.find(objType.name + "." + mem->member);
+        if (bf != program_->generics.boundFailures.end()) {
+            error(mem->line, mem->col, bf->second);
+            for (auto &a : e.args) checkExpr(*a);
+            return TypeRef::prim(TypeRef::Kind::Error);
         }
     }
     if (cands.empty() && useExtension(e, *mem, objType)) return checkCall(e);

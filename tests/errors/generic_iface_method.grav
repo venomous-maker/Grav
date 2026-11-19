@@ -1,0 +1,9 @@
+// A class that implements an interface with a generic method needs a generic
+// method of that name too; a bound on it is checked where it is called.
+import "std"
+interface Box { fn wrap<T>(x: T) -> string }
+class Plain implements Box { fn wrap(x: int) -> string { return "${x}" } }
+fn main() {
+    let b: Box = new Plain()
+    print(b.wrap(1))
+}

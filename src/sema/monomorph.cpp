@@ -284,6 +284,7 @@ MethodDecl cloneMethod(const MethodDecl &m) {
     n.name = m.name; n.params = m.params; n.returnType = m.returnType;
     n.hasBody = m.hasBody; n.isFinal = m.isFinal; n.line = m.line; n.col = m.col;
     n.typeParams = m.typeParams;
+    n.typeParamBounds = m.typeParamBounds;
     n.decorators = m.decorators;
     n.ns = m.ns;
     n.body = cloneBlock(m.body);
@@ -342,6 +343,7 @@ private:
                       bool isClass, int line, int col);
     std::string instName(const std::string &name, const std::vector<TypeRef> &args) const;
     bool satisfies(const TypeRef &arg, const std::string &bound) const;
+    std::string brokenBound(const MethodDecl &m, const std::vector<TypeRef> &args) const;
     void checkBounds(const std::vector<std::string> &params,
                      const std::vector<std::string> &bounds,
                      const std::vector<TypeRef> &args, const std::string &what,
@@ -359,6 +361,12 @@ private:
     // `obj.m::<Args>(...)` requests seen so far; instantiated to a fixed point.
     struct GenericMethod { ClassDecl *owner; MethodDecl tpl; Subst classSubst; std::string ns; };
     std::vector<GenericMethod> genericMethods_;
+    // An interface's generic methods: each request `m<Args>` adds the signature
+    // `m$Args` to the interface (an itable slot), and the same request makes `m$Args`
+    // in every class with a generic `m`, which fills that slot.
+    struct GenericIfaceMethod { InterfaceDecl *owner; MethodDecl tpl; Subst subst; std::string ns; };
+    std::vector<GenericIfaceMethod> genericIfaceMethods_;
+    void extractInterfaceGenerics(InterfaceDecl *id, std::vector<MethodDecl> &from, const Subst &subst);
     std::vector<std::pair<std::string, std::vector<TypeRef>>> methodRequests_;
     int instanceDepth(const std::string &cls, int guard) const;
     // A class whose method names a deeper instance of itself (Coll<T>.chunk() ->
@@ -434,6 +442,15 @@ std::string Mono::instName(const std::string &name, const std::vector<TypeRef> &
 
 // Does the concrete `arg` satisfy a `T: Bound` constraint? `arg` must be (a
 // subclass of) the bound class, or a class implementing the bound interface.
+// The first bound of generic method `m` that `args` break, as a message ("" if none).
+std::string Mono::brokenBound(const MethodDecl &m, const std::vector<TypeRef> &args) const {
+    for (size_t i = 0; i < m.typeParams.size() && i < m.typeParamBounds.size() && i < args.size(); ++i)
+        if (!m.typeParamBounds[i].empty() && !satisfies(args[i], m.typeParamBounds[i]))
+            return "type argument '" + typeMangle(args[i]) + "' for '" + m.typeParams[i] + "' in method '" +
+                   m.name + "' does not satisfy the bound '" + m.typeParamBounds[i] + "'";
+    return "";
+}
+
 bool Mono::satisfies(const TypeRef &arg, const std::string &bound) const {
     if (bound.empty()) return true;
     if (!arg.isNamed()) return false;
@@ -645,10 +662,12 @@ std::string Mono::instantiateInterface(const std::string &name, const std::vecto
     out->name = inst; out->fqName = inst;
     for (const auto &m : tpl->methods) {
         MethodDecl nm = cloneMethod(m);
+        if (!nm.typeParams.empty()) { out->methods.push_back(std::move(nm)); continue; } // (extracted below)
         rewriteParams(nm.params, subst, m.line, m.col);
         rewriteType(nm.returnType, subst, m.line, m.col);
         out->methods.push_back(std::move(nm));
     }
+    extractInterfaceGenerics(out.get(), out->methods, subst);
     instances_.push_back(std::move(out));
     return inst;
 }
@@ -1081,6 +1100,7 @@ void Mono::walkDeclTypes(Decl *d, const Subst &subst) {
             if (m.hasBody) walkBlock(m.body, subst);
         }
     } else if (auto *id = dynamic_cast<InterfaceDecl *>(d)) {
+        extractInterfaceGenerics(id, id->methods, subst);
         // Signatures (and default bodies, copied into implementers afterwards)
         // may name generic instances such as Array<string>.
         for (auto &m : id->methods) {
@@ -1164,6 +1184,17 @@ void Mono::run() {
     flattenBases();
     // 5) Trait/interface default methods are copied into each implementer.
     synthesizeTraits();
+}
+
+void Mono::extractInterfaceGenerics(InterfaceDecl *id, std::vector<MethodDecl> &from, const Subst &subst) {
+    std::vector<MethodDecl> keep;
+    for (auto &m : from) {
+        if (m.typeParams.empty()) { keep.push_back(std::move(m)); continue; }
+        program_.generics.methods[id->fqName + "." + m.name].push_back(
+            exportSig(m.typeParams, m.params, m.returnType, subst));
+        genericIfaceMethods_.push_back({id, std::move(m), subst, currentNs_});
+    }
+    from = std::move(keep);
 }
 
 void Mono::extractGenericMethods(ClassDecl *cd, std::vector<MethodDecl> &from,
@@ -1277,9 +1308,47 @@ void Mono::instantiateGenericMethods() {
                 std::string key = owner->name + "." + inst;
                 if (methodDone_.count(key)) continue;
                 methodDone_[key] = true;
+                // (a request reaches every class with an `m`: one whose bounds the
+                // arguments break is skipped, and a call that needs it reports why)
+                if (std::string why = brokenBound(genericMethods_[gi].tpl, args); !why.empty()) {
+                    program_.generics.boundFailures[owner->fqName + "." + inst] = why;
+                    continue;
+                }
                 progress = true;
                 MethodDecl m = cloneMethod(genericMethods_[gi].tpl);
                 Subst s = genericMethods_[gi].classSubst;
+                for (size_t i = 0; i < args.size(); ++i) s[m.typeParams[i]] = args[i];
+                m.name = inst;
+                m.typeParams.clear();
+                rewriteParams(m.params, s, m.line, m.col);
+                rewriteType(m.returnType, s, m.line, m.col);
+                if (m.hasBody) walkBlock(m.body, s);
+                owner->methods.push_back(std::move(m));
+            }
+        }
+        // The interfaces' slots for the same requests (a default body comes along,
+        // and is copied into implementers that lack the method, like any other).
+        for (size_t gi = 0; gi < genericIfaceMethods_.size(); ++gi) {
+            for (size_t ri = 0; ri < methodRequests_.size(); ++ri) {
+                std::string name = methodRequests_[ri].first;
+                std::vector<TypeRef> args = methodRequests_[ri].second;
+                // (by index: walking a body can add templates and requests)
+                if (genericIfaceMethods_[gi].tpl.name != name ||
+                    genericIfaceMethods_[gi].tpl.typeParams.size() != args.size())
+                    continue;
+                InterfaceDecl *owner = genericIfaceMethods_[gi].owner;
+                std::string inst = instName(name, args);
+                std::string key = "iface " + owner->name + "." + inst;
+                if (methodDone_.count(key)) continue;
+                methodDone_[key] = true;
+                if (std::string why = brokenBound(genericIfaceMethods_[gi].tpl, args); !why.empty()) {
+                    program_.generics.boundFailures[owner->fqName + "." + inst] = why;
+                    continue;
+                }
+                progress = true;
+                NsScope nsScope(currentNs_, genericIfaceMethods_[gi].ns);
+                MethodDecl m = cloneMethod(genericIfaceMethods_[gi].tpl);
+                Subst s = genericIfaceMethods_[gi].subst;
                 for (size_t i = 0; i < args.size(); ++i) s[m.typeParams[i]] = args[i];
                 m.name = inst;
                 m.typeParams.clear();

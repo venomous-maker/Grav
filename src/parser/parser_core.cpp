@@ -1095,7 +1095,7 @@ MethodDecl Parser::parseMethod(bool inInterface) {
     m.line = kw.line;
     m.col = kw.col;
     m.name = memberName("after 'fn'").lexeme;
-    if (m.name != "operator" && check(TokenType::Less)) m.typeParams = parseTypeParams(); // generic method
+    if (m.name != "operator" && check(TokenType::Less)) m.typeParams = parseTypeParams(&m.typeParamBounds); // generic method
     // `fn operator+(o: T)` — an operator method, stored under a mangled name.
     if (m.name == "operator" && !check(TokenType::LParen)) {
         const Token &op = advance();

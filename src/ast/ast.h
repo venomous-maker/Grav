@@ -512,6 +512,7 @@ struct MethodDecl {
     // `fn mapTo<U>(...)`: a generic method, instantiated per `obj.mapTo::<X>(...)`
     // call (as `mapTo$X`) before symbol registration; the template is not emitted.
     std::vector<std::string> typeParams;
+    std::vector<std::string> typeParamBounds; // optional `T: Bound` (parallel; "" if none)
     std::vector<Param> params;
     TypeRef returnType; // Void if omitted
     Block body;
@@ -727,6 +728,9 @@ struct GenericTables {
     // its class (Coll<int>.chunk -> Coll<Coll<int>>): made when a call needs it
     // (`deferred`), or never, nesting the class more than 3 deep (`tooDeep`).
     std::set<std::string> deferred, tooDeep;
+    // "Type.m$Args" not made because Args break m's bounds (`m<T: Named>` asked for
+    // with int): the reason, for the error at a call that needs it.
+    std::map<std::string, std::string> boundFailures;
 };
 
 // `use` declarations, per namespace ("" = the global scope):
