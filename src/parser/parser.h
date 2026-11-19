@@ -103,6 +103,12 @@ private:
     // top-level function's name (see parseLocalFunction).
     std::vector<std::map<std::string, std::string>> localGenerics_;
     int localGenericCounter_ = 0;
+    // Types declared inside the class bodies being parsed, innermost last: name ->
+    // its qualified name (`Node` -> `Tree.Node`, declared in the namespace `Tree`).
+    std::vector<std::map<std::string, std::string>> nestedTypes_;
+    void scanNestedTypes(const std::string &outer);
+    const std::string *nestedType(const std::string &name) const;
+    bool atNestedType() const;
     // Integer constants declared so far, which a fixed array's length may use
     // (`int[N * 2]`): top-level ones by name and qualified name, and local ones
     // per block, innermost last (a length counts as a use of the local).
