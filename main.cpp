@@ -27,6 +27,7 @@
 #include "driver/modules.h"
 #include "driver/format.h"
 #include "driver/packages.h"
+#include "driver/self_update.h"
 #include "lexer/lexer.h"
 #include "lexer/preprocess.h"
 #include "parser/parser.h"
@@ -253,6 +254,7 @@ int usage(const char *prog) {
         "       " << prog << " check [--json] [--types] [file.grav]  type-check only (JSON diagnostics, binding types, for editors)\n"
         "       " << prog << " fmt [--check] [paths]           format source files (fmt - : stdin to stdout)\n"
         "       " << prog << " env [--json]                    where the standard library and packages are\n"
+        "       " << prog << " self-update [--check]           update grav (installed by install.sh)\n"
         "       " << prog << " -                 read stdin, write C to stdout\n"
         "\n"
         "output:\n"
@@ -333,6 +335,10 @@ int main(int argc, char **argv) {
     if (argc > 1 && std::string(argv[1]) == "fmt") {
         std::vector<std::string> args(argv + 2, argv + argc);
         return grav::runFormat(args);
+    }
+    if (argc > 1 && std::string(argv[1]) == "self-update") {
+        std::vector<std::string> args(argv + 2, argv + argc);
+        return grav::runSelfUpdate(args);
     }
     if (argc > 1 && std::string(argv[1]) == "env") {
         // Where things are, for editors and scripts.
