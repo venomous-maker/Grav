@@ -91,7 +91,7 @@ const INTERNAL_BUILTINS = [
 // Hover explanations for keywords and built-in types: [summary, example].
 const KEYWORD_DOCS = {
   fn: ["Declares a function or method; `fn(a) => e` is a lambda. Parameters may have defaults (`b: int = 1`). A lambda copies the variables it reads and shares the ones it assigns. `fn Point.norm()` adds a method to a type from outside it (an extension method).", "fn add(a: int, b: int = 1) -> int { return a + b }"],
-  class: ["A reference type with fields, constructors, methods, single inheritance and interfaces.", "class Dog extends Animal implements Named { ... }"],
+  class: ["A reference type with fields, constructors, methods, single inheritance and interfaces. Types declared inside it are `Outer.Inner` outside it.", "class Dog extends Animal implements Named { ... }"],
   struct: ["A value type: named fields, copied on assignment. It may have methods; inside them `self` is the struct.", "struct Point { x: int  y: int  fn sum() -> int { return self.x + self.y } }"],
   enum: ["A set of named constants (members may have values), or a data enum whose variants carry fields.", "enum Http { Ok = 200, NotFound = 404 }\nenum Shape { Circle(r: float), Empty }"],
   type: ["A type alias; fully interchangeable with what it names (`typedef` is a synonym). Outside a declaration `type` may also name a variable.", "type Meters = double"],
@@ -445,8 +445,11 @@ function parseFile(text) {
       const decl = raw.trim().replace(/\s*\{.*$/, "");
       const ext = /\bextends\s+([\w.<>, ]+?)(?:\s+implements|\s+uses|\s*\{|$)/.exec(m);
       const imp = /\bimplements\s+([\w.<>, ]+?)(?:\s+extends|\s+uses|\s*\{|$)/.exec(m);
+      // a type declared in a class body (`class Tree { class Node {} }`) is Tree.Node: not a member, but
+      // in the namespace named after the types around it
+      const outer = inType ? stack.filter((s) => s.ctx && s.ctx.kind !== KIND.Enum).map((s) => s.ctx.name).join(".") : "";
       opened = add({ name, kind, keyword: kw, line: i, ch: m.indexOf(name, mm.index + mm[0].indexOf(kw) + kw.length),
-        namespace: ns, container: container && container.name, typeParams: mm[3] || "",
+        namespace: inType ? outer : ns, memberNs: ns, container: inType ? undefined : container && container.name, typeParams: mm[3] || "",
         base: ext ? ext[1].trim().replace(/<.*$/, "") : "", detail: decl, doc: docAbove(lines, i), children: [],
         // implemented interfaces and traits (a trait's fields, statics and methods become the class's)
         impls: imp ? splitParams(imp[1]).map((x) => x.trim().replace(/<.*$/, "")).filter(Boolean) : [] });
@@ -597,7 +600,7 @@ function parseFile(text) {
     }
   }
   for (const s of symbols) if (!s.local && [KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(s.kind))
-    s.members = (byContainer.get(s.name) || []).filter((x) => x.namespace === s.namespace);
+    s.members = (byContainer.get(s.name) || []).filter((x) => x.namespace === (s.memberNs ?? s.namespace));
   return { symbols, imports, uses };
 
   function addParams(owner, params, line, rawLine, at) {
