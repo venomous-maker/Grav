@@ -234,6 +234,7 @@ void Parser::parseUse(Program &program) {
     std::string ns;
     for (size_t i = 0; i < nsStack_.size(); ++i) ns += (i ? "." : "") + nsStack_[i];
     program.uses.byNamespace[ns].push_back(std::move(u));
+    program.uses.candidates.clear();
 }
 
 void Parser::parseNamespace(Program &program) {

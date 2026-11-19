@@ -2,7 +2,9 @@
 #define GRAV_AST_H
 
 #include <functional>
+#include <typeinfo>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <memory>
 #include <string>
@@ -747,6 +749,9 @@ struct UseEntry {
 struct UseTable {
     std::map<std::string, std::vector<UseEntry>> byNamespace;
     bool empty() const { return byNamespace.empty(); }
+    // nameCandidates' answers, by "name\0ns": lookups repeat the same few thousand
+    // names many times over. Cleared whenever an entry is added.
+    mutable std::unordered_map<std::string, std::vector<std::string>> candidates;
 };
 
 // The fully qualified names `name` (as written in namespace `ns`) may refer to,
@@ -754,8 +759,8 @@ struct UseTable {
 // declarations come first, then the names its `use` declarations bring in. So a
 // library's code always finds its own names before anything a program defines
 // globally, and a program's own global names win over imported ones.
-std::vector<std::string> nameCandidates(const std::string &name, const std::string &ns,
-                                        const UseTable &uses);
+const std::vector<std::string> &nameCandidates(const std::string &name, const std::string &ns,
+                                               const UseTable &uses);
 
 struct Program {
     std::vector<DeclPtr> decls;

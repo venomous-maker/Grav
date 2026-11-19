@@ -214,9 +214,15 @@ struct Rewriter {
 };
 } // namespace
 
-std::vector<std::string> nameCandidates(const std::string &name, const std::string &ns,
-                                        const UseTable &uses) {
-    std::vector<std::string> out;
+const std::vector<std::string> &nameCandidates(const std::string &name, const std::string &ns,
+                                               const UseTable &uses) {
+    std::string key;
+    key.reserve(name.size() + ns.size() + 1);
+    key.append(name).push_back('\0');
+    key.append(ns);
+    auto [it0, fresh] = uses.candidates.try_emplace(std::move(key));
+    if (!fresh) return it0->second;
+    std::vector<std::string> &out = it0->second;
     std::string level = ns;
     for (;;) {
         out.push_back(level.empty() ? name : level + "." + name);
