@@ -118,7 +118,7 @@ namespace std.net {
         public fn idleConnections() -> int {
             self.poolLock.lock();
             let n = 0;
-            for (k in self.pool.keys()) { n += self.pool.get(k).size(); }
+            for (conns in self.pool.values()) { n += conns.size(); }
             self.poolLock.unlock();
             return n;
         }
