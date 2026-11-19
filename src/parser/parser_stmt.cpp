@@ -71,7 +71,7 @@ StmtPtr Parser::parseStatement() {
         case TokenType::Do: return parseDoWhile();
         case TokenType::For: return parseFor();
         case TokenType::Switch:
-        case TokenType::Match: return parseSwitch();
+        case TokenType::Match: return atName() ? parseExprOrAssign() : parseSwitch();
         case TokenType::Fn: // `fn name(...) { }` inside a function: a local function
             if (peekAt(1).type == TokenType::Identifier) return parseLocalFunction();
             return parseExprOrAssign();
@@ -152,7 +152,7 @@ StmtPtr Parser::parseTry() {
         CatchClause c;
         c.line = ck.line; c.col = ck.col;
         expect(TokenType::LParen, "after 'catch'");
-        c.var = expect(TokenType::Identifier, "as the caught variable").lexeme;
+        c.var = expectName("as the caught variable").lexeme;
         expect(TokenType::Colon, "after the caught variable");
         c.type = parseType("for the caught exception");
         expect(TokenType::RParen, "after the catch type");
@@ -287,9 +287,9 @@ StmtPtr Parser::parseFor() {
     }
 
     // `for (i in lo..hi [step s])`, `for (x in xs)`, `for (i, x in xs)`.
-    bool pairForm = check(TokenType::Identifier) && peekAt(1).type == TokenType::Comma &&
-                    peekAt(2).type == TokenType::Identifier && peekAt(3).type == TokenType::In;
-    if (pairForm || (check(TokenType::Identifier) && peekAt(1).type == TokenType::In)) {
+    bool pairForm = atName() && peekAt(1).type == TokenType::Comma &&
+                    atName(2) && peekAt(3).type == TokenType::In;
+    if (pairForm || (atName() && peekAt(1).type == TokenType::In)) {
         auto stmt = std::make_unique<ForInStmt>();
         stmt->line = kw.line; stmt->col = kw.col;
         if (pairForm) {
@@ -421,7 +421,7 @@ StmtPtr Parser::parseDestructure(const Token &kw) {
                     : open == TokenType::LBracket ? TokenType::RBracket : TokenType::RBrace;
     advance();
     std::vector<const Token *> names;
-    do { names.push_back(&expect(TokenType::Identifier, "as a name to bind")); } while (matchToken(TokenType::Comma));
+    do { names.push_back(&expectName("as a name to bind")); } while (matchToken(TokenType::Comma));
     expect(close, "to close the names");
     if (open == TokenType::LParen && (names.size() < 2 || names.size() > 3))
         fail(kw, "a tuple has 2 or 3 elements to bind");
@@ -501,7 +501,7 @@ StmtPtr Parser::parseLet() {
     stmt->line = kw.line;
     stmt->col = kw.col;
     stmt->isConst = (kw.type == TokenType::Const);
-    stmt->name = expect(TokenType::Identifier, "after 'let'").lexeme;
+    stmt->name = expectName("after 'let'").lexeme;
     if (matchToken(TokenType::Colon)) {
         stmt->hasDeclaredType = true;
         stmt->declaredType = parseType("in the declaration");

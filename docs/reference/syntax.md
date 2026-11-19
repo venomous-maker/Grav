@@ -49,8 +49,10 @@ Names starting with `__` are reserved for the compiler and standard library.
 
 A member may be named by a keyword: after `.` (or `?.`, `->`), after `fn` in a
 class, interface or struct, and as a field's name after a modifier, the
-position already says it is a name. Locals, parameters and free functions
-cannot be.
+position already says it is a name. Locals, parameters, loop and catch
+variables may also be named `type`, `typedef`, `trait`, `match`, `export` or
+`uses` (no expression starts with them, and `match (` still starts a `match`);
+other keywords, and free functions, cannot be names.
 
 ```grav
 import "std"

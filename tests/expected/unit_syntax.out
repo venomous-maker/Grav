@@ -1,4 +1,4 @@
-running 9 tests
+running 10 tests
   ok    raw strings keep backslashes and dollar signs
   ok    multi-line strings drop the shared indentation
   ok    character literals are their code points
@@ -9,4 +9,5 @@ local!
   ok    keywords as member names: methods, fields, static members, after . and ?.
   ok    a case runs the statements up to the next case, without braces
   ok    if and try give values
-result: 9 passed, 0 failed
+  ok    type, match, trait, export and uses name variables
+result: 10 passed, 0 failed

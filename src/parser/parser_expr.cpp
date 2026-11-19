@@ -661,7 +661,7 @@ ExprPtr Parser::parsePrimary() {
                 c.type = TypeRef::named("Exception");
                 if (check(TokenType::LParen) && !check(TokenType::LBrace)) {
                     advance();
-                    c.var = expect(TokenType::Identifier, "as the caught exception's name").lexeme;
+                    c.var = expectName("as the caught exception's name").lexeme;
                     expect(TokenType::Colon, "after the caught exception's name");
                     c.type = parseType("for the caught exception");
                     expect(TokenType::RParen, "after the caught exception's type");
@@ -674,7 +674,21 @@ ExprPtr Parser::parsePrimary() {
             call->callee = std::move(lam);
             return call;
         }
+        case TokenType::Type: case TokenType::Trait:
+        case TokenType::Export: case TokenType::Uses: {
+            advance(); // a variable named by a keyword (see atName)
+            auto n = at<NameExpr>(t);
+            n->name = t.lexeme;
+            return n;
+        }
         case TokenType::Match:
+            if (atName()) {
+                advance();
+                auto n = at<NameExpr>(t);
+                n->name = t.lexeme;
+                return n;
+            }
+            [[fallthrough]];
         case TokenType::Switch: {
             // `match (x) { case 1: "one" default: "many" }` as a value: a lambda
             // whose body returns the chosen arm, called on the spot.
@@ -692,7 +706,7 @@ ExprPtr Parser::parsePrimary() {
             if (!check(TokenType::RParen)) {
                 do {
                     Param p;
-                    p.name = expect(TokenType::Identifier, "as a lambda parameter name").lexeme;
+                    p.name = expectName("as a lambda parameter name").lexeme;
                     bool typed = matchToken(TokenType::Colon);
                     p.type = typed ? parseType("for the lambda parameter")
                                    : TypeRef::prim(TypeRef::Kind::Error);

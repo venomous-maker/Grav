@@ -108,6 +108,8 @@ private:
     Block parseFunctionBody(TypeRef &returnType, const Token &at);
     bool atYield() const;
     bool atExtensionHead() const;
+    bool atName(size_t k = 0) const;
+    const Token &expectName(const char *context);
     StmtPtr parseYield();
     void parseCaseStatements(Block &b);
     StmtPtr parseTry();

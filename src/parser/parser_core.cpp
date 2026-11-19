@@ -28,6 +28,25 @@ const Token &Parser::previous() const { return tokens_[pos_ - 1]; }
 bool Parser::atEnd() const { return peek().type == TokenType::EndOfFile; }
 bool Parser::check(TokenType type) const { return peek().type == type; }
 
+// A name for a variable, parameter, loop or catch variable: an identifier, or one
+// of the keywords nothing else can start there (`type`, `match` not before `(`, ...).
+bool Parser::atName(size_t k) const {
+    switch (peekAt(k).type) {
+        case TokenType::Identifier: case TokenType::Type:
+        case TokenType::Trait: case TokenType::Export: case TokenType::Uses:
+            return true;
+        case TokenType::Match:
+            return peekAt(k + 1).type != TokenType::LParen;
+        default:
+            return false;
+    }
+}
+
+const Token &Parser::expectName(const char *context) {
+    if (atName() && !check(TokenType::Identifier)) return advance();
+    return expect(TokenType::Identifier, context);
+}
+
 const Token &Parser::advance() {
     if (!atEnd()) pos_++;
     return previous();
@@ -391,7 +410,7 @@ std::vector<Param> Parser::parseParams(bool allowVariadic) {
                 advance(); // '...'
                 p.variadic = true;
             }
-            p.name = expect(TokenType::Identifier, "as a parameter name").lexeme;
+            p.name = expectName("as a parameter name").lexeme;
             expect(TokenType::Colon, "after the parameter name");
             p.type = parseType("for the parameter");
             if (matchToken(TokenType::Assign)) {

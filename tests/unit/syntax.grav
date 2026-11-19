@@ -143,3 +143,18 @@ test "if and try give values" {
     let v = try { tries += 1; Format.toInt("z") } catch { tries += 10; 5 }
     assertEq("${v} ${tries}", "5 11")
 }
+
+fn describe(type: string, match: int) -> string { return "${type}:${match}" }
+
+test "type, match, trait, export and uses name variables" {
+    let type = "user"
+    let match = 3
+    type = type + "s"
+    match += 1
+    let uses: Array<string> = [type, "x"]
+    let seen = ""
+    for (i, export in uses) { seen += "${i}${export} " }
+    let trait = fn(type: string) => Str.upper(type)
+    let r = match (match) { case 4: "four" default: "other" }
+    assertEq(seen + describe(type, match) + " " + trait("t") + " " + r, "0users 1x users:4 T four")
+}
