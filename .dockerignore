@@ -1,0 +1,7 @@
+# docker/Dockerfile needs only the compiler's sources and the installer.
+*
+!CMakeLists.txt
+!main.cpp
+!src
+!lib
+!install.sh
