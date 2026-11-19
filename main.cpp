@@ -673,25 +673,24 @@ int main(int argc, char **argv) {
             if (keepC) {
                 cPath = base + ".gen.c";
             } else {
-                // A scratch file in the temp dir, named after the binary it builds: no
-                // clutter next to the sources, and the same name each time, since the C
-                // names itself in its #line directives (and the C compiler's caches
-                // compare it). Builds of different binaries cannot collide.
+                // A unique scratch file in the temp dir: no clutter next to the
+                // sources, and parallel builds cannot collide. (Its #line directives
+                // name a fixed file instead: see lineName below.)
                 std::error_code tec;
                 fs::path tmp = fs::temp_directory_path(tec);
                 if (tec) tmp = ".";
-                std::error_code aec;
-                std::string target = fs::absolute(exePath, aec).string();
-                unsigned long long h = 1469598103934665603ULL;
-                for (unsigned char ch : target) h = (h ^ ch) * 1099511628211ULL;
-                char hex[17];
-                std::snprintf(hex, sizeof hex, "%016llx", h);
-                cPath = (tmp / ("gravc-" + std::string(hex) + "-" + fs::path(base).filename().string() + ".c")).string();
+                cPath = (tmp / ("gravc-" + std::to_string(getpid()) + "-" +
+                                fs::path(base).filename().string() + ".c")).string();
                 tempC = true;
             }
         }
 
-        c = resolveLineResets(c, cPath);
+        // The C names itself in its #line directives. A scratch file (deleted after the
+        // build) is named the same in every build, so the same program gives the same C
+        // whatever the output and temporary file are called, and the C compiler's caches
+        // match it.
+        std::string lineName = tempC ? "grav-generated.c" : cPath;
+        c = resolveLineResets(c, lineName);
         std::ofstream out(cPath);
         if (!out) { std::cerr << "gravc: cannot write '" << cPath << "'\n"; return 1; }
         out << c;
@@ -742,8 +741,12 @@ int main(int argc, char **argv) {
                 if (!inc.empty()) flags += " -flto-incremental=\"" + inc + "\"";
             }
         }
+        // With GCC's partition cache, the C goes in on stdin: GCC's cache keys include
+        // the input file's name, and on stdin it is always the same.
+        bool viaStdin = flags.find("-flto-incremental") != std::string::npos;
         std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
-                          " \"" + cPath + "\" -o \"" + exePath + "\"" + libs;
+                          (viaStdin ? " -x c -" : " \"" + cPath + "\"") + " -o \"" + exePath + "\"" + libs +
+                          (viaStdin ? " < \"" + cPath + "\"" : "");
         if (verbose) std::cerr << "gravc: " << cmd << "\n";
         // The same C built the same way before: its binary is reused.
         grav::BuildCache cache(cPath, cc, flags + libs);
