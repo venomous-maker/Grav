@@ -12,46 +12,6 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
-### Language
-
-- **Closures can assign the variables they capture.** A variable a lambda
-  assigns is shared (a heap cell) by the function and all its lambdas, so
-  `let n = 0; xs.forEach(fn(x: int) { n += x })` works and counters outlive
-  their function. Variables lambdas only read are still copied when the lambda
-  is made.
-- **Generators**: a function or method returning `Iterator<T>` can `yield`
-  values one at a time; `for` loops walk it, and a loop that stops early ends it
-  (its `finally` blocks run). Each value costs a thread switch.
-- **`if` and `try` as values**: `if (c) a else b` (with `else if` chains) and
-  `try value catch fallback` / `catch (e: T) fallback`; branches may be blocks
-  whose last line is the value.
-- **`async` methods**, static ones included.
-- **`private constructor`**: only the class's own code can call it.
-- **Extension methods**: `fn Point.norm() -> float { ... }` adds a method to a
-  class, struct, interface or built-in type (`fn int.twice()`,
-  `fn Array<int>.total()`) from outside it; `self` is the receiver. A type's own
-  method of the same name wins.
-- `type`, `typedef`, `trait`, `match`, `export` and `uses` can name locals,
-  parameters, loop and catch variables.
-- **Nested types**: a class, struct, enum or interface declared inside a class
-  body; `Inner` inside the class, `Outer.Inner` outside it.
-- **Generic local functions**: `fn twice<T>(x: T)` inside a block (they cannot
-  use the block's variables).
-- A fixed array's length may be a constant expression: `int[SIZE * 2]`.
-- Tuples of four: `(a, b, c, d)`, the std `Quad<A, B, C, D>`.
-
-### Fixes
-
-- A line that starts with `(` or an interpolated string begins a new statement
-  instead of calling the previous line's value.
-
-### Editors
-
-- VS Code extension 1.15.0: `yield` highlighted everywhere; hover and snippets
-  for generators, `if`/`try` values, async methods and private constructors;
-  extension methods highlighted, outlined and offered after `.`; nested types
-  outlined as `Outer.Inner`.
-
 ## 1.7.0 (2026-11-19)
 
 ### Breaking changes
@@ -96,6 +56,31 @@ Packages state the compiler versions they need in `grav.toml`
   with fields and statics, decorators with named arguments, field initializers.
 - Built-ins: `long(x)`, `byte(x)`, `double(x)` conversions, `nameof(T)`,
   `reflect(Class)`.
+- **Closures can assign the variables they capture.** A variable a lambda
+  assigns is shared (a heap cell) by the function and all its lambdas, so
+  `let n = 0; xs.forEach(fn(x: int) { n += x })` works and counters outlive
+  their function. Variables lambdas only read are still copied when the lambda
+  is made.
+- **Generators**: a function or method returning `Iterator<T>` can `yield`
+  values one at a time; `for` loops walk it, and a loop that stops early ends it
+  (its `finally` blocks run). Each value costs a thread switch.
+- **`if` and `try` as values**: `if (c) a else b` (with `else if` chains) and
+  `try value catch fallback` / `catch (e: T) fallback`; branches may be blocks
+  whose last line is the value.
+- **`async` methods**, static ones included.
+- **`private constructor`**: only the class's own code can call it.
+- **Extension methods**: `fn Point.norm() -> float { ... }` adds a method to a
+  class, struct, interface or built-in type (`fn int.twice()`,
+  `fn Array<int>.total()`) from outside it; `self` is the receiver. A type's own
+  method of the same name wins.
+- `type`, `typedef`, `trait`, `match`, `export` and `uses` can name locals,
+  parameters, loop and catch variables.
+- **Nested types**: a class, struct, enum or interface declared inside a class
+  body; `Inner` inside the class, `Outer.Inner` outside it.
+- **Generic local functions**: `fn twice<T>(x: T)` inside a block (they cannot
+  use the block's variables).
+- A fixed array's length may be a constant expression: `int[SIZE * 2]`.
+- Tuples of four: `(a, b, c, d)`, the std `Quad<A, B, C, D>`.
 
 ### Memory and runtime
 
@@ -123,8 +108,9 @@ Packages state the compiler versions they need in `grav.toml`
   program.
 - Selective imports, aliases, `use`, namespaces and a std prelude.
 - `grav test` builds at `-Og`; gravc's own build defaults to RelWithDebInfo.
-- Editors (VS Code 1.14.3, Neovim, JetBrains): typed loop variables, red
-  squiggles for loops over non-iterable values, and inlay type hints.
+- Editors (VS Code extension 1.15.0, Neovim, JetBrains): typed loop variables,
+  red squiggles for loops over non-iterable values, inlay type hints; `yield`,
+  extension methods and nested types highlighted, outlined and completed.
 - The MCP server for AI assistants.
 
 ### Standard library
@@ -140,6 +126,11 @@ Packages state the compiler versions they need in `grav.toml`
   memory usage; `Term.readHidden`.
 - Fixes: `Str.join` and `HashMap` lookups no longer leak or write; a `Regex` can
   be shared between threads.
+
+### Fixes
+
+- A line that starts with `(` or an interpolated string begins a new statement
+  instead of calling the previous line's value.
 
 ## 1.6.0 (2026-11-03) and earlier
 
