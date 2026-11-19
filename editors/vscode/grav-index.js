@@ -128,7 +128,7 @@ const KEYWORD_DOCS = {
   if: ["Runs a block when the condition (a bool) holds; also `case x if cond:` guards.", "if (n > 0) { ... } else { ... }"],
   else: ["The branch taken when the `if` condition is false.", "else if (n == 0) { ... }"],
   while: ["Repeats a block while the condition holds.", "while (i < 10) { i++ }"],
-  for: ["A C-style loop, a range `for (i in 0..n step 2)`, or for-each `for (i, x in xs)` / `for ((k, v) in pairs)`.", "for (x in xs) { print(x) }"],
+  for: ["A C-style loop, a range `for (i in 0..n step 2)`, or for-each `for (i, x in xs)` / `for ((k, v) in map)` over arrays, strings, collections and iterators (`iterator()`, or `hasNext()`/`next()`).", "for (x in xs) { print(x) }"],
   do: ["A loop whose body runs at least once.", "do { tries++ } while (tries < 3)"],
   in: ["Separates the loop variable from what it iterates.", "for (ch in \"héllo\") { }"],
   step: ["The increment of a range loop (may be negative).", "for (i in 10..0 step -2) { }"],
@@ -1205,7 +1205,10 @@ class Workspace {
     if (typeof sym.type === "object") return this.returnOf(file, sym.type.call, sym.type.method);
     if (sym.type || sym.role !== "for" || !sym.iter) return sym.type || "";
     if (/\.\./.test(sym.iter)) return "int";                                   // for (i in 0..n)
-    return this.elementType(file, this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.iter, depth + 1));
+    const it = this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.iter, depth + 1);
+    if (it === "string" || /\]$|^(?:[\w.]+\.)?Array</.test(it)) return this.elementType(file, it);
+    const r = it ? this.loopElement(file, it, 0) : "";
+    return /^[A-Z]$/.test(r) ? "" : r;
   }
   // Decorator names written in the project (the file's imports and the workspace),
   // with how often: [[name, uses]], the most used first.
@@ -1303,6 +1306,22 @@ class Workspace {
   }
 
   // What `for (x in <a value of type t>)` gives x.
+  // What `for (x in v)` gives for a class or interface type, as the compiler picks it:
+  // iterator()'s next(), else get(i)/at(i), else its own next() beside hasNext().
+  loopElement(file, t, depth) {
+    const members = this.membersOf(file, t);
+    const ret = (name) => members.find((x) => x.sym.name === name && x.sym.returns);
+    const iter = depth < 3 && ret("iterator");
+    if (iter) {
+      const r = this.loopElement(file, this.bindMember(file, t, iter.sym, iter.sym.returns), depth + 1);
+      if (r) return r;
+    }
+    const get = ret("get") || ret("at");
+    if (get && depth === 0) return this.bindMember(file, t, get.sym, get.sym.returns);
+    const next = ret("next");
+    return next && members.some((x) => x.sym.name === "hasNext") ? this.bindMember(file, t, next.sym, next.sym.returns) : "";
+  }
+
   elementType(file, t) {
     let m, r = "";
     if (t === "string") r = "string";

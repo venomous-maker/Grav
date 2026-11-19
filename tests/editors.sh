@@ -32,6 +32,8 @@ fn main() {
         case Circle(r): print(r)
         case Square(side): print(side)
     }
+    for (e in byName) { print(e.first) }
+    for (w in new LinkedList<string>()) { print(w) }
     print(first(names) + "${first(new Array<int>())}" + show(1) + "${maybe}" + "${byName.size()}")
 }
 EOF
@@ -40,7 +42,8 @@ EOF
 "$GRAV" check --types "$T/types.grav" > "$T/types.json" || fail "grav check --types on a valid file"
 for want in '6 fixed int[3]' '7 names Array<string>' '8 byName HashMap<string, Array<int>>' \
             '9 show fn(int) -> string' '10 maybe long?' '11 sh Shape' '12 i int' '12 x int' \
-            '13 s string' '14 k string' '15 n int' '16 err Exception' '17 v string' '19 r float' '20 side float'; do
+            '13 s string' '14 k string' '15 n int' '16 err Exception' '17 v string' '19 r float' '20 side float' \
+            '22 e Pair<string, Array<int>>' '23 w string'; do
   set -- $want; line=$1 name=$2; shift 2
   grep -qF "{\"line\": $line, \"column\": " "$T/types.json" || fail "no types on line $line"
   grep -F "\"line\": $line, " "$T/types.json" | grep -qF "\"name\": \"$name\", \"type\": \"$*\"}" ||
@@ -71,7 +74,8 @@ grep -q '^10: maybe' "$T/checked.txt" && fail "no hint where the type is written
 grep -q '^16: err' "$T/checked.txt" && fail "no hint for a catch variable (its type is written)"
 # Without the compiler: what the source shows, and nothing invented.
 hints /nonexistent/grav > "$T/source.txt"
-for want in '7: names: Array<string>' '11: sh: Shape' '12: i: int' '13: s: string' '15: n: int'; do
+for want in '7: names: Array<string>' '11: sh: Shape' '12: i: int' '13: s: string' '15: n: int' \
+            '22: e: Pair<string, Array<int>>' '23: w: string'; do
   grep -qxF "$want" "$T/source.txt" || fail "inlay hint from the source: $want"
 done
 grep -qxF '14: k: string' "$T/source.txt" || fail "a generic's type parameter is bound (HashMap<string, ...>.keys() gives strings)"
