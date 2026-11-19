@@ -53,6 +53,15 @@ fs::path cacheDir() {
 
 } // namespace
 
+std::string buildCacheDir(const std::string &sub) {
+    if (const char *off = std::getenv("GRAV_BUILD_CACHE"); off && std::string(off) == "0") return "";
+    fs::path dir = cacheDir();
+    if (dir.empty()) return "";
+    std::error_code ec;
+    fs::create_directories(dir / sub, ec);
+    return ec ? "" : (dir / sub).string();
+}
+
 bool ccIsGcc(const std::string &cc) {
     // (Debian's says "cc (Debian 16.2.0-3) 16.2.0" first; the rest names the FSF.
     // clang's mentions neither.)

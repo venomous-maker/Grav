@@ -122,6 +122,12 @@ private:
     bool lastArgsSpread_ = false; // the last parseArguments() ended with `...xs`
     Block parseCaseBody();
     void asyncMethod(MethodDecl &m, const Token &at);
+    Block parseBodyBlock();
+    static unsigned long long hashMix(unsigned long long h, unsigned long long v);
+    void parseTopLevelDecl(Program &program);
+    std::vector<std::pair<size_t, size_t>> bodyRanges_; // token ranges of bodies (see parseBodyBlock)
+    struct MemberScope { std::string key; unsigned long long hash; int firstLine, lastLine; };
+    std::map<std::string, std::vector<MemberScope>> classMembers_; // per class fq, until its decl is recorded
     Block parseFunctionBody(TypeRef &returnType, const Token &at);
     bool atYield() const;
     bool atExtensionHead() const;

@@ -154,6 +154,13 @@ Two things keep that short:
   end has to run again (a change that leaves the generated C the same), the C
   compiler is still skipped. Change any file the program uses and it is built
   afresh. Warnings are printed when a program is compiled, not when it is reused.
+- **Fewer front-end passes.** Each generic type argument the compiler infers
+  (`mapOf("a", 1)`) makes it compile the program again with the argument filled
+  in, so a large program takes three passes. The inferences are kept with the
+  build: as long as the program's declarations (fields, signatures, imports)
+  are unchanged, those made in functions and methods whose text is unchanged are
+  reused, and an edit inside function bodies usually compiles in one pass. If a
+  build that reused them fails, it is compiled again without them.
 
 `grav test` builds with `-Og`, which compiles about three times as fast as the
 `-O2` of `run` and `build`; pass `-O1` (or `-Og`) to `run` or `build` for quicker

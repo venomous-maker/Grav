@@ -1,4 +1,6 @@
 #include "parser/parser.h"
+
+#include <algorithm>
 #include "lexer/lexer.h"
 
 #include <charconv>
@@ -111,6 +113,17 @@ Program Parser::parseProgram() {
     while (!atEnd()) {
         parseTopLevel(program);
     }
+    // The declaration surface: every token outside function bodies.
+    std::sort(bodyRanges_.begin(), bodyRanges_.end());
+    unsigned long long h = 1469598103934665603ULL;
+    size_t r = 0;
+    for (size_t i = 0; i < tokens_.size(); ++i) {
+        while (r < bodyRanges_.size() && bodyRanges_[r].second <= i) ++r;
+        if (r < bodyRanges_.size() && bodyRanges_[r].first <= i) { i = bodyRanges_[r].second - 1; continue; }
+        h = hashMix(h, static_cast<unsigned long long>(tokens_[i].type));
+        for (unsigned char ch : tokens_[i].lexeme) h = (h ^ ch) * 1099511628211ULL;
+    }
+    program.surfaceHash = h;
     if (asyncMethods_) {
         // What an `async fn` method runs its body through (see asyncMethod).
         Token at = tokens_.back();
@@ -123,7 +136,49 @@ Program Parser::parseProgram() {
     return program;
 }
 
+// A function, method, constructor, destructor, accessor or test body, whose token
+// range is left out of the declaration surface (see Program::surfaceHash).
+Block Parser::parseBodyBlock() {
+    size_t from = pos_;
+    Block b = parseBlock();
+    bodyRanges_.push_back({from, pos_});
+    return b;
+}
+
+unsigned long long Parser::hashMix(unsigned long long h, unsigned long long v) {
+    for (int i = 0; i < 8; ++i) h = (h ^ ((v >> (8 * i)) & 0xff)) * 1099511628211ULL;
+    return h;
+}
+
 void Parser::parseTopLevel(Program &program) {
+    size_t scopeFrom = pos_, declsBefore = program.decls.size();
+    parseTopLevelDecl(program);
+    // Each function's and class's text, with its tokens' places relative to its
+    // start: what an inference made inside it depends on, besides the surface.
+    if (scopeFrom >= tokens_.size() || pos_ <= scopeFrom) return;
+    int startLine = tokens_[scopeFrom].line;
+    unsigned long long h = 1469598103934665603ULL;
+    for (size_t i = scopeFrom; i < pos_ && i < tokens_.size(); ++i) {
+        h = hashMix(h, static_cast<unsigned long long>(tokens_[i].type));
+        h = hashMix(h, static_cast<unsigned long long>(tokens_[i].line - startLine));
+        h = hashMix(h, static_cast<unsigned long long>(tokens_[i].col));
+        for (unsigned char ch : tokens_[i].lexeme) h = (h ^ ch) * 1099511628211ULL;
+    }
+    for (size_t d = declsBefore; d < program.decls.size(); ++d) {
+        Decl *decl = program.decls[d].get();
+        if (as<FunctionDecl>(decl) || as<ClassDecl>(decl))
+            program.scopes.emplace(decl->fqName, Program::ScopeHash{h, startLine});
+        auto members = classMembers_.find(decl->fqName);
+        if (members == classMembers_.end()) continue;
+        for (const auto &m : members->second) {
+            program.scopes.emplace(m.key, Program::ScopeHash{m.hash, m.firstLine});
+            program.members[decl->fqName].push_back({m.firstLine, m.lastLine, m.key});
+        }
+        classMembers_.erase(members);
+    }
+}
+
+void Parser::parseTopLevelDecl(Program &program) {
     // Optional leading `@Decorator`s and an `export` modifier. These are metadata
     // only (every top-level name is already visible); they attach to the decl.
     std::vector<Decorator> decorators;
@@ -154,7 +209,7 @@ void Parser::parseTopLevel(Program &program) {
                 t->line = kw.line; t->col = kw.col;
                 t->name = advance().lexeme;
                 t->fqName = qualify("test$" + std::to_string(kw.line));
-                t->body = parseBlock();
+                t->body = parseBodyBlock();
                 program.decls.push_back(std::move(t));
                 break;
             }
@@ -771,7 +826,12 @@ DeclPtr Parser::parseClass(bool isAbstract) {
 
     expect(TokenType::LBrace, "to open the class body");
     scanNestedTypes(cls->name);
+    // Each member's tokens (up to the next member), for reusing inferences per method.
+    std::vector<std::pair<size_t, size_t>> memberSpans;
+    size_t memberFrom = pos_;
     while (!check(TokenType::RBrace) && !atEnd()) {
+        if (pos_ > memberFrom) memberSpans.push_back({memberFrom, pos_});
+        memberFrom = pos_;
         // Decorators for the member that follows (read through reflection).
         std::vector<Decorator> decos = parseDecorators();
         // Optional access modifier.
@@ -817,7 +877,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
             cls->destructor.present = true;
             cls->destructor.line = dk.line;
             cls->destructor.col = dk.col;
-            cls->destructor.body = parseBlock();
+            cls->destructor.body = parseBodyBlock();
             continue;
         }
         // `final fn m()` (contextual) — the method cannot be overridden.
@@ -876,6 +936,20 @@ DeclPtr Parser::parseClass(bool isAbstract) {
                                      "body, but found ") +
                              tokenTypeName(peek().type));
         }
+    }
+    if (pos_ > memberFrom) memberSpans.push_back({memberFrom, pos_});
+    for (const auto &[from, to] : memberSpans) {
+        unsigned long long h = 1469598103934665603ULL;
+        int startLine = tokens_[from].line;
+        for (size_t i = from; i < to; ++i) {
+            h = hashMix(h, static_cast<unsigned long long>(tokens_[i].type));
+            h = hashMix(h, static_cast<unsigned long long>(tokens_[i].line - startLine));
+            h = hashMix(h, static_cast<unsigned long long>(tokens_[i].col));
+            for (unsigned char ch : tokens_[i].lexeme) h = (h ^ ch) * 1099511628211ULL;
+        }
+        char hex[17];
+        std::snprintf(hex, sizeof hex, "%016llx", h);
+        classMembers_[cls->fqName].push_back({cls->fqName + "#" + hex, h, startLine, tokens_[to - 1].line});
     }
     expect(TokenType::RBrace, "to close the class body");
     nestedTypes_.pop_back();
@@ -961,7 +1035,7 @@ void Parser::asyncMethod(MethodDecl &m, const Token &at) {
 // each `yield v` being `__yield.put(v)` (see std/concurrency/generator.grav).
 Block Parser::parseFunctionBody(TypeRef &returnType, const Token &at) {
     yieldScopes_.push_back(1);
-    Block body = parseBlock();
+    Block body = parseBodyBlock();
     bool yielded = yieldScopes_.back() == 2;
     yieldScopes_.pop_back();
     if (!yielded) return body;
@@ -1086,7 +1160,7 @@ ConstructorDecl Parser::parseConstructor() {
     ctor.line = kw.line;
     ctor.col = kw.col;
     ctor.params = parseParams();
-    ctor.body = parseBlock();
+    ctor.body = parseBodyBlock();
     return ctor;
 }
 
@@ -1170,7 +1244,7 @@ MethodDecl Parser::parseProperty(bool inInterface) {
         m.returnType = TypeRef::prim(TypeRef::Kind::Void);
     }
     if (inInterface && !check(TokenType::LBrace)) m.hasBody = false;
-    else { m.hasBody = true; m.body = parseBlock(); }
+    else { m.hasBody = true; m.body = parseBodyBlock(); }
     return m;
 }
 

@@ -30,6 +30,10 @@ Packages state the compiler versions they need in `grav.toml`
   named after where they are, and a build's C file keeps its name), and GCC 15+
   keeps its optimized partitions between builds (`-flto-incremental`). Editing
   one function of the example app rebuilds it in about 40 seconds.
+- **One front-end pass instead of three** for most edits: inferred generic type
+  arguments are kept between builds and reused for every function and method
+  whose text (and the program's declarations) is unchanged. `grav check` of the
+  example app after an edit inside a function: about 4 seconds instead of 9.
 - **A build cache** (`~/.cache/grav/builds`): building, running or testing a
   program that has not changed reuses its binary in a fraction of a second; a
   change that leaves the generated C the same skips the C compiler. `GRAV_CACHE`,

@@ -29,6 +29,9 @@ private:
     std::string entry_; // the cached binary's path, "" when caching is off
 };
 
+// The build cache's folder for `sub` ("" when caching is off, or there is no folder).
+std::string buildCacheDir(const std::string &sub);
+
 // Whether `cc` is GCC, which optimizes one large file in parallel with -flto=auto.
 bool ccIsGcc(const std::string &cc);
 // Whether that GCC keeps its link-time partitions between builds (-flto-incremental,

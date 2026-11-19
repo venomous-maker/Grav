@@ -25,6 +25,7 @@
 #include "codegen/codegen.h"
 #include "common/diagnostics.h"
 #include "driver/build_cache.h"
+#include "driver/infer_cache.h"
 #include "driver/modules.h"
 #include "driver/format.h"
 #include "driver/packages.h"
@@ -551,6 +552,12 @@ int main(int argc, char **argv) {
                       << std::chrono::duration_cast<std::chrono::milliseconds>(now - clock0).count() << " ms\n";
             clock0 = now;
         };
+        // The last build's inferences that still hold seed the first pass (see
+        // driver/infer_cache.h): an edit usually needs one pass instead of three.
+        std::string seedPath = useStdin ? "" : grav::inferCache::pathFor(inputPath, testMode);
+        size_t seeded = 0;
+        for (int attempt = 0;; ++attempt) {
+        bool retry = false;
         for (int pass = 0; pass < 8; ++pass) {
             lap("start", pass);
             grav::Lexer lexer(source);
@@ -558,6 +565,10 @@ int main(int argc, char **argv) {
             tokens = grav::preprocess(std::move(tokens));
             grav::Parser parser(std::move(tokens));
             programPtr = std::make_unique<grav::Program>(parser.parseProgram());
+            if (pass == 0 && attempt == 0) {
+                seeded = grav::inferCache::load(seedPath, *programPtr, inference);
+                if (timesOn) std::cerr << "gravc: " << seeded << " inference(s) from the last build\n";
+            }
             grav::lowerEnumConstructors(*programPtr); // Shape.Circle(r) -> new Shape$Circle(r)
             grav::boxAssignedCaptures(*programPtr);   // variables lambdas assign live in shared cells
             grav::applyInferences(*programPtr, inference);
@@ -571,6 +582,7 @@ int main(int argc, char **argv) {
             // A failed expansion leaves half-made instances; checking them would only
             // bury the real error under follow-on errors from library code.
             if (!errors.empty()) {
+                if (seeded > 0) { retry = true; break; } // (maybe a seed's doing: try without)
                 for (const auto &err : errors) printDiag(err, srcMap);
                 if (!gJson) std::cerr << "gravc: " << errors.size() << " error(s); aborting\n";
                 return 1;
@@ -589,6 +601,16 @@ int main(int argc, char **argv) {
             lap("check", pass);
             if (inference.added == 0) break; // nothing new inferred: this pass is final
         }
+        // A program that fails with seeds is compiled again without them, so a seed
+        // can never be the cause of an error.
+        if (!retry && !errors.empty() && seeded > 0) retry = true;
+        if (!retry) break;
+        if (timesOn) std::cerr << "gravc: errors with the last build's inferences: again without them\n";
+        inference = grav::InferenceTable();
+        errors.clear();
+        seeded = 0;
+        }
+        if (errors.empty()) grav::inferCache::save(seedPath, *programPtr, inference);
         grav::Program &program = *programPtr;
         grav::Registry &registry = *registryPtr;
         grav::TypeChecker &checker = *checkerPtr;

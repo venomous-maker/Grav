@@ -776,6 +776,16 @@ struct Program {
     std::vector<DeclPtr> decls;
     GenericTables generics;
     UseTable uses;
+    // For reusing a previous build's inferred type arguments (driver/infer_cache):
+    // a hash of every token outside function bodies (the declaration surface), and
+    // per top-level function or class, a hash of its text and the line it starts on.
+    unsigned long long surfaceHash = 0;
+    struct ScopeHash { unsigned long long hash; int line; };
+    std::map<std::string, ScopeHash> scopes;
+    // A class's members as their own scopes ("Class#<hash>"), by the lines they span,
+    // so an edit to one method keeps the inferences made in the others.
+    struct MemberSpan { int firstLine, lastLine; std::string key; };
+    std::map<std::string, std::vector<MemberSpan>> members;
 };
 
 // Calls `f` on every expression in the program (pre-order, including lambda
