@@ -98,6 +98,7 @@ private:
     std::vector<DeclPtr> pendingDecls_; // declarations made alongside the last one (struct methods)
     std::vector<StmtPtr> pendingStmts_; // more statements from the last one (destructuring)
     int destructureCounter_ = 0;
+    bool extensionSelf_ = false;  // parsing an extension method: `self` is a parameter
     bool asyncMethods_ = false;   // an `async fn` method was parsed: add its helpers
     // Function bodies being parsed, innermost last: 0 cannot yield (a lambda), 1 may, 2 did.
     std::vector<int> yieldScopes_;
@@ -106,6 +107,7 @@ private:
     void asyncMethod(MethodDecl &m, const Token &at);
     Block parseFunctionBody(TypeRef &returnType, const Token &at);
     bool atYield() const;
+    bool atExtensionHead() const;
     StmtPtr parseYield();
     void parseCaseStatements(Block &b);
     StmtPtr parseTry();

@@ -430,12 +430,69 @@ DeclPtr Parser::parseGlobalVar() {
     return g;
 }
 
+// After `fn`: whether this declares an extension method, `fn Type.name(...)`
+// (`Type` a built-in type, a dotted class name, or one with type arguments).
+bool Parser::atExtensionHead() const {
+    switch (peek().type) {
+        case TokenType::KwInt: case TokenType::KwFloat: case TokenType::KwBool: case TokenType::KwString:
+            return peekAt(1).type == TokenType::Dot;
+        case TokenType::Identifier: break;
+        default: return false;
+    }
+    size_t j = 0;
+    while (peekAt(j).type == TokenType::Identifier && peekAt(j + 1).type == TokenType::Dot) j += 2;
+    if (j > 0) return peekAt(j).type == TokenType::Identifier;     // a.B.name
+    if (peekAt(1).type != TokenType::Less) return false;
+    int depth = 0;                                                  // Box<int>.name
+    for (j = 1;; ++j) {
+        TokenType t = peekAt(j).type;
+        if (t == TokenType::EndOfFile || t == TokenType::LParen || t == TokenType::LBrace) return false;
+        if (t == TokenType::Less) ++depth;
+        else if (t == TokenType::Greater) { if (--depth == 0) break; }
+        else if (t == TokenType::ShiftRight) { depth -= 2; if (depth <= 0) break; }
+    }
+    return peekAt(j + 1).type == TokenType::Dot;
+}
+
 DeclPtr Parser::parseFunction(bool isAsync) {
     const Token &kw = advance(); // 'fn'
     auto fn = std::make_unique<FunctionDecl>();
     fn->line = kw.line;
     fn->col = kw.col;
     fn->isAsync = isAsync;
+    if (atExtensionHead()) {
+        // `fn Point.norm() -> float { ... self ... }` adds a method to an existing
+        // type: the free function `__ext_norm(self: Point)`, which `p.norm()` calls
+        // when Point has no `norm` of its own (see TypeChecker::useExtension).
+        Param self;
+        self.name = "self";
+        if (peek().type != TokenType::Identifier) {
+            self.type = parseType("as the extended type");
+        } else {
+            std::string name = advance().lexeme;
+            while (check(TokenType::Dot) && peekAt(2).type == TokenType::Dot) {
+                advance();
+                name += "." + expect(TokenType::Identifier, "in the extended type's name").lexeme;
+            }
+            if (const TypeRef *b = builtinTypeName(name)) self.type = *b;
+            else self.type = TypeRef::named(name);
+            if (check(TokenType::Less)) self.type.args = parseTypeArgs();
+        }
+        expect(TokenType::Dot, "between the extended type and the method's name");
+        const Token &mname = expect(TokenType::Identifier, "as the extension method's name");
+        fn->name = "__ext_" + mname.lexeme;
+        fn->fqName = qualify(fn->name);
+        fn->typeParams = parseTypeParams(&fn->typeParamBounds);
+        fn->params = parseParams(/*allowVariadic=*/true);
+        fn->params.insert(fn->params.begin(), std::move(self));
+        fn->returnType = matchToken(TokenType::Arrow) ? parseType("as the return type")
+                                                      : TypeRef::prim(TypeRef::Kind::Void);
+        bool saved = extensionSelf_;
+        extensionSelf_ = true;
+        fn->body = parseFunctionBody(fn->returnType, kw);
+        extensionSelf_ = saved;
+        return fn;
+    }
     fn->name = expect(TokenType::Identifier, "after 'fn'").lexeme;
     fn->fqName = qualify(fn->name);
     fn->typeParams = parseTypeParams(&fn->typeParamBounds); // optional <T, ...>

@@ -939,6 +939,28 @@ TypeRef TypeChecker::checkIndex(IndexExpr &e) {
     return TypeRef::prim(TypeRef::Kind::Error);
 }
 
+// `x.m(args)` where x's type has no method m: an extension method `fn T.m(...)`,
+// which the parser declared as the free function `__ext_m(self: T, ...)`. The call
+// becomes `__ext_m(x, args)`, so overloads of it pick the receiver's type.
+bool TypeChecker::useExtension(CallExpr &e, MemberExpr &mem, const TypeRef &objType) {
+    std::string fn = "__ext_" + mem.member;
+    std::string fq = reg_->resolveFunc(fn, currentNs_);
+    if (fq.empty()) return false;
+    // Only one for this receiver (a generic one is checked at the call).
+    const auto &overloads = reg_->funcOverloads(fq);
+    bool fits = overloads.empty();
+    for (const auto &f : overloads)
+        if (!f.paramTypes.empty() && isAssignable(objType, f.paramTypes[0])) fits = true;
+    if (!fits) return false;
+    auto callee = std::make_unique<NameExpr>();
+    callee->name = fn;
+    callee->line = mem.line;
+    callee->col = mem.col;
+    e.args.insert(e.args.begin(), std::move(mem.object));
+    e.callee = std::move(callee);
+    return true;
+}
+
 TypeRef TypeChecker::checkNew(NewExpr &e) {
     const TypeRef *expNew = expected_;
     expected_ = nullptr;
@@ -1649,6 +1671,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             mem->object = std::move(cls);
             return checkCall(e);
         }
+        if (useExtension(e, *mem, objType)) return checkCall(e);
         std::string kind = typeRefName(objType);
         std::string a = std::string("aeiou").find(kind[0]) != std::string::npos ? "an " : "a ";
         std::string where = owners.back().substr(owners.back().rfind('.') + 1);
@@ -1693,6 +1716,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             e.args.insert(e.args.begin(), std::move(addr));
             return resolveFreeCall(e, it->second);
         }
+        if (useExtension(e, *mem, objType)) return checkCall(e);
         error(mem->line, mem->col, "struct '" + prettyNames(objType.name) + "' has no method '" + mem->member + "'");
         return TypeRef::prim(TypeRef::Kind::Error);
     }
@@ -1701,6 +1725,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     if (objType.isNamed() && reg_->isInterface(objType.name)) {
         const MethodInfo *mi = reg_->findInterfaceMethod(objType.name, mem->member);
         if (!mi) {
+            if (useExtension(e, *mem, objType)) return checkCall(e);
             error(mem->line, mem->col, "interface '" + objType.name +
                                            "' has no method '" + mem->member + "'");
             return TypeRef::prim(TypeRef::Kind::Error);
@@ -1721,6 +1746,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
     }
 
     if (!objType.isNamed() || !reg_->isClass(objType.name)) {
+        if (useExtension(e, *mem, objType)) return checkCall(e);
         error(mem->line, mem->col, "cannot call method '" + mem->member +
                                        "' on a value of type " + typeRefName(objType) + maybeNullHint(objType));
         return TypeRef::prim(TypeRef::Kind::Error);
@@ -1739,6 +1765,7 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             cur = ci ? ci->baseClass : "";
         }
     }
+    if (cands.empty() && useExtension(e, *mem, objType)) return checkCall(e);
     if (cands.empty() && reg_->isClass(objType.name)) {
         // A name the class lacks: Object's (std.types), with the object first (`u.toMap()`).
         bool has = false;

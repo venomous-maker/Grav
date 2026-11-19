@@ -1,0 +1,40 @@
+// Extension methods: `fn T.name(...)` adds a method to a class, struct, interface,
+// built-in type or generic instance that does not have one; `self` is the value.
+import "std"
+
+class Point {
+    public x: float
+    public y: float
+    constructor(x: float, y: float) { self.x = x; self.y = y }
+    fn label() -> string { return "own" }
+}
+struct Size { w: int  h: int }
+interface Shape { fn area() -> float }
+class Square implements Shape {
+    public side: float
+    constructor(side: float) { self.side = side }
+    fn area() -> float { return self.side * self.side }
+}
+
+fn Point.norm() -> float { return Math.sqrt(self.x * self.x + self.y * self.y) }
+fn Point.scaled(k: float) -> Point { return new Point(self.x * k, self.y * k) }
+fn Point.label() -> string { return "extension" }        // the class's own method wins
+fn int.twice() -> int { return self * 2 }
+fn string.shout(times: int = 1) -> string { return Str.upper(self) + Str.repeat("!", times) }
+fn Array<int>.total() -> int {
+    let t = 0
+    for (x in self) { t += x }
+    return t
+}
+fn Size.area() -> int { return self.w * self.h }
+fn Shape.describe() -> string { return "area ${self.area()}" }
+
+test "extensions on classes, built-ins, structs, interfaces and instances" {
+    let p = new Point(3.0, 4.0)
+    assertEq("${p.norm()} ${p.scaled(2.0).norm()} ${p.label()}", "5 10 own")
+    assertEq("${21.twice()} ${"hi".shout()} ${"hi".shout(3)}", "42 HI! HI!!!")
+    let xs: Array<int> = [1, 2, 3]
+    let s = Size { w: 2, h: 5 }
+    let sh: Shape = new Square(2.0)
+    assertEq("${xs.total()} ${s.area()} ${sh.describe()} ${new Square(3.0).describe()}", "6 10 area 4 area 9")
+}

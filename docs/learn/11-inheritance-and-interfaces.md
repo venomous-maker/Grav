@@ -503,6 +503,52 @@ not passed where a `Swimmer` is expected. When you need that, make `Swimmer` an
 interface. Most designs are clearer with one parent plus interfaces, so reach for
 multiple inheritance rarely.
 
+## Extension methods
+
+Sometimes a type you did not write, or cannot change, is missing a method you
+would like to call on it. An *extension method* adds one from outside: write
+`fn Type.name(...)`, and use `self` for the value it is called on:
+
+```grav
+import "std"
+
+class Point {
+    public x: float
+    public y: float
+    constructor(x: float, y: float) { self.x = x; self.y = y }
+}
+
+fn Point.norm() -> float { return Math.sqrt(self.x * self.x + self.y * self.y) }
+fn int.isEven() -> bool { return self % 2 == 0 }
+fn string.shout() -> string { return Str.upper(self) + "!" }
+fn Array<int>.total() -> int {
+    let t = 0
+    for (x in self) { t += x }
+    return t
+}
+
+fn main() {
+    let xs: Array<int> = [1, 2, 3]
+    print("${new Point(3.0, 4.0).norm()} ${10.isEven()} ${"hey".shout()} ${xs.total()}")
+}
+```
+
+Output:
+
+```text
+5 true HEY! 6
+```
+
+Extensions work on classes, structs, interfaces, the built-in types, and
+generic types with their type arguments (`Array<int>`). They are ordinary
+functions underneath, so:
+
+- they see only what any outside code sees (public members), and cannot be
+  overridden by subclasses;
+- a method the type has itself always wins over an extension of the same name;
+- they are visible where the function would be: in their namespace, and where
+  that namespace is imported or `use`d.
+
 ## Summary
 
 - `class B extends A` inherits `A`'s members; a `B` can be used as an `A`.

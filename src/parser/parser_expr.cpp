@@ -760,6 +760,11 @@ ExprPtr Parser::parsePrimary() {
         }
         case TokenType::Self: {
             advance();
+            if (extensionSelf_) { // in an extension method, `self` is its first parameter
+                auto n = at<NameExpr>(t);
+                n->name = "self";
+                return n;
+            }
             return at<SelfExpr>(t);
         }
         case TokenType::Super: {

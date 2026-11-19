@@ -124,6 +124,7 @@ private:
     bool noteCapture(const std::string &name, const TypeRef &type, size_t scopeIdx);
     // Is local `name` captured by the innermost lambda (so it may not be assigned)?
     bool isCapturedHere(const std::string &name);
+    bool useExtension(CallExpr &e, MemberExpr &mem, const TypeRef &objType);
     // A free function named in value position: its type as a function value.
     std::optional<TypeRef> tryFunctionRef(NameExpr &e);
     // `f(args)` where f evaluates to a function value.
