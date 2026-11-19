@@ -1,5 +1,5 @@
-// Constructors through a class hierarchy, the initial values of fields, async methods
-// and private constructors.
+// Constructors through a class hierarchy, the initial values of fields, async methods,
+// private constructors and types declared inside a class.
 import "std"
 
 class Log { static text: string = "" }
@@ -94,4 +94,35 @@ test "async methods run on the worker pool" {
 
 test "a private constructor is used through the class's own methods" {
     assertEq(Config.defaults().name, "default")
+}
+
+class Tree {
+    public root: Node? = null
+    public count: int = 0
+    fn add(v: int) {
+        let n = Node.of(v)
+        if (self.root == null) { self.root = n } else { n.kind = Kind.Leaf; self.root!.kids.push(n) }
+        self.count += 1
+    }
+    enum Kind { Root, Leaf }
+    class Node {
+        public v: int = 0
+        public kind: Kind = Kind.Root
+        public kids: Array<Node> = []
+        constructor(v: int) { self.v = v }
+        static fn of(v: int) -> Node { return new Node(v) }
+        fn label() -> Label { return Label { text: "n${self.v}" } }
+        struct Label { text: string }
+    }
+}
+
+test "classes, enums and structs declared inside a class" {
+    let t = new Tree()
+    t.add(1)
+    t.add(2)
+    let kid: Tree.Node = t.root!.kids[0]
+    assertEq("${t.count} ${t.root!.v} ${kid.v} ${kid.kind == Tree.Kind.Leaf}", "2 1 2 true")
+    let lone = new Tree.Node(7)
+    let label: Tree.Node.Label = lone.label()
+    assertEq(label.text + " " + Tree.Node.of(3).label().text, "n7 n3")
 }
