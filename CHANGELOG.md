@@ -18,6 +18,18 @@ Packages state the compiler versions they need in `grav.toml`
   through the interface reach each implementing class's own copy for the type
   arguments the program uses.
 
+### Build speed
+
+- **Large programs compile several times faster.** The front end is about four
+  times faster (name lookups are cached, and AST node tests are a pointer
+  comparison instead of `dynamic_cast`), and GCC optimizes a large program's C
+  on every core (`-flto=auto`). The example shop app (framework and all its
+  packages, 1.5 million lines of C) went from 7 minutes to under 1.5.
+- **A build cache** (`~/.cache/grav/builds`): building, running or testing a
+  program that has not changed reuses its binary in a fraction of a second; a
+  change that leaves the generated C the same skips the C compiler. `GRAV_CACHE`,
+  `GRAV_BUILD_CACHE=0`, `GRAV_CACHE_MAX` and `GRAV_LTO` control it.
+
 ### Fixes
 
 - A generic method's type bounds (`fn m<T: Named>(...)`) are checked: a call

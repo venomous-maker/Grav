@@ -24,6 +24,7 @@
 
 #include "codegen/codegen.h"
 #include "common/diagnostics.h"
+#include "driver/build_cache.h"
 #include "driver/modules.h"
 #include "driver/format.h"
 #include "driver/packages.h"
@@ -476,6 +477,61 @@ int main(int argc, char **argv) {
         }
     }
 
+    // After a binary is built (or reused): say so, and run it for `run`/`test`.
+    auto finishBuilt = [&](const std::string &exePath, bool tempExe, const std::string &also = "") -> int {
+        if (!tempExe)
+            std::cerr << "gravc: built " << exePath << (also.empty() ? "" : " (and wrote " + also + ")") << "\n";
+        if (!runAfter) return 0;
+        // A relative path with no directory needs a `./` so the shell finds it.
+        std::string runPath = exePath;
+        if (runPath.find('/') == std::string::npos) runPath = "./" + runPath;
+        std::string runCmd = "\"" + runPath + "\"";
+        for (const auto &a : runArgs) runCmd += " \"" + a + "\"";
+        if (testMode) setenv("GRAV_TEST_FILTER", testFilter.c_str(), 1);
+        int prc = std::system(runCmd.c_str());
+        if (tempExe) { std::error_code ec; fs::remove(exePath, ec); }
+        // Pass the program's own exit status through.
+        if (prc == -1) return 1;
+        if (WIFEXITED(prc)) return WEXITSTATUS(prc);
+        return 128 + (WIFSIGNALED(prc) ? WTERMSIG(prc) : 0);
+    };
+
+    // A program built before from the same source, files, compiler and options:
+    // its binary is reused without running the front end or the C compiler.
+    std::unique_ptr<grav::BuildCache> whole;
+    if (!checkOnly && !toStdout && emit == EmitMode::Bin && !keepC && !gJson) {
+        std::vector<std::string> parts{GRAV_VERSION};
+        std::error_code sec;
+        fs::path self = fs::read_symlink("/proc/self/exe", sec);
+        if (!sec) {
+            parts.push_back(self.string() + " " + std::to_string(fs::file_size(self, sec)) + " " +
+                            std::to_string(fs::last_write_time(self, sec).time_since_epoch().count()));
+        }
+        for (int i = 1; i < argc; ++i) parts.push_back(argv[i]);
+        for (const char *v : {"CC", "GRAV_LTO", "GRAV_STD"}) parts.push_back(std::getenv(v) ? std::getenv(v) : "");
+        parts.push_back(source);
+        std::string files;
+        const std::string *last = nullptr; // (the map has a run of lines per file)
+        for (const auto &s : srcMap)
+            if (!last || *last != s.file) { files += s.file + "\n"; last = &s.file; }
+        parts.push_back(files);
+        if (!sec) whole = std::make_unique<grav::BuildCache>(parts);
+        std::string exe = outputPath;
+        bool tempExe = false;
+        if (exe.empty() && testMode) {
+            std::error_code tec;
+            fs::path tmp = fs::temp_directory_path(tec);
+            if (tec) tmp = ".";
+            exe = (tmp / ("gravtest-" + std::to_string(getpid()) + "-" + fs::path(stem(inputPath)).filename().string())).string();
+            tempExe = true;
+        }
+        if (exe.empty()) exe = stem(inputPath);
+        if (whole && whole->restore(exe)) {
+            if (verbose) std::cerr << "gravc: reused the cached build of this program\n";
+            return finishBuilt(exe, tempExe);
+        }
+    }
+
     try {
         // The front end may run more than once: when the checker infers omitted
         // generic type arguments (`maxOf(1, 2)`, `new Box(5)`), it records them and
@@ -641,10 +697,25 @@ int main(int argc, char **argv) {
         // assembly output there is no link step.
         std::string libs = emit == EmitMode::Asm ? "" : " -lm";
         flags += " -pthread"; // async tasks run on a worker thread pool
+        // A large program is optimized on every core: GCC splits the one C file into
+        // partitions at link time (-flto=auto). Most of a big build is optimizing it.
+        // GRAV_LTO=1 forces it, GRAV_LTO=0 turns it off.
+        const char *ltoEnv = std::getenv("GRAV_LTO");
+        std::string ltoWant = ltoEnv ? ltoEnv : "";
+        if (emit != EmitMode::Asm && optFlag != "-O0" && !race && !sanitize && ltoWant != "0") {
+            std::error_code sz;
+            bool large = fs::file_size(cPath, sz) > (16u << 20) && !sz;
+            if ((ltoWant == "1" || large) && grav::ccIsGcc(cc)) flags += " -flto=auto";
+        }
         std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
                           " \"" + cPath + "\" -o \"" + exePath + "\"" + libs;
         if (verbose) std::cerr << "gravc: " << cmd << "\n";
-        int rc = std::system(cmd.c_str());
+        // The same C built the same way before: its binary is reused.
+        grav::BuildCache cache(cPath, cc, flags + libs);
+        bool reused = emit != EmitMode::Asm && cache.restore(exePath);
+        if (reused && verbose) std::cerr << "gravc: reused the cached build of this program\n";
+        int rc = reused ? 0 : std::system(cmd.c_str());
+        if (rc == 0 && !reused && emit != EmitMode::Asm) cache.store(exePath);
         if (tempC) { std::error_code ec; fs::remove(cPath, ec); }
         if (rc != 0) {
             std::cerr << "gravc: C compilation failed (" << cc << ")\n";
@@ -654,27 +725,9 @@ int main(int argc, char **argv) {
             std::cerr << "gravc: wrote " << exePath << "\n";
             return 0;
         }
-        if (!tempExe)
-            std::cerr << "gravc: built " << exePath
-                      << (emit == EmitMode::Both ? (" (and wrote " + cPath + ")") : "")
-                      << "\n";
-
+        if (whole && emit == EmitMode::Bin) whole->store(exePath);
         // --run: execute the freshly built binary, forwarding any `-- args`.
-        if (runAfter) {
-            // A relative path with no directory needs a `./` so the shell finds it.
-            std::string runPath = exePath;
-            if (runPath.find('/') == std::string::npos) runPath = "./" + runPath;
-            std::string runCmd = "\"" + runPath + "\"";
-            for (const auto &a : runArgs) runCmd += " \"" + a + "\"";
-            if (testMode) setenv("GRAV_TEST_FILTER", testFilter.c_str(), 1);
-            int prc = std::system(runCmd.c_str());
-            if (tempExe) { std::error_code ec; fs::remove(exePath, ec); }
-            // Pass the program's own exit status through.
-            if (prc == -1) return 1;
-            if (WIFEXITED(prc)) return WEXITSTATUS(prc);
-            return 128 + (WIFSIGNALED(prc) ? WTERMSIG(prc) : 0);
-        }
-        return 0;
+        return finishBuilt(exePath, tempExe, emit == EmitMode::Both ? cPath : "");
     } catch (const grav::GravError &e) {
         printDiag(e, srcMap);
         return 1;

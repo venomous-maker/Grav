@@ -131,6 +131,30 @@ dependency is read from its folder each time and is not pinned.
 | `GRAV_PANIC_RECOVERY` | programs | `off` disables panic recovery points |
 | `GRAV_TEST_FILTER` | test runs | the same as `--filter` |
 | `GRAV_TIMES` | the compiler | `1` prints how long each front-end phase takes, per generic-inference pass (stderr) |
+| `GRAV_CACHE` | the compiler | the build cache folder (default `$XDG_CACHE_HOME/grav/builds`, else `~/.cache/grav/builds`) |
+| `GRAV_BUILD_CACHE` | the compiler | `0` turns the build cache off |
+| `GRAV_CACHE_MAX` | the compiler | how many built programs the cache keeps (default 40, the most recently used) |
+| `GRAV_LTO` | the compiler | `1` always optimizes on every core (`-flto=auto`), `0` never; by default GCC does for large programs |
+
+## Build speed
+
+Most of building a large program is the C compiler optimizing the generated C.
+Two things keep that short:
+
+- **Every core.** When the C compiler is GCC and the generated C is large (over
+  16 MB, as with a framework and its packages), it is optimized in parallel
+  partitions (`-flto=auto`): about five times faster on eight cores. Debug (`-g`,
+  `-O0`), `--race` and `--sanitize` builds compile as before.
+- **A build cache.** A program built before is reused: when its source files,
+  the compiler and the options are all the same, `build`, `run` and `test` copy
+  the earlier binary without compiling anything; when only the compiler's front
+  end has to run again (a change that leaves the generated C the same), the C
+  compiler is still skipped. Change any file the program uses and it is built
+  afresh. Warnings are printed when a program is compiled, not when it is reused.
+
+`grav test` builds with `-Og`, which compiles about three times as fast as the
+`-O2` of `run` and `build`; pass `-O1` (or `-Og`) to `run` or `build` for quicker
+edit-and-run cycles on a very large program, and `--release` for the fastest code.
 
 ## Exit status
 

@@ -15,6 +15,7 @@ endif()
 
 add_executable(gravc
         main.cpp
+        src/driver/build_cache.cpp
         src/driver/modules.cpp
         src/driver/packages.cpp
         src/driver/format.cpp
