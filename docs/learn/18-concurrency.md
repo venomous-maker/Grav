@@ -326,9 +326,10 @@ The other tools in [`std/concurrency`](../std/concurrency/thread.md):
 | `RWLock` | many readers or one writer: `withRead(body)`, `withWrite(body)` |
 | `Once` | running an initialiser exactly once: `once.run(body)` |
 
-Closures copy the variables they capture ([chapter 6](06-lambdas-and-closures.md#captured-variables-are-copies)),
-so threads cannot share state by assigning to captured locals. They share it
-through objects, as above, which makes the shared parts easy to spot.
+A closure that assigns a captured local shares it with the code around it
+([chapter 6](06-lambdas-and-closures.md#captured-variables-copies-unless-a-closure-assigns-them)),
+but nothing guards such a variable: across threads, share state through the
+types above, which makes the shared parts easy to spot.
 
 ## Finding data races
 

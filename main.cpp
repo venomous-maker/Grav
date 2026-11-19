@@ -33,6 +33,7 @@
 #include "parser/parser.h"
 #include "sema/enums.h"
 #include "sema/monomorph.h"
+#include "sema/cells.h"
 #include "sema/sanitize.h"
 #include "sema/symbols.h"
 #include "sema/typechecker.h"
@@ -502,6 +503,7 @@ int main(int argc, char **argv) {
             grav::Parser parser(std::move(tokens));
             programPtr = std::make_unique<grav::Program>(parser.parseProgram());
             grav::lowerEnumConstructors(*programPtr); // Shape.Circle(r) -> new Shape$Circle(r)
+            grav::boxAssignedCaptures(*programPtr);   // variables lambdas assign live in shared cells
             grav::applyInferences(*programPtr, inference);
             lap("parse", pass);
 

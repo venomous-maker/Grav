@@ -1,0 +1,107 @@
+// Closures that assign the variables they capture: those variables are shared
+// (a heap cell) by the function and its lambdas; read-only captures stay copies.
+import "std"
+
+fn makeCounter(start: int) -> fn() -> int {
+    let n = start
+    return fn() -> int {
+        n += 1
+        return n
+    }
+}
+
+fn countWords(text: string) -> int {
+    let words = 0
+    Str.split(text, " ").forEach(fn(w: string) { if (w != "") { words++ } })
+    return words
+}
+
+fn bump(x: int) -> int {
+    let add = fn() { x += 10 }        // a parameter, shared the same way
+    add()
+    add()
+    return x
+}
+
+class Tally {
+    public total: long = 0
+    fn addAll(xs: Array<int>) -> long {
+        let sum = 0 as long
+        xs.forEach(fn(v: int) { sum += v })
+        self.total = sum
+        return sum
+    }
+}
+
+test "a lambda assigns a local, and the function sees it" {
+    let count = 0
+    let label = ""
+    let add = fn(s: string) {
+        count += 1
+        label = label + s
+    }
+    add("a")
+    add("b")
+    assertEq("${count} ${label}", "2 ab")
+    count = 10                       // and the lambda sees the function's writes
+    add("c")
+    assertEq(count, 11)
+}
+
+test "counters outlive the function that made them, each with its own variable" {
+    let a = makeCounter(0)
+    let b = makeCounter(100)
+    a(); a()
+    assertEq("${a()} ${b()}", "3 101")
+    assertEq(countWords("to be  or not"), 4)
+    assertEq(bump(1), 21)
+    assertEq(new Tally().addAll([1, 2, 3]), 6 as long)
+}
+
+test "read-only captures are still copies made when the lambda is" {
+    let greeting = "hello"
+    let say = fn() -> string { return greeting }
+    greeting = "bye"
+    assertEq(say(), "hello")
+}
+
+test "loop and catch variables, nested lambdas, typed and untyped lets" {
+    let seen = new Array<string>()
+    for (i in 0..3) {
+        let mark = fn() { i *= 2 }
+        mark()
+        seen.push("${i}")
+    }
+    assertEq(Str.join(seen, " "), "0 2 4")
+    let msg = ""
+    try { throw new ValueError("x") } catch (e: ValueError) {
+        let swap = fn() { e = new ValueError("y") }
+        swap()
+        msg = e.message()
+    }
+    assertEq(msg, "y")
+    let depth: long = 0
+    let outer = fn() {
+        let inner = fn() { depth += 1 }
+        inner(); inner()
+    }
+    outer()
+    assertEq(depth, 2 as long)
+    let maybe: string? = null
+    let set = fn() { maybe = "set" }
+    set()
+    assertEq(maybe ?? "", "set")
+}
+
+test "threads share an assigned capture (guarded by a mutex)" {
+    let hits = 0
+    let lock = new Mutex()
+    let threads = new Array<Thread>()
+    for (t in 0..4) {
+        threads.push(Thread.spawn(fn() {
+            for (k in 0..1000) { lock.lock(); hits += 1; lock.unlock() }
+        }))
+    }
+    for (th in threads) { th.join() }
+    assertEq(hits, 4000)
+}

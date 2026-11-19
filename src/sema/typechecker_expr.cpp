@@ -647,7 +647,7 @@ TypeRef TypeChecker::checkIncDec(IncDecExpr &e) {
     }
     if (auto *n = dynamic_cast<NameExpr *>(e.target.get()); n && isCapturedHere(n->name))
         error(e.line, e.col, "cannot modify captured variable '" + n->name +
-                                 "' inside a lambda (captures are copies)");
+                                 "' inside a lambda (it is called as a function, has its address taken, or has no type to share it by; use an object field)");
     if (!isLvalue(*e.target)) {
         error(e.line, e.col, "'++'/'--' requires a variable or field");
         return TypeRef::prim(TypeRef::Kind::Error);

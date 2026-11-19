@@ -672,7 +672,7 @@ void TypeChecker::checkAssign(AssignStmt &s) {
         if (isCapturedHere(name->name))
             error(name->line, name->col,
                   "cannot assign to captured variable '" + name->name +
-                      "' inside a lambda (captures are copies; use an object field to share state)");
+                      "' inside a lambda (it is called as a function, has its address taken, or has no type to share it by; use an object field)");
         if (s.isCompound) {
             checkCompound(s, local->type, valueType);
         } else if (!isAssignable(valueType, local->type)) {

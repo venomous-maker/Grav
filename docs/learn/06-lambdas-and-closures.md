@@ -134,34 +134,67 @@ Output:
 `makeAdder` has returned by the time `add5` is called, yet `add5` still knows
 that `k` is 5. Each closure keeps its own copy of the variables it uses.
 
-### Captured variables are copies
+### Captured variables: copies, unless a closure assigns them
 
-Grav copies each captured variable into the closure when the closure is
-created. Two consequences:
-
-- The closure sees the value the variable had **when the closure was made**.
-- Assigning to a captured variable inside the closure is a compile error, because
-  it would only change the copy and that would be confusing.
-
-```text
-let count = 0
-let inc = fn() { count += 1 }   // error: cannot assign to captured variable 'count' inside a lambda
-```
-
-To share changing state between a closure and its surroundings, put the state in
-an object. The closure copies the *reference*, so both sides see the same object:
+Grav copies each variable a closure *reads* into the closure when the closure is
+created, so the closure sees the value the variable had **when it was made**:
 
 ```grav
-class Counter {
-    public n: int
-    constructor() { self.n = 0 }
+fn main() {
+    let greeting = "hello"
+    let say = fn() { print(greeting) }
+    greeting = "bye"
+    say()
 }
+```
 
+Output:
+
+```text
+hello
+```
+
+A variable that a closure *assigns* is different: it is shared. The function
+and every closure that uses it see one variable, so a closure can count, collect
+or remember things for the code around it:
+
+```grav
+import "std"
+
+fn main() {
+    let count = 0
+    let total = 0
+    let add = fn(n: int) {
+        count += 1
+        total += n
+    }
+    add(5)
+    add(7)
+    print("${count} numbers, total ${total}")
+
+    let words: Array<string> = ["a", "b", "c"]
+    let seen = ""
+    words.forEach(fn(w: string) { seen += w })
+    print(seen)
+}
+```
+
+Output:
+
+```text
+2 numbers, total 12
+abc
+```
+
+Such a variable lives on the heap, in a small cell the closures share, which
+also lets a closure keep it alive after the function returns:
+
+```grav
 fn makeCounter() -> fn() -> int {
-    let c = new Counter()
+    let n = 0
     return fn() -> int {
-        c.n = c.n + 1
-        return c.n
+        n += 1
+        return n
     }
 }
 
@@ -179,8 +212,9 @@ Output:
 3
 ```
 
-Copying makes closures predictable, and safe to run on other threads: nothing
-changes a closure's variables behind its back.
+A shared variable is not protected against threads: when closures on several
+threads change one, use an `AtomicInt`, a `Mutex` or a `Channel` (see
+[Concurrency](18-concurrency.md)). `grav run --race` finds the ones you missed.
 
 ### Closures that return closures
 
@@ -203,7 +237,7 @@ Output:
 
 ### Lambdas that call themselves
 
-Because captures are copies made when the lambda is created, a lambda cannot
+Because a read capture is a copy made when the lambda is created, a lambda cannot
 normally see the variable it is about to be stored in. There is one exception:
 a lambda stored in a variable that it mentions is given itself under that name.
 It must state its result type, because its own calls depend on it:
@@ -357,8 +391,8 @@ collections have similar methods.
 - `fn(A, B) -> R` is a function type; named functions, lambdas and bound methods all fit.
 - `fn(x: int) => x * 2` for one expression; `fn(x: int) -> int { ... }` for a block.
 - Parameter types can be left out where the expected function type is known.
-- Closures copy the variables they use, when they are created; share changing
-  state through an object.
+- Closures copy the variables they only read, when they are created; a variable
+  a closure assigns is shared by the function and its closures.
 - A lambda stored in a name it uses can call itself (with a result type written).
 - `map`, `filter`, `reduce`, `sortBy` and friends take lambdas.
 

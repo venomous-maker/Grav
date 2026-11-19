@@ -1,0 +1,7 @@
+running 5 tests
+  ok    a lambda assigns a local, and the function sees it
+  ok    counters outlive the function that made them, each with its own variable
+  ok    read-only captures are still copies made when the lambda is
+  ok    loop and catch variables, nested lambdas, typed and untyped lets
+  ok    threads share an assigned capture (guarded by a mutex)
+result: 5 passed, 0 failed
