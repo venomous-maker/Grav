@@ -93,6 +93,7 @@ std::string Parser::qualify(const std::string &simpleName) const {
 std::string Parser::parseQualifiedName(const char *context) {
     const Token &first = expect(TokenType::Identifier, context);
     std::string name = first.lexeme;
+    if (const std::string *full = nestedType(name)) name = *full; // a type declared in the class
     while (check(TokenType::Dot) && peekAt(1).type == TokenType::Identifier) {
         advance(); // '.'
         name += '.';
@@ -768,6 +769,7 @@ DeclPtr Parser::parseClass(bool isAbstract) {
     }
 
     expect(TokenType::LBrace, "to open the class body");
+    scanNestedTypes(cls->name);
     while (!check(TokenType::RBrace) && !atEnd()) {
         // Decorators for the member that follows (read through reflection).
         std::vector<Decorator> decos = parseDecorators();
@@ -777,6 +779,19 @@ DeclPtr Parser::parseClass(bool isAbstract) {
         if (matchToken(TokenType::Public)) { access = Access::Public; sawAccess = true; }
         else if (matchToken(TokenType::Private)) { access = Access::Private; sawAccess = true; }
         else if (matchToken(TokenType::Protected)) { access = Access::Protected; sawAccess = true; }
+
+        if (atNestedType()) {
+            // `class Node { ... }` inside `class Tree`: the class Tree.Node, declared
+            // in a namespace named after the outer class (beside it, at top level).
+            if (sawAccess) fail(previous(), "a nested type has no access modifier: it is public");
+            nsStack_.push_back(cls->name);
+            Program nested;
+            parseTopLevel(nested);
+            nsStack_.pop_back();
+            if (!decos.empty()) nested.decls.front()->decorators = std::move(decos);
+            for (auto &d : nested.decls) pendingDecls_.push_back(std::move(d));
+            continue;
+        }
 
         if (check(TokenType::Constructor)) {
             if (sawAccess && access == Access::Protected)
@@ -862,7 +877,47 @@ DeclPtr Parser::parseClass(bool isAbstract) {
         }
     }
     expect(TokenType::RBrace, "to close the class body");
+    nestedTypes_.pop_back();
     return cls;
+}
+
+// At the start of a class body: note the types declared directly in it, so the
+// whole body (before their declarations too) can name them without the prefix.
+void Parser::scanNestedTypes(const std::string &outer) {
+    std::map<std::string, std::string> found;
+    int depth = 1;
+    for (size_t j = 0; depth > 0; ++j) {
+        TokenType t = peekAt(j).type;
+        if (t == TokenType::EndOfFile) break;
+        if (t == TokenType::LBrace) ++depth;
+        else if (t == TokenType::RBrace) --depth;
+        else if (depth == 1 && (t == TokenType::Class || t == TokenType::Struct || t == TokenType::Enum ||
+                                t == TokenType::Interface || t == TokenType::Trait) &&
+                 peekAt(j + 1).type == TokenType::Identifier)
+            found[peekAt(j + 1).lexeme] = qualify(outer + "." + peekAt(j + 1).lexeme);
+    }
+    nestedTypes_.push_back(std::move(found));
+}
+
+const std::string *Parser::nestedType(const std::string &name) const {
+    for (auto s = nestedTypes_.rbegin(); s != nestedTypes_.rend(); ++s) {
+        auto it = s->find(name);
+        if (it != s->end()) return &it->second;
+    }
+    return nullptr;
+}
+
+// In a class body, after any decorators and access modifier: a nested type?
+bool Parser::atNestedType() const {
+    switch (peek().type) {
+        case TokenType::Class: case TokenType::Struct: case TokenType::Enum:
+        case TokenType::Interface: case TokenType::Trait:
+            return peekAt(1).type == TokenType::Identifier;
+        case TokenType::Abstract: return peekAt(1).type == TokenType::Class;
+        default:
+            return peek().type == TokenType::Identifier && peek().lexeme == "final" &&
+                   peekAt(1).type == TokenType::Class;
+    }
 }
 
 // `async fn m(args) -> R { body }` becomes `fn m(args) -> Future<R>` whose body
