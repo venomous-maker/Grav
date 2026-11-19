@@ -179,11 +179,63 @@ y
 
 The two-name form `for (i, x in xs)` also gives the position of each element.
 
-Your own classes work in a for-each loop too, if they have a `size()` (or
-`length()`) method and a `get(i)` (or `at(i)`) method.
-
 Maps, and pairs in general, can be taken apart in the loop header:
-`for ((key, value) in pairs)`. See [Structs, enums and tuples](08-structs-enums-tuples.md#tuples-and-destructuring).
+`for ((key, value) in map)`. See [Structs, enums and tuples](08-structs-enums-tuples.md#tuples-and-destructuring).
+
+Your own classes work in a for-each loop too, in one of three ways:
+
+- a `size()` (or `length()`) method and a `get(i)` (or `at(i)`) method: the
+  loop counts through the positions;
+- `hasNext()` and `next()`: the object is an *iterator*, and the loop asks it
+  for values until `hasNext()` says false;
+- an `iterator()` method that gives such an object, a new one for each loop.
+
+An iterator suits values that have no position, or that are made as they are
+asked for, such as a linked list, the lines of a file, or a sequence with no end.
+The standard interfaces `Iterator<T>` and `Iterable<T>` name the last two ways
+(see [iter](../std/core/iter.md)); implementing them is optional, but lets a
+function take anything that can be walked:
+
+```grav
+import "std"
+
+class Countdown implements Iterator<int> {
+    private n: int
+    constructor(n: int) { self.n = n }
+    fn hasNext() -> bool { return self.n > 0 }
+    fn next() -> int {
+        self.n -= 1
+        return self.n + 1
+    }
+}
+
+fn total(xs: Iterable<int>) -> int {
+    let sum = 0
+    for (x in xs) { sum += x }
+    return sum
+}
+
+fn main() {
+    for (x in new Countdown(3)) { print(x) }
+
+    let list = new LinkedList<int>()
+    list.add(10)
+    list.add(20)
+    print(total(list))
+}
+```
+
+Output:
+
+```text
+3
+2
+1
+30
+```
+
+When a class has both, `iterator()` wins: `get(i)` on a linked list walks from
+one end each time, and on a map it takes a key rather than a position.
 
 ### The C-style for
 
@@ -451,7 +503,7 @@ failed
 - `if`/`else if`/`else` needs `bool` conditions and braces.
 - `while` checks first, `do`/`while` checks last.
 - `for (i in a..b)` counts (`..=` includes the end, `step` changes the stride);
-  `for (x in xs)` and `for (i, x in xs)` walk collections and strings.
+  `for (x in xs)` and `for (i, x in xs)` walk collections, strings and iterators.
 - `break` and `continue` work on the innermost loop, or on a labeled one.
 - `switch`/`match` picks one case, never falls through, and supports value lists,
   ranges, guards and enums; `match` also works as an expression.

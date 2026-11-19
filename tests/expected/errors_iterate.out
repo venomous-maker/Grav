@@ -1,0 +1,13 @@
+gravc: tests/errors/iterate.grav:9:15: type error: cannot iterate Nothing: it needs length()/size() -> int and get(int)/at(int), an iterator() whose result has hasNext() -> bool and next(), or hasNext() and next() of its own
+        for (x in new Nothing()) { }
+                  ^
+gravc: tests/errors/iterate.grav:10:15: type error: cannot iterate BadStep: it needs length()/size() -> int and get(int)/at(int), an iterator() whose result has hasNext() -> bool and next(), or hasNext() and next() of its own
+        for (x in new BadStep()) { }
+                  ^
+gravc: tests/errors/iterate.grav:11:15: type error: cannot iterate BadIterable: it needs length()/size() -> int and get(int)/at(int), an iterator() whose result has hasNext() -> bool and next(), or hasNext() and next() of its own
+        for (x in new BadIterable()) { }
+                  ^
+gravc: tests/errors/iterate.grav:12:15: type error: cannot iterate a value of type int (expected an array, slice, string, binary, collection or iterator)
+        for (x in 42) { }
+                  ^
+gravc: 4 error(s); aborting

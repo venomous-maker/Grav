@@ -3,6 +3,7 @@
 // index-heavy work; use LinkedList when you mostly add/remove at the ends or
 // splice through an iteration.
 import "../core/exception.grav"
+import "../core/iter.grav"
 import "array.grav"
 
 namespace std.collections {
@@ -14,7 +15,7 @@ namespace std.collections {
         constructor(value: T) { self.value = value; self.prev = null; self.next = null; }
     }
 
-    class LinkedList<T> {
+    class LinkedList<T> implements Iterable<T> {
         private head: LinkedNode<T>
         private tail: LinkedNode<T>
         private len: int
@@ -122,6 +123,8 @@ namespace std.collections {
             let n = self.head;
             while (n != null) { f(n.value); n = n.next; }
         }
+        // Walks the elements front to back, one node at a time (what `for (x in list)` uses).
+        public fn iterator() -> Iterator<T> { return new LinkedListIterator<T>(self.head); }
         // Reverses the order of the elements in place.
         public fn reverse() {
             let n = self.head;
@@ -143,6 +146,19 @@ namespace std.collections {
             let n = self.head;
             while (n != null) { out.push(n.value); n = n.next; }
             return out;
+        }
+    }
+
+    // Walks a LinkedList from a node to the back.
+    class LinkedListIterator<T> implements Iterator<T> {
+        private node: LinkedNode<T>
+        constructor(node: LinkedNode<T>) { self.node = node; }
+        public fn hasNext() -> bool { return self.node != null; }
+        public fn next() -> T {
+            if (self.node == null) { throw new StateError("LinkedList iterator: no more elements"); }
+            let v = self.node.value;
+            self.node = self.node.next;
+            return v;
         }
     }
 

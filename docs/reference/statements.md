@@ -125,6 +125,10 @@ fn name(params) -> R { }       (a local function)
   warns about missing members; a `match` over a data enum without `default` must
   cover every variant (an error otherwise).
 - In a loop, `break` inside a `case` leaves the loop.
+- `for (x in v)` walks a fixed array, slice, `string` (characters), `binary`
+  (bytes), or an object: by its `iterator()` when that gives something with
+  `hasNext() -> bool` and `next() -> T`; else by `size()`/`length()` and
+  `get(int)`/`at(int)`; else by its own `hasNext()` and `next()`.
 - `defer`red code runs when its block exits (not when an exception passes
   through), in reverse order; it cannot `return`, `break` or `continue`.
 - `finally` runs on every exit, including exceptions.

@@ -50,7 +50,7 @@ Removing from an empty list throws `StateError`; a bad index throws `IndexError`
 - `prev: LinkedNode<T>`
 - `next: LinkedNode<T>`
 
-### class LinkedList<T>
+### class LinkedList<T> implements Iterable<T>
 
 **Constructors**
 
@@ -75,8 +75,22 @@ Removing from an empty list throws `StateError`; a bad index throws `IndexError`
 - `fn remove(item: T) -> bool` — Removes the first element equal to `item`; reports whether one was found.
 - `fn contains(item: T) -> bool` — Whether some element equals `item`.
 - `fn forEach(f: fn(T))` — Calls f on each element, front to back.
+- `fn iterator() -> Iterator<T>` — Walks the elements front to back, one node at a time (what `for (x in list)` uses).
 - `fn reverse()` — Reverses the order of the elements in place.
 - `fn toString() -> string` — As text: [1, 2, 3] (strings in quotes).
 - `fn toArray() -> Array<T>` — The elements as a new Array, front to back.
+
+### class LinkedListIterator<T> implements Iterator<T>
+
+Walks a LinkedList from a node to the back.
+
+**Constructors**
+
+- `new LinkedListIterator(node: LinkedNode<T>)`
+
+**Methods**
+
+- `fn hasNext() -> bool`
+- `fn next() -> T`
 
 <!-- api:end -->

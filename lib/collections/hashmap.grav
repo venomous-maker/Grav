@@ -14,6 +14,7 @@
 //   for (k in ages.keys()) { ... }
 import "array.grav"
 import "tuple.grav"
+import "../core/iter.grav"
 
 namespace std.collections {
 
@@ -76,7 +77,7 @@ namespace std.collections {
     // `==`), enums by value, so HashMap<MyClass, V> and HashMap<MyEnum, V> work too.
     fn hashOf(x: any) -> long { return %{ grav_hash_any(x) %} as long; }
 
-    class HashMap<K, V> {
+    class HashMap<K, V> implements Iterable<Pair<K, V>> {
         private ks: K*
         private vs: V*
         private used: byte*
@@ -287,6 +288,18 @@ namespace std.collections {
             for (i in 0..self.cap) { if (self.used[i] != 0) { out.push(self.ks[i * kst]); } }
             return out;
         }
+        // Every key with its value, one at a time (in no particular order): what
+        // `for ((k, v) in map)` uses. Adding to the map while walking it may skip or repeat entries.
+        public fn iterator() -> Iterator<Pair<K, V>> { return new HashMapIterator<K, V>(self); }
+        // (for iterators) The first used slot at or after `i`, or -1.
+        public fn __slotFrom(i: int) -> int {
+            let j = i;
+            while (j < self.cap) { if (self.used[j] != 0) { return j; } j += 1; }
+            return -1;
+        }
+        // (for iterators) The key and the value in used slot `i`.
+        public fn __keyAt(i: int) -> K { return self.ks[i * %{ GRAV_HM_KST(self) %} as int]; }
+        public fn __valueAt(i: int) -> V { return self.vs[i * %{ GRAV_HM_VST(self) %} as int]; }
         // Calls f with each key and its value (in no particular order).
         public fn forEach(f: fn(K, V)) {
             let kst = %{ GRAV_HM_KST(self) %} as int;
@@ -343,6 +356,34 @@ namespace std.collections {
         let m = new HashMap<K, V>()
         for (p in pairs) { m.put(p.first, p.second) }
         return m
+    }
+
+    // Walks a HashMap's entries, slot by slot.
+    class HashMapIterator<K, V> implements Iterator<Pair<K, V>> {
+        private map: HashMap<K, V>
+        private at: int
+        constructor(map: HashMap<K, V>) { self.map = map; self.at = map.__slotFrom(0); }
+        public fn hasNext() -> bool { return self.at >= 0; }
+        public fn next() -> Pair<K, V> {
+            if (self.at < 0) { throw new StateError("HashMap iterator: no more entries"); }
+            let e = new Pair<K, V>(self.map.__keyAt(self.at), self.map.__valueAt(self.at));
+            self.at = self.map.__slotFrom(self.at + 1);
+            return e;
+        }
+    }
+
+    // Walks a HashMap's keys, slot by slot (HashSet's iterator).
+    class HashKeyIterator<K, V> implements Iterator<K> {
+        private map: HashMap<K, V>
+        private at: int
+        constructor(map: HashMap<K, V>) { self.map = map; self.at = map.__slotFrom(0); }
+        public fn hasNext() -> bool { return self.at >= 0; }
+        public fn next() -> K {
+            if (self.at < 0) { throw new StateError("HashSet iterator: no more elements"); }
+            let k = self.map.__keyAt(self.at);
+            self.at = self.map.__slotFrom(self.at + 1);
+            return k;
+        }
     }
 
 }

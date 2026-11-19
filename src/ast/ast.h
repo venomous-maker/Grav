@@ -395,9 +395,11 @@ struct ForStmt : Stmt {
 // `for (i in lo..hi [step s]) { ... }` — i takes lo, lo+s, … up to hi (exclusive
 // with `..`, inclusive with `..=`); s defaults to 1 and may be negative.
 // `for (x in xs)` / `for (i, x in xs)` iterate the elements of a fixed array, a
-// slice (variadic param), a `binary`, or a collection object exposing
-// `length()`/`size()` plus `get(i)`/`at(i)` (e.g. Array<T>, List<T>).
-enum class ForInKind { Range, Array, Slice, Bytes, Chars, Object };
+// slice (variadic param), a `binary`, a collection object exposing
+// `length()`/`size()` plus `get(i)`/`at(i)` (e.g. Array<T>, List<T>), or an
+// iterator: an object with `hasNext()`/`next()`, or whose `iterator()` gives one
+// (which wins over get(i): LinkedList<T>, HashMap<K, V>).
+enum class ForInKind { Range, Array, Slice, Bytes, Chars, Object, Iterator };
 struct ForInStmt : Stmt {
     std::string label;
     std::string var;
@@ -412,6 +414,9 @@ struct ForInStmt : Stmt {
     TypeRef varType;        // loop variable type (range counter / element)
     std::string lenMethod;  // Object: `length` or `size`
     std::string getMethod;  // Object: `get` or `at`
+    std::string iterMethod; // Iterator: `iterator`, or empty when the value is the iterator itself
+    TypeRef iterType;       // Iterator: the type with hasNext()/next()
+    std::string hasNextMethod, nextMethod;
 };
 
 // `defer stmt` / `defer { ... }` — runs when the enclosing block exits (normal

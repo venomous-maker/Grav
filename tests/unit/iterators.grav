@@ -1,0 +1,112 @@
+// `for (x in v)` over iterators: a class with hasNext()/next(), one whose
+// iterator() gives such a thing, Iterator/Iterable as types, the std
+// collections that have no index, and leaving a loop early.
+import "std"
+
+class Countdown implements Iterator<int> {
+    private n: int
+    constructor(n: int) { self.n = n }
+    fn hasNext() -> bool { return self.n > 0 }
+    fn next() -> int { self.n -= 1; return self.n + 1 }
+}
+
+class Words implements Iterable<string> {
+    private parts: Array<string>
+    constructor(text: string) { self.parts = Str.split(text, " ") }
+    fn iterator() -> Iterator<string> { return new WordIter(self.parts) }
+}
+
+class WordIter implements Iterator<string> {
+    private parts: Array<string>
+    private i: int = 0
+    constructor(parts: Array<string>) { self.parts = parts }
+    fn hasNext() -> bool { return self.i < self.parts.size() }
+    fn next() -> string { self.i += 1; return self.parts[self.i - 1] }
+}
+
+// Both ways through: the iterator wins over get(i).
+class Both {
+    fn size() -> int { return 2 }
+    fn get(i: int) -> string { return "indexed" }
+    fn iterator() -> Countdown { return new Countdown(2) }
+}
+
+fn joined(xs: Iterable<string>) -> string {
+    let out = ""
+    for (x in xs) { out += x }
+    return out
+}
+
+test "an iterator, and a class whose iterator() gives one" {
+    let got = new Array<string>()
+    for (x in new Countdown(3)) { got.push("${x}") }
+    for (i, w in new Words("a bb ccc")) { got.push("${i}${w}") }
+    assertEq(Str.join(got, " "), "3 2 1 0a 1bb 2ccc")
+    assertEq(joined(new Words("x y z")), "xyz")
+    let it: Iterator<int> = new Countdown(2)
+    let sum = 0
+    for (x in it) { sum += x }
+    assertEq(sum, 3)
+    assertEq(it.hasNext(), false)
+    let both = 0
+    for (x in new Both()) { both += x }
+    assertEq(both, 3)
+}
+
+test "break, continue, labels and exceptions leave an iterator loop" {
+    let got = new Array<string>()
+    outer: for (w in new Words("p q r s t")) {
+        if (w == "q") { continue }
+        for (x in new Countdown(3)) {
+            if (w == "s") { break outer }
+            if (x == 2) { break }
+            got.push(w + "${x}")
+        }
+    }
+    assertEq(Str.join(got, " "), "p3 r3")
+    let caught = ""
+    try { for (w in new Words("boom here")) { throw new ValueError(w) } }
+    catch (e: ValueError) { caught = e.message() }
+    assertEq(caught, "boom")
+}
+
+test "std collections without an index" {
+    let l = new LinkedList<int>()
+    for (i in 1..=4) { l.add(i * i) }
+    let seen = new Array<string>()
+    for (i, x in l) { seen.push("${i}:${x}") }
+    assertEq(Str.join(seen, " "), "0:1 1:4 2:9 3:16")
+
+    let ages = new HashMap<string, int>()
+    ages["ada"] = 36
+    ages["alan"] = 41
+    let lines = new Array<string>()
+    for ((name, age) in ages) { lines.push("${name}=${age}") }
+    lines.sortBy(fn(a, b) => Str.compare(a, b))
+    assertEq(Str.join(lines, " "), "ada=36 alan=41")
+
+    // An int-keyed map is walked by its entries, not by get(0), get(1), ...
+    let byId = new HashMap<int, string>()
+    byId[7] = "seven"
+    byId[9] = "nine"
+    let ids = 0
+    for (e in byId) { ids += e.first }
+    assertEq(ids, 16)
+
+    let set = new HashSet<string>()
+    set.add("x"); set.add("y"); set.add("x")
+    let n = 0
+    for (s in set) { n += 1 }
+    assertEq(n, 2)
+
+    let m = new Map<string, int>()
+    m.put("b", 2); m.put("a", 1)
+    let sm = new SortedMap<string, int>(fn(a, b) => Str.compare(a, b))
+    sm.put("b", 2); sm.put("a", 1)
+    let order = ""
+    for ((k, v) in m) { order += "${k}${v}" }
+    for ((k, v) in sm) { order += "${k}${v}" }
+    assertEq(order, "b2a1a1b2")
+
+    for (e in new HashMap<string, int>()) { assertEq(true, false) }
+}

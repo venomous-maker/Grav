@@ -559,33 +559,56 @@ void TypeChecker::checkForIn(ForInStmt &s) {
         } else if (lo.kind == TypeRef::Kind::String) {
             s.iterKind = ForInKind::Chars; // each UTF-8 character, as a string
             s.varType = TypeRef::prim(TypeRef::Kind::String);
-        } else if (lo.isNamed() && reg_->isClass(lo.name)) {
-            s.iterKind = ForInKind::Object;
-            auto pick = [&](std::initializer_list<const char *> names, size_t nparams)
-                -> const MethodInfo * {
-                for (const char *n : names) {
-                    const MethodInfo *m = reg_->findMethod(lo.name, n);
-                    if (m && !m->isStatic && m->paramTypes.size() == nparams) return m;
-                }
+        } else if (lo.isNamed() && (reg_->isClass(lo.name) || reg_->isInterface(lo.name))) {
+            // A method of a class or interface by its source name, taking `nparams`.
+            auto method = [&](const TypeRef &t, const char *n, size_t nparams) -> const MethodInfo * {
+                const MethodInfo *m = reg_->isInterface(t.name) ? reg_->findInterfaceMethod(t.name, n)
+                                                                : reg_->findMethod(t.name, n);
+                return m && !m->isStatic && m->paramTypes.size() == nparams ? m : nullptr;
+            };
+            auto pick = [&](std::initializer_list<const char *> names, size_t nparams) -> const MethodInfo * {
+                for (const char *n : names)
+                    if (const MethodInfo *m = method(lo, n, nparams)) return m;
                 return nullptr;
+            };
+            // hasNext() -> bool and next() -> T on `t`: it is an iterator.
+            auto stepper = [&](const TypeRef &t) {
+                if (!t.isNamed() || !(reg_->isClass(t.name) || reg_->isInterface(t.name))) return false;
+                const MethodInfo *has = method(t, "hasNext", 0), *next = method(t, "next", 0);
+                if (!has || has->returnType.kind != TypeRef::Kind::Bool || !next || next->returnType.isVoid())
+                    return false;
+                s.iterType = t;
+                s.hasNextMethod = has->name;
+                s.nextMethod = next->name;
+                s.varType = next->returnType;
+                return true;
             };
             const MethodInfo *len = pick({"length", "size"}, 0);
             const MethodInfo *get = pick({"get", "at"}, 1);
-            if (!len || len->returnType.kind != TypeRef::Kind::Int || !get ||
-                get->paramTypes[0].kind != TypeRef::Kind::Int) {
-                error(s.lo->line, s.lo->col,
-                      "cannot iterate " + typeRefName(lo) +
-                          ": a collection needs length()/size() -> int and get(int)/at(int)");
-                s.varType = TypeRef::prim(TypeRef::Kind::Error);
-            } else {
+            const MethodInfo *iter = pick({"iterator"}, 0);
+            if (iter && stepper(iter->returnType)) {
+                // The class's own way through wins: get(i) may walk a list, or take a key.
+                s.iterKind = ForInKind::Iterator;
+                s.iterMethod = iter->name;
+            } else if (len && len->returnType.kind == TypeRef::Kind::Int && get &&
+                       get->paramTypes[0].kind == TypeRef::Kind::Int) {
+                s.iterKind = ForInKind::Object;
                 s.lenMethod = len->name;
                 s.getMethod = get->name;
                 s.varType = get->returnType;
+            } else if (stepper(lo)) {
+                s.iterKind = ForInKind::Iterator;
+            } else {
+                error(s.lo->line, s.lo->col,
+                      "cannot iterate " + typeRefName(lo) +
+                          ": it needs length()/size() -> int and get(int)/at(int), an iterator() whose "
+                          "result has hasNext() -> bool and next(), or hasNext() and next() of its own");
+                s.varType = TypeRef::prim(TypeRef::Kind::Error);
             }
         } else {
             error(s.lo->line, s.lo->col,
                   "cannot iterate a value of type " + typeRefName(lo) +
-                      " (expected an array, slice, string, binary, or collection object)");
+                      " (expected an array, slice, string, binary, collection or iterator)");
             s.varType = TypeRef::prim(TypeRef::Kind::Error);
         }
     } else {

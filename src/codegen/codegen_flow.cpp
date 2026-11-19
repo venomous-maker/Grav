@@ -285,7 +285,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         return;
     }
 
-    bool ownedSrc = false, srcReg = false;
+    bool ownedSrc = false, srcReg = false, ownedIter = false;
     // Element loops: bind the iterable once, then index it.
     std::string idx = s.indexVar.empty() ? "__i" + n : s.indexVar;
     std::string src = "__it" + n;
@@ -330,6 +330,7 @@ void CodeGen::emitForIn(const ForInStmt &s) {
             ownedSrc = true;
             break;
         case ForInKind::Object:
+        case ForInKind::Iterator:
         default:
             // The collection is owned for the whole loop (an iteration's releases
             // must not free a collection the loop expression just made).
@@ -338,6 +339,22 @@ void CodeGen::emitForIn(const ForInStmt &s) {
                 line(unwindPush(s.lo->type, src));
                 cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(s.lo->type, src, true)});
                 ownedSrc = true;
+            }
+            if (s.iterKind == ForInKind::Iterator) {
+                // The iterator iterator() gives is owned for the loop as well.
+                std::string it = src;
+                if (!s.iterMethod.empty()) {
+                    it = src + "_it";
+                    line(cTy(s.iterType) + " " + it + " = " + methodCall(src, s.lo->type, s.iterMethod, "") + ";");
+                    if (refKind(s.iterType) != RefKind::None) {
+                        line(unwindPush(s.iterType, it));
+                        cleanups_.push_back({Cleanup::Code, "", nullptr, ownedRelease(s.iterType, it, true)});
+                        ownedIter = true;
+                    }
+                }
+                count = methodCall(it, s.iterType, s.hasNextMethod, "");
+                elem = methodCall(it, s.iterType, s.nextMethod, "");
+                break;
             }
             // length() is re-read each step so the loop tolerates appends.
             count = methodCall(src, s.lo->type, s.lenMethod, "");
@@ -353,13 +370,17 @@ void CodeGen::emitForIn(const ForInStmt &s) {
         indent_++;
         line(len + " = grav_utf8_len(" + src + " + " + pos + ");");
         elem = "grav_str_slice(" + src + " + " + pos + ", " + len + ")";
+    } else if (s.iterKind == ForInKind::Iterator) {
+        line("for (int " + idx + " = 0; " + count + "; " + idx + "++) {");
+        indent_++;
     } else {
         line("for (int " + idx + " = 0; " + idx + " < " + count + "; " + idx + "++) {");
         indent_++;
     }
     // An element from get(i) is the loop variable's own reference: released at
     // the end of the iteration (and by break/continue/return on the way out).
-    bool ownedVar = (s.iterKind == ForInKind::Object || s.iterKind == ForInKind::Chars) &&
+    bool ownedVar = (s.iterKind == ForInKind::Object || s.iterKind == ForInKind::Iterator ||
+                     s.iterKind == ForInKind::Chars) &&
                     refKind(s.varType) != RefKind::None;
     line(vty + " " + s.var + " = " + elem + ";");
     bool varReg = ownedVar && blockMayThrow(s.body);
@@ -374,6 +395,10 @@ void CodeGen::emitForIn(const ForInStmt &s) {
     line("}");
     popLoopLabel(labelId); // `break <label>` still releases the iterated collection
     forInEnd();
+    if (ownedIter) {
+        line(cleanups_.back().code);
+        cleanups_.pop_back();
+    }
     if (ownedSrc) {
         line(cleanups_.back().code);
         cleanups_.pop_back();
@@ -506,7 +531,7 @@ bool CodeGen::stmtMayCall(const Stmt &s) const {
         return (x->init && stmtMayCall(*x->init)) || exprMayCall(x->cond.get()) ||
                (x->update && stmtMayCall(*x->update));
     if (auto *x = dynamic_cast<const ForInStmt *>(&s))
-        return x->iterKind == ForInKind::Object || exprMayCall(x->lo.get()) ||
+        return x->iterKind == ForInKind::Object || x->iterKind == ForInKind::Iterator || exprMayCall(x->lo.get()) ||
                exprMayCall(x->hi.get()) || exprMayCall(x->step.get());
     if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) return exprMayCall(x->subject.get());
     if (dynamic_cast<const ThrowStmt *>(&s)) return true;
@@ -571,7 +596,7 @@ bool CodeGen::stmtMayThrow(const Stmt &s) const {
         return (x->init && stmtMayThrow(*x->init)) || exprMayThrow(x->cond.get()) ||
                (x->update && stmtMayThrow(*x->update)) || blockMayThrow(x->body);
     if (auto *x = dynamic_cast<const ForInStmt *>(&s))
-        return x->iterKind == ForInKind::Object || exprMayThrow(x->lo.get()) || exprMayThrow(x->hi.get()) ||
+        return x->iterKind == ForInKind::Object || x->iterKind == ForInKind::Iterator || exprMayThrow(x->lo.get()) || exprMayThrow(x->hi.get()) ||
                exprMayThrow(x->step.get()) || blockMayThrow(x->body);
     if (auto *x = dynamic_cast<const DeferStmt *>(&s)) return blockMayThrow(x->body);
     if (auto *x = dynamic_cast<const SwitchStmt *>(&s)) {

@@ -1,0 +1,13 @@
+// What `for ... in` cannot walk.
+class Nothing { fn size() -> int { return 0 } }
+class BadStep {
+    fn hasNext() -> int { return 0 }
+    fn next() -> int { return 1 }
+}
+class BadIterable { fn iterator() -> int { return 0 } }
+fn main() {
+    for (x in new Nothing()) { }
+    for (x in new BadStep()) { }
+    for (x in new BadIterable()) { }
+    for (x in 42) { }
+}

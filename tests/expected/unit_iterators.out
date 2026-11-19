@@ -1,0 +1,5 @@
+running 3 tests
+  ok    an iterator, and a class whose iterator() gives one
+  ok    break, continue, labels and exceptions leave an iterator loop
+  ok    std collections without an index
+result: 3 passed, 0 failed

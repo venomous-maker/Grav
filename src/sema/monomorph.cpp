@@ -1452,7 +1452,7 @@ void eachTypeIn(MethodDecl &m, const std::function<void(TypeRef &)> &onType,
     for (auto &st : m.body.statements) {
         visitStmt(*st, [&](Stmt &s) {
             if (auto *l = dynamic_cast<LetStmt *>(&s)) { if (l->hasDeclaredType) onType(l->declaredType); }
-            else if (auto *f = dynamic_cast<ForInStmt *>(&s)) onType(f->varType);
+            else if (auto *f = dynamic_cast<ForInStmt *>(&s)) { onType(f->varType); onType(f->iterType); }
             else if (auto *t = dynamic_cast<TryStmt *>(&s)) for (auto &c : t->catches) onType(c.type);
         }, [&](Expr &e) {
             if (auto *x = dynamic_cast<AsExpr *>(&e)) onType(x->target);

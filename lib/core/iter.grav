@@ -1,0 +1,31 @@
+// lib/core/iter.grav — Iterator<T> and Iterable<T>: walking values one at a time,
+// for things that have no index (linked lists, sets, maps, lines read from a
+// stream, rows from a cursor, endless sequences).
+//
+//   class Countdown implements Iterator<int> {
+//       private n: int
+//       constructor(n: int) { self.n = n }
+//       fn hasNext() -> bool { return self.n > 0 }
+//       fn next() -> int { self.n -= 1; return self.n + 1 }
+//   }
+//   for (x in new Countdown(3)) { print(x) }   // 3 2 1
+//
+// `for (x in v)` walks any value whose class has these methods; implementing
+// the interfaces is not required, but lets a function take "anything iterable".
+
+namespace std.core {
+
+    // Gives values one at a time: next() only after hasNext() said true.
+    interface Iterator<T> {
+        // Whether next() has another value.
+        fn hasNext() -> bool
+        // The next value.
+        fn next() -> T
+    }
+
+    // Something that can be walked: each call to iterator() starts again from the first value.
+    interface Iterable<T> {
+        // A new iterator over the values.
+        fn iterator() -> Iterator<T>
+    }
+}

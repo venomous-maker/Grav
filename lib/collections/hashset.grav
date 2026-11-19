@@ -7,7 +7,7 @@ import "hashmap.grav"
 
 namespace std.collections {
 
-    class HashSet<T> {
+    class HashSet<T> implements Iterable<T> {
         private m: HashMap<T, bool>
         constructor() { self.m = new HashMap<T, bool>(); }
         destructor() { free(self.m); }
@@ -44,6 +44,8 @@ namespace std.collections {
         }
         // The elements as a new Array (in no particular order).
         public fn toArray() -> Array<T> { return self.m.keys(); }
+        // Walks the elements (in no particular order): what `for (x in set)` uses.
+        public fn iterator() -> Iterator<T> { return new HashKeyIterator<T, bool>(self.m); }
         // Calls f on each element (in no particular order).
         public fn forEach(f: fn(T)) { self.m.forEach(fn(k, v) => f(k)); }
 

@@ -6,10 +6,11 @@
 import "../core/exception.grav"
 import "array.grav"
 import "tuple.grav"
+import "map.grav"
 
 namespace std.collections {
 
-    class SortedMap<K, V> {
+    class SortedMap<K, V> implements Iterable<Pair<K, V>> {
         private ks: Array<K>
         private vs: Array<V>
         private cmp: fn(K, K) -> int
@@ -104,6 +105,8 @@ namespace std.collections {
         }
         // Calls f with each key and value, in key order.
         public fn forEach(f: fn(K, V)) { for (i in 0..self.ks.size()) { f(self.ks[i], self.vs[i]); } }
+        // Every key with its value, one at a time, in key order: what `for ((k, v) in map)` uses.
+        public fn iterator() -> Iterator<Pair<K, V>> { return new EntryIterator<K, V>(self.ks, self.vs); }
         // Every key with its value, as pairs, in key order.
         public fn entries() -> Array<Pair<K, V>> {
             let out = new Array<Pair<K, V>>();
