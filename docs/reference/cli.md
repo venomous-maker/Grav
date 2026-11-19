@@ -134,6 +134,7 @@ dependency is read from its folder each time and is not pinned.
 | `GRAV_CACHE` | the compiler | the build cache folder (default `$XDG_CACHE_HOME/grav/builds`, else `~/.cache/grav/builds`) |
 | `GRAV_BUILD_CACHE` | the compiler | `0` turns the build cache off |
 | `GRAV_CACHE_MAX` | the compiler | how many built programs the cache keeps (default 40, the most recently used) |
+| `GRAV_PRUNE` | the compiler | `0` keeps every generated function in the C (by default those nothing calls are left out) |
 | `GRAV_LTO` | the compiler | `1` always optimizes on every core (`-flto=auto`), `0` never; by default GCC does for large programs |
 
 ## Build speed
@@ -154,6 +155,10 @@ Two things keep that short:
   end has to run again (a change that leaves the generated C the same), the C
   compiler is still skipped. Change any file the program uses and it is built
   afresh. Warnings are printed when a program is compiled, not when it is reused.
+- **Less C.** A generic instance brings every method of its template, and most
+  are never called: functions nothing reaches are left out of the generated C,
+  which for a framework-sized program is less than half as long. Debug builds
+  (and `grav test`'s `-Og`) compile about a quarter faster for it.
 - **Fewer front-end passes.** Each generic type argument the compiler infers
   (`mapOf("a", 1)`) makes it compile the program again with the argument filled
   in, so a large program takes three passes. The inferences are kept with the

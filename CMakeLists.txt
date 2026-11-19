@@ -45,6 +45,7 @@ add_executable(gravc
         src/sema/sanitize.cpp
         src/sema/enums.cpp
         src/sema/typechecker_match.cpp
+        src/codegen/prune.cpp
         src/codegen/mangle.cpp
         src/codegen/codegen_runtime.cpp
         src/codegen/codegen_faults.cpp

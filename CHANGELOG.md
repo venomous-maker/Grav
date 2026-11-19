@@ -34,6 +34,10 @@ Packages state the compiler versions they need in `grav.toml`
   arguments are kept between builds and reused for every function and method
   whose text (and the program's declarations) is unchanged. `grav check` of the
   example app after an edit inside a function: about 4 seconds instead of 9.
+- **Less generated C**: functions nothing can reach (most methods of generic
+  instances) are left out; the example app's C is 60% smaller, and `-Og` builds
+  of it compile about 27% faster. A build to a new output path reuses GCC's
+  optimized partitions too.
 - **A build cache** (`~/.cache/grav/builds`): building, running or testing a
   program that has not changed reuses its binary in a fraction of a second; a
   change that leaves the generated C the same skips the C compiler. `GRAV_CACHE`,

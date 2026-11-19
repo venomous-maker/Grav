@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "codegen/codegen.h"
+#include "codegen/prune.h"
 #include "common/diagnostics.h"
 #include "driver/build_cache.h"
 #include "driver/infer_cache.h"
@@ -644,6 +645,9 @@ int main(int argc, char **argv) {
         cgMap.reserve(srcMap.size());
         for (const auto &s : srcMap) cgMap.push_back({s.file, s.line});
         std::string c = codegen.generate(program, registry, cgMap);
+        // Most methods of generic instances are never called: leave them out of the C
+        // (GRAV_PRUNE=0 keeps everything).
+        if (const char *pr = std::getenv("GRAV_PRUNE"); !pr || std::string(pr) != "0") c = grav::pruneUnreachable(c);
 
         if (toStdout) {
             std::cout << resolveLineResets(c, "<stdout>");
