@@ -1,11 +1,12 @@
-# Pair and Triple
+# Pair, Triple and Quad
 
 `import "std/collections"` (included in `import "std"`) · namespace `std.collections`
 
-`Pair<A, B>` and `Triple<A, B, C>` group two or three values. They are what the
-tuple syntax builds: `(1, "one")` is a `Pair<int, string>`, and the type
-`(int, string)` means `Pair<int, string>`. Their fields are `first`, `second`
-and `third`, and they cannot be changed after creation.
+`Pair<A, B>`, `Triple<A, B, C>` and `Quad<A, B, C, D>` group two, three or four
+values. They are what the tuple syntax builds: `(1, "one")` is a
+`Pair<int, string>`, and the type `(int, string)` means `Pair<int, string>`.
+Their fields are `first`, `second`, `third` and `fourth`, and they cannot be
+changed after creation.
 
 ```grav
 import "std"
@@ -93,5 +94,23 @@ so walking a map allocates nothing. `for ((k, v) in map)` takes it apart.
 
 - `fn operator==(o: Triple<A, B, C>) -> bool` — Whether all three values are equal (==).
 - `fn toString() -> string` — As text: (1, 2.5, "c") (strings in quotes).
+
+### class Quad<A, B, C, D>
+
+**Constructors**
+
+- `new Quad(first: A, second: B, third: C, fourth: D)`
+
+**Fields**
+
+- `readonly first: A`
+- `readonly second: B`
+- `readonly third: C`
+- `readonly fourth: D`
+
+**Methods**
+
+- `fn operator==(o: Quad<A, B, C, D>) -> bool` — Whether all four values are equal (==).
+- `fn toString() -> string` — As text: (1, 2.5, "c", true) (strings in quotes).
 
 <!-- api:end -->

@@ -1,4 +1,4 @@
-// lib/collections/tuple.grav — Pair<A,B> and Triple<A,B,C>: small immutable groupings, handy
+// lib/collections/tuple.grav — Pair<A,B>, Triple<A,B,C> and Quad<A,B,C,D>: small immutable groupings, handy
 // for returning several values. Constructed with inferred types:
 //
 //   let p = new Pair("age", 36)            // Pair<string, int>
@@ -37,6 +37,25 @@ namespace std.collections {
         // As text: (1, 2.5, "c") (strings in quotes).
         fn toString() -> string {
             return "(" + __repr(self.first) + ", " + __repr(self.second) + ", " + __repr(self.third) + ")"
+        }
+    }
+
+    class Quad<A, B, C, D> {
+        readonly first: A
+        readonly second: B
+        readonly third: C
+        readonly fourth: D
+        constructor(first: A, second: B, third: C, fourth: D) {
+            self.first = first; self.second = second; self.third = third; self.fourth = fourth;
+        }
+        // Whether all four values are equal (==).
+        fn operator==(o: Quad<A, B, C, D>) -> bool {
+            return self.first == o.first && self.second == o.second && self.third == o.third && self.fourth == o.fourth;
+        }
+        // As text: (1, 2.5, "c", true) (strings in quotes).
+        fn toString() -> string {
+            return "(" + __repr(self.first) + ", " + __repr(self.second) + ", " + __repr(self.third) + ", " +
+                   __repr(self.fourth) + ")"
         }
     }
 

@@ -274,13 +274,13 @@ TypeRef Parser::parseType(const char *context) {
             advance();
             base = TypeRef::named("Self");
             break;
-        case TokenType::LParen: { // `(A, B)` / `(A, B, C)` — a tuple: Pair<A, B> / Triple<A, B, C>
+        case TokenType::LParen: { // `(A, B)` .. `(A, B, C, D)` — a tuple: Pair<A, B> / Triple / Quad
             advance();
             std::vector<TypeRef> parts;
             do { parts.push_back(parseType("for a tuple element")); } while (matchToken(TokenType::Comma));
             expect(TokenType::RParen, "to close the tuple type");
-            if (parts.size() < 2 || parts.size() > 3) fail(t, "a tuple type has 2 or 3 elements");
-            base = TypeRef::named(parts.size() == 2 ? "Pair" : "Triple");
+            if (parts.size() < 2 || parts.size() > 4) fail(t, "a tuple type has 2 to 4 elements");
+            base = TypeRef::named(parts.size() == 2 ? "Pair" : parts.size() == 3 ? "Triple" : "Quad");
             base.args = std::move(parts);
             break;
         }

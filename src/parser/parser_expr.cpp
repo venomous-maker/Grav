@@ -836,13 +836,14 @@ ExprPtr Parser::parsePrimary() {
         case TokenType::LParen: {
             advance();
             ExprPtr inner = parseExpression();
-            // `(a, b)` / `(a, b, c)`: a tuple, built as the standard library's Pair / Triple.
+            // `(a, b)` .. `(a, b, c, d)`: a tuple, built as the standard library's Pair / Triple / Quad.
             if (check(TokenType::Comma)) {
                 auto tuple = at<NewExpr>(t);
                 tuple->args.push_back(std::move(inner));
                 while (matchToken(TokenType::Comma)) tuple->args.push_back(parseExpression());
-                if (tuple->args.size() > 3) fail(t, "a tuple has 2 or 3 elements");
-                tuple->className = tuple->args.size() == 2 ? "Pair" : "Triple";
+                if (tuple->args.size() > 4) fail(t, "a tuple has 2 to 4 elements");
+                size_t n = tuple->args.size();
+                tuple->className = n == 2 ? "Pair" : n == 3 ? "Triple" : "Quad";
                 expect(TokenType::RParen, "to close the tuple");
                 return tuple;
             }

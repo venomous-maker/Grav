@@ -1,5 +1,5 @@
 // Literal and declaration syntax: raw and multi-line strings, character
-// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions, constant array lengths.
+// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions, constant array lengths, tuples of four.
 import "std"
 
 class Bag {
@@ -180,4 +180,20 @@ test "fixed array lengths may be constant expressions" {
     let a: int[HALF + 1] = [1, 2, 3]
     let b = new Board()
     assertEq("${a[2]} ${b.cells.length}", "3 8")
+}
+
+fn stats(xs: Array<int>) -> (int, int, int, float) {
+    let lo = xs[0]
+    let hi = xs[0]
+    let sum = 0
+    for (x in xs) { lo = Math.min(lo, x); hi = Math.max(hi, x); sum += x }
+    return (lo, hi, sum, double(sum) / xs.size())
+}
+
+test "tuples of four" {
+    let s = stats([3, 1, 4, 1, 5])
+    let (lo, hi, sum, mean) = s
+    assertEq("${lo} ${hi} ${sum} ${mean} ${s.fourth}", "1 5 14 2.8 2.8")
+    assertEq(s.toString(), "(1, 5, 14, 2.8)")
+    assert(s == (1, 5, 14, 2.8))
 }

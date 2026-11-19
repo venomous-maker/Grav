@@ -416,7 +416,7 @@ StmtPtr Parser::parseSwitch(bool asExpr) {
     return stmt;
 }
 
-// `let (a, b) = pair` (tuple fields first/second/third), `let [x, y] = arr`
+// `let (a, b) = pair` (tuple fields first/second/third/fourth), `let [x, y] = arr`
 // (indexes) and `let {x, y} = point` (fields by name): the value goes into a
 // hidden local, and each name is a `let` reading its part (`_` skips one).
 StmtPtr Parser::parseDestructure(const Token &kw) {
@@ -427,15 +427,15 @@ StmtPtr Parser::parseDestructure(const Token &kw) {
     std::vector<const Token *> names;
     do { names.push_back(&expectName("as a name to bind")); } while (matchToken(TokenType::Comma));
     expect(close, "to close the names");
-    if (open == TokenType::LParen && (names.size() < 2 || names.size() > 3))
-        fail(kw, "a tuple has 2 or 3 elements to bind");
+    if (open == TokenType::LParen && (names.size() < 2 || names.size() > 4))
+        fail(kw, "a tuple has 2 to 4 elements to bind");
     expect(TokenType::Assign, "after the names");
     auto hidden = std::make_unique<LetStmt>();
     hidden->line = kw.line; hidden->col = kw.col;
     hidden->name = "destructured__" + std::to_string(destructureCounter_++);
     hidden->isConst = true;
     hidden->init = parseExpression();
-    static const char *tupleFields[] = {"first", "second", "third"};
+    static const char *tupleFields[] = {"first", "second", "third", "fourth"};
     for (size_t i = 0; i < names.size(); ++i) {
         const Token &n = *names[i];
         if (n.lexeme == "_") continue;

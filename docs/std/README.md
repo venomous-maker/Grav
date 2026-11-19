@@ -71,7 +71,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [heap](collections/heap.md) | `PriorityQueue<T>`: always the best element next |
 | [linkedlist](collections/linkedlist.md) | `LinkedList<T>`: a doubly linked list |
 | [bitset](collections/bitset.md) | `BitSet`: a compact set of small integers |
-| [tuple](collections/tuple.md) | `Pair<A, B>` and `Triple<A, B, C>`: what `(a, b)` builds |
+| [tuple](collections/tuple.md) | `Pair<A, B>`, `Triple<A, B, C>` and `Quad<A, B, C, D>`: what `(a, b)` builds |
 
 ### text
 

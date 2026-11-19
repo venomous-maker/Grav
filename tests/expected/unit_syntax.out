@@ -1,4 +1,4 @@
-running 12 tests
+running 13 tests
   ok    raw strings keep backslashes and dollar signs
   ok    multi-line strings drop the shared indentation
   ok    character literals are their code points
@@ -12,4 +12,5 @@ local!
   ok    type, match, trait, export and uses name variables
   ok    generic local functions
   ok    fixed array lengths may be constant expressions
-result: 12 passed, 0 failed
+  ok    tuples of four
+result: 13 passed, 0 failed

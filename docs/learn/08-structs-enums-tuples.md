@@ -265,7 +265,7 @@ Data enums can be generic. The standard library's `Option<T>` and
 
 ## Tuples and destructuring
 
-Sometimes you want to group two or three values without declaring a struct for
+Sometimes you want to group two to four values without declaring a struct for
 them, typically to return several results from a function. `(a, b)` makes a
 *tuple*, and `(int, string)` is its type:
 
@@ -291,8 +291,9 @@ Output:
 3 remainder 2
 ```
 
-Tuples are the standard library's `Pair<A, B>` and `Triple<A, B, C>`, with
-fields `first`, `second` and `third`, so they need `import "std"`.
+Tuples are the standard library's `Pair<A, B>`, `Triple<A, B, C>` and
+`Quad<A, B, C, D>`, with fields `first`, `second`, `third` and `fourth`, so they
+need `import "std"`.
 
 `let (q, r) = ...` is *destructuring*: it declares one variable per part. It
 works on more than tuples:
