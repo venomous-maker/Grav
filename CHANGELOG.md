@@ -12,6 +12,32 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Language
+
+- **Closures can assign the variables they capture.** A variable a lambda
+  assigns is shared (a heap cell) by the function and all its lambdas, so
+  `let n = 0; xs.forEach(fn(x: int) { n += x })` works and counters outlive
+  their function. Variables lambdas only read are still copied when the lambda
+  is made.
+- **Generators**: a function or method returning `Iterator<T>` can `yield`
+  values one at a time; `for` loops walk it, and a loop that stops early ends it
+  (its `finally` blocks run). Each value costs a thread switch.
+- **`if` and `try` as values**: `if (c) a else b` (with `else if` chains) and
+  `try value catch fallback` / `catch (e: T) fallback`; branches may be blocks
+  whose last line is the value.
+- **`async` methods**, static ones included.
+- **`private constructor`**: only the class's own code can call it.
+
+### Fixes
+
+- A line that starts with `(` or an interpolated string begins a new statement
+  instead of calling the previous line's value.
+
+### Editors
+
+- VS Code extension 1.15.0: `yield` highlighted everywhere; hover and snippets
+  for generators, `if`/`try` values, async methods and private constructors.
+
 ## 1.7.0 (2026-11-19)
 
 ### Breaking changes
