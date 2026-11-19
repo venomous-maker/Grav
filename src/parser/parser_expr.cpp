@@ -796,6 +796,22 @@ ExprPtr Parser::parsePrimary() {
                 return e;
             }
             advance();
+            if (const std::string *full = nestedType(t.lexeme)) {
+                // A type declared in the class being parsed: `Node.of(1)` is `Tree.Node.of(1)`.
+                size_t dot = full->find('.');
+                auto e = at<NameExpr>(t);
+                e->name = full->substr(0, dot);
+                ExprPtr out = std::move(e);
+                while (dot != std::string::npos) {
+                    size_t next = full->find('.', dot + 1);
+                    auto m = at<MemberExpr>(t);
+                    m->object = std::move(out);
+                    m->member = full->substr(dot + 1, next == std::string::npos ? std::string::npos : next - dot - 1);
+                    out = std::move(m);
+                    dot = next;
+                }
+                return out;
+            }
             auto e = at<NameExpr>(t);
             e->name = t.lexeme;
             for (auto s = localGenerics_.rbegin(); s != localGenerics_.rend(); ++s) {
