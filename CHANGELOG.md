@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.8.0 (2026-11-19)
+
 ### Language
 
 - **Generic methods in interfaces** (and traits, with default bodies): calls
