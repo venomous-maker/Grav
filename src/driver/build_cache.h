@@ -31,6 +31,9 @@ private:
 
 // Whether `cc` is GCC, which optimizes one large file in parallel with -flto=auto.
 bool ccIsGcc(const std::string &cc);
+// Whether that GCC keeps its link-time partitions between builds (-flto-incremental,
+// GCC 15 and later), and the folder for them ("" when not, or the cache is off).
+std::string ltoIncrementalDir(const std::string &cc);
 
 } // namespace grav
 

@@ -60,6 +60,15 @@ bool ccIsGcc(const std::string &cc) {
     return v.find("Free Software Foundation") != std::string::npos || v.find("gcc") != std::string::npos;
 }
 
+std::string ltoIncrementalDir(const std::string &cc) {
+    if (const char *off = std::getenv("GRAV_BUILD_CACHE"); off && std::string(off) == "0") return "";
+    fs::path dir = cacheDir();
+    if (dir.empty() || output(cc + " --help=common").find("-flto-incremental=") == std::string::npos) return "";
+    std::error_code ec;
+    fs::create_directories(dir / "lto", ec);
+    return ec ? "" : (dir / "lto").string();
+}
+
 BuildCache::BuildCache(const std::string &cPath, const std::string &cc, const std::string &flags) {
     if (const char *off = std::getenv("GRAV_BUILD_CACHE"); off && std::string(off) == "0") return;
     fs::path dir = cacheDir();

@@ -25,6 +25,11 @@ Packages state the compiler versions they need in `grav.toml`
   comparison instead of `dynamic_cast`), and GCC optimizes a large program's C
   on every core (`-flto=auto`). The example shop app (framework and all its
   packages, 1.5 million lines of C) went from 7 minutes to under 1.5.
+- **Edits rebuild faster**: generated C no longer changes outside the code that
+  changed (temporaries are numbered per function, lambdas and call adapters are
+  named after where they are, and a build's C file keeps its name), and GCC 15+
+  keeps its optimized partitions between builds (`-flto-incremental`). Editing
+  one function of the example app rebuilds it in about 40 seconds.
 - **A build cache** (`~/.cache/grav/builds`): building, running or testing a
   program that has not changed reuses its binary in a fraction of a second; a
   change that leaves the generated C the same skips the C compiler. `GRAV_CACHE`,

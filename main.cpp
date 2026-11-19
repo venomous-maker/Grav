@@ -651,13 +651,20 @@ int main(int argc, char **argv) {
             if (keepC) {
                 cPath = base + ".gen.c";
             } else {
-                // A unique scratch file in the temp dir: no clutter next to the
-                // sources, and parallel builds of the same file cannot collide.
+                // A scratch file in the temp dir, named after the binary it builds: no
+                // clutter next to the sources, and the same name each time, since the C
+                // names itself in its #line directives (and the C compiler's caches
+                // compare it). Builds of different binaries cannot collide.
                 std::error_code tec;
                 fs::path tmp = fs::temp_directory_path(tec);
                 if (tec) tmp = ".";
-                cPath = (tmp / ("gravc-" + std::to_string(getpid()) + "-" +
-                                fs::path(base).filename().string() + ".c")).string();
+                std::error_code aec;
+                std::string target = fs::absolute(exePath, aec).string();
+                unsigned long long h = 1469598103934665603ULL;
+                for (unsigned char ch : target) h = (h ^ ch) * 1099511628211ULL;
+                char hex[17];
+                std::snprintf(hex, sizeof hex, "%016llx", h);
+                cPath = (tmp / ("gravc-" + std::string(hex) + "-" + fs::path(base).filename().string() + ".c")).string();
                 tempC = true;
             }
         }
@@ -705,7 +712,13 @@ int main(int argc, char **argv) {
         if (emit != EmitMode::Asm && optFlag != "-O0" && !race && !sanitize && ltoWant != "0") {
             std::error_code sz;
             bool large = fs::file_size(cPath, sz) > (16u << 20) && !sz;
-            if ((ltoWant == "1" || large) && grav::ccIsGcc(cc)) flags += " -flto=auto";
+            if ((ltoWant == "1" || large) && grav::ccIsGcc(cc)) {
+                flags += " -flto=auto";
+                // GCC 15+ keeps each partition it optimized: after an edit, only the
+                // partitions holding changed code are optimized again.
+                std::string inc = grav::ltoIncrementalDir(cc);
+                if (!inc.empty()) flags += " -flto-incremental=\"" + inc + "\"";
+            }
         }
         std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
                           " \"" + cPath + "\" -o \"" + exePath + "\"" + libs;
