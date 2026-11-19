@@ -125,6 +125,8 @@ fn name(params) -> R { }       (a local function)
   warns about missing members; a `match` over a data enum without `default` must
   cover every variant (an error otherwise).
 - In a loop, `break` inside a `case` leaves the loop.
+- A case body runs from its colon to the next `case`, `default` or `}`; it
+  cannot be empty (`case 1, 2:` gives one body several values).
 - `for (x in v)` walks a fixed array, slice, `string` (characters), `binary`
   (bytes), or an object: by its `iterator()` when that gives something with
   `hasNext() -> bool` and `next() -> T`; else by `size()`/`length()` and

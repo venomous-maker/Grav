@@ -350,7 +350,10 @@ weekday
 - `default` runs when no case fits.
 - The value can be an integer, a string, an enum, or a data enum.
 
-A case body is a block, or a single statement written after the colon.
+A case body is everything from the colon up to the next `case`, `default` or
+the closing brace: one statement, several (on separate lines or split by `;`),
+or a `{ block }`. A case cannot be empty: where C would let `case 1: case 2:`
+fall through, write `case 1, 2:`.
 
 ### Ranges and guards
 

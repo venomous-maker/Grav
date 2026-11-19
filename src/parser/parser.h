@@ -98,6 +98,7 @@ private:
     int destructureCounter_ = 0;
     bool lastArgsSpread_ = false; // the last parseArguments() ended with `...xs`
     Block parseCaseBody();
+    void parseCaseStatements(Block &b);
     StmtPtr parseTry();
     StmtPtr parseThrow();
     StmtPtr parseSimpleStmt(); // for-loop init/update: let / assign / expr

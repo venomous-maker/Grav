@@ -1,5 +1,5 @@
 // Literal and declaration syntax: raw and multi-line strings, character
-// literals, collection literals, local functions and lambdas that call themselves.
+// literals, collection literals, local functions, lambdas that call themselves, case bodies.
 import "std"
 
 class Bag {
@@ -98,4 +98,30 @@ test "keywords as member names: methods, fields, static members, after . and ?."
     let m: KwMatcher = r
     r.type = "changed"
     assertEq("${m.match("changed")} ${r?.type}", "true changed")
+}
+
+fn caseBodies(x: int) -> string {
+    let out = ""
+    switch (x) {
+        case 1: out += "a"; out += "b"
+        case 2:
+            out += "c"
+            out += "d"
+        case 3: { out += "e" } out += "f"
+        default: out = "z"; return out + "?"
+    }
+    return out
+}
+
+test "a case runs the statements up to the next case, without braces" {
+    assertEq("${caseBodies(1)} ${caseBodies(2)} ${caseBodies(3)} ${caseBodies(4)}", "ab cd ef z?")
+    let n = 0
+    for (i in 0..10) {
+        switch (i % 3) {
+            case 0: continue
+            case 1: n += 1; if (i > 6) { break }
+            default: n += 10
+        }
+    }
+    assertEq(n, 23)
 }

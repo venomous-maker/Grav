@@ -1,0 +1,3 @@
+gravc: tests/errors/switch_empty_case.grav:6:9: parse error: a case needs a body; for several values in one case write `case a, b:`
+            case 2: print("one or two")
+            ^

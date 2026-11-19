@@ -285,15 +285,38 @@ StmtPtr Parser::parseFor() {
     return stmt;
 }
 
-// A case body: a `{ block }`, or a single statement (`case Some(x): return x`).
+// A case body: a `{ block }`, or the statements up to the next `case`, `default`
+// or the closing brace (`case 1: log("one"); n += 1`).
 Block Parser::parseCaseBody() {
-    if (check(TokenType::LBrace)) return parseBlock();
+    if (check(TokenType::LBrace)) {
+        const Token &open = peek();
+        int line = open.line, col = open.col;
+        Block b = parseBlock();
+        matchToken(TokenType::Semicolon);
+        if (check(TokenType::Case) || check(TokenType::Default) || check(TokenType::RBrace)) return b;
+        // `case 1: { ... } more()`: the block was the first statement of several.
+        auto first = std::make_unique<BlockStmt>();
+        first->line = line; first->col = col;
+        first->block = std::move(b);
+        Block all;
+        all.statements.push_back(std::move(first));
+        parseCaseStatements(all);
+        return all;
+    }
+    if (check(TokenType::Case) || check(TokenType::Default) || check(TokenType::RBrace))
+        fail(peek(), "a case needs a body; for several values in one case write `case a, b:`");
     Block b;
-    b.statements.push_back(parseStatement());
-    for (auto &extra : pendingStmts_) b.statements.push_back(std::move(extra));
-    pendingStmts_.clear();
-    matchToken(TokenType::Semicolon);
+    parseCaseStatements(b);
     return b;
+}
+
+void Parser::parseCaseStatements(Block &b) {
+    while (!check(TokenType::Case) && !check(TokenType::Default) && !check(TokenType::RBrace) && !atEnd()) {
+        b.statements.push_back(parseStatement());
+        for (auto &extra : pendingStmts_) b.statements.push_back(std::move(extra));
+        pendingStmts_.clear();
+        while (matchToken(TokenType::Semicolon)) {}
+    }
 }
 
 // In a `match` expression each arm is an expression: its value is the result.

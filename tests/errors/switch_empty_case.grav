@@ -1,0 +1,8 @@
+// An empty case is not a fall-through into the next one, as in C.
+fn main() {
+    let x = 1
+    switch (x) {
+        case 1:
+        case 2: print("one or two")
+    }
+}
