@@ -30,6 +30,7 @@ kind of type, how they convert into each other, and what their zero values are.
 | `T*` | a pointer to `T` |
 | `T?` | a nullable value: a `T` or `null` |
 | `fn(A, B) -> R` | a function taking `A` and `B` and returning `R`; `fn(A)` returns nothing |
+| `Outer.Inner` | a class, struct, enum or interface declared inside the class `Outer` (plain `Inner` inside it) |
 | `(A, B)`, `(A, B, C)`, `(A, B, C, D)` | tuples: the standard library's `Pair<A, B>`, `Triple<A, B, C>` and `Quad<A, B, C, D>` |
 | `Future<T>` | the result of an `async` call; `await` it for the `T` |
 | `Name` | a class, struct, enum, interface, trait or alias |
