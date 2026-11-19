@@ -27,6 +27,12 @@ Packages state the compiler versions they need in `grav.toml`
   whose last line is the value.
 - **`async` methods**, static ones included.
 - **`private constructor`**: only the class's own code can call it.
+- **Extension methods**: `fn Point.norm() -> float { ... }` adds a method to a
+  class, struct, interface or built-in type (`fn int.twice()`,
+  `fn Array<int>.total()`) from outside it; `self` is the receiver. A type's own
+  method of the same name wins.
+- `type`, `typedef`, `trait`, `match`, `export` and `uses` can name locals,
+  parameters, loop and catch variables.
 
 ### Fixes
 
@@ -36,7 +42,8 @@ Packages state the compiler versions they need in `grav.toml`
 ### Editors
 
 - VS Code extension 1.15.0: `yield` highlighted everywhere; hover and snippets
-  for generators, `if`/`try` values, async methods and private constructors.
+  for generators, `if`/`try` values, async methods and private constructors;
+  extension methods highlighted, outlined and offered after `.`.
 
 ## 1.7.0 (2026-11-19)
 
