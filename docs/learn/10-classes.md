@@ -532,6 +532,47 @@ Output:
 v2
 ```
 
+## Types inside a class
+
+A class, struct, enum or interface can be declared inside a class body when it
+only makes sense next to that class. Inside the class it goes by its own name;
+outside, it is `Outer.Inner`:
+
+```grav
+import "std"
+
+class Playlist {
+    public songs: Array<Song> = []
+    fn add(title: string, mood: Mood) { self.songs.push(new Song(title, mood)) }
+
+    enum Mood { Calm, Loud }
+    class Song {
+        public title: string
+        public mood: Mood
+        constructor(title: string, mood: Mood) { self.title = title; self.mood = mood }
+    }
+}
+
+fn main() {
+    let p = new Playlist()
+    p.add("Rain", Playlist.Mood.Calm)
+    let first: Playlist.Song = p.songs[0]
+    print(first.title)
+    print(first.mood == Playlist.Mood.Calm)
+}
+```
+
+Output:
+
+```text
+Rain
+true
+```
+
+A nested type is an ordinary type in a namespace named after the class: it
+cannot use the outer class's type parameters or private members, and it has no
+access modifier.
+
 ## Structs or classes?
 
 | | struct | class |
@@ -553,6 +594,7 @@ v2
   reads and assigns through them (`+=` and `++` too); leave out `set` for a
   read-only one.
 - `static` members belong to the class.
+- A type declared in a class body is `Outer.Inner` outside the class.
 - Several constructors are allowed, with defaults and named arguments.
 - `public done: bool = false` gives a field its starting value, in every constructor.
 - `toString` controls printing; a `destructor` runs when the last reference goes away.
