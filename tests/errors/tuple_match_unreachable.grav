@@ -1,0 +1,7 @@
+// A case after one that matches every tuple can never match.
+fn main() {
+    match ((1, 2)) {
+        case (x, _): println(x)
+        case (1, 2): println("never")
+    }
+}

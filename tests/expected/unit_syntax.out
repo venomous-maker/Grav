@@ -1,4 +1,4 @@
-running 13 tests
+running 15 tests
   ok    raw strings keep backslashes and dollar signs
   ok    multi-line strings drop the shared indentation
   ok    character literals are their code points
@@ -11,6 +11,8 @@ local!
   ok    if and try give values
   ok    type, match, trait, export and uses name variables
   ok    generic local functions
+  ok    generic local functions use the block's variables
   ok    fixed array lengths may be constant expressions
   ok    tuples of four
-result: 13 passed, 0 failed
+  ok    tuple patterns in match
+result: 15 passed, 0 failed

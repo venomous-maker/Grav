@@ -1,0 +1,3 @@
+gravc: tests/errors/generic_local_shadow.grav:7:13: parse error: 'show' uses the variable 'n' declared before it, and here 'n' is another variable: rename one of them
+            show(n)
+                ^

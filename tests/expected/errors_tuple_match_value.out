@@ -1,0 +1,3 @@
+gravc: tests/errors/tuple_match_value.grav:4:13: parse error: a match on a tuple used as a value needs a 'default' (or a last case that matches every tuple)
+        let s = match (p) { case (1, _): "one" case (_, 2): "two" }
+                ^

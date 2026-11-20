@@ -1,0 +1,5 @@
+// A match on a tuple used as a value must cover every tuple.
+fn main() {
+    let p = (1, 2)
+    let s = match (p) { case (1, _): "one" case (_, 2): "two" }
+}

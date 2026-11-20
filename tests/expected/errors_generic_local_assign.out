@@ -1,0 +1,3 @@
+gravc: tests/errors/generic_local_assign.grav:4:26: parse error: a generic local function cannot assign 'n', a variable of its block (it has a copy): use a non-generic local function or a lambda
+        fn bump<T>(x: T) { n += 1 }
+                             ^

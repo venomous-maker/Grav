@@ -1,5 +1,5 @@
 // Literal and declaration syntax: raw and multi-line strings, character
-// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions, constant array lengths, tuples of four.
+// literals, collection literals, local functions, lambdas that call themselves, case bodies, if and try as values, generic local functions (and the block variables they use), constant array lengths, tuples of four, tuple patterns in match.
 import "std"
 
 class Bag {
@@ -172,6 +172,26 @@ test "generic local functions" {
     assertEq(twice, 9)
 }
 
+test "generic local functions use the block's variables" {
+    let sep = ", "
+    let bag = new Bag()
+    fn join<T>(a: T, b: T) -> string { return "${a}${sep}${b}" }
+    fn fill<T>(x: T, n: int) {
+        if (n == 0) { return }
+        bag.add(n)
+        fill(x, n - 1)
+    }
+    fill("x", 3)
+    let out = ""
+    for (i in 0..2) {
+        fn tag<T>(x: T) -> string { return "${x}${i}${join(1, 2)}" }
+        out += tag::<string>("t") + ";"
+    }
+    assertEq(join("a", "b"), "a, b")
+    assertEq(bag.items.size(), 3)
+    assertEq(out, "t01, 2;t11, 2;")
+}
+
 const CELLS: int = 4
 class Board { public cells: int[CELLS * 2] }
 
@@ -196,4 +216,29 @@ test "tuples of four" {
     assertEq("${lo} ${hi} ${sum} ${mean} ${s.fourth}", "1 5 14 2.8 2.8")
     assertEq(s.toString(), "(1, 5, 14, 2.8)")
     assert(s == (1, 5, 14, 2.8))
+}
+
+fn where(p: Pair<int, int>) -> string {
+    return match (p) {
+        case (0, 0): "origin"
+        case (0, _), (_, 0): "axis"
+        case (x, y) if x == y: "diagonal ${x}"
+        case (1..=3, y): "near ${y}"
+        default: "far"
+    }
+}
+
+test "tuple patterns in match" {
+    let got = new Array<string>()
+    for (p in [(0, 0), (0, 4), (7, 0), (5, 5), (2, 9), (8, 1)]) { got.push(where(p)) }
+    assertEq(Str.join(got, ","), "origin,axis,axis,diagonal 5,near 9,far")
+    let seen = ""
+    match (("go", 3, (1, "z"))) {
+        case ("stop", _, _): seen = "stop"
+        case (word, n, (1, s)) if n > 2: seen = "${word}${n}${s}"
+        case _: seen = "?"
+    }
+    assertEq(seen, "go3z")
+    let a = 4
+    assertEq(match (a, "x", 1.5, true) { case (4, "x", _, true): "all" case _: "no" }, "all")
 }

@@ -1,0 +1,9 @@
+// A call of a generic local function where a variable it uses is shadowed.
+fn main() {
+    let n = 1
+    fn show<T>(x: T) { println("${n} ${x}") }
+    if (true) {
+        let n = "s"
+        show(n)
+    }
+}

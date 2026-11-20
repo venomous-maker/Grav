@@ -1,0 +1,6 @@
+// A generic local function has a copy of the block variables it uses: it cannot assign them.
+fn main() {
+    let n = 1
+    fn bump<T>(x: T) { n += 1 }
+    bump(2)
+}
