@@ -747,6 +747,8 @@ int main(int argc, char **argv) {
         // With GCC's partition cache, the C goes in on stdin: GCC's cache keys include
         // the input file's name, and on stdin it is always the same.
         bool viaStdin = flags.find("-flto-incremental") != std::string::npos;
+        // Clang (macOS's cc) warns about patterns the generated C uses on purpose.
+        if (!grav::ccIsGcc(cc)) flags += " -Wno-parentheses-equality -Wno-unused-value";
         std::string cmd = cc + flags + (emit == EmitMode::Asm ? " -S" : "") +
                           (viaStdin ? " -x c -" : " \"" + cPath + "\"") + " -o \"" + exePath + "\"" + libs +
                           (viaStdin ? " < \"" + cPath + "\"" : "");
