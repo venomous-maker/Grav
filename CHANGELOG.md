@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.9.0 (2026-11-20)
+
 ### Standard library
 
 - More things can be walked one at a time instead of read whole:
