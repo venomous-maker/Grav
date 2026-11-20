@@ -723,8 +723,10 @@ namespace std.data {
         private pos: int
         private len: int
         private depth: int
-        // Object keys seen so far, so repeated keys ("id" in every record) share one string.
-        private keys: HashMap<string, string>
+        // Object keys seen so far, so repeated keys ("id" in every record) share one
+        // string (made with the second object: a small document has one).
+        private keys: HashMap<string, string> = null
+        private objects: int = 0
         // Per nesting depth, the keys of the last object there, by position: the
         // records of an array usually repeat them, and a key that matches is not
         // parsed into a new string at all.
@@ -734,7 +736,6 @@ namespace std.data {
             self.pos = 0;
             self.len = %{ (int)strlen(src) %} as int;
             self.depth = 0;
-            self.keys = new HashMap<string, string>();
             self.recent = new Array<Array<string>>();
         }
         // Key number `ki` of an object at the current depth.
@@ -754,6 +755,10 @@ namespace std.data {
             return k;
         }
         private fn sharedKey(k: string) -> string {
+            if (self.keys == null) {
+                if (self.objects < 2) { return k; }
+                self.keys = new HashMap<string, string>();
+            }
             let seen = self.keys.getOr(k, "");
             if (seen != "" || k == "") { return k == "" ? k : seen; }
             if (self.keys.size() < 4096) { self.keys.put(k, k); }
@@ -868,6 +873,7 @@ namespace std.data {
         }
         private fn object() -> JsonValue {
             self.enter();
+            self.objects += 1;
             self.pos += 1;
             let out = new JsonValue(JsonKind.Object);
             self.skipSpace();
