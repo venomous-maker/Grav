@@ -570,6 +570,21 @@ function parseFile(text) {
           add({ name, kind: KIND.Variable, line: i, ch: m.indexOf(name, cb.index + cb[0].indexOf("(")), local: owner, type: "",
             role: "case", detail: raw.trim(), doc: "" });
         }
+      // case (x, _), case ((a, 2), s) if a > 1: the names a tuple pattern binds
+      for (const ct of m.matchAll(/\bcase\s+\(/g)) {
+        let at = ct.index + ct[0].length - 1, depth = 0, end = at;
+        for (; end < m.length; end++) {
+          if (m[end] === "(") depth++;
+          else if (m[end] === ")" && --depth === 0) break;
+        }
+        const pat = m.slice(at, end + 1);
+        for (const b of pat.matchAll(new RegExp(`(?<=[(,]\\s*)(${IDENT})(?=\\s*[,)])`, "g"))) {
+          const name = b[1];
+          if (name === "_" || KEYWORD_SET.has(name) || name === "true" || name === "false" || name === "null") continue;
+          add({ name, kind: KIND.Variable, line: i, ch: at + b.index, local: owner, type: "",
+            role: "case", detail: raw.trim(), doc: "" });
+        }
+      }
     }
 
     // ---- brackets: bodies of the declarations opened above ----

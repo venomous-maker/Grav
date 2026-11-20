@@ -35,6 +35,7 @@ fn main() {
     for (e in byName) { print(e.first) }
     for (w in new LinkedList<string>()) { print(w) }
     print(first(names) + "${first(new Array<int>())}" + show(1) + "${maybe}" + "${byName.size()}")
+    match ((1, ("a", 2.5))) { case (num, (word, _)): print("${num}${word}") }
 }
 EOF
 
@@ -43,7 +44,7 @@ EOF
 for want in '6 fixed int[3]' '7 names Array<string>' '8 byName HashMap<string, Array<int>>' \
             '9 show fn(int) -> string' '10 maybe long?' '11 sh Shape' '12 i int' '12 x int' \
             '13 s string' '14 k string' '15 n int' '16 err Exception' '17 v string' '19 r float' '20 side float' \
-            '22 e Entry<string, Array<int>>' '23 w string'; do
+            '22 e Entry<string, Array<int>>' '23 w string' '25 num int' '25 word string'; do
   set -- $want; line=$1 name=$2; shift 2
   grep -qF "{\"line\": $line, \"column\": " "$T/types.json" || fail "no types on line $line"
   grep -F "\"line\": $line, " "$T/types.json" | grep -qF "\"name\": \"$name\", \"type\": \"$*\"}" ||
@@ -67,7 +68,7 @@ hints() { # compiler, then "check" to run it first
 }
 hints "$GRAV" check > "$T/checked.txt"
 for want in '6: fixed: int[3]' '9: show: fn(int) -> string' '12: x: int' '14: k: string' '17: v: string' \
-            '19: r: float' '20: side: float'; do
+            '19: r: float' '20: side: float' '25: num: int' '25: word: string'; do
   grep -qxF "$want" "$T/checked.txt" || fail "inlay hint after a check: $want"
 done
 grep -q '^10: maybe' "$T/checked.txt" && fail "no hint where the type is written"
