@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.10.0 (2026-11-20)
+
 ### Language
 
 - **Generic local functions use the block's variables**: `fn join<T>(a: T, b: T)`
