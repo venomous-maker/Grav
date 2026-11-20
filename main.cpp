@@ -347,8 +347,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && std::string(argv[1]) == "env") {
         // Where things are, for editors and scripts.
         bool json = argc > 2 && std::string(argv[2]) == "--json";
-        std::error_code ec;
-        fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+        fs::path exe = grav::currentExecutable();
         std::string stdDir = grav::stdLibDir().string(), pkgs = grav::packagesDir().string();
         std::string projErr2;
         grav::ProjectConfig pc = grav::findProject(fs::current_path(), projErr2);

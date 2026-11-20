@@ -79,6 +79,8 @@ ProjectConfig findProject(const std::filesystem::path &start, std::string &err);
 // The standard library directory ($GRAV_STD, $GRAV_HOME/lib, next to the
 // executable, or the source tree it was built from); empty if none is found.
 std::filesystem::path stdLibDir();
+// This program's own file (empty if the system cannot tell).
+std::filesystem::path currentExecutable();
 
 class ModuleLoader {
 public:

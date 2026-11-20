@@ -4,6 +4,7 @@
 // reinstalls only when something changed. The process is replaced by the
 // script, so the binary being updated is no longer running.
 #include "driver/self_update.h"
+#include "driver/modules.h"
 
 #include <filesystem>
 #include <fstream>
@@ -52,9 +53,8 @@ int runSelfUpdate(const std::vector<std::string> &args) {
         else return usage();
     }
 
-    std::error_code ec;
-    fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (ec) {
+    fs::path exe = currentExecutable();
+    if (exe.empty()) {
         std::cerr << "grav self-update: cannot tell where this grav is installed\n";
         return 1;
     }

@@ -7,6 +7,9 @@
 #include <fstream>
 #include <sstream>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -245,14 +248,27 @@ ProjectConfig findProject(const fs::path &start, std::string &err) {
     return cfg;
 }
 
+fs::path currentExecutable() {
+    std::error_code ec;
+#ifdef __APPLE__
+    char buf[4096];
+    uint32_t n = sizeof buf;
+    if (_NSGetExecutablePath(buf, &n) != 0) return {};
+    fs::path p = fs::canonical(buf, ec);
+    return ec ? fs::path(buf) : p;
+#else
+    fs::path p = fs::read_symlink("/proc/self/exe", ec);
+    return ec ? fs::path() : p;
+#endif
+}
+
 fs::path stdLibDir() {
     if (const char *e = std::getenv("GRAV_STD"); e && *e && hasStd(e)) return e;
     if (const char *e = std::getenv("GRAV_HOME"); e && *e && hasStd(fs::path(e) / "lib"))
         return fs::path(e) / "lib";
     // Installed layouts: <prefix>/bin/grav with <prefix>/share/grav/lib or <prefix>/lib/grav.
-    std::error_code ec;
-    fs::path exe = fs::read_symlink("/proc/self/exe", ec);
-    if (!ec) {
+    fs::path exe = currentExecutable();
+    if (!exe.empty()) {
         fs::path prefix = exe.parent_path().parent_path();
         for (const fs::path &d : {prefix / "share" / "grav" / "lib", prefix / "lib" / "grav",
                                   prefix / "lib", exe.parent_path() / "lib"})
