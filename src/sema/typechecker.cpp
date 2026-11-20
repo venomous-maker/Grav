@@ -50,7 +50,8 @@ void TypeChecker::declareLocal(const std::string &name, const TypeRef &type,
     v.col = col;
     v.name = name;
     scopes_.back()[name] = std::move(v);
-    if (recordBindings_) bindings_.push_back({name, type, line, col});
+    if (recordBindings_ && name.find("__") == std::string::npos) // (not the compiler's hidden locals)
+        bindings_.push_back({name, type, line, col});
 }
 
 TypeChecker::LocalVar *TypeChecker::lookupLocal(const std::string &name) {
