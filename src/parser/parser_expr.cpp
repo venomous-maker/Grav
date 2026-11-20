@@ -2,6 +2,7 @@
 #include "lexer/lexer.h"
 
 #include <charconv>
+#include <utility>
 
 #include "common/diagnostics.h"
 
@@ -375,6 +376,7 @@ ExprPtr Parser::parseUnary() {
         e->isIncrement = (opTok.type == TokenType::PlusPlus);
         e->isPrefix = true;
         e->target = parseUnary();
+        checkCapturedWrite(*e->target, opTok);
         return e;
     }
     return parsePostfix();
@@ -450,6 +452,7 @@ ExprPtr Parser::parsePostfix() {
             call->args = parseArguments();
             call->spreadLast = lastArgsSpread_;
             call->callee = std::move(expr);
+            completeLocalCall(*call);
             expr = std::move(call);
         } else if (check(TokenType::LParen) && !onNewLine()) {
             // `f(args)`. A line-leading `(` (or interpolated string) begins a new
@@ -459,6 +462,7 @@ ExprPtr Parser::parsePostfix() {
             call->args = parseArguments();
             call->spreadLast = lastArgsSpread_;
             call->callee = std::move(expr);
+            completeLocalCall(*call);
             expr = std::move(call);
         } else if (check(TokenType::LBracket) && !onNewLine()) {
             // `base[index]` — element access. A line-leading `[` begins a new
@@ -491,6 +495,7 @@ ExprPtr Parser::parsePostfix() {
             e->isIncrement = (opTok.type == TokenType::PlusPlus);
             e->isPrefix = false;
             e->target = std::move(expr);
+            checkCapturedWrite(*e->target, opTok);
             expr = std::move(e);
         } else {
             return expr;
@@ -666,6 +671,7 @@ ExprPtr Parser::parsePrimary() {
                     c.type = parseType("for the caught exception");
                     expect(TokenType::RParen, "after the caught exception's type");
                 }
+                nextBlockVars_ = {c.var};
                 c.block = parseValueBranch("a 'catch' fallback");
                 st->catches.push_back(std::move(c));
             }
@@ -715,6 +721,8 @@ ExprPtr Parser::parsePrimary() {
                 } while (matchToken(TokenType::Comma));
             }
             expect(TokenType::RParen, "to end the lambda's parameters");
+            nextBlockVars_.clear();
+            for (const auto &p : e->params) nextBlockVars_.push_back(p.name);
             if (matchToken(TokenType::Arrow)) {
                 e->hasReturnType = true;
                 e->returnType = parseType("as the lambda's return type");
@@ -722,7 +730,10 @@ ExprPtr Parser::parsePrimary() {
             yieldScopes_.push_back(0); // (`yield` belongs to functions, not lambdas)
             if (matchToken(TokenType::FatArrow)) {
                 e->isArrow = true;
+                localVars_.emplace_back(); // its parameters
+                for (const auto &v : std::exchange(nextBlockVars_, {})) declareLocal(v);
                 e->exprBody = parseExpression();
+                localVars_.pop_back();
             } else {
                 e->body = parseBlock();
             }
@@ -818,6 +829,7 @@ ExprPtr Parser::parsePrimary() {
                 auto it = s->find(t.lexeme);
                 if (it != s->end()) { e->name = it->second; break; } // a generic local function
             }
+            if (e->name == t.lexeme) noteLocalUse(e->name);
             return e;
         }
         case TokenType::New: {

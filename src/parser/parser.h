@@ -103,6 +103,27 @@ private:
     // top-level function's name (see parseLocalFunction).
     std::vector<std::map<std::string, std::string>> localGenerics_;
     int localGenericCounter_ = 0;
+    // The block variables in reach (`let`s, parameters, loop and catch variables),
+    // innermost block last, each with a number telling it from a shadowing one. A
+    // generic local function gets the ones it uses as hidden leading parameters
+    // (of hidden type parameters), passed at each call: copies, like a lambda's.
+    struct LocalVar { std::string name; int id; };
+    std::vector<std::vector<LocalVar>> localVars_;
+    std::vector<std::string> nextBlockVars_; // declared in the next block parsed (parameters, loop variables)
+    int localVarCounter_ = 0;
+    struct Captures {
+        std::vector<LocalVar> vars;
+        size_t base = 0;                 // localVars_ depth outside the function
+        bool done = false;               // its body is parsed: `vars` is final
+        std::vector<CallExpr *> pending; // its own calls in its body, completed after it
+    };
+    std::map<std::string, Captures> localCaptures_; // hidden function name -> what it uses
+    std::vector<std::string> captureFrames_;         // generic local functions being parsed, innermost last
+    void declareLocal(const std::string &name);
+    const LocalVar *findLocal(const std::string &name, size_t *depth = nullptr) const;
+    void noteLocalUse(const std::string &name);
+    void completeLocalCall(CallExpr &call);
+    void checkCapturedWrite(const Expr &target, const Token &at);
     // Types declared inside the class bodies being parsed, innermost last: name ->
     // its qualified name (`Node` -> `Tree.Node`, declared in the namespace `Tree`).
     std::vector<std::map<std::string, std::string>> nestedTypes_;

@@ -152,6 +152,7 @@ unsigned long long Parser::hashMix(unsigned long long h, unsigned long long v) {
 
 void Parser::parseTopLevel(Program &program) {
     size_t scopeFrom = pos_, declsBefore = program.decls.size();
+    nextBlockVars_.clear(); // (left by a declaration without a body)
     parseTopLevelDecl(program);
     // Each function's and class's text, with its tokens' places relative to its
     // start: what an inference made inside it depends on, besides the surface.
@@ -488,6 +489,8 @@ std::vector<Param> Parser::parseParams(bool allowVariadic) {
         } while (matchToken(TokenType::Comma));
     }
     expect(TokenType::RParen, "to end the parameter list");
+    nextBlockVars_.clear(); // the body's first variables
+    for (const auto &p : params) nextBlockVars_.push_back(p.name);
     return params;
 }
 

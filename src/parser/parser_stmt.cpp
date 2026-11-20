@@ -2,6 +2,8 @@
 
 #include "common/diagnostics.h"
 
+#include <utility>
+
 namespace grav {
 
 Block Parser::parseBlock() {
@@ -9,11 +11,16 @@ Block Parser::parseBlock() {
     Block block;
     localGenerics_.emplace_back();
     localConsts_.emplace_back();
+    localVars_.emplace_back();
+    for (const auto &v : std::exchange(nextBlockVars_, {})) declareLocal(v);
     while (!check(TokenType::RBrace) && !atEnd()) {
         if (matchToken(TokenType::Semicolon)) continue; // stray / empty statement
+        size_t first = block.statements.size();
         block.statements.push_back(parseStatement());
         for (auto &extra : pendingStmts_) block.statements.push_back(std::move(extra)); // destructuring
         pendingStmts_.clear();
+        for (size_t i = first; i < block.statements.size(); ++i) // the variables it declares
+            if (auto *let = as<LetStmt>(block.statements[i].get())) declareLocal(let->name);
         // Statements may be terminated by ';' (recommended). Consume any here;
         // whitespace/newlines also separate statements when ';' is omitted.
         while (matchToken(TokenType::Semicolon)) {}
@@ -21,6 +28,7 @@ Block Parser::parseBlock() {
     expect(TokenType::RBrace, "to close the block");
     localGenerics_.pop_back();
     localConsts_.pop_back();
+    localVars_.pop_back();
     return block;
 }
 
@@ -160,6 +168,7 @@ StmtPtr Parser::parseTry() {
         expect(TokenType::Colon, "after the caught variable");
         c.type = parseType("for the caught exception");
         expect(TokenType::RParen, "after the catch type");
+        nextBlockVars_ = {c.var};
         c.block = parseBlock();
         s->catches.push_back(std::move(c));
     }
@@ -283,6 +292,9 @@ StmtPtr Parser::parseFor() {
         pos_ = afterHeader;
         std::vector<StmtPtr> binds = std::move(pendingStmts_);
         pendingStmts_.clear();
+        nextBlockVars_ = {stmt->var};
+        for (const auto &b : binds)
+            if (auto *let = as<LetStmt>(b.get())) nextBlockVars_.push_back(let->name);
         stmt->body = parseBlock();
         auto &body = stmt->body.statements;
         body.insert(body.begin(), std::make_move_iterator(binds.begin()), std::make_move_iterator(binds.end()));
@@ -314,19 +326,24 @@ StmtPtr Parser::parseFor() {
             }
         }
         expect(TokenType::RParen, "to close the for-header");
+        nextBlockVars_ = {stmt->var};
+        if (!stmt->indexVar.empty()) nextBlockVars_.push_back(stmt->indexVar);
         stmt->body = parseBlock();
         return stmt;
     }
 
     auto stmt = std::make_unique<ForStmt>();
     stmt->line = kw.line; stmt->col = kw.col;
+    localVars_.emplace_back(); // the initializer's variable
     if (!check(TokenType::Semicolon)) stmt->init = parseSimpleStmt();
+    if (auto *let = as<LetStmt>(stmt->init.get())) declareLocal(let->name);
     expect(TokenType::Semicolon, "after the for-initializer");
     if (!check(TokenType::Semicolon)) stmt->cond = parseExpression();
     expect(TokenType::Semicolon, "after the for-condition");
     if (!check(TokenType::RParen)) stmt->update = parseSimpleStmt();
     expect(TokenType::RParen, "to close the for-header");
     stmt->body = parseBlock();
+    localVars_.pop_back();
     return stmt;
 }
 
@@ -469,10 +486,82 @@ StmtPtr Parser::parseDestructure(const Token &kw) {
     return hidden;
 }
 
+void Parser::declareLocal(const std::string &name) {
+    if (!localVars_.empty()) localVars_.back().push_back({name, ++localVarCounter_});
+}
+
+const Parser::LocalVar *Parser::findLocal(const std::string &name, size_t *depth) const {
+    for (size_t d = localVars_.size(); d-- > 0;)
+        for (auto v = localVars_[d].rbegin(); v != localVars_[d].rend(); ++v)
+            if (v->name == name) {
+                if (depth) *depth = d;
+                return &*v;
+            }
+    return nullptr;
+}
+
+// `name` is read: each generic local function being parsed that it is a block
+// variable from outside of captures it.
+void Parser::noteLocalUse(const std::string &name) {
+    if (captureFrames_.empty()) return;
+    size_t depth = 0;
+    const LocalVar *v = findLocal(name, &depth);
+    if (!v) return;
+    for (const auto &f : captureFrames_) {
+        Captures &c = localCaptures_[f];
+        if (depth >= c.base) continue;
+        bool have = false;
+        for (const auto &u : c.vars) have = have || u.id == v->id;
+        if (!have) c.vars.push_back(*v);
+    }
+}
+
+// A call of a generic local function passes the block variables it uses first
+// (`auto` for their types when the call names its type arguments).
+void Parser::completeLocalCall(CallExpr &call) {
+    auto *callee = as<NameExpr>(call.callee.get());
+    if (!callee) return;
+    auto it = localCaptures_.find(callee->name);
+    if (it == localCaptures_.end() || (it->second.vars.empty() && it->second.done)) return;
+    Captures &c = it->second;
+    if (!c.done) { c.pending.push_back(&call); return; } // a call in its own body
+    std::vector<ExprPtr> args;
+    for (const auto &v : c.vars) {
+        const LocalVar *here = findLocal(v.name);
+        if (here && here->id != v.id) {
+            std::string fn = callee->name.substr(callee->name.find('_', 7) + 1);
+            throw GravError("parse", call.line, call.col,
+                            "'" + fn + "' uses the variable '" + v.name + "' declared before it, and here '" +
+                                v.name + "' is another variable: rename one of them");
+        }
+        noteLocalUse(v.name);
+        auto a = std::make_unique<NameExpr>();
+        a->line = call.line;
+        a->col = call.col;
+        a->name = v.name;
+        args.push_back(std::move(a));
+    }
+    call.args.insert(call.args.begin(), std::make_move_iterator(args.begin()), std::make_move_iterator(args.end()));
+    if (!call.typeArgs.empty())
+        call.typeArgs.insert(call.typeArgs.begin(), c.vars.size(), TypeRef::named("auto"));
+}
+
+// Assigning a block variable from inside a generic local function, which has a copy.
+void Parser::checkCapturedWrite(const Expr &target, const Token &at) {
+    auto *n = as<const NameExpr>(&target);
+    if (!n || captureFrames_.empty()) return;
+    size_t depth = 0;
+    if (findLocal(n->name, &depth) && depth < localCaptures_[captureFrames_.back()].base)
+        fail(at, "a generic local function cannot assign '" + n->name +
+                     "', a variable of its block (it has a copy): use a non-generic local function or a lambda");
+}
+
 // A function declared inside a block: `const name = fn(params) -> R { body }`,
 // which can call itself (and see the block's variables, captured like a lambda's).
 // A generic one, `fn pair<T>(x: T)`, becomes a hidden top-level generic function
-// that the rest of the block calls by its name; it cannot use the block's variables.
+// that the rest of the block calls by its name. The block's variables it uses
+// become hidden leading parameters (each of its own hidden type parameter) that
+// every call passes: it sees their values at the call, and cannot assign them.
 StmtPtr Parser::parseLocalFunction() {
     const Token &kw = advance(); // 'fn'
     const Token &name = expect(TokenType::Identifier, "after 'fn'");
@@ -482,6 +571,9 @@ StmtPtr Parser::parseLocalFunction() {
         fn->name = "__local" + std::to_string(++localGenericCounter_) + "_" + name.lexeme;
         fn->fqName = qualify(fn->name);
         localGenerics_.back()[name.lexeme] = fn->name; // before the body: it may call itself
+        Captures &caps = localCaptures_[fn->name];
+        caps.base = localVars_.size();
+        captureFrames_.push_back(fn->name);
         fn->typeParams = parseTypeParams(&fn->typeParamBounds);
         fn->params = parseParams(/*allowVariadic=*/true);
         fn->returnType = matchToken(TokenType::Arrow) ? parseType("as the return type")
@@ -490,6 +582,24 @@ StmtPtr Parser::parseLocalFunction() {
         extensionSelf_ = false;
         fn->body = parseFunctionBody(fn->returnType, kw);
         extensionSelf_ = saved;
+        captureFrames_.pop_back();
+        // What it uses from the block: `fn __localN_f<__C1_n, T>(n: __C1_n, x: T)`.
+        Captures &done = localCaptures_[fn->name]; // (the map may have grown)
+        done.done = true;
+        std::vector<std::string> tps;
+        std::vector<Param> ps;
+        for (const auto &v : done.vars) {
+            tps.push_back("__C" + std::to_string(tps.size() + 1) + "_" + v.name);
+            Param p;
+            p.name = v.name;
+            p.type = TypeRef::named(tps.back());
+            ps.push_back(std::move(p));
+        }
+        fn->typeParamBounds.resize(fn->typeParams.size());
+        fn->typeParamBounds.insert(fn->typeParamBounds.begin(), tps.size(), "");
+        fn->typeParams.insert(fn->typeParams.begin(), tps.begin(), tps.end());
+        fn->params.insert(fn->params.begin(), std::make_move_iterator(ps.begin()), std::make_move_iterator(ps.end()));
+        for (CallExpr *call : std::exchange(done.pending, {})) completeLocalCall(*call);
         pendingDecls_.push_back(std::move(fn));
         auto empty = std::make_unique<BlockStmt>();
         empty->line = kw.line; empty->col = kw.col;
@@ -586,6 +696,7 @@ StmtPtr Parser::parseExprOrAssign() {
             fail(eq, std::string("the left-hand side of ") + tokenTypeName(eq.type) +
                          " is not assignable");
         }
+        checkCapturedWrite(*expr, eq);
         auto stmt = std::make_unique<AssignStmt>();
         stmt->line = eq.line;
         stmt->col = eq.col;

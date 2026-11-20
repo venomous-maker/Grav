@@ -132,7 +132,7 @@ TypeRef TypeChecker::checkExpr(Expr &expr) {
         } else {
             error(e->line, e->col, "use of undeclared variable '" + e->name + "'" +
                                    (currentFunction_.find("__local") != std::string::npos
-                                        ? " (a generic local function cannot use its block's variables: pass them in)"
+                                        ? " (a generic local function sees only the block's variables declared before it)"
                                         : ""));
             t = TypeRef::prim(TypeRef::Kind::Error);
         }
