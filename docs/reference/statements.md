@@ -108,6 +108,8 @@ break [label]                  continue [label]
 return [value]
 switch (value) { case v1, v2: body  case lo..hi: body  case x if cond: body  default: body }
 match (value) { ... }          (a synonym of switch)
+match (t) { case (0, y): body  case (x, _) if x > y: body  case _: body }   (t a tuple)
+match (a, b) { ... }           (matches the tuple (a, b))
 throw value
 try { } catch (e: Type) { } [catch (e: Other) { }] [finally { }]
 defer statement                defer { statements }
@@ -124,6 +126,13 @@ fn name(params) -> R { }       (a local function)
 - `switch` cases never fall through. A `switch` over an enum without `default`
   warns about missing members; a `match` over a data enum without `default` must
   cover every variant (an error otherwise).
+- A tuple pattern `(p1, p2[, p3[, p4]])` matches a `Pair`, `Triple` or `Quad`
+  element by element: `_` matches anything, a name binds that element, a value
+  or range (`0`, `"go"`, `Color.Red`, `1..=3`) must equal or contain it, and a
+  nested tuple pattern matches a tuple element. A guard may use the names. Every
+  case of such a `match` is a tuple pattern (or `case _:`/`default:`); a case
+  of several patterns binds nothing; a case after one that matches every tuple is
+  an error, and a tuple `match` used as a value needs one.
 - In a loop, `break` inside a `case` leaves the loop.
 - A case body runs from its colon to the next `case`, `default` or `}`; it
   cannot be empty (`case 1, 2:` gives one body several values).
@@ -137,7 +146,9 @@ fn name(params) -> R { }       (a local function)
 - A `catch` that can never run, because an earlier one catches a parent class, is an error.
 - Local functions see variables declared before them (like a lambda), may call
   themselves, and cannot have defaults. A generic one (`fn pair<T>(x: T)`) is a
-  hidden top-level function: it cannot use the block's variables.
+  hidden top-level function that each call passes the block variables it uses:
+  it reads their values at the call and cannot assign them, and a call where one
+  of them is shadowed by another variable of that name is an error.
 
 ## Expressions that contain statements
 

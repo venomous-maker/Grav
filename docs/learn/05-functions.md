@@ -308,17 +308,20 @@ It uses the block's variables just like a lambda does
 ([chapter 6](06-lambdas-and-closures.md)). A local function can call itself,
 but cannot have default values.
 
-A local function can be generic. A generic one becomes an ordinary top-level
-function with a hidden name, so it cannot use the block's variables; pass them
-in instead:
+A local function can be generic. It can use the block's variables declared
+before it too. Each call passes it their values, so it cannot assign them;
+write a lambda or a non-generic local function for that:
 
 ```grav
 import "std"
 
 fn main() {
+    let sep = " / "
     fn twice<T>(x: T) -> Array<T> { return [x, x] }
+    fn join<T>(a: T, b: T) -> string { return "${a}${sep}${b}" }
     println(twice(4))
     println(twice("ab"))
+    println(join(1, 2))
 }
 ```
 
@@ -327,6 +330,7 @@ Output:
 ```text
 [4, 4]
 ["ab", "ab"]
+1 / 2
 ```
 
 ## Functions are values

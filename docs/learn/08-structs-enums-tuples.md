@@ -332,6 +332,42 @@ ada: 9
 bob: 7
 ```
 
+`match` takes tuples apart too. Each case is a tuple pattern: `_` matches any
+element, a name binds it, and a value or a range must match it. `match (a, b)`
+matches the tuple of the two:
+
+```grav
+import "std"
+
+fn place(x: int, y: int) -> string {
+    return match (x, y) {
+        case (0, 0): "origin"
+        case (0, _), (_, 0): "on an axis"
+        case (a, b) if a == b: "diagonal at ${a}"
+        case (1..=3, b): "near, ${b} up"
+        default: "far"
+    }
+}
+
+fn main() {
+    print(place(0, 0))
+    print(place(0, 5))
+    print(place(4, 4))
+    print(place(2, 9))
+    print(place(8, 1))
+}
+```
+
+Output:
+
+```text
+origin
+on an axis
+diagonal at 4
+near, 9 up
+far
+```
+
 If a tuple travels far through your program, or its parts deserve names, turn it
 into a struct.
 
