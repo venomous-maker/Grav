@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.grav"
-version = "0.9.0"
+version = "0.10.0"
 
 repositories {
     mavenCentral()
@@ -24,12 +24,16 @@ repositories {
 dependencies {
     intellijPlatform {
         // Target CLion; swap to intellijIdeaCommunity("2024.2") to test in IDEA.
-        clion("2025.2")
-        instrumentationTools()
+        // `-PlocalIde=/path/to/clion` builds against an installed IDE instead.
+        val localIde = providers.gradleProperty("localIde").orNull
+        if (localIde != null) local(localIde) else clion("2025.2")
     }
 }
 
 intellijPlatform {
+    // Kotlin only, no forms or settings pages: nothing to instrument or index.
+    instrumentCode = false
+    buildSearchableOptions = false
     pluginConfiguration {
         id = "dev.grav.lang"
         name = "Grav"
@@ -42,5 +46,9 @@ intellijPlatform {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
+    // A newer installed IDE ships newer Kotlin metadata than this compiler reads.
+    if (providers.gradleProperty("localIde").isPresent) {
+        compilerOptions.freeCompilerArgs.add("-Xskip-metadata-version-check")
+    }
 }
