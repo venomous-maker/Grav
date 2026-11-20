@@ -77,7 +77,7 @@ const char *tokenTypeName(TokenType type) {
         case TokenType::At: return "'@'";
         case TokenType::Hash: return "'#'";
         case TokenType::Question: return "'?'";
-        case TokenType::QuestionQuestion: return "'??'";
+        case TokenType::QuestionQuestion: return "'?\?'"; // (\? keeps "??'" from reading as a trigraph)
         case TokenType::QuestionDot: return "'?.'";
         case TokenType::LParen: return "'('";
         case TokenType::RParen: return "')'";
