@@ -93,12 +93,31 @@ dependency's folder) without fetching anything.
 
 ### fmt
 
-`grav fmt` re-indents code with 4 spaces per level (brackets opened on one line
-indent the following lines once), indents continuation lines after a trailing
-operator, removes trailing spaces and extra blank lines, and otherwise leaves
-lines alone. Strings, comments and inline C are untouched. With no paths it
-formats every `.grav` file of the project. `--check` lists unformatted files and
-exits with 1 without changing anything, for use in CI.
+`grav fmt` lays code out and re-indents it:
+
+- **Spacing within a line**: one space around binary operators, `=`, `->` and
+  `=>`, after `,` and `:`, between `if`/`for`/`while`/`match`/`catch` and their
+  `(`, and inside a `{ ... }` kept on one line (`} else {`); none inside `( )`
+  and `[ ]`, around `.` and `..`, before a call's `(`, or after a prefix
+  operator. `<` and `>` in type arguments, an operator method's name
+  (`operator[]=`), map literals' insides and gaps of two spaces or more (lining
+  things up) are kept as written.
+- **Blocks**: a `{ a; b }` written on one line becomes one statement per line
+  (dropping the `;`s, except after a bare `return`, `break`, `continue` or
+  `yield`); `{ return x }` stays on its line. A `{` followed by code that runs
+  past its line, and a `}` after code on an earlier block's last line, get a
+  line break.
+- **Indentation**: 4 spaces per level (brackets opened on one line indent the
+  following lines once), continuation lines one level more after a trailing
+  operator or before a leading `.`, `?`, `:`, `&&` or `||`, unless already set
+  further in (lined up under an open bracket). Trailing spaces and extra blank
+  lines go.
+
+It only changes whitespace, line breaks and those `;`s: strings (`"""` ones
+line by line), comments, inline C and preprocessor lines are untouched, and
+formatting the result again changes nothing. With no paths it formats every
+`.grav` file of the project. `--check` lists unformatted files and exits with 1
+without changing anything, for use in CI.
 
 ## grav.toml
 

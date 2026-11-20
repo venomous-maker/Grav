@@ -20,6 +20,7 @@ add_executable(gravc
         src/driver/modules.cpp
         src/driver/packages.cpp
         src/driver/format.cpp
+        src/driver/format_layout.cpp
         src/driver/self_update.cpp
         src/common/types.cpp
         src/ast/ast.cpp

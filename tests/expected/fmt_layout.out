@@ -1,0 +1,49 @@
+// grav fmt's input (a .in file, so formatting the repo leaves it as it is): the
+// expected result is tests/expected/fmt_layout.out.
+import "std"
+#define TWICE(x) ((x)*2)
+struct Cfg { port: int?  debug: bool? }
+class Point {
+    public x: int
+    public y: int
+    constructor(x: int, y: int) {
+        self.x = x
+        self.y = y
+    }
+    fn norm() -> float { return float(self.x * self.x + self.y * self.y) }
+    fn operator==(o: Point) -> bool { return self.x == o.x && self.y == o.y; }
+    fn step() -> Point { return self }
+}
+fn pick<T: Named>(xs: Array<Map<string, int>>, n: int) -> Pair<T, int>? { return null }
+fn main() {
+    let p = new Point(1, -2)
+    if (p.x > 0 && p.y < 5) { println("in") } else { println("out") }
+    for (i in 0..3) {
+        println(i)
+    }
+    let xs = [1, 2, 3]
+    let s = match (p.x) { case 1: "one" default: "many" }
+    xs.forEach(fn(v: int) {
+        println(v)
+        println(-v)
+    })
+    while (true) { break }
+    let m = {"a": 1,   "b": 2}
+    let q = p.step().step()
+    let label = xs.size() > 2 ? "many" : "few"
+    let total = xs.size() * 2
+    + 1
+    let text = """
+      kept
+        as is
+      """
+    if (q.x == 1) { return; }
+    let n = TWICE(3)
+
+    let t = "a,b  c"   // keep   this
+    for (k in 0..2) {
+        if (k == 1) { continue; }
+        println("${k}")
+        println(t)
+    }
+}

@@ -80,6 +80,17 @@ run_error() {
     echo "FAIL (errors)  $f"; diff "$gold" "$J/$name.out" 2>&1 | sed 's/^/    /' | head -30; res fail
   else echo "ok   $f (errors)"; res pass; fi
 }
+# `grav fmt` on tests/fmt/*.in: golden-checked, and formatting its result changes nothing.
+run_fmt() {
+  local f="$1" name; name="fmt_$(basename "$f" .in)"; local gold="tests/expected/$name.out"
+  "$GRAV" fmt - <"$f" >"$J/$name.out" 2>&1
+  if [ $UPDATE = 1 ]; then cp "$J/$name.out" "$gold"; echo "updated $gold"; res pass; return; fi
+  if [ ! -f "$gold" ] || ! diff -q "$gold" "$J/$name.out" >/dev/null; then
+    echo "FAIL (fmt)     $f"; diff "$gold" "$J/$name.out" 2>&1 | sed 's/^/    /' | head -30; res fail
+  elif ! "$GRAV" fmt - <"$J/$name.out" | diff -q "$J/$name.out" - >/dev/null; then
+    echo "FAIL (fmt)     $f: formatting the result again changes it"; res fail
+  else echo "ok   $f (fmt)"; res pass; fi
+}
 # Project test suites run with `grav test` from the project directory.
 run_project() {
   local p="$1" name; name="project_$(basename "$p")"; local gold="tests/expected/$name.out"
@@ -127,6 +138,7 @@ done
 for f in lib/*/*.grav; do spawn run_lib "$f"; done
 note "ok   lib/*/*.grav (each checks on its own)"
 for f in tests/errors/*.grav; do spawn run_error "$f"; done
+for f in tests/fmt/*.in; do spawn run_fmt "$f"; done
 for p in examples/apps/bank_server; do spawn run_project "$p"; done
 for f in examples/*.grav examples/apps/*.grav examples/project/main.grav examples/apps/bank_server/src/main.grav; do
   spawn run_release "$f"

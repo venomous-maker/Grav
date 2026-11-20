@@ -1,14 +1,16 @@
-// `grav fmt` — re-indents Grav source and normalizes whitespace.
+// `grav fmt` — lays out and re-indents Grav source.
 //
-// It never changes code within a line. It
+// The first pass (format_layout.cpp) spaces each line's code and puts the
+// statements of a `{ a; b }` block on lines of their own. This one
 //   - indents with 4 spaces per open bracket level, where brackets opened on the
 //     same line count once (so `spawn(fn() {` indents its body one level);
-//   - indents a continuation line one extra level after a line ending in a binary
+//   - indents a continuation line (one inside an earlier line's `(` or `[`, or) one
+//     extra level after a line ending in a binary
 //     operator, `:` or `=>`, and every line of a case body after a bare
 //     `case ...:` / `default:` line, up to the next case;
 //   - strips trailing whitespace, turns tabs in indentation into spaces, keeps at
 //     most one blank line in a row, uses "\n" line ends and ends with a newline.
-// Strings (with `${...}`), comments and inline C (`%{ ... %}`) are left as they
+// Strings (with `${...}`, and `"""` ones line by line), comments and inline C (`%{ ... %}`) are left as they
 // are; lines inside multi-line inline C and block comments keep their own text.
 #include "driver/format.h"
 
@@ -33,6 +35,7 @@ struct Scanner {
     std::vector<Open> stack;
     bool inBlockComment = false;
     bool inCBlock = false;
+    bool inTriple = false; // inside a `"""` string, whose lines are its text
 
     static bool isCloser(char c) { return c == '}' || c == ')' || c == ']'; }
 
@@ -52,6 +55,14 @@ struct Scanner {
                 else ++i;
                 continue;
             }
+            if (inTriple) {
+                size_t e = line.find("\"\"\"", i);
+                if (e == std::string::npos) return code;
+                inTriple = false;
+                i = e + 3;
+                code += "\"\"";
+                continue;
+            }
             if (inCBlock) {
                 if (c == '%' && i + 1 < n && line[i + 1] == '}') { inCBlock = false; i += 2; code += " C "; }
                 else ++i;
@@ -59,7 +70,8 @@ struct Scanner {
             }
             if (c == '/' && i + 1 < n && line[i + 1] == '/') break;            // line comment
             if (c == '/' && i + 1 < n && line[i + 1] == '*') { inBlockComment = true; i += 2; continue; }
-            if (c == '%' && i + 1 < n && line[i + 1] == '{') { inCBlock = true; i += 2; continue; }
+            if (c == '%' && i + 1 < n && line[i + 1] == '{') { inCBlock = true; i += 2; code += " C "; continue; }
+            if (line.compare(i, 3, "\"\"\"") == 0) { inTriple = true; i += 3; code += "\"\""; continue; }
             if (c == '"') { i = skipString(line, i + 1); code += "\"\""; continue; }
             if (c == '\'') {                                                   // a char literal
                 size_t j = i + 1;
@@ -129,7 +141,8 @@ bool endsWithContinuation(const std::string &code) {
 
 } // namespace
 
-std::string formatGrav(const std::string &src) {
+std::string formatGrav(const std::string &source) {
+    std::string src = layoutGrav(source);
     std::vector<std::string> lines;
     {
         std::string cur;
@@ -145,7 +158,7 @@ std::string formatGrav(const std::string &src) {
     std::vector<long> cases; // bracket depths of case bodies begun by a bare `case ...:` line (nested switches)
     for (const std::string &raw : lines) {
         std::string line = rtrim(raw);
-        bool verbatim = sc.inCBlock || sc.inBlockComment; // inside multi-line C or a comment
+        bool verbatim = sc.inCBlock || sc.inBlockComment || sc.inTriple; // inside multi-line C, a comment or a """ string
         if (verbatim) {
             sc.scan(line, 0);
             out += line + "\n";
@@ -176,15 +189,21 @@ std::string formatGrav(const std::string &src) {
         if (label && !cases.empty() && static_cast<long>(sc.stack.size()) == cases.back()) cases.pop_back();
         bool inCase = !cases.empty() && static_cast<long>(sc.stack.size()) == cases.back();
         if (inCase) { level += 1; continuation = false; }
-        // A line that starts with `.` continues a method chain.
-        bool chain = body.size() > 1 && body[0] == '.' && body[1] != '.';
+        // A line that starts with `.` continues a method chain; one that starts with
+        // `?`, `:`, `&&`, `||` or `??`, an expression.
+        bool chain = (body.size() > 1 && body[0] == '.' && body[1] != '.') ||
+                     ((body[0] == '?' || body[0] == ':') && body.compare(0, 2, "::") != 0) ||
+                     body.compare(0, 2, "&&") == 0 || body.compare(0, 2, "||") == 0;
         // Inside ( ) or [ ] the bracket already indents continuation lines.
         bool inParens = !sc.stack.empty() && sc.stack.back().ch != '{';
         bool bumped = (continuation || chain) && k == 0 && !inParens;
         if (bumped) level += 1;
         // Brackets opened on a continuation line belong to the statement's level.
         std::string code = sc.scan(body, bumped ? level - 1 : level);
-        out += std::string(static_cast<size_t>(level) * 4, ' ') + body + "\n";
+        // A continuation line set further in (lined up under an open bracket) stays there.
+        size_t indent = static_cast<size_t>(level) * 4;
+        if ((inParens || bumped) && k == 0 && first > indent) indent = first;
+        out += std::string(indent, ' ') + body + "\n";
         continuation = endsWithContinuation(code);
         if (label && !rtrim(code).empty() && rtrim(code).back() == ':') {
             cases.push_back(static_cast<long>(sc.stack.size()));
