@@ -11,6 +11,7 @@ import "../core/exception.grav"
 import "../collections/array.grav"
 import "string.grav"
 import "strbuf.grav"
+import "../core/iter.grav"
 
 namespace std.text {
 
@@ -144,6 +145,9 @@ namespace std.text {
             }
             return out
         }
+        // The matches in `s` one at a time, found as the loop asks for them (a loop
+        // that stops early does not search the rest): `for (m in re.findEach(text))`.
+        public fn findEach(s: string) -> RegexMatches { return new RegexMatches(self, s) }
         // The text of every match.
         public fn findAllText(s: string) -> Array<string> {
             return self.findAll(s).mapTo(fn(m: RegexMatch) => m.text)
@@ -234,5 +238,28 @@ namespace std.text {
         }
         // As text: the pattern.
         public fn toString() -> string { return "/" + self.pattern + "/" }
+    }
+
+    // A regex's matches in a text, found one at a time (see Regex.findEach).
+    class RegexMatches implements Iterator<RegexMatch> {
+        private re: Regex
+        private s: string
+        private at: int = 0
+        private ahead: RegexMatch = null
+        constructor(re: Regex, s: string) { self.re = re; self.s = s }
+        public fn hasNext() -> bool {
+            if (self.ahead == null && self.at <= self.s.length) {
+                self.ahead = self.re.findFrom(self.s, self.at)
+                if (self.ahead == null) { self.at = self.s.length + 1 }
+                else { self.at = self.ahead.end > self.ahead.start ? self.ahead.end : self.ahead.end + 1 }
+            }
+            return self.ahead != null
+        }
+        public fn next() -> RegexMatch {
+            if (!self.hasNext()) { throw new StateError("Regex.findEach: no more matches") }
+            let m = self.ahead
+            self.ahead = null
+            return m
+        }
     }
 }

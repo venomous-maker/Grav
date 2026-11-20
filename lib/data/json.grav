@@ -17,6 +17,7 @@ import "../collections/array.grav"
 import "../collections/hashmap.grav"
 import "../text/strbuf.grav"
 import "../core/exception.grav"
+import "../core/iter.grav"
 
 namespace std.data {
 
@@ -486,6 +487,15 @@ namespace std.data {
         fn operator[](i: int) -> JsonValue { return self.at(i); }
         // Whether an object has member `key`.
         public fn has(key: string) -> bool { return self.find(key) >= 0; }
+        // An array's elements, or an object's member values, one at a time:
+        // `for (item in json["items"])`.
+        public fn iterator() -> JsonItems { return new JsonItems(self); }
+        // An object's members as key and value, in insertion order:
+        // `for ((key, value) in obj.entries())` (nothing for anything but an object).
+        public fn entries() -> JsonEntries { return new JsonEntries(self); }
+        // (for iterators) Element or member `j`'s value, and member `j`'s key.
+        public fn __valueAt(j: int) -> JsonValue { return self.slotValue(j); }
+        public fn __keyAt(j: int) -> string { return self.k == JsonKind.Object ? self.keyAt(j) : ""; }
         // An object's keys, in insertion order.
         public fn keys() -> Array<string> {
             let out = new Array<string>();
@@ -922,4 +932,30 @@ namespace std.data {
         static fn quote(s: string) -> string { return %{ grav_json_quote(s) %} as string; }
     }
 
+
+    // An array's elements or an object's member values, in order (see JsonValue.iterator).
+    class JsonItems implements Iterator<JsonValue> {
+        private v: JsonValue
+        private i: int = 0
+        constructor(v: JsonValue) { self.v = v; }
+        public fn hasNext() -> bool { return (self.v.isArray() || self.v.isObject()) && self.i < self.v.size(); }
+        public fn next() -> JsonValue {
+            if (!self.hasNext()) { throw new StateError("JSON: no more items"); }
+            self.i += 1;
+            return self.v.__valueAt(self.i - 1);
+        }
+    }
+
+    // An object's members as Entry(key, value), in order (see JsonValue.entries).
+    class JsonEntries implements Iterator<Entry<string, JsonValue>> {
+        private v: JsonValue
+        private i: int = 0
+        constructor(v: JsonValue) { self.v = v; }
+        public fn hasNext() -> bool { return self.v.isObject() && self.i < self.v.size(); }
+        public fn next() -> Entry<string, JsonValue> {
+            if (!self.hasNext()) { throw new StateError("JSON: no more members"); }
+            self.i += 1;
+            return Entry<string, JsonValue> { first: self.v.__keyAt(self.i - 1), second: self.v.__valueAt(self.i - 1) };
+        }
+    }
 }

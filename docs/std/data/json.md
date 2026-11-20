@@ -135,6 +135,8 @@ boolean out of one gives a fresh JsonValue (scalars cannot be changed anyway).
 - `fn operator[](key: string) -> JsonValue` — `v["key"]`: member key of an object (null when absent).
 - `fn operator[](i: int) -> JsonValue` — `v[i]`: element i of an array.
 - `fn has(key: string) -> bool` — Whether an object has member `key`.
+- `fn iterator() -> JsonItems` — An array's elements, or an object's member values, one at a time: `for (item in json["items"])`.
+- `fn entries() -> JsonEntries` — An object's members as key and value, in insertion order: `for ((key, value) in obj.entries())` (nothing for anything but an object).
 - `fn keys() -> Array<string>` — An object's keys, in insertion order.
 - `fn path(dotted: string) -> JsonValue` — A path through nested objects and arrays: "server.ports.0".
 - `fn getString(key: string, fallback: string) -> string` — Lookups with a fallback (when absent or of another type).
@@ -191,5 +193,31 @@ Entry points: parsing and building values.
 - `static fn of(s: string) -> JsonValue` — A JSON string.
 - `static fn strings(xs: Array<string>) -> JsonValue` — A JSON array of strings.
 - `static fn quote(s: string) -> string` — Quote a string as a JSON string literal.
+
+### class JsonItems implements Iterator<JsonValue>
+
+An array's elements or an object's member values, in order (see JsonValue.iterator).
+
+**Constructors**
+
+- `new JsonItems(v: JsonValue)`
+
+**Methods**
+
+- `fn hasNext() -> bool`
+- `fn next() -> JsonValue`
+
+### class JsonEntries implements Iterator<Entry<string, JsonValue>>
+
+An object's members as Entry(key, value), in order (see JsonValue.entries).
+
+**Constructors**
+
+- `new JsonEntries(v: JsonValue)`
+
+**Methods**
+
+- `fn hasNext() -> bool`
+- `fn next() -> Entry<string, JsonValue>`
 
 <!-- api:end -->

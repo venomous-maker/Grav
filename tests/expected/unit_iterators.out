@@ -1,5 +1,6 @@
-running 3 tests
+running 4 tests
   ok    an iterator, and a class whose iterator() gives one
   ok    break, continue, labels and exceptions leave an iterator loop
   ok    std collections without an index
-result: 3 passed, 0 failed
+  ok    files, directories, regex matches and JSON, one at a time
+result: 4 passed, 0 failed

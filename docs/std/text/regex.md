@@ -118,6 +118,7 @@ A compiled regular expression (POSIX extended syntax).
 - `fn find(s: string) -> RegexMatch` — The first match in `s`, or null.
 - `fn findFrom(s: string, from: int) -> RegexMatch` — The first match at or after byte offset `from`, or null.
 - `fn findAll(s: string) -> Array<RegexMatch>` — Every non-overlapping match in `s`, left to right.
+- `fn findEach(s: string) -> RegexMatches` — The matches in `s` one at a time, found as the loop asks for them (a loop that stops early does not search the rest): `for (m in re.findEach(text))`.
 - `fn findAllText(s: string) -> Array<string>` — The text of every match.
 - `fn count(s: string) -> int` — The number of non-overlapping matches.
 - `fn replace(s: string, replacement: string) -> string` — `s` with the first match replaced by `replacement`, where $0 is the whole match, $1..$9 are groups and $$ is a dollar sign.
@@ -125,5 +126,18 @@ A compiled regular expression (POSIX extended syntax).
 - `fn replaceAllWith(s: string, f: fn(RegexMatch) -> string) -> string` — `s` with every match replaced by what `f` returns for it.
 - `fn split(s: string) -> Array<string>` — The pieces of `s` between matches.
 - `fn toString() -> string` — As text: the pattern.
+
+### class RegexMatches implements Iterator<RegexMatch>
+
+A regex's matches in a text, found one at a time (see Regex.findEach).
+
+**Constructors**
+
+- `new RegexMatches(re: Regex, s: string)`
+
+**Methods**
+
+- `fn hasNext() -> bool`
+- `fn next() -> RegexMatch`
 
 <!-- api:end -->

@@ -14,6 +14,7 @@ import "../core/exception.grav"
 import "../text/string.grav"
 import "../collections/array.grav"
 import "path.grav"
+import "../core/iter.grav"
 
 namespace std.io {
 
@@ -160,6 +161,9 @@ namespace std.io {
         public fn appendLine(line: string) -> bool { return self.append(line + "\n"); }
         // Lines of the file (handles \n and \r\n); IOError when it cannot be read.
         public fn readLines() -> Array<string> { return Str.lines(self.read()); }
+        // The lines one at a time, read as the loop asks for them: for files too big
+        // to hold. `for (line in new File("big.log").lines())`.
+        public fn lines() -> FileReader { return new FileReader(self.path); }
         // Replaces the contents with the lines joined by "\n"; whether it worked.
         public fn writeLines(lines: Array<string>) -> bool {
             let body = Str.join(lines, "\n");
@@ -224,6 +228,12 @@ namespace std.io {
             let t = env("TMPDIR");
             return Str.isEmpty(t) ? "/tmp" : t;
         }
+        // Entry names (not paths) one at a time, in the order the system lists them
+        // (unsorted), without "." and "..": for directories too big to list at once.
+        static fn entries(path: string) -> DirEntries { return new DirEntries(path); }
+        // Every file under `path`, recursively, one at a time (unsorted, as paths starting
+        // with `path`): walk() without holding them all.
+        static fn files(path: string) -> DirFiles { return new DirFiles(path); }
         // Every file under `path`, recursively, as paths starting with `path`, sorted.
         static fn walk(path: string) -> Array<string> {
             let out = new Array<string>();
@@ -268,11 +278,15 @@ namespace std.io {
 
     // Reads a text file one line at a time, without loading it all: for large files.
     //
+    //   for (line in new FileReader("big.log")) { ... }       // closed at the end
     //   let r = new FileReader("big.log")
     //   while (true) { let line = r.readLine(); if (line == null) { break }  ... }
     //   r.close()
-    class FileReader {
+    class FileReader implements Iterator<string> {
         private f: byte*
+        private owned: bool = true      // (standard input is not closed)
+        private ahead: string? = null   // a line read by hasNext() and not yet taken
+        private peeked: bool = false
         // The path being read.
         readonly path: string
         // Opens `path` for reading; IOError when it cannot be opened.
@@ -284,9 +298,32 @@ namespace std.io {
                 throw new IOError("cannot read '${path}': ${why}");
             }
         }
+        private constructor(f: byte*, path: string) { self.f = f; self.path = path; self.owned = false; }
+        // Standard input, line by line (see IO.lines).
+        static fn stdin() -> FileReader { return new FileReader(%{ (unsigned char*)stdin %} as byte*, "<stdin>"); }
         destructor() { self.close(); }
         // The next line without its line break (\n or \r\n), or null at the end of the file.
-        public fn readLine() -> string? { return %{ grav_read_line(self->f) %} as string?; }
+        public fn readLine() -> string? {
+            if (self.peeked) { self.peeked = false; return self.ahead; }
+            if (self.f == null) { return null; }
+            return %{ grav_read_line(self->f) %} as string?;
+        }
+        // Whether there is another line (what `for (line in reader)` asks; the file is
+        // closed at its end).
+        public fn hasNext() -> bool {
+            if (!self.peeked) {
+                self.ahead = self.f == null ? null : %{ grav_read_line(self->f) %} as string?;
+                self.peeked = true;
+                if (self.ahead == null) { self.close(); }
+            }
+            return self.ahead != null;
+        }
+        // The next line (StateError at the end of the file).
+        public fn next() -> string {
+            if (!self.hasNext()) { throw new StateError("FileReader: no more lines in '${self.path}'"); }
+            self.peeked = false;
+            return self.ahead!;
+        }
         // Calls f with each remaining line, then closes the file.
         public fn forEachLine(f: fn(string)) {
             while (true) {
@@ -297,7 +334,63 @@ namespace std.io {
             self.close();
         }
         // Closes the file (safe to call twice).
-        public fn close() { if (self.f != null) { %{ fclose((FILE*)self->f); %}; self.f = null; } }
+        public fn close() {
+            if (self.f != null && self.owned) { %{ fclose((FILE*)self->f); %}; }
+            self.f = null;
+        }
+    }
+
+    // A directory's entry names, read as they are asked for (see Dir.entries).
+    class DirEntries implements Iterator<string> {
+        private d: byte*
+        private ahead: string = ""
+        private peeked: bool = false
+        constructor(path: string) { self.d = %{ (unsigned char*)opendir(path) %} as byte*; }
+        destructor() { self.close(); }
+        public fn hasNext() -> bool {
+            while (!self.peeked && self.d != null) {
+                let name = %{ grav_dir_next(self->d) %} as string;
+                if (%{ name == 0 %} as bool) { self.close(); break; }
+                if (name != "." && name != "..") { self.ahead = name; self.peeked = true; }
+            }
+            return self.peeked;
+        }
+        public fn next() -> string {
+            if (!self.hasNext()) { throw new StateError("Dir.entries: no more entries"); }
+            self.peeked = false;
+            return self.ahead;
+        }
+        // Stops reading (done by itself at the end).
+        public fn close() { if (self.d != null) { %{ closedir((DIR*)self->d); %}; self.d = null; } }
+    }
+
+    // The files under a directory, recursively, found as they are asked for (see Dir.files).
+    class DirFiles implements Iterator<string> {
+        private pending: Array<string> = new Array<string>()   // directories still to read
+        private cur: DirEntries = null
+        private curPath: string = ""
+        private ahead: string = ""
+        private peeked: bool = false
+        constructor(path: string) { self.pending.push(path); }
+        public fn hasNext() -> bool {
+            while (!self.peeked) {
+                if (self.cur == null) {
+                    if (self.pending.isEmpty()) { return false; }
+                    self.curPath = self.pending.pop();
+                    self.cur = new DirEntries(self.curPath);
+                }
+                if (!self.cur.hasNext()) { self.cur = null; continue; }
+                let p = Path.combine(self.curPath, self.cur.next());
+                if (Dir.exists(p) && !Dir.isLink(p)) { self.pending.push(p); }
+                else { self.ahead = p; self.peeked = true; }
+            }
+            return true;
+        }
+        public fn next() -> string {
+            if (!self.hasNext()) { throw new StateError("Dir.files: no more files"); }
+            self.peeked = false;
+            return self.ahead;
+        }
     }
 
     // Writes a file piece by piece through a buffer: for large or incremental output.

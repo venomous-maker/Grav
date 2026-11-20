@@ -12,6 +12,19 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Standard library
+
+- More things can be walked one at a time instead of read whole:
+  `File.lines()` and `FileReader` (a file's lines), `IO.lines()` (standard
+  input), `Dir.entries(path)` and `Dir.files(path)` (a directory's names, and
+  every file under it), `Regex.findEach(text)` (matches found as they are asked
+  for), and JSON values (`for (item in json)`, `for ((k, v) in obj.entries())`).
+
+### Fixes
+
+- A class in a namespace can implement a generic interface of a type from that
+  namespace (`class Items implements Iterator<Item>` in `namespace shop`).
+
 ## 1.8.0 (2026-11-19)
 
 ### Language

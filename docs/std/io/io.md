@@ -68,6 +68,7 @@ anything is written to standard error and when the program ends.
 - `static fn promptInt(message: string) -> int` — Writes `message` and reads the answer as an int.
 - `static fn promptFloat(message: string) -> float` — Writes `message` and reads the answer as a float.
 - `static fn readAll() -> string` — Everything left on standard input.
+- `static fn lines() -> FileReader` — The remaining input, one line at a time as the loop asks (for input too big to hold): `for (line in IO.lines()) { ... }`.
 - `static fn readLines() -> Array<string>` — The remaining input, line by line.
 
 ### Functions

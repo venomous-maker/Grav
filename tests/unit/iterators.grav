@@ -110,3 +110,53 @@ test "std collections without an index" {
 
     for (e in new HashMap<string, int>()) { assertEq(true, false) }
 }
+
+namespace shop {
+    class Item { public n: int = 1 }
+    // A class in a namespace implementing Iterator of a type from that namespace.
+    class Items implements Iterator<Item> {
+        private i: int = 0
+        fn hasNext() -> bool { return self.i < 2 }
+        fn next() -> Item { self.i += 1; return new Item() }
+    }
+}
+
+test "files, directories, regex matches and JSON, one at a time" {
+    let dir = Dir.temp() + "/grav_iter_${Process.pid()}"
+    Dir.create(dir + "/sub")
+    new File(dir + "/a.txt").write("one\ntwo\nthree\n")
+    new File(dir + "/sub/b.txt").write("x")
+    let lines = new Array<string>()
+    for (line in new File(dir + "/a.txt").lines()) { lines.push(line) }
+    let r = new FileReader(dir + "/a.txt")
+    let first = r.readLine()
+    for (rest in r) { lines.push("rest " + rest) }
+    assertEq("${Str.join(lines, ",")} ${first}", "one,two,three,rest two,rest three one")
+    let names = new Array<string>()
+    for (e in Dir.entries(dir)) { names.push(e) }
+    names.sortBy(fn(a, b) => Str.compare(a, b))
+    let files = new Array<string>()
+    for (f in Dir.files(dir)) { files.push(Str.substring(f, Str.length(dir), Str.length(f) - Str.length(dir))) }
+    files.sortBy(fn(a, b) => Str.compare(a, b))
+    assertEq("${names} ${files}", "[\"a.txt\", \"sub\"] [\"/a.txt\", \"/sub/b.txt\"]")
+    new File(dir + "/a.txt").delete()
+    new File(dir + "/sub/b.txt").delete()
+    Dir.remove(dir + "/sub")
+    Dir.remove(dir)
+
+    let found = new Array<string>()
+    for (m in new Regex("[0-9]+").findEach("a1 b22 c333")) { found.push("${m.text}@${m.start}") }
+    assertEq(Str.join(found, " "), "1@1 22@4 333@8")
+
+    let j = Json.parse("{\"a\": 1, \"b\": [true, \"s\"], \"c\": null}")
+    let parts = new Array<string>()
+    for ((k, v) in j.entries()) { parts.push("${k}=${v}") }
+    for (item in j["b"]) { parts.push("${item}") }
+    let n = 0
+    for (v in j) { n += 1 }
+    assertEq("${Str.join(parts, " ")} ${n}", "a=1 b=[true,\"s\"] c=null true \"s\" 3")
+
+    let count = 0
+    for (x in new shop.Items()) { count += x.n }
+    assertEq(count, 2)
+}

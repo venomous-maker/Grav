@@ -134,6 +134,7 @@ or `null` at the end of the file.
 - `fn writeLine(line: string) -> bool` — Adds a line (with "\n") at the end of the file; whether it worked.
 - `fn appendLine(line: string) -> bool` — Adds a line (with "\n") at the end of the file; whether it worked.
 - `fn readLines() -> Array<string>` — Lines of the file (handles \n and \r\n); IOError when it cannot be read.
+- `fn lines() -> FileReader` — The lines one at a time, read as the loop asks for them: for files too big to hold. `for (line in new File("big.log").lines())`.
 - `fn writeLines(lines: Array<string>) -> bool` — Replaces the contents with the lines joined by "\n"; whether it worked.
 - `fn readBinary() -> binary` — The whole file as raw bytes (NUL-safe); IOError when it cannot be read.
 - `fn writeBinary(data: binary) -> bool` — Replaces the file's contents with raw bytes; whether it worked.
@@ -156,16 +157,19 @@ Directory operations on paths.
 - `static fn current() -> string` — The working directory.
 - `static fn change(path: string) -> bool` — Changes the working directory; whether it worked.
 - `static fn temp() -> string` — The system temporary directory ($TMPDIR, else /tmp).
+- `static fn entries(path: string) -> DirEntries` — Entry names (not paths) one at a time, in the order the system lists them (unsorted), without "." and "..": for directories too big to list at once.
+- `static fn files(path: string) -> DirFiles` — Every file under `path`, recursively, one at a time (unsorted, as paths starting with `path`): walk() without holding them all.
 - `static fn walk(path: string) -> Array<string>` — Every file under `path`, recursively, as paths starting with `path`, sorted.
 - `static fn find(path: string, pattern: string) -> Array<string>` — The files under `path` (recursively) whose name matches a glob pattern such as "*.grav" or "test_?.txt" (* any text, ? one character, [abc] one of).
 - `static fn removeAll(path: string) -> bool` — Removes a directory and everything in it (like rm -r); whether it worked. Symbolic links are removed, not followed.
 - `static fn isLink(path: string) -> bool` — Whether `path` is a symbolic link.
 - `static fn size(path: string) -> long` — The total size in bytes of the files under `path`.
 
-### class FileReader
+### class FileReader implements Iterator<string>
 
 Reads a text file one line at a time, without loading it all: for large files.
 
+  for (line in new FileReader("big.log")) { ... }       // closed at the end
   let r = new FileReader("big.log")
   while (true) { let line = r.readLine(); if (line == null) { break }  ... }
   r.close()
@@ -174,6 +178,10 @@ Reads a text file one line at a time, without loading it all: for large files.
 
 - `new FileReader(path: string)` — Opens `path` for reading; IOError when it cannot be opened.
 
+**Static members**
+
+- `static fn stdin() -> FileReader` — Standard input, line by line (see IO.lines).
+
 **Fields**
 
 - `readonly path: string` — The path being read.
@@ -181,8 +189,37 @@ Reads a text file one line at a time, without loading it all: for large files.
 **Methods**
 
 - `fn readLine() -> string?` — The next line without its line break (\n or \r\n), or null at the end of the file.
+- `fn hasNext() -> bool` — Whether there is another line (what `for (line in reader)` asks; the file is closed at its end).
+- `fn next() -> string` — The next line (StateError at the end of the file).
 - `fn forEachLine(f: fn(string))` — Calls f with each remaining line, then closes the file.
 - `fn close()` — Closes the file (safe to call twice).
+
+### class DirEntries implements Iterator<string>
+
+A directory's entry names, read as they are asked for (see Dir.entries).
+
+**Constructors**
+
+- `new DirEntries(path: string)`
+
+**Methods**
+
+- `fn hasNext() -> bool`
+- `fn next() -> string`
+- `fn close()` — Stops reading (done by itself at the end).
+
+### class DirFiles implements Iterator<string>
+
+The files under a directory, recursively, found as they are asked for (see Dir.files).
+
+**Constructors**
+
+- `new DirFiles(path: string)`
+
+**Methods**
+
+- `fn hasNext() -> bool`
+- `fn next() -> string`
 
 ### class FileWriter
 
