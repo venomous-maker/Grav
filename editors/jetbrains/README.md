@@ -37,15 +37,17 @@ launching the shared [Grav language server](../lsp/) through CLion's LSP API
 (CLion, IntelliJ Ultimate). The TextMate bundle in option A gives highlighting
 only — navigation requires this built plugin.
 
-**Requirements:** JDK 17+ and network access (the IntelliJ Platform SDK is
-downloaded on first build). This box has only JDK 11, so build it on a machine
-with JDK 17+, or open the `editors/jetbrains` folder in IntelliJ IDEA (it
+**Requirements:** JDK 21 and network access (the IntelliJ Platform SDK is
+downloaded on first build), or an installed JetBrains IDE to build against
+(`-PlocalIde=...` below). You can also open the `editors/jetbrains` folder in IntelliJ IDEA (it
 provisions Gradle automatically).
 
 ```bash
 cd editors/jetbrains
 gradle wrapper            # once, if you don't already have ./gradlew
-./gradlew buildPlugin     # -> build/distributions/grav-jetbrains-0.9.0.zip
+./gradlew buildPlugin     # -> build/distributions/grav-jetbrains-0.10.0.zip
+# offline, against an installed CLion instead of downloading one:
+./gradlew buildPlugin -PlocalIde=$HOME/.local/share/JetBrains/Toolbox/apps/clion
 ./gradlew runIde          # or: launch a sandbox IDE with the plugin loaded
 ```
 
