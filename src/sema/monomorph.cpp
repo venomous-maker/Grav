@@ -631,7 +631,9 @@ std::string Mono::instantiateFn(const std::string &name, const std::vector<TypeR
 void Mono::rewriteSuper(std::string &name, std::vector<TypeRef> &args, const Subst &subst,
                         bool isClass, int line, int col) {
     if (args.empty()) return;
-    for (auto &a : args) rewriteType(a, subst, line, col);
+    // (qualified like any other type argument: `implements Iterator<Item>` in namespace
+    // shop means shop.Item)
+    for (auto &a : args) { rewriteType(a, subst, line, col); qualifyArg(a); }
     std::string fq = isClass ? findTpl(name, classTpl_) : findTpl(name, ifaceTpl_);
     if (isClass && !fq.empty()) name = instantiateClass(fq, args, line, col);
     else if (!isClass && !fq.empty()) name = instantiateInterface(fq, args, line, col);
