@@ -94,6 +94,14 @@ private:
     StmtPtr parseIfValue();
     StmtPtr parseDestructure(const Token &kw);
     StmtPtr parseLocalFunction();
+    // `match` on a tuple: `case (0, y) if y > 1:` (see parseTupleMatch).
+    struct PatternPath { std::string var; std::vector<std::string> fields; };
+    bool tuplePatternAhead() const;
+    StmtPtr parseTupleMatch(const Token &kw, ExprPtr subject, bool asExpr);
+    void parseTuplePattern(const PatternPath &path, std::vector<ExprPtr> &tests,
+                           std::vector<std::pair<std::string, PatternPath>> &binds);
+    ExprPtr patternExpr(const PatternPath &path, const Token &at);
+    std::vector<std::map<std::string, PatternPath>> patternNames_; // a guard's bound names, innermost last
     bool destructureAhead() const;
     void parseStructMethod(StructDecl &st);
     std::vector<DeclPtr> pendingDecls_; // declarations made alongside the last one (struct methods)

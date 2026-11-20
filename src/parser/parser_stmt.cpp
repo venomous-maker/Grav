@@ -400,8 +400,25 @@ StmtPtr Parser::parseSwitch(bool asExpr) {
     stmt->line = kw.line; stmt->col = kw.col;
     expect(TokenType::LParen, "after 'switch'");
     stmt->subject = parseExpression();
+    if (check(TokenType::Comma)) { // `match (a, b)`: a tuple of them
+        auto tuple = std::make_unique<NewExpr>();
+        tuple->line = stmt->subject->line; tuple->col = stmt->subject->col;
+        tuple->args.push_back(std::move(stmt->subject));
+        while (matchToken(TokenType::Comma)) tuple->args.push_back(parseExpression());
+        if (tuple->args.size() > 4) fail(kw, "a tuple has 2 to 4 elements");
+        size_t n = tuple->args.size();
+        tuple->className = n == 2 ? "Pair" : n == 3 ? "Triple" : "Quad";
+        stmt->subject = std::move(tuple);
+    }
     expect(TokenType::RParen, "after the switch subject");
     expect(TokenType::LBrace, "to open the switch body");
+    if (check(TokenType::Case) && peekAt(1).type == TokenType::LParen) {
+        size_t save = pos_;
+        advance();
+        bool tuple = tuplePatternAhead();
+        pos_ = save;
+        if (tuple) return parseTupleMatch(kw, std::move(stmt->subject), asExpr);
+    }
     while (!check(TokenType::RBrace) && !atEnd()) {
         if (matchToken(TokenType::Default)) {
             if (stmt->hasDefault) fail(previous(), "duplicate 'default' case");
@@ -431,6 +448,192 @@ StmtPtr Parser::parseSwitch(bool asExpr) {
     }
     expect(TokenType::RBrace, "to close the switch body");
     return stmt;
+}
+
+// At a `(` that opens a tuple pattern: a parenthesized list with a comma at its top level.
+bool Parser::tuplePatternAhead() const {
+    if (!check(TokenType::LParen)) return false;
+    int depth = 0;
+    for (size_t i = pos_; i < tokens_.size(); ++i) {
+        TokenType tt = tokens_[i].type;
+        if (tt == TokenType::LParen || tt == TokenType::LBracket || tt == TokenType::LBrace) ++depth;
+        else if (tt == TokenType::RParen || tt == TokenType::RBracket || tt == TokenType::RBrace) {
+            if (--depth == 0) return false;
+        } else if (tt == TokenType::Comma && depth == 1) return true;
+        else if (tt == TokenType::Colon && depth == 0) return false;
+    }
+    return false;
+}
+
+ExprPtr Parser::patternExpr(const PatternPath &path, const Token &at) {
+    auto n = std::make_unique<NameExpr>();
+    n->line = at.line; n->col = at.col;
+    n->name = path.var;
+    ExprPtr e = std::move(n);
+    for (const auto &f : path.fields) {
+        auto m = std::make_unique<MemberExpr>();
+        m->line = at.line; m->col = at.col;
+        m->object = std::move(e);
+        m->member = f;
+        e = std::move(m);
+    }
+    return e;
+}
+
+namespace {
+ExprPtr binary(BinaryOp op, ExprPtr l, ExprPtr r) {
+    auto b = std::make_unique<BinaryExpr>();
+    b->line = l->line; b->col = l->col;
+    b->op = op;
+    b->left = std::move(l);
+    b->right = std::move(r);
+    return b;
+}
+} // namespace
+
+// One tuple pattern at `path`: each element is `_`, a name (bound to that part),
+// a value or range (`0`, "a", Color.Red, 1..5) that part must equal or lie in, or a
+// tuple pattern again.
+void Parser::parseTuplePattern(const PatternPath &path, std::vector<ExprPtr> &tests,
+                               std::vector<std::pair<std::string, PatternPath>> &binds) {
+    static const char *fields[] = {"first", "second", "third", "fourth"};
+    const Token &open = expect(TokenType::LParen, "to begin the tuple pattern");
+    size_t n = 0;
+    do {
+        if (n == 4) fail(open, "a tuple has 2 to 4 elements");
+        PatternPath part = path;
+        part.fields.push_back(fields[n++]);
+        bool ends = peekAt(1).type == TokenType::Comma || peekAt(1).type == TokenType::RParen;
+        if (check(TokenType::LParen) && tuplePatternAhead()) {
+            parseTuplePattern(part, tests, binds);
+        } else if (atName() && ends) {
+            const Token &name = advance();
+            if (name.lexeme == "_") continue;
+            for (const auto &b : binds)
+                if (b.first == name.lexeme) fail(name, "'" + name.lexeme + "' is bound twice in this pattern");
+            binds.push_back({name.lexeme, part});
+        } else {
+            const Token &at = peek();
+            ExprPtr lo = parseExpression();
+            if (check(TokenType::DotDot) || check(TokenType::DotDotEq)) {
+                bool incl = advance().type == TokenType::DotDotEq;
+                ExprPtr hi = parseExpression();
+                tests.push_back(binary(BinaryOp::And, binary(BinaryOp::GreaterEq, patternExpr(part, at), std::move(lo)),
+                                       binary(incl ? BinaryOp::LessEq : BinaryOp::Less, patternExpr(part, at), std::move(hi))));
+            } else {
+                tests.push_back(binary(BinaryOp::Eq, patternExpr(part, at), std::move(lo)));
+            }
+        }
+    } while (matchToken(TokenType::Comma));
+    if (n < 2) fail(open, "a tuple pattern has 2 to 4 elements");
+    expect(TokenType::RParen, "to close the tuple pattern");
+}
+
+// `match (t) { case (0, y) if y > 1: ... case (x, _): ... default: ... }` on a tuple
+// (Pair, Triple, Quad) becomes
+//
+//     { let tuple__N = t
+//       if (tuple__N.first == 0 && tuple__N.second > 1) { let y = tuple__N.second; ... }
+//       else if (true) { let x = tuple__N.first; ... } else { ... } }
+//
+// (a guard reads the parts directly). A case of several patterns (`case (0, _), (_, 0):`)
+// matches any of them, and binds nothing. A case that matches everything ends the chain.
+StmtPtr Parser::parseTupleMatch(const Token &kw, ExprPtr subject, bool asExpr) {
+    PatternPath root{"tuple__" + std::to_string(destructureCounter_++), {}};
+    auto out = std::make_unique<BlockStmt>();
+    out->line = kw.line; out->col = kw.col;
+    auto let = std::make_unique<LetStmt>();
+    let->line = kw.line; let->col = kw.col;
+    let->name = root.var;
+    let->quietUnused = true;
+    let->init = std::move(subject);
+    out->block.statements.push_back(std::move(let));
+    StmtPtr *tail = nullptr;  // where the next case goes: the last if's else
+    bool total = false;       // a case (or the default) matches whatever is left
+    bool hasDefault = false;
+    while (!check(TokenType::RBrace) && !atEnd()) {
+        if (total && (check(TokenType::Case) || check(TokenType::Default)))
+            fail(peek(), hasDefault ? "a case after 'default' can never match"
+                                    : "this case can never match: an earlier one matches every tuple");
+        Block body;
+        ExprPtr cond;
+        if (matchToken(TokenType::Default) ||
+            (check(TokenType::Case) && peekAt(1).type == TokenType::Identifier && peekAt(1).lexeme == "_" &&
+             peekAt(2).type == TokenType::Colon && (advance(), advance(), true))) { // `case _:` is `default:`
+            expect(TokenType::Colon, "after 'default'");
+            body = asExpr ? parseArmValue() : parseCaseBody();
+            total = hasDefault = true;
+        } else {
+            const Token &ck = expect(TokenType::Case, "to begin a switch case");
+            std::vector<ExprPtr> alts;
+            std::vector<std::pair<std::string, PatternPath>> binds;
+            size_t patterns = 0;
+            do {
+                if (!tuplePatternAhead()) fail(peek(), "every case of a match on a tuple is a tuple pattern: `case (a, _):`");
+                std::vector<ExprPtr> tests;
+                parseTuplePattern(root, tests, binds);
+                ++patterns;
+                ExprPtr all;
+                for (auto &t : tests) all = all ? binary(BinaryOp::And, std::move(all), std::move(t)) : std::move(t);
+                if (!all) { // matches every tuple
+                    auto yes = std::make_unique<BoolLiteralExpr>();
+                    yes->line = ck.line; yes->col = ck.col;
+                    yes->value = true;
+                    all = std::move(yes);
+                    total = true;
+                }
+                alts.push_back(std::move(all));
+            } while (matchToken(TokenType::Comma));
+            if (patterns > 1 && !binds.empty())
+                fail(ck, "a case with several patterns cannot bind names (each pattern would bind its own)");
+            for (auto &a : alts) cond = cond ? binary(BinaryOp::Or, std::move(cond), std::move(a)) : std::move(a);
+            if (matchToken(TokenType::If)) {
+                std::map<std::string, PatternPath> names;
+                for (const auto &b : binds) names[b.first] = b.second;
+                patternNames_.push_back(std::move(names));
+                ExprPtr guard = parseExpression();
+                patternNames_.pop_back();
+                cond = binary(BinaryOp::And, std::move(cond), std::move(guard));
+                total = false;
+            }
+            expect(TokenType::Colon, "after the case pattern");
+            body = asExpr ? parseArmValue() : parseCaseBody();
+            std::vector<StmtPtr> lets;
+            for (const auto &b : binds) {
+                auto l = std::make_unique<LetStmt>();
+                l->line = ck.line; l->col = ck.col;
+                l->name = b.first;
+                l->quietUnused = true; // (a guard may be its only use)
+                l->init = patternExpr(b.second, ck);
+                lets.push_back(std::move(l));
+            }
+            body.statements.insert(body.statements.begin(), std::make_move_iterator(lets.begin()),
+                                   std::make_move_iterator(lets.end()));
+        }
+        StmtPtr next;
+        if (total && (cond == nullptr || as<BoolLiteralExpr>(cond.get()))) { // the rest: no test
+            auto b = std::make_unique<BlockStmt>();
+            b->line = kw.line; b->col = kw.col;
+            b->block = std::move(body);
+            next = std::move(b);
+        } else {
+            auto iff = std::make_unique<IfStmt>();
+            iff->line = kw.line; iff->col = kw.col;
+            iff->cond = std::move(cond);
+            iff->thenBlock = std::move(body);
+            next = std::move(iff);
+        }
+        StmtPtr *slot = tail ? tail : nullptr;
+        if (slot) *slot = std::move(next);
+        else out->block.statements.push_back(std::move(next));
+        StmtPtr &placed = slot ? *slot : out->block.statements.back();
+        if (auto *iff = as<IfStmt>(placed.get())) tail = &iff->elseStmt;
+        else tail = &placed; // (nothing may follow: `total`)
+    }
+    expect(TokenType::RBrace, "to close the match");
+    if (asExpr && !total)
+        fail(kw, "a match on a tuple used as a value needs a 'default' (or a last case that matches every tuple)");
+    return out;
 }
 
 // `let (a, b) = pair` (tuple fields first/second/third/fourth), `let [x, y] = arr`

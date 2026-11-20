@@ -823,6 +823,10 @@ ExprPtr Parser::parsePrimary() {
                 }
                 return out;
             }
+            for (auto s = patternNames_.rbegin(); s != patternNames_.rend(); ++s) {
+                auto it = s->find(t.lexeme);
+                if (it != s->end()) return patternExpr(it->second, t); // a name a tuple pattern binds, in its guard
+            }
             auto e = at<NameExpr>(t);
             e->name = t.lexeme;
             for (auto s = localGenerics_.rbegin(); s != localGenerics_.rend(); ++s) {
