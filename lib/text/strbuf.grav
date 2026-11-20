@@ -22,13 +22,6 @@ namespace std.text {
         *cap = nc;
         return nb;
     }
-    static const char* grav_sb_ll(long long n) {
-        static _Thread_local char b[32];
-        char* d = grav_udigits(n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n, b + sizeof b - 1);
-        b[sizeof b - 1] = 0;
-        if (n < 0) *--d = '-';
-        return d;
-    }
     static const char* grav_sb_g(double f) { static _Thread_local char b[48]; return grav_dtoa(f, b); }
     static const char* grav_sb_dup(const unsigned char* buf, int len) {
         char* r = grav_str_alloc((size_t)len + 1);
@@ -61,7 +54,15 @@ namespace std.text {
         public fn appendLine(s: string) -> StringBuilder { self.append(s); self.put("\n", 1); return self; }
         // Appends a number; returns this builder.
         public fn appendInt(n: long) -> StringBuilder {
-            return self.append(%{ grav_sb_ll((long long)n) %} as string);
+            // (its digits go straight into the buffer: no string made for them)
+            %{ char d[24]; int k = 0;
+               unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n;
+               do { d[k++] = (char)('0' + (int)(u % 10)); u /= 10; } while (u);
+               if (n < 0) d[k++] = '-';
+               self->buf = grav_sb_grow(self->buf, &self->cap, self->len + k);
+               while (k) self->buf[self->len++] = (unsigned char)d[--k];
+               self->buf[self->len] = 0; %};
+            return self;
         }
         // Appends a number (shortest exact form); returns this builder.
         public fn appendFloat(f: double) -> StringBuilder {
