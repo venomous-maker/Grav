@@ -12,6 +12,47 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Language
+
+- **Generic local functions use the block's variables**: `fn join<T>(a: T, b: T)`
+  inside a block can read the variables declared before it. Each call passes
+  their values (hidden leading parameters), so it cannot assign them; a call
+  where one of them is shadowed by another variable of that name is an error.
+- **Tuple patterns in `match`**: `case (0, y) if y > 1:`, `case (_, "go", 1..=3):`,
+  nested `case ((a, 2), s):`, several patterns per case (`case (0, _), (_, 0):`)
+  and `case _:`, on a `Pair`, `Triple` or `Quad`; `match (a, b)` matches the
+  tuple of the two. A case after one that matches every tuple is an error, and
+  a tuple `match` used as a value needs one.
+
+### Tools
+
+- **`grav fmt` lays code out**, not only indents it: spacing within lines
+  (operators, commas, colons, keywords and their parentheses, `} else {`), and a
+  `{ a; b }` on one line becomes one statement per line. `<`/`>` in type
+  arguments, map literals, preprocessor lines and wider gaps (alignment) are
+  kept; continuation lines lined up under a bracket keep their place. It only
+  changes whitespace, line breaks and the `;`s it splits at; formatting its
+  result again changes nothing.
+- Editors (VS Code extension 1.16.0, the language server): a tuple pattern's
+  names have their types in hovers and inlay hints. `grav check --types` no
+  longer lists the compiler's hidden locals.
+- Generated C builds without warnings under Clang (`CC=clang`), and the
+  compiler builds with `clang++`; it finds its own executable on macOS too, and
+  the networking library falls back where macOS lacks `SOCK_CLOEXEC` and
+  `MSG_NOSIGNAL`. (Untested on a Mac.)
+
+### Standard library
+
+- `StringBuilder.appendInt` writes the digits straight into the buffer instead
+  of making a string of them; `Json.parse` of a small document no longer sets up
+  its shared-key table (about 16% faster for a three-field object).
+
+### Fixes
+
+- `grav fmt` keeps the lines of a `"""` string as they are (it re-indented
+  them, changing the string), and no longer indents the line after a `"""`
+  string or a multi-line `%{ %}` block as a continuation.
+
 ## 1.9.0 (2026-11-20)
 
 ### Standard library
