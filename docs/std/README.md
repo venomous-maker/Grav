@@ -103,6 +103,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [fs](io/fs.md) | `File`, `Dir`, `FileReader`, `FileWriter`: files and folders, walking and globbing |
 | [path](io/path.md) | `Path`: building and splitting paths |
 | [term](io/term.md) | `Term`: colours and cursor control in the terminal |
+| [watch](io/watch.md) | `FileWatcher`: files created, changed or deleted under some paths |
 
 ### sys
 
