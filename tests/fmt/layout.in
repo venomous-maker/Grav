@@ -38,3 +38,11 @@ println(i)}
   let t = "a,b  c"   // keep   this
   for (k in 0..2) { if (k == 1) { continue; } println("${k}"); println(t) }
 }
+// declared functions' one-line bodies become blocks (their `;` kept); empty ones and lambdas' stay
+class Verbs {
+    fn get(url: string) -> string { return self.send("GET", url); }
+    constructor() {}
+    fn make() -> fn(int) -> int { return fn(v: int) -> int { return v * 2 }; }
+}
+class Ping extends Job { constructor() {}  fn tags() -> Array<string> { return ["ping"] }  fn handle() {} }
+fn Point.len(p: Point) -> int { return p.x; }

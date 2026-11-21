@@ -10,11 +10,19 @@ class Point {
         self.x = x
         self.y = y
     }
-    fn norm() -> float { return float(self.x * self.x + self.y * self.y) }
-    fn operator==(o: Point) -> bool { return self.x == o.x && self.y == o.y; }
-    fn step() -> Point { return self }
+    fn norm() -> float {
+        return float(self.x * self.x + self.y * self.y)
+    }
+    fn operator==(o: Point) -> bool {
+        return self.x == o.x && self.y == o.y;
+    }
+    fn step() -> Point {
+        return self
+    }
 }
-fn pick<T: Named>(xs: Array<Map<string, int>>, n: int) -> Pair<T, int>? { return null }
+fn pick<T: Named>(xs: Array<Map<string, int>>, n: int) -> Pair<T, int>? {
+    return null
+}
 fn main() {
     let p = new Point(1, -2)
     if (p.x > 0 && p.y < 5) { println("in") } else { println("out") }
@@ -46,4 +54,24 @@ fn main() {
         println("${k}")
         println(t)
     }
+}
+// declared functions' one-line bodies become blocks (their `;` kept); empty ones and lambdas' stay
+class Verbs {
+    fn get(url: string) -> string {
+        return self.send("GET", url);
+    }
+    constructor() {}
+    fn make() -> fn(int) -> int {
+        return fn(v: int) -> int { return v * 2 };
+    }
+}
+class Ping extends Job {
+    constructor() {}
+    fn tags() -> Array<string> {
+        return ["ping"]
+    }
+    fn handle() {}
+}
+fn Point.len(p: Point) -> int {
+    return p.x;
 }
