@@ -114,7 +114,16 @@ fs::path fetch(const std::string &source, const std::string &version, const std:
         if (fs::is_directory(dir / ".git", ec) || fs::is_directory(dir, ec)) {
             std::string c;
             capture("git -C " + shellQuote(dir.string()) + " rev-parse HEAD", c);
-            if (commit.empty() || c == commit) { resolvedCommit = c; return dir; }
+            // A folder named after a tag must be at that tag (an older grav could
+            // file another commit under it); a branch's is taken as it is.
+            bool atVersion = true;
+            if (commit.empty() && !version.empty()) {
+                std::string tagged;
+                if (capture("git -C " + shellQuote(dir.string()) + " rev-parse --verify --quiet " +
+                            shellQuote("refs/tags/" + version + "^{commit}"), tagged) == 0)
+                    atVersion = tagged == c;
+            }
+            if ((commit.empty() && atVersion) || c == commit) { resolvedCommit = c; return dir; }
         }
     }
     fs::path tmp = packagesDir() / (".tmp-" + std::to_string(getpid()));
@@ -260,6 +269,9 @@ bool installDep(const ProjectConfig &project, const Dependency &dep, bool useLoc
     seen.insert(dep.source);
     const LockEntry *l = useLock ? project.locked(dep.name) : nullptr;
     if (l && l->source != dep.source) l = nullptr;
+    // grav.toml asks for another version than the lock holds (edited by hand): the
+    // lock's commit belongs to the old one, so it is not used.
+    if (l && !dep.version.empty() && !l->version.empty() && l->version != dep.version) l = nullptr;
     std::string version = dep.version, commit = l ? l->commit : "";
     if (l && version.empty()) version = l->version;
     if (version.empty() && commit.empty()) version = newestTag(cloneUrl(dep.source));
