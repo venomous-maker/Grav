@@ -92,6 +92,8 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens) and `Uuid` |
 | [csv](data/csv.md) | `Csv`: reading and writing comma-separated values |
 | [compress](data/compress.md) | `Compress`: gzip, zlib and raw deflate (system zlib) |
+| [crypto](data/crypto.md) | `Crypto` (SHA-2 digests, HMAC, random bytes), `AesGcm`, `CryptoKey` (RSA, ECDSA, Ed25519: sign, verify, PEM, JWK), `PasswordHash` (scrypt) |
+| [jwt](data/jwt.md) | `Jwt`, `JwtKey`, `Jwks`, `JwtOptions`: JSON Web Tokens (HS, RS, ES, EdDSA) and key sets |
 
 ### io
 

@@ -68,6 +68,7 @@ Base64: binary data as text (RFC 4648), standard or URL-safe.
 - `static fn encode(s: string) -> string` — The Base64 text of a string's bytes, with = padding.
 - `static fn encodeBytes(b: Bytes) -> string` — The Base64 text of raw bytes, with = padding.
 - `static fn encodeUrl(s: string) -> string` — URL- and filename-safe Base64 (- and _ instead of + and /, no padding).
+- `static fn encodeBytesUrl(b: Bytes) -> string` — Raw bytes as URL- and filename-safe Base64 (- and _, no padding), as JWTs and JWKs write them.
 - `static fn decode(s: string) -> string` — The text that Base64 `s` encodes (standard or URL-safe; padding and whitespace optional); ValueError when `s` is not Base64. Use decodeBytes for binary data.
 - `static fn decodeBytes(s: string) -> Bytes` — The bytes that Base64 `s` encodes; ValueError when `s` is not Base64.
 - `static fn isValid(s: string) -> bool` — Whether `s` is valid Base64.
