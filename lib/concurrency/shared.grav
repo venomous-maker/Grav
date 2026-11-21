@@ -1,0 +1,178 @@
+// lib/concurrency/shared.grav — state shared between threads without one big
+// lock: ThreadLocal<T> (each thread its own value, no locking to read or
+// write it) and ConcurrentMap<K, V> (a map split into shards, each with its
+// own lock, so threads working on different keys seldom wait for each other).
+//
+//   let buffers = new ThreadLocal<StringBuilder>(fn() -> StringBuilder { return new StringBuilder() })
+//   buffers.get().append("only this thread's")
+//
+//   let hits = new ConcurrentMap<string, long>()
+//   hits.merge("/home", 1, fn(a: long, b: long) -> long { return a + b })
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "async.grav"
+
+namespace std.concurrency {
+
+    %{
+    #include <pthread.h>
+    #include <stdint.h>
+    #include <stdlib.h>
+    #include <string.h>
+    /* Each thread's values, one slot per ThreadLocal (by its id), in that
+       thread's own memory: reading or writing one is an array access, with
+       no lock. A thread's slots are given back when it exits. */
+    static __thread GravAny* grav_tl_vals = 0;
+    static __thread int grav_tl_cap = 0;
+    static long long grav_tl_ids = 0;
+    static pthread_key_t grav_tl_key;
+    static pthread_once_t grav_tl_once = PTHREAD_ONCE_INIT;
+    static void grav_tl_exit(void* p) {
+        GravAny* v = (GravAny*)p;
+        int n = grav_tl_cap;
+        for (int i = 0; i < n; i++) grav_any_release(v[i]);
+        free(v);
+        grav_tl_vals = 0;
+        grav_tl_cap = 0;
+    }
+    static void grav_tl_setup(void) { pthread_key_create(&grav_tl_key, grav_tl_exit); }
+    static int grav_tl_new_id(void) { return (int)__atomic_fetch_add(&grav_tl_ids, 1, __ATOMIC_SEQ_CST); }
+    /* This thread's value for ThreadLocal `id` (borrowed; tag 0, null, when unset). */
+    static GravAny grav_tl_get(int id) {
+        if (id < grav_tl_cap) return grav_tl_vals[id];
+        GravAny none; memset(&none, 0, sizeof none);
+        return none;
+    }
+    static void grav_tl_put(int id, GravAny v) {
+        if (id >= grav_tl_cap) {
+            int cap = grav_tl_cap ? grav_tl_cap : 8;
+            while (cap <= id) cap *= 2;
+            GravAny* nv = (GravAny*)realloc(grav_tl_vals, sizeof(GravAny) * (size_t)cap);
+            if (!nv) abort();
+            memset(nv + grav_tl_cap, 0, sizeof(GravAny) * (size_t)(cap - grav_tl_cap));
+            if (!grav_tl_vals) { pthread_once(&grav_tl_once, grav_tl_setup); }
+            grav_tl_vals = nv;
+            grav_tl_cap = cap;
+            pthread_setspecific(grav_tl_key, nv);
+        }
+        GravAny old = grav_tl_vals[id];
+        grav_tl_vals[id] = grav_any_retain(v);
+        grav_any_release(old);
+    }
+    %}
+
+    // A value per thread: the first get() on a thread makes it with `init`.
+    // Each thread keeps its values in its own memory, so get and set take no
+    // lock; a thread's values are let go when it exits.
+    class ThreadLocal<T> {
+        private init: fn() -> T
+        private id: int
+        constructor(init: fn() -> T) { self.init = init; self.id = %{ grav_tl_new_id() %} as int; }
+        // This thread's value (made by `init` the first time).
+        fn get() -> T {
+            let id = self.id;
+            let a = %{ grav_tl_get(id) %} as any;
+            if (a != null) { return a as T; }
+            let v = self.init();
+            self.set(v);
+            return v;
+        }
+        // Sets this thread's value.
+        fn set(v: T) {
+            let id = self.id;
+            let a: any = v;
+            %{ grav_tl_put(id, a); %};
+        }
+        // Whether this thread has a value yet.
+        fn has() -> bool { let id = self.id; let a = %{ grav_tl_get(id) %} as any; return a != null; }
+        // Forgets this thread's value (the next get() makes a new one).
+        fn remove() {
+            let id = self.id;
+            let none: any = null;
+            %{ grav_tl_put(id, none); %};
+        }
+    }
+
+    // A thread-safe map in 16 shards, each a HashMap with its own lock: threads
+    // on different keys seldom wait for each other, and nothing ever locks the
+    // whole map but size(), keys() and clear().
+    class ConcurrentMap<K, V> {
+        private maps: Array<HashMap<K, V>> = new Array<HashMap<K, V>>()
+        private locks: Array<Mutex> = new Array<Mutex>()
+        constructor() {
+            for (i in 0..16) { self.maps.push(new HashMap<K, V>()); self.locks.push(new Mutex()); }
+        }
+        private fn shard(key: K) -> int { let h = hashOf(key); return ((h ^ (h >> 17)) & 15) as int; }
+        fn get(key: K) -> V {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let v = self.maps[s].get(key);
+            self.locks[s].unlock();
+            return v;
+        }
+        // The value for `key`, or `fallback`.
+        fn getOr(key: K, fallback: V) -> V {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let v = self.maps[s].getOr(key, fallback);
+            self.locks[s].unlock();
+            return v;
+        }
+        fn put(key: K, value: V) {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            self.maps[s].put(key, value);
+            self.locks[s].unlock();
+        }
+        fn containsKey(key: K) -> bool {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let has = self.maps[s].containsKey(key);
+            self.locks[s].unlock();
+            return has;
+        }
+        // Removes `key`; whether it was there.
+        fn remove(key: K) -> bool {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let had = self.maps[s].containsKey(key);
+            if (had) { self.maps[s].remove(key); }
+            self.locks[s].unlock();
+            return had;
+        }
+        // The value for `key`, made by `make` (once, under the key's lock) when missing.
+        fn computeIfAbsent(key: K, make: fn(K) -> V) -> V {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let m = self.maps[s];
+            if (!m.containsKey(key)) { m.put(key, make(key)); }
+            let v = m.get(key);
+            self.locks[s].unlock();
+            return v;
+        }
+        // Puts `value`, or combines it with the value there (`combine(old, value)`); the result.
+        fn merge(key: K, value: V, combine: fn(V, V) -> V) -> V {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let m = self.maps[s];
+            let v = m.containsKey(key) ? combine(m.get(key), value) : value;
+            m.put(key, v);
+            self.locks[s].unlock();
+            return v;
+        }
+        fn size() -> int {
+            let n = 0;
+            for (i in 0..16) { self.locks[i].lock(); n += self.maps[i].size(); self.locks[i].unlock(); }
+            return n;
+        }
+        fn isEmpty() -> bool { return self.size() == 0; }
+        // The keys at this moment (a copy).
+        fn keys() -> Array<K> {
+            let out = new Array<K>();
+            for (i in 0..16) { self.locks[i].lock(); for (k in self.maps[i].keys()) { out.push(k); } self.locks[i].unlock(); }
+            return out;
+        }
+        fn clear() { for (i in 0..16) { self.locks[i].lock(); self.maps[i].clear(); self.locks[i].unlock(); } }
+    }
+}
