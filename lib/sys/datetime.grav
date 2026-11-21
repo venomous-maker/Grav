@@ -36,6 +36,39 @@ namespace std.sys {
         time_t tt = (time_t)ts; struct tm tmv; struct tm* m = localtime_r(&tt, &tmv); /* thread-safe */
         char* b = grav_str_alloc(256); if (!strftime(b, 256, fmt, m)) b[0] = 0; return b;
     }
+    /* strftime in UTC (gmtime_r: thread-safe). */
+    static const char* grav_strftime_utc(long long ts, const char* fmt) {
+        time_t tt = (time_t)ts; struct tm tmv; struct tm* m = gmtime_r(&tt, &tmv);
+        char* b = grav_str_alloc(256); if (!m || !strftime(b, 256, fmt, m)) b[0] = 0; return b;
+    }
+    /* The local zone's offset from UTC at `ts`, in seconds (east positive). */
+    static long long grav_utc_offset(long long ts) {
+        time_t tt = (time_t)ts; struct tm l, g;
+        localtime_r(&tt, &l); gmtime_r(&tt, &g);
+        l.tm_isdst = 0; g.tm_isdst = 0;
+        return (long long)(timegm(&l) - timegm(&g));
+    }
+    /* From UTC calendar fields (out-of-range fields roll over). */
+    static long long grav_from_utc(int y, int mo, int d, int h, int mi, int s) {
+        struct tm t = {0};
+        t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d; t.tm_hour = h; t.tm_min = mi; t.tm_sec = s;
+        return (long long)timegm(&t);
+    }
+    /* An HTTP date ("Sun, 06 Nov 1994 08:49:37 GMT", RFC 9110; also the RFC 850 and
+       asctime forms old clients send) as unix seconds; -1 when it is none of them. */
+    static long long grav_http_date(const char* s) {
+        static const char* const months[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
+        char mon[4] = {0}, wd[16] = {0};
+        int d = 0, y = 0, h = 0, mi = 0, sec = 0;
+        if (sscanf(s, "%3s, %d %3s %d %d:%d:%d GMT", wd, &d, mon, &y, &h, &mi, &sec) == 7) {}
+        else if (sscanf(s, "%15[^,], %d-%3s-%d %d:%d:%d GMT", wd, &d, mon, &y, &h, &mi, &sec) == 7) { y += y < 70 ? 2000 : 1900; }
+        else if (sscanf(s, "%3s %3s %d %d:%d:%d %d", wd, mon, &d, &h, &mi, &sec, &y) == 7) {}
+        else return -1;
+        int m = -1;
+        for (int i = 0; i < 12; i++) if (!strcmp(mon, months[i])) m = i;
+        if (m < 0 || d < 1 || d > 31 || h > 23 || mi > 59 || sec > 60) return -1;
+        return grav_from_utc(y, m + 1, d, h, mi, sec);
+    }
     char* strptime(const char* s, const char* format, struct tm* tm);   /* POSIX; hidden without _XOPEN_SOURCE */
     /* strptime into local time; -1 (and *ok = 0) when the text does not fit the format. */
     static long long grav_strptime(const char* text, const char* fmt, int* ok) {
@@ -233,6 +266,31 @@ namespace std.sys {
         // "YYYY-MM-DDTHH:MM:SS" (ISO 8601, local time), with ".ffffff" when the
         // microseconds are not 0.
         public fn iso() -> string { return self.format("%Y-%m-%dT%H:%M:%S") + self.fraction(); }
+        // "YYYY-MM-DDTHH:MM:SSZ" in UTC (RFC 3339, as JSON APIs and logs write it),
+        // with ".ffffff" when the microseconds are not 0. DateTime.parse reads it back.
+        public fn isoUtc() -> string { return self.formatUtc("%Y-%m-%dT%H:%M:%S") + self.fraction() + "Z"; }
+        // ISO 8601 in local time with the zone's offset ("2026-11-21T15:00:00+03:00").
+        public fn isoLocal() -> string {
+            let off = self.utcOffsetSeconds();
+            let sign = off < 0 ? "-" : "+";
+            let a = off < 0 ? -off : off;
+            return self.iso() + sign + Str.padLeft(str(a / 3600), 2, "0") + ":" + Str.padLeft(str((a / 60) % 60), 2, "0");
+        }
+        // strftime patterns in UTC ("%Y-%m-%d %H:%M").
+        public fn formatUtc(fmt: string) -> string { let t = self.ts; return %{ grav_strftime_utc(t, fmt) %} as string; }
+        // The local zone's offset from UTC at this moment, in seconds (east positive).
+        public fn utcOffsetSeconds() -> long { let t = self.ts; return %{ grav_utc_offset(t) %} as long; }
+        // As an HTTP date: "Sun, 06 Nov 1994 08:49:37 GMT" (Last-Modified, Expires, cookies).
+        public fn httpDate() -> string { return self.formatUtc("%a, %d %b %Y %H:%M:%S GMT"); }
+        // From UTC calendar fields (out-of-range fields roll over).
+        static fn ofUtc(year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> DateTime {
+            return new DateTime(%{ grav_from_utc(year, month, day, hour, minute, second) %} as long);
+        }
+        // An HTTP date (RFC 9110, and the older RFC 850 and asctime forms); null when it is none.
+        static fn parseHttpDate(text: string) -> DateTime {
+            let t = %{ grav_http_date(text) %} as long;
+            return t < 0 ? null : new DateTime(t);
+        }
         // Midnight at the start of this day.
         public fn startOfDay() -> DateTime { return DateTime.of(self.year(), self.month(), self.day()); }
         // The same day and time `months` later (or earlier when negative); a day that the
