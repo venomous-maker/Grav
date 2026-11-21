@@ -94,6 +94,11 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [compress](data/compress.md) | `Compress`: gzip, zlib and raw deflate (system zlib) |
 | [crypto](data/crypto.md) | `Crypto` (SHA-2 digests, HMAC, random bytes), `AesGcm`, `CryptoKey` (RSA, ECDSA, Ed25519: sign, verify, PEM, JWK), `PasswordHash` (scrypt) |
 | [jwt](data/jwt.md) | `Jwt`, `JwtKey`, `Jwks`, `JwtOptions`: JSON Web Tokens (HS, RS, ES, EdDSA) and key sets |
+| [toml](data/toml.md) | `Toml`: TOML 1.0 read into and written from `JsonValue` |
+| [zip](data/zip.md) | `ZipWriter`, `ZipReader`: ZIP archives (stored or deflated), safe extraction |
+| [xml](data/xml.md) | `Xml`, `XmlNode`: XML parsed, queried by path, written; DTDs refused |
+| [mime](data/mime.md) | `MimeType`: media types by extension and back |
+| [semver](data/semver.md) | `Semver`: semantic versions, ordering and npm-style ranges |
 
 ### io
 
