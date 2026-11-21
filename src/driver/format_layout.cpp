@@ -10,7 +10,9 @@
 //     preprocessor lines, and gaps of two spaces or more (alignment) are kept as
 //     they are;
 //   - a `{ a; b }` on one line becomes one statement per line (the `;`s dropped
-//     where a line break ends the statement as well), a `{` followed on its line
+//     where a line break ends the statement as well), and so does a function's,
+//     method's, constructor's or destructor's body on one line, `fn f() { a; }`
+//     (its `;` kept; an empty `{}` and a lambda's body stay), a `{` followed on its line
 //     by code that runs past the line gets a line break after it, and a `}`
 //     closing an earlier line's `{` after other code gets one before it.
 // The second pass (formatGrav) then indents every line.
@@ -340,6 +342,49 @@ std::vector<size_t> partners(const std::vector<Tok> &t) {
 
 bool spansLines(const Tok &t) { return t.text.find('\n') != std::string::npos; }
 
+// Is the `{` at o the body of a declared function (`fn name(...) -> T {`, a method,
+// `fn Type.name`, `fn operator==`, `constructor(...)`, `destructor()`), not a lambda's
+// (`fn(...) {`) or a statement's? Between the parameters' `)` and the `{` only a
+// return type may come (which may itself hold a function type's parentheses).
+bool declBody(const std::vector<Tok> &t, const std::vector<Role> &r, const std::vector<size_t> &m, size_t o) {
+    static const std::set<std::string> between = {"->", "<", ">", ">>", ",", "?", "[", "]", "*", ".", "::"};
+    size_t k = o;
+    while (k-- > 0) {
+        const Tok &x = t[k];
+        if (x.k == K::Word) continue;                                // a return type's names
+        if (x.k != K::Punct) return false;
+        if (x.text != ")") {
+            if (between.count(x.text) || r[k] == Role::Keep) continue;
+            return false;
+        }
+        size_t p = m[k];
+        if (p == std::string::npos || p == 0) return false;
+        size_t q = p - 1;
+        if (isWord(&t[q], "fn")) { k = q; continue; }                // a function type in the return type
+        if (isWord(&t[q], "constructor") || isWord(&t[q], "destructor")) return true;
+        if (t[q].k == K::Punct && (t[q].text == ">" || t[q].text == ">>")) { // `name<T>(`
+            int depth = 0;
+            for (;; --q) {
+                if (t[q].k == K::Punct && t[q].text == ">") ++depth;
+                else if (t[q].k == K::Punct && t[q].text == ">>") depth += 2;
+                else if (t[q].k == K::Punct && t[q].text == "<") --depth;
+                if (depth == 0 || q == 0) break;
+            }
+            if (q == 0) return false;
+            --q;
+        }
+        if (t[q].k == K::Punct && r[q] == Role::Keep) {              // `fn operator[]=(`
+            while (q > 0 && t[q].k == K::Punct && r[q] == Role::Keep) --q;
+            if (!isWord(&t[q], "operator")) return false;
+        }
+        if (t[q].k != K::Word || q == 0) return false;
+        size_t f = q - 1;
+        while (f >= 2 && is(&t[f], ".") && t[f - 1].k == K::Word) f -= 2;  // `fn Point.name(`
+        return isWord(&t[f], "fn");
+    }
+    return false;
+}
+
 } // namespace
 
 std::string layoutGrav(const std::string &src) {
@@ -357,7 +402,7 @@ std::string layoutGrav(const std::string &src) {
     };
     // A `{ ... }` on one line spreads over lines when it holds a `;` between
     // statements, or a block that does (worked out innermost first); `{ a; }` stays.
-    std::vector<bool> spread(t.size(), false);
+    std::vector<bool> spread(t.size(), false), keepSemis(t.size(), false);
     {
         std::vector<size_t> open;
         for (size_t i = 0; i < t.size(); ++i) {
@@ -367,6 +412,7 @@ std::string layoutGrav(const std::string &src) {
                 open.pop_back();
                 if (m[o] != i || lineHasBreak(o, i)) continue;
                 int depth = 0;
+                bool body = o + 1 < i && declBody(t, r, m, o);
                 for (size_t k = o + 1; k < i && !spread[o]; ++k) {
                     if (t[k].k != K::Punct) continue;
                     const std::string &x = t[k].text;
@@ -375,6 +421,7 @@ std::string layoutGrav(const std::string &src) {
                     else if (x == ")" || x == "]" || x == "}") --depth;
                     else if (x == ";" && depth == 0 && k + 1 < i) spread[o] = true; // (not one ending the block)
                 }
+                if (body && !spread[o]) spread[o] = keepSemis[o] = true;  // a declared function's one-line body
             }
         }
     }
@@ -402,7 +449,7 @@ std::string layoutGrav(const std::string &src) {
                             (before->text == "return" || before->text == "break" || before->text == "continue" ||
                              before->text == "yield");
                 bool startsClean = s + 1 == close || after->k == K::Word || is(after, "(") || is(after, "[");
-                drop[s] = (!bare || s + 1 == close) && startsClean;
+                drop[s] = !keepSemis[i] && (!bare || s + 1 == close) && startsClean;
             }
             breakBefore[close] = true;
             continue;
