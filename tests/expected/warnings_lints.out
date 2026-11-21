@@ -67,4 +67,8 @@ gravc: tests/warnings/lints.grav:45:40: warning: an `if` alone in an `else` bloc
         if (x > 2) { println("g") } else { if (x > 1) { println("h") } }
                                            ^
     help: write `else if (...) { ... }`
-gravc: ok (18 warning(s))
+gravc: tests/warnings/lints.grav:46:27: warning: `Str.charAt` makes a call for each byte [slow-char-at]
+        println(str(Str.charAt(name, 0)))
+                              ^
+    help: write `name[0]`
+gravc: ok (19 warning(s))

@@ -1,0 +1,65 @@
+// std/concurrency's shared state: ThreadLocal (a value per thread, and a
+// reused thread number never showing the last owner's value), ConcurrentMap
+// under eight threads, AtomicLong (with a running maximum) and AtomicBool.
+import "std"
+
+test "each thread its own value" {
+    let made = new AtomicLong(0)
+    let local = new ThreadLocal<Array<int>>(fn() -> Array<int> { made.increment(); return new Array<int>() })
+    local.get().push(1)
+    let threads = new Array<Thread>()
+    let sums = new ConcurrentMap<int, int>()
+    for (t in 0..8) {
+        threads.push(Thread.spawn(fn() {
+            for (i in 0..1000) { local.get().push(i) }
+            sums.put(t, local.get().size())
+        }))
+    }
+    for (th in threads) { th.join() }
+    assertEq(local.get().size(), 1)                       // the main thread's, untouched
+    for (t in 0..8) { assertEq(sums.get(t), 1000) }
+    assertEq(made.get(), 9 as long)
+    // a later thread may reuse a number: it starts empty all the same
+    let fresh = new AtomicLong(-1)
+    Thread.spawn(fn() { fresh.set(local.get().size() as long) }).join()
+    assertEq(fresh.get(), 0 as long)
+    assert(local.has())
+    local.remove()
+    assert(!local.has())
+    local.set(new Array<int>())
+    assertEq(local.get().size(), 0)
+}
+
+test "a concurrent map under eight threads" {
+    let m = new ConcurrentMap<string, long>()
+    let threads = new Array<Thread>()
+    for (t in 0..8) {
+        threads.push(Thread.spawn(fn() {
+            for (i in 0..2000) { m.merge("k" + str(i % 50), 1, fn(a: long, b: long) -> long { return a + b }) }
+        }))
+    }
+    for (th in threads) { th.join() }
+    assertEq(m.size(), 50)
+    let total: long = 0
+    for (k in m.keys()) { total += m.get(k) }
+    assertEq(total, 16000 as long)
+    assertEq(m.computeIfAbsent("new", fn(k: string) -> long { return 7 }), 7 as long)
+    assertEq(m.computeIfAbsent("new", fn(k: string) -> long { return 8 }), 7 as long)
+    assert(m.remove("new") && !m.remove("new") && !m.containsKey("new"))
+    assertEq(m.getOr("none", 42), 42 as long)
+    m.clear()
+    assert(m.isEmpty())
+}
+
+test "atomics" {
+    let top = new AtomicLong()
+    let threads = new Array<Thread>()
+    for (t in 0..4) { threads.push(Thread.spawn(fn() { for (i in 0..1000) { top.updateMax((t * 1000 + i) as long) } })) }
+    for (th in threads) { th.join() }
+    assertEq(top.get(), 3999 as long)
+    assertEq(top.exchange(5), 3999 as long)
+    assert(top.compareAndSet(5, 6) && !top.compareAndSet(5, 7))
+    let stop = new AtomicBool()
+    assert(!stop.get() && !stop.getAndSet(true) && stop.getAndSet(true))
+    assert(stop.compareAndSet(true, false) && !stop.get())
+}

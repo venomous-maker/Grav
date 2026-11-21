@@ -43,6 +43,7 @@ fn main() {
     let y = x as int
     if (x > 1) {}
     if (x > 2) { println("g") } else { if (x > 1) { println("h") } }
+    println(str(Str.charAt(name, 0)))
     println(str(isBig(x)) + str(isSmall(x)) + str(total(b.items)) + str(early(x)) + str(same) + s + str(y))
     // fine: a float compared with itself is the NaN check; a nullable string; x += 1
     if (f != f) { println("nan") }

@@ -1,0 +1,5 @@
+running 3 tests
+  ok    each thread its own value
+  ok    a concurrent map under eight threads
+  ok    atomics
+result: 3 passed, 0 failed
