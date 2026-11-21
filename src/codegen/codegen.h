@@ -36,6 +36,8 @@ public:
     void setLineDirectives(bool on) { lines_ = on; }
     // `grav test`: emit the test blocks and a runner main instead of the program's main.
     void setTestMode(bool on) { testMode_ = on; }
+    // `grav bench`: the bench blocks run (timed), not the tests.
+    void setBenchMode(bool on) { benchMode_ = on; }
     // After each function the mapping returns to the C file; the driver replaces
     // this marker with `#line <n> "<file.c>"` once the output path is known.
     static constexpr const char *kLineReset = "#line __GRAV_RESET__";
@@ -72,6 +74,7 @@ private:
     bool lines_ = true;
     bool testMode_ = false;
     std::vector<std::pair<std::string, std::string>> tests_; // display name, C function
+    bool benchMode_ = false;
     int curSrcLine_ = 0; // source line of the statement being emitted (for #line)
     const Block *curBlock_ = nullptr; // the block whose statement curStmt_ is being emitted
     size_t curStmt_ = 0;

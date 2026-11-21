@@ -1728,6 +1728,60 @@ static void grav_assert_eq(GravAny actual, GravAny expected, const char* msg, co
              eq, grav_any_to_string(expected), eq, aq, grav_any_to_string(actual), aq);
     grav_assert_fail_at(b, loc);
 }
+/* `grav bench`: each bench body is run once to warm up, then in batches sized
+   to take about 50 ms, five times; the median and the fastest batch give the
+   time per run. A failure in a bench stops it (and fails the run). */
+static long long grav_bench_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000000000LL + t.tv_nsec; }
+static void grav_bench_time(char* out, size_t n, double ns) {
+    if (ns < 1e3) snprintf(out, n, "%.1f ns", ns);
+    else if (ns < 1e6) snprintf(out, n, "%.2f us", ns / 1e3);
+    else if (ns < 1e9) snprintf(out, n, "%.2f ms", ns / 1e6);
+    else snprintf(out, n, "%.2f s", ns / 1e9);
+}
+static int grav_run_benches(const char* const* names, void (*const* fns)(void), int n) {
+    const char* filter = getenv("GRAV_TEST_FILTER");
+    int failed = 0;
+    printf("running %d bench%s\n", n, n == 1 ? "" : "es");
+    fflush(stdout);
+    grav_testing = 1;
+    for (int i = 0; i < n; i++) {
+        if (filter && filter[0] && !strstr(names[i], filter)) continue;
+        grav_jmp_top = 0;
+        grav_frames_restore(0);
+        grav_test_uw = grav_uw_top;
+        if (setjmp(grav_test_jmp) != 0) {
+            printf("  FAIL  %s\n        %s\n", names[i], grav_test_msg);
+            failed++;
+            fflush(stdout);
+            continue;
+        }
+        fns[i]();                                          /* warm up */
+        long long iters = 1, spent = 0;
+        for (;;) {                                         /* a batch of about 50 ms */
+            long long t0 = grav_bench_now();
+            for (long long k = 0; k < iters; k++) fns[i]();
+            spent = grav_bench_now() - t0;
+            if (spent >= 50000000LL || iters >= (1LL << 40)) break;
+            long long next = spent > 0 ? iters * 60000000LL / spent : iters * 100;
+            iters = next > iters * 100 ? iters * 100 : (next <= iters ? iters * 2 : next);
+        }
+        double samples[5];
+        for (int s = 0; s < 5; s++) {
+            long long t0 = grav_bench_now();
+            for (long long k = 0; k < iters; k++) fns[i]();
+            samples[s] = (double)(grav_bench_now() - t0) / (double)iters;
+        }
+        for (int a = 0; a < 5; a++) for (int b = a + 1; b < 5; b++) if (samples[b] < samples[a]) { double t = samples[a]; samples[a] = samples[b]; samples[b] = t; }
+        char med[32], best[32];
+        grav_bench_time(med, sizeof med, samples[2]);
+        grav_bench_time(best, sizeof best, samples[0]);
+        double perSec = samples[2] > 0 ? 1e9 / samples[2] : 0;
+        printf("  %-40s %12s/op  (fastest %s, %.0f ops/s, %lld runs per sample)\n", names[i], med, best, perSec, iters);
+        fflush(stdout);
+    }
+    grav_testing = 0;
+    return failed ? 1 : 0;
+}
 static int grav_run_tests(const char* const* names, void (*const* fns)(void), int n) {
     const char* filter = getenv("GRAV_TEST_FILTER");
     volatile int passed = 0, failed = 0, skipped = 0;

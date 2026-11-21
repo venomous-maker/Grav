@@ -125,7 +125,7 @@ void CodeGen::emitDefinitions(const Program &program) {
             emitFunction(*fn);
         } else if (auto *c = as<const ClassDecl>(declPtr.get())) {
             emitClassBodies(*c);
-        } else if (auto *t = as<const TestDecl>(declPtr.get()); t && testMode_) {
+        } else if (auto *t = as<const TestDecl>(declPtr.get()); t && testMode_ && t->isBench == benchMode_) {
             std::string fn = "grav_test_" + std::to_string(tests_.size());
             tests_.push_back({t->name, fn});
             defs_ += lineDirective(t->line);
@@ -369,8 +369,8 @@ void CodeGen::emitMainWrapper() {
         defs_ += "    grav_argc = argc; grav_argv = argv;\n";
         defs_ += "    grav_install_faults();\n";
         if (!dynamicGlobals_.empty()) defs_ += "    grav_init_globals();\n";
-        defs_ += "    int rc = grav_run_tests(grav_test_names, grav_test_fns, " +
-                 std::to_string(tests_.size()) + ");\n";
+        defs_ += std::string("    int rc = ") + (benchMode_ ? "grav_run_benches" : "grav_run_tests") +
+                 "(grav_test_names, grav_test_fns, " + std::to_string(tests_.size()) + ");\n";
         if (!asyncDecls_.empty()) defs_ += "    grav_join_all();\n";
         defs_ += "    return rc;\n}\n";
         return;

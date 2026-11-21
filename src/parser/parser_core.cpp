@@ -203,13 +203,14 @@ void Parser::parseTopLevelDecl(Program &program) {
                 parseUse(program);
                 return;
             }
-            // `test "name" { ... }` — contextual: a unit test.
-            if (peek().lexeme == "test" && peekAt(1).type == TokenType::StringLiteral) {
+            // `test "name" { ... }` — contextual: a unit test; `bench "name" { ... }`: a benchmark.
+            if ((peek().lexeme == "test" || peek().lexeme == "bench") && peekAt(1).type == TokenType::StringLiteral) {
                 const Token &kw = advance();
                 auto t = std::make_unique<TestDecl>();
                 t->line = kw.line; t->col = kw.col;
+                t->isBench = kw.lexeme == "bench";
                 t->name = advance().lexeme;
-                t->fqName = qualify("test$" + std::to_string(kw.line));
+                t->fqName = qualify((t->isBench ? "bench$" : "test$") + std::to_string(kw.line));
                 t->body = parseBodyBlock();
                 program.decls.push_back(std::move(t));
                 break;

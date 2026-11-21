@@ -685,6 +685,7 @@ struct TypeAliasDecl : Decl {
 struct TestDecl : Decl {
     std::string name;
     Block body;
+    bool isBench = false; // `bench "name" { ... }`: timed by `grav bench`, skipped by `grav test`
 };
 
 // A top-level `%{ ... %}` block: verbatim C emitted into the translation unit

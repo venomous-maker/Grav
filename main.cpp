@@ -339,6 +339,7 @@ int main(int argc, char **argv) {
     bool trace = true, native = false, release = false, race = false, sanitize = false;
     bool lineDirectives = true;
     bool testMode = false;
+    bool benchMode = false; // `grav bench`: build optimized, run the bench blocks
     std::string testFilter;
     std::vector<std::string> runArgs;
     EmitMode emit = EmitMode::C;
@@ -382,6 +383,7 @@ int main(int argc, char **argv) {
         if (sub == "run") { runAfter = true; emit = EmitMode::Bin; first = 2; }
         else if (sub == "build") { emit = EmitMode::Bin; first = 2; }
         else if (sub == "test") { testMode = true; runAfter = true; emit = EmitMode::Bin; first = 2; }
+        else if (sub == "bench") { testMode = true; benchMode = true; runAfter = true; emit = EmitMode::Bin; first = 2; }
         else if (sub == "check") { checkOnly = true; first = 2; }
     }
 
@@ -691,6 +693,7 @@ int main(int argc, char **argv) {
         codegen.setTrace(trace);
         codegen.setLineDirectives(lineDirectives);
         codegen.setTestMode(testMode);
+        codegen.setBenchMode(benchMode);
         // Hand the line map to codegen so runtime stack traces show real file:line.
         std::vector<grav::SourceMapEntry> cgMap;
         cgMap.reserve(srcMap.size());
@@ -764,7 +767,7 @@ int main(int argc, char **argv) {
         std::string flags = " -std=c11 -D_DEFAULT_SOURCE -fwrapv -pipe";
         // Optimize by default; an explicit -O wins, and plain -g means "debug me".
         // `grav test` builds for a quick run: -Og compiles about three times as fast as -O2.
-        if (optFlag.empty()) optFlag = release ? "-O3" : !debugFlag.empty() ? "-O0" : testMode ? "-Og" : "-O2";
+        if (optFlag.empty()) optFlag = release ? "-O3" : !debugFlag.empty() ? "-O0" : benchMode ? "-O2" : testMode ? "-Og" : "-O2";
         flags += " " + optFlag;
         if (release) flags += " -DNDEBUG";
         if (native) flags += " -march=native";
