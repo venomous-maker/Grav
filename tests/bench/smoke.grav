@@ -1,0 +1,7 @@
+// `grav bench` runs bench blocks (timed) and skips tests: tests/run.sh checks
+// the report's shape, not the numbers.
+import "std"
+class Sink { static n: long = 0 }
+bench "adding" { Sink.n += 1 }
+bench "a string's hash" { Sink.n += Hash.fnv1a("abc") }
+test "not run by grav bench" { assert(false) }

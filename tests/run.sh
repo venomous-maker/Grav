@@ -89,6 +89,13 @@ run_warn() {
     echo "FAIL (warnings) $f"; diff "$gold" "$J/$name.out" 2>&1 | sed 's/^/    /' | head -30; res fail
   else echo "ok   $f (warnings)"; res pass; fi
 }
+# `grav bench`: the bench blocks run (and the tests do not); timings vary, so only the shape is checked.
+run_bench() {
+  local f="$1" out="$J/bench_$(basename "$1" .grav).out"
+  if "$GRAV" bench "$f" >"$out" 2>&1 && grep -q "running 2 benches" "$out" && [ "$(grep -c '/op' "$out")" = 2 ] && ! grep -q FAIL "$out"; then
+    echo "ok   $f (bench)"; res pass
+  else echo "FAIL (bench)   $f"; sed 's/^/    /' "$out" | head -10; res fail; fi
+}
 # `grav fmt` on tests/fmt/*.in: golden-checked, and formatting its result changes nothing.
 run_fmt() {
   local f="$1" name; name="fmt_$(basename "$f" .in)"; local gold="tests/expected/$name.out"
@@ -148,6 +155,7 @@ for f in lib/*/*.grav; do spawn run_lib "$f"; done
 note "ok   lib/*/*.grav (each checks on its own)"
 for f in tests/errors/*.grav; do spawn run_error "$f"; done
 for f in tests/warnings/*.grav; do spawn run_warn "$f"; done
+for f in tests/bench/*.grav; do spawn run_bench "$f"; done
 for f in tests/fmt/*.in; do spawn run_fmt "$f"; done
 for p in examples/apps/bank_server; do spawn run_project "$p"; done
 for f in examples/*.grav examples/apps/*.grav examples/project/main.grav examples/apps/bank_server/src/main.grav; do

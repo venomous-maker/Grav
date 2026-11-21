@@ -1,0 +1,20 @@
+// DateTime in UTC: RFC 3339 output that parse reads back, the local offset,
+// HTTP dates both ways (all three historical forms), and UTC fields.
+import "std"
+
+test "UTC and HTTP dates" {
+    let d = DateTime.ofUtc(1994, 11, 6, 8, 49, 37)
+    assertEq(d.unix(), 784111777 as long)
+    assertEq(d.isoUtc(), "1994-11-06T08:49:37Z")
+    assertEq(d.httpDate(), "Sun, 06 Nov 1994 08:49:37 GMT")
+    assertEq(d.formatUtc("%Y/%m/%d %H"), "1994/11/06 08")
+    assertEq(DateTime.parse(d.isoUtc()).unix(), d.unix())
+    for (form in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"]) {
+        assertEq(DateTime.parseHttpDate(form).unix(), 784111777 as long)
+    }
+    assert(DateTime.parseHttpDate("tomorrow") == null)
+    assertEq(DateTime.parse("2024-02-29T09:30:00.25+03:00").isoUtc(), "2024-02-29T06:30:00.250000Z")
+    assertEq(DateTime.ofUtc(2024, 1, 32).isoUtc(), "2024-02-01T00:00:00Z")            // rolls over
+    // the local rendering carries the zone's offset, and reads back as the same moment
+    assertEq(DateTime.parse(d.isoLocal()).unix(), d.unix())
+}
