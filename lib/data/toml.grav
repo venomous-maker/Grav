@@ -1,0 +1,454 @@
+// lib/data/toml.grav — TOML 1.0 (the format of grav.toml, Cargo.toml and
+// pyproject.toml) read into, and written from, the same JsonValue tree as JSON:
+// tables are objects, arrays are arrays, and dates and times are strings.
+//
+//   let cfg = Toml.parse(new File("grav.toml").read())
+//   print(cfg.getString("name", ""))
+//   print(cfg.get("dependencies").keys())
+//
+// Malformed input (or a key defined twice) is a ValueError naming the line.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/strbuf.grav"
+import "../collections/array.grav"
+import "../collections/hashset.grav"
+import "../types/integer.grav"
+import "../types/float.grav"
+import "json.grav"
+import "encoding.grav"
+
+namespace std.data {
+
+    class Toml {
+        // The document as a JsonValue object; ValueError (with the line) when it is not TOML.
+        static fn parse(text: string) -> JsonValue { return new TomlParser(text).document(); }
+        // A JsonValue object as TOML: plain values first, then tables ([name]) and
+        // arrays of tables ([[name]]); arrays of plain values and objects inside
+        // arrays are written inline. Null values are left out (TOML has none).
+        static fn stringify(doc: JsonValue) -> string {
+            let out = new StringBuilder();
+            Toml.writeTable(out, doc, "");
+            let s = out.toString();
+            return Str.startsWith(s, "\n") ? s[1..] : s;
+        }
+
+        private static fn writeTable(out: StringBuilder, t: JsonValue, path: string) {
+            // plain values (and arrays of them) first
+            for ((k, v) in t.entries()) {
+                if (v.isNull() || v.isObject() || Toml.isTableArray(v)) { continue; }
+                out.append(Toml.key(k)).append(" = ").append(Toml.value(v)).append("\n");
+            }
+            for ((k, v) in t.entries()) {
+                let p = path == "" ? Toml.key(k) : path + "." + Toml.key(k);
+                if (v.isObject()) {
+                    out.append("\n[").append(p).append("]\n");
+                    Toml.writeTable(out, v, p);
+                } else if (Toml.isTableArray(v)) {
+                    for (item in v.asArray()) {
+                        out.append("\n[[").append(p).append("]]\n");
+                        Toml.writeTable(out, item, p);
+                    }
+                }
+            }
+        }
+        private static fn isTableArray(v: JsonValue) -> bool {
+            if (!v.isArray() || v.size() == 0) { return false; }
+            for (x in v.asArray()) { if (!x.isObject()) { return false; } }
+            return true;
+        }
+        static fn key(k: string) -> string {
+            if (k == "") { return "\"\""; }
+            for (b in k as binary) {
+                let bare = (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95 || b == 45;
+                if (!bare) { return Json.of(k).toJson(); }
+            }
+            return k;
+        }
+        static fn value(v: JsonValue) -> string {
+            if (v.isString()) { return Json.of(v.asString()).toJson(); }
+            if (v.isBool()) { return v.asBool() ? "true" : "false"; }
+            if (v.isInteger()) { return str(v.asLong()); }
+            if (v.isNumber()) {
+                let f = v.asFloat();
+                if (f != f) { return "nan"; }
+                if (f > 1.0e308) { return "inf"; }
+                if (f < -1.0e308) { return "-inf"; }
+                let s = v.toJson();
+                return Str.contains(s, ".") || Str.contains(s, "e") || Str.contains(s, "E") ? s : s + ".0";
+            }
+            if (v.isArray()) {
+                let parts = new Array<string>();
+                for (x in v.asArray()) { if (!x.isNull()) { parts.push(Toml.value(x)); } }
+                return "[" + Str.join(parts, ", ") + "]";
+            }
+            if (v.isObject()) {
+                let parts = new Array<string>();
+                for ((k, x) in v.entries()) { if (!x.isNull()) { parts.push(Toml.key(k) + " = " + Toml.value(x)); } }
+                return "{" + Str.join(parts, ", ") + "}";
+            }
+            return "\"\"";
+        }
+    }
+
+    // A one-pass reader over the text's bytes.
+    class TomlParser {
+        private s: string
+        private n: int
+        private i: int = 0
+        private line: int = 1
+        private root: JsonValue = Json.object()
+        // tables named by a header, and objects made by dotted keys or arrays (by identity)
+        private defined: HashSet<string> = new HashSet<string>()
+        constructor(text: string) { self.s = text; self.n = text.length; }
+
+        fn document() -> JsonValue {
+            let current = self.root;
+            while (true) {
+                self.skipBlankLines();
+                if (self.i >= self.n) { break; }
+                let c = self.s[self.i];
+                if (c == 91) {                                         // [
+                    let arrayTable = self.i + 1 < self.n && self.s[self.i + 1] == 91;
+                    self.i += arrayTable ? 2 : 1;
+                    self.skipSpaces();
+                    let keys = self.keyPath();
+                    self.skipSpaces();
+                    if (!self.eat(93) || (arrayTable && !self.eat(93))) { self.fail("expected ']' to close the table header"); }
+                    let path = Str.join(keys, "\u{1}");
+                    if (arrayTable) {
+                        let parent = self.walk(self.root, keys, keys.size() - 1, true);
+                        let last = keys[keys.size() - 1];
+                        let arr = parent.has(last) ? parent.get(last) : null;
+                        if (arr == null) { arr = Json.array(); parent.set(last, arr); self.defined.add("[[" + path); }
+                        else if (!arr.isArray() || !self.defined.contains("[[" + path)) { self.fail("'" + last + "' is already defined"); }
+                        let t = Json.object();
+                        arr.push(t);
+                        current = t;
+                    } else {
+                        if (self.defined.contains(path)) { self.fail("table [" + Str.join(keys, ".") + "] is defined twice"); }
+                        self.defined.add(path);
+                        current = self.walk(self.root, keys, keys.size(), true);
+                    }
+                    self.endOfLine();
+                    continue;
+                }
+                // key = value
+                let keys = self.keyPath();
+                self.skipSpaces();
+                if (!self.eat(61)) { self.fail("expected '=' after the key"); }      // =
+                self.skipSpaces();
+                let v = self.value();
+                let target = self.walk(current, keys, keys.size() - 1, false);
+                let last = keys[keys.size() - 1];
+                if (target.has(last)) { self.fail("'" + last + "' is defined twice"); }
+                target.set(last, v);
+                self.endOfLine();
+            }
+            return self.root;
+        }
+
+        // The table at keys[0..count] under `from`, made where missing.
+        private fn walk(from: JsonValue, keys: Array<string>, count: int, header: bool) -> JsonValue {
+            let t = from;
+            for (k in 0..count) {
+                let name = keys[k];
+                let next = t.has(name) ? t.get(name) : null;
+                if (next == null) { next = Json.object(); t.set(name, next); }
+                else if (next.isArray() && header) {
+                    if (next.size() == 0 || !next.at(next.size() - 1).isObject()) { self.fail("'" + name + "' is not a table"); }
+                    next = next.at(next.size() - 1);                     // into the last [[table]]
+                } else if (!next.isObject()) { self.fail("'" + name + "' is not a table"); }
+                t = next;
+            }
+            return t;
+        }
+
+        // ── lexing ───────────────────────────────────────────────────────────
+        private fn fail(msg: string) { throw new ValueError("TOML line " + str(self.line) + ": " + msg); }
+        private fn eat(c: int) -> bool { if (self.i < self.n && self.s[self.i] == c) { self.i += 1; return true; } return false; }
+        private fn skipSpaces() { while (self.i < self.n && (self.s[self.i] == 32 || self.s[self.i] == 9)) { self.i += 1; } }
+        private fn skipComment() { if (self.i < self.n && self.s[self.i] == 35) { while (self.i < self.n && self.s[self.i] != 10) { self.i += 1; } } }
+        private fn skipBlankLines() {
+            while (self.i < self.n) {
+                self.skipSpaces();
+                self.skipComment();
+                if (self.i < self.n && self.s[self.i] == 13) { self.i += 1; }
+                if (self.i < self.n && self.s[self.i] == 10) { self.i += 1; self.line += 1; continue; }
+                break;
+            }
+        }
+        // Whitespace, newlines and comments inside an array.
+        private fn skipInArray() {
+            while (self.i < self.n) {
+                let c = self.s[self.i];
+                if (c == 32 || c == 9 || c == 13) { self.i += 1; }
+                else if (c == 10) { self.i += 1; self.line += 1; }
+                else if (c == 35) { self.skipComment(); }
+                else { break; }
+            }
+        }
+        private fn endOfLine() {
+            self.skipSpaces();
+            self.skipComment();
+            if (self.i < self.n && self.s[self.i] == 13) { self.i += 1; }
+            if (self.i < self.n && self.s[self.i] != 10) { self.fail("unexpected text after the value"); }
+        }
+        private fn keyPath() -> Array<string> {
+            let keys = new Array<string>();
+            while (true) {
+                self.skipSpaces();
+                keys.push(self.oneKey());
+                self.skipSpaces();
+                if (!self.eat(46)) { break; }                                // .
+            }
+            return keys;
+        }
+        private fn oneKey() -> string {
+            if (self.i >= self.n) { self.fail("expected a key"); }
+            let c = self.s[self.i];
+            if (c == 34) { return self.basicString(); }
+            if (c == 39) { return self.literalString(); }
+            let start = self.i;
+            while (self.i < self.n) {
+                let b = self.s[self.i];
+                if ((b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95 || b == 45) { self.i += 1; } else { break; }
+            }
+            if (self.i == start) { self.fail("expected a key"); }
+            return self.s[start..self.i];
+        }
+
+        // ── values ───────────────────────────────────────────────────────────
+        private fn value() -> JsonValue {
+            if (self.i >= self.n) { self.fail("expected a value"); }
+            let c = self.s[self.i];
+            if (c == 34) {
+                if (self.startsWith("\"\"\"")) { return Json.of(self.multiBasic()); }
+                return Json.of(self.basicString());
+            }
+            if (c == 39) {
+                if (self.startsWith("'''")) { return Json.of(self.multiLiteral()); }
+                return Json.of(self.literalString());
+            }
+            if (c == 91) { return self.array(); }
+            if (c == 123) { return self.inlineTable(); }
+            if (self.startsWith("true")) { self.i += 4; return Json.of(true); }
+            if (self.startsWith("false")) { self.i += 5; return Json.of(false); }
+            return self.numberOrDate();
+        }
+        private fn startsWith(t: string) -> bool {
+            if (self.i + t.length > self.n) { return false; }
+            for (k in 0..t.length) { if (self.s[self.i + k] != t[k]) { return false; } }
+            return true;
+        }
+        private fn array() -> JsonValue {
+            self.i += 1;
+            let a = Json.array();
+            while (true) {
+                self.skipInArray();
+                if (self.eat(93)) { return a; }
+                a.push(self.value());
+                self.skipInArray();
+                if (self.eat(44)) { continue; }                              // ,
+                if (self.eat(93)) { return a; }
+                self.fail("expected ',' or ']' in the array");
+            }
+            return a;
+        }
+        private fn inlineTable() -> JsonValue {
+            self.i += 1;
+            let t = Json.object();
+            self.skipSpaces();
+            if (self.eat(125)) { return t; }
+            while (true) {
+                let keys = self.keyPath();
+                self.skipSpaces();
+                if (!self.eat(61)) { self.fail("expected '=' in the inline table"); }
+                self.skipSpaces();
+                let v = self.value();
+                let target = self.walk(t, keys, keys.size() - 1, false);
+                let last = keys[keys.size() - 1];
+                if (target.has(last)) { self.fail("'" + last + "' is defined twice"); }
+                target.set(last, v);
+                self.skipSpaces();
+                if (self.eat(125)) { return t; }                             // }
+                if (!self.eat(44)) { self.fail("expected ',' or '}' in the inline table"); }
+                self.skipSpaces();
+            }
+            return t;
+        }
+        private fn numberOrDate() -> JsonValue {
+            let start = self.i;
+            // a date or time: 1979-05-27, 07:32:00, 1979-05-27T07:32:00Z (or with a space)
+            let digits = 0;
+            while (self.i + digits < self.n && self.s[self.i + digits] >= 48 && self.s[self.i + digits] <= 57) { digits += 1; }
+            let next = self.i + digits < self.n ? self.s[self.i + digits] : 0;
+            if ((digits == 4 && next == 45) || (digits == 2 && next == 58)) {
+                while (self.i < self.n) {
+                    let b = self.s[self.i];
+                    let dateSpace = b == 32 && self.i - start == 10 && self.i + 1 < self.n && self.s[self.i + 1] >= 48 && self.s[self.i + 1] <= 57;
+                    if (b == 32 && !dateSpace) { break; }
+                    if (b == 9 || b == 10 || b == 13 || b == 44 || b == 93 || b == 125 || b == 35) { break; }
+                    self.i += 1;
+                }
+                return Json.of(self.s[start..self.i]);
+            }
+            while (self.i < self.n) {
+                let b = self.s[self.i];
+                if (b == 32 || b == 9 || b == 10 || b == 13 || b == 44 || b == 93 || b == 125 || b == 35) { break; }
+                self.i += 1;
+            }
+            let raw = self.s[start..self.i];
+            if (raw == "") { self.fail("expected a value"); }
+            let t = Str.replace(raw, "_", "");
+            if (Str.contains(raw, "__") || Str.startsWith(raw, "_") || Str.endsWith(raw, "_")) { self.fail("misplaced '_' in " + raw); }
+            if (t == "inf" || t == "+inf") { return Json.of(1.0 / 0.0); }
+            if (t == "-inf") { return Json.of(-1.0 / 0.0); }
+            if (t == "nan" || t == "+nan" || t == "-nan") { return Json.of(0.0 / 0.0); }
+            if (Str.startsWith(t, "0x") || Str.startsWith(t, "0o") || Str.startsWith(t, "0b")) {
+                let base = t[1] == 120 ? 16 : (t[1] == 111 ? 8 : 2);
+                let v: long = 0;
+                for (k in 2..t.length) {
+                    let d = TomlParser.digit(t[k]);
+                    if (d < 0 || d >= base) { self.fail("not a number: " + raw); }
+                    v = v * base + d;
+                }
+                if (t.length == 2) { self.fail("not a number: " + raw); }
+                return Json.of(v);
+            }
+            let isFloat = Str.contains(t, ".") || Str.contains(t, "e") || Str.contains(t, "E");
+            if (isFloat) {
+                if (Str.startsWith(t, ".") || Str.endsWith(t, ".") || Str.contains(t, ".e") || Str.contains(t, ".E")) { self.fail("not a number: " + raw); }
+                let f = Float.tryParse(t);
+                if (f == null) { self.fail("not a number: " + raw); }
+                return Json.of(f!);
+            }
+            let body = Str.startsWith(t, "+") || Str.startsWith(t, "-") ? t[1..] : t;
+            if (body == "" || !Str.isDigits(body) || (body.length > 1 && body[0] == 48)) { self.fail("not a number: " + raw); }
+            let n = Integer.tryParse(t);
+            if (n == null) { self.fail("not a number: " + raw); }
+            return Json.of(n!);
+        }
+        private static fn digit(b: int) -> int {
+            if (b >= 48 && b <= 57) { return b - 48; }
+            if (b >= 97 && b <= 102) { return b - 87; }
+            if (b >= 65 && b <= 70) { return b - 55; }
+            return -1;
+        }
+
+        // ── strings ──────────────────────────────────────────────────────────
+        private fn literalString() -> string {
+            self.i += 1;
+            let start = self.i;
+            while (self.i < self.n && self.s[self.i] != 39) {
+                if (self.s[self.i] == 10) { self.fail("unterminated string"); }
+                self.i += 1;
+            }
+            if (self.i >= self.n) { self.fail("unterminated string"); }
+            let out = self.s[start..self.i];
+            self.i += 1;
+            return out;
+        }
+        private fn multiLiteral() -> string {
+            self.i += 3;
+            if (self.i < self.n && self.s[self.i] == 13) { self.i += 1; }
+            if (self.i < self.n && self.s[self.i] == 10) { self.i += 1; self.line += 1; }
+            let start = self.i;
+            while (self.i < self.n && !self.startsWith("'''")) { if (self.s[self.i] == 10) { self.line += 1; } self.i += 1; }
+            if (self.i >= self.n) { self.fail("unterminated string"); }
+            // ('''' ends with a quote inside: up to two more)
+            let end = self.i;
+            self.i += 3;
+            let extra = 0;
+            while (extra < 2 && self.i < self.n && self.s[self.i] == 39) { self.i += 1; extra += 1; end += 1; }
+            return self.s[start..end];
+        }
+        private fn basicString() -> string {
+            self.i += 1;
+            let out = new StringBuilder();
+            let start = self.i;
+            while (true) {
+                if (self.i >= self.n || self.s[self.i] == 10) { self.fail("unterminated string"); }
+                let c = self.s[self.i];
+                if (c == 34) { break; }
+                if (c == 92) {
+                    out.append(self.s[start..self.i]);
+                    self.escape(out);
+                    start = self.i;
+                    continue;
+                }
+                self.i += 1;
+            }
+            out.append(self.s[start..self.i]);
+            self.i += 1;
+            return out.toString();
+        }
+        private fn multiBasic() -> string {
+            self.i += 3;
+            if (self.i < self.n && self.s[self.i] == 13) { self.i += 1; }
+            if (self.i < self.n && self.s[self.i] == 10) { self.i += 1; self.line += 1; }
+            let out = new StringBuilder();
+            let start = self.i;
+            while (true) {
+                if (self.i >= self.n) { self.fail("unterminated string"); }
+                if (self.startsWith("\"\"\"")) { break; }
+                let c = self.s[self.i];
+                if (c == 10) { self.line += 1; }
+                if (c == 92) {
+                    out.append(self.s[start..self.i]);
+                    // a backslash at the end of a line: the newline and the indentation after it go
+                    let k = self.i + 1;
+                    while (k < self.n && (self.s[k] == 32 || self.s[k] == 9 || self.s[k] == 13)) { k += 1; }
+                    if (k < self.n && self.s[k] == 10) {
+                        self.i = k;
+                        while (self.i < self.n && (self.s[self.i] == 32 || self.s[self.i] == 9 || self.s[self.i] == 10 || self.s[self.i] == 13)) {
+                            if (self.s[self.i] == 10) { self.line += 1; }
+                            self.i += 1;
+                        }
+                    } else {
+                        self.escape(out);
+                    }
+                    start = self.i;
+                    continue;
+                }
+                self.i += 1;
+            }
+            out.append(self.s[start..self.i]);
+            self.i += 3;
+            let extra = 0;
+            while (extra < 2 && self.i < self.n && self.s[self.i] == 34) { out.append("\""); self.i += 1; extra += 1; }
+            return out.toString();
+        }
+        // At a backslash: its character into `out`.
+        private fn escape(out: StringBuilder) {
+            self.i += 1;
+            if (self.i >= self.n) { self.fail("unterminated escape"); }
+            let e = self.s[self.i];
+            self.i += 1;
+            switch (e) {
+                case 98: out.append("\u{8}")
+                case 116: out.append("\t")
+                case 110: out.append("\n")
+                case 102: out.append("\u{c}")
+                case 114: out.append("\r")
+                case 101: out.append("\u{1b}")
+                case 34: out.append("\"")
+                case 92: out.append("\\")
+                case 117: out.append(self.unicode(4))
+                case 85: out.append(self.unicode(8))
+                default: self.fail("unknown escape \\" + Str.fromChar(e))
+            }
+        }
+        private fn unicode(len: int) -> string {
+            if (self.i + len > self.n) { self.fail("short \\u escape"); }
+            let cp = 0;
+            for (k in 0..len) {
+                let d = TomlParser.digit(self.s[self.i + k]);
+                if (d < 0) { self.fail("bad \\u escape"); }
+                cp = cp * 16 + d;
+            }
+            self.i += len;
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) { self.fail("not a Unicode scalar value"); }
+            return Utf8.fromCodePoint(cp);
+        }
+    }
+}
