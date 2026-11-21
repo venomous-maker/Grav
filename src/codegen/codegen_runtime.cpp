@@ -687,6 +687,35 @@ static void grav_gc_scan_black(void* o) {
     grav_gc_push(o);
     while (grav_gc_sn > base) grav_gc_children(grav_gc_stack[--grav_gc_sn], grav_gc_black_child);
 }
+/* Disposal order: an object before what it holds. A depth-first walk of the
+   references among the garbage lists each object after everything it reaches
+   (post-order); disposing in the reverse runs a destructor while the objects it
+   refers to are still whole, as plain reference counting would (a connection's
+   destructor walking its statement cache must not find the cache torn down).
+   Only inside a true cycle can an object meet one already disposed. */
+static void grav_gc_order_child(void* t) { if (grav_gc_color(t) == GRAV_PURPLE) grav_gc_push(t); }
+static void grav_gc_order(void** white, size_t nw) {
+    if (nw < 2) return;
+    for (size_t i = 0; i < nw; i++) grav_gc_paint(white[i], GRAV_PURPLE);      /* garbage, not yet walked */
+    void** post = (void**)malloc(nw * sizeof(void*));
+    if (!post) abort();
+    size_t np = 0;
+    for (size_t i = 0; i < nw; i++) {
+        if (grav_gc_color(white[i]) != GRAV_PURPLE) continue;
+        grav_gc_push(white[i]);
+        while (grav_gc_sn) {
+            void* o = grav_gc_stack[grav_gc_sn - 1];
+            int c = grav_gc_color(o);
+            if (c == GRAV_PURPLE) { grav_gc_paint(o, GRAV_GRAY); grav_gc_children(o, grav_gc_order_child); }
+            else {
+                grav_gc_sn--;
+                if (c == GRAV_GRAY) { grav_gc_paint(o, GRAV_BLACK); post[np++] = o; }   /* (a second copy: already done) */
+            }
+        }
+    }
+    for (size_t i = 0; i < np; i++) white[i] = post[np - 1 - i];
+    free(post);
+}
 static size_t grav_gc_collect(void) {
     if (grav_gc_running || __atomic_load_n(&grav_gc_others, __ATOMIC_ACQUIRE) || grav_destroying) return 0;
     grav_gc_running = 1;
@@ -736,7 +765,9 @@ static size_t grav_gc_collect(void) {
         }
     }
     grav_gc_nroots = 0;
-    /* 5. Give the garbage its real counts back, hold it, dispose of it, let go. */
+    grav_gc_order(white, nw);
+    /* 5. Give the garbage its real counts back, hold it, dispose of it (holders
+       first), let go. */
     for (size_t i = 0; i < nw; i++) grav_gc_children(white[i], grav_gc_restore_child);
     for (size_t i = 0; i < nw; i++) ++*grav_gc_rc(white[i]);
     for (size_t i = 0; i < nw; i++) grav_free_obj(white[i]);
