@@ -199,6 +199,13 @@ struct Linter {
                 c->args[0]->type.kind == TypeRef::Kind::String && !c->args[0]->type.isNullable())
                 warn(c->line, c->col, "redundant-str", "this is already a string: `str(...)` does nothing",
                      show(c->args[0].get()).empty() ? "" : "write " + tick(show(c->args[0].get())));
+            // Str.charAt(s, i): a call (and reference counting) per byte; s[i] is none
+            if (c->kind == CallKind::StaticMethod && c->methodName.rfind("charAt", 0) == 0 && c->args.size() == 2 &&
+                (c->ownerClass == "std.text.Str" || c->ownerClass == "Str")) {
+                std::string s = show(c->args[0].get()), i = show(c->args[1].get());
+                warn(c->line, c->col, "slow-char-at", "`Str.charAt` makes a call for each byte",
+                     s.empty() || i.empty() ? "index the string: `s[i]`" : "write " + tick(s + "[" + i + "]"));
+            }
         } else if (auto *l = as<LambdaExpr>(&e)) {
             if (!l->isMatch) block(l->body);
         }
