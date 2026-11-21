@@ -17,7 +17,7 @@ class Resource {
 class Database extends Resource {
     private queries: int
     constructor(name: string) { super(name); self.queries = 0 }
-    fn query(q: string) -> string { self.queries = self.queries + 1; return "rows for '${q}'" }
+    fn query(q: string) -> string { self.queries += 1; return "rows for '${q}'" }
     destructor() { print("  flush ${self.queries} queries on ${self.name}") }   // runs first
 }
 

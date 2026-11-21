@@ -22,22 +22,22 @@ class Account {
         self.id = Account.opened + 1
         self.owner = owner
         self.balance = 0
-        Account.opened = Account.opened + 1
+        Account.opened += 1
     }
     constructor(owner: string, initial: long) {
         this.id = Account.opened + 1     // `this` is an alias for `self`
         this.owner = owner
         this.balance = initial
-        Account.opened = Account.opened + 1
+        Account.opened += 1
     }
 
     public fn deposit(amount: long) -> Account {        // returns self for chaining
-        if (amount > 0) { self.balance = self.balance + amount }
+        if (amount > 0) { self.balance += amount }
         return self
     }
     public fn withdraw(amount: long) -> bool {
         if (amount > self.balance) { return false }
-        self.balance = self.balance - amount
+        self.balance -= amount
         return true
     }
     public fn getBalance() -> long { return self.balance }

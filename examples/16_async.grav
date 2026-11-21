@@ -58,7 +58,7 @@ class Tally { public hits: int  constructor() { self.hits = 0 } }
 
 async fn record(m: Mutex, tally: Tally, atomic: AtomicInt, times: int) {
     for (i in 0..times) {
-        m.withLock(fn() { tally.hits = tally.hits + 1 })     // guarded by the mutex
+        m.withLock(fn() { tally.hits += 1 })     // guarded by the mutex
         atomic.increment()                                   // lock-free
     }
 }

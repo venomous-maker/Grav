@@ -61,7 +61,7 @@ abstract class Account implements Statement {
     }
     fn deposit(amount: long, note: string) {
         if (amount <= 0) { throw new BankError("deposit must be positive") }
-        self.balance = self.balance + amount
+        self.balance += amount
         self.record(Kind.Deposit, amount, note)
     }
     fn withdraw(amount: long, note: string) {
@@ -99,7 +99,7 @@ class Savings extends Account {
     fn monthEnd() {
         let interest = self.balance * self.rateBasisPoints / 10000
         if (interest > 0) {
-            self.balance = self.balance + interest
+            self.balance += interest
             self.record(Kind.Interest, interest, "monthly interest")
         }
     }
@@ -111,7 +111,7 @@ class Checking extends Account {
     fn overdraftLimit() -> long { return 5000 }          // $50 overdraft
     fn monthEnd() {
         if (self.balance < 0) {
-            self.balance = self.balance - 1500
+            self.balance -= 1500
             self.record(Kind.Fee, 1500, "overdraft fee")
         }
     }

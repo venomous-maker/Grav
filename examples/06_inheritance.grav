@@ -66,9 +66,9 @@ class Service uses log: Logger {
 
 // Multiple inheritance: fields and methods of both bases are flattened in.
 class Flyer { public altitude: int  constructor() { self.altitude = 0 }
-    public fn fly() -> string { self.altitude = self.altitude + 100; return "flying" } }
+    public fn fly() -> string { self.altitude += 100; return "flying" } }
 class Swimmer { public depth: int  constructor() { self.depth = 0 }
-    public fn dive() -> string { self.depth = self.depth + 5; return "diving" } }
+    public fn dive() -> string { self.depth += 5; return "diving" } }
 class Duck extends Flyer, Swimmer {
     constructor() { self.altitude = 0; self.depth = 0 }
 }

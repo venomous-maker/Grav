@@ -27,7 +27,7 @@ fn makeAdder(k: int) -> fn(int) -> int { return fn(x) => x + k }
 class Counter { public n: int  constructor() { self.n = 0 } }
 fn makeTicker() -> fn() -> int {
     let c = new Counter()
-    return fn() -> int { c.n = c.n + 1; return c.n }
+    return fn() -> int { c.n += 1; return c.n }
 }
 
 // Callbacks as fields; lambdas that capture `self`.
@@ -37,7 +37,7 @@ class Button {
     private clicks: int
     constructor(label: string) { self.label = label; self.onClick = null; self.clicks = 0 }
     fn click() -> string {
-        self.clicks = self.clicks + 1
+        self.clicks += 1
         if (self.onClick == null) { return "${self.label}: no handler" }
         return self.onClick(self.label)
     }

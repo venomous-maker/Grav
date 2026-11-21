@@ -97,7 +97,7 @@ fn main() {
     try {
         for (s in inputs) {
             parsePositive(s)
-            processed = processed + 1
+            processed += 1
         }
     } catch (e: ValueError) {
         print("stopped after ${processed} values: ${e.message()}")

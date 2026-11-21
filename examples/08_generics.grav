@@ -31,7 +31,7 @@ class Cell<T> implements Container<T> {
 class CountingCell<T> extends Cell<T> {
     public writes: int
     constructor(v: T) { super(v); self.writes = 0 }
-    public fn put(v: T) { self.value = v; self.writes = self.writes + 1 }
+    public fn put(v: T) { self.value = v; self.writes += 1 }
 }
 
 // A bounded generic: T must implement Shape.

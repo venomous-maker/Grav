@@ -84,7 +84,7 @@ class TodoList {
                 words.removeAt(0)
                 words.removeAt(0)
                 let t = new Task(self.nextId, Str.join(words, " "), pr)
-                self.nextId = self.nextId + 1
+                self.nextId += 1
                 self.tasks.push(t)
                 self.byId[t.id] = t
                 print("added ${t}")
