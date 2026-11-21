@@ -9,11 +9,10 @@
 // Malformed input (or a key defined twice) is a ValueError naming the line.
 import "../core/exception.grav"
 import "../text/string.grav"
+import "../text/convert.grav"
 import "../text/strbuf.grav"
 import "../collections/array.grav"
 import "../collections/hashset.grav"
-import "../types/integer.grav"
-import "../types/float.grav"
 import "json.grav"
 import "encoding.grav"
 
@@ -318,15 +317,14 @@ namespace std.data {
             let isFloat = Str.contains(t, ".") || Str.contains(t, "e") || Str.contains(t, "E");
             if (isFloat) {
                 if (Str.startsWith(t, ".") || Str.endsWith(t, ".") || Str.contains(t, ".e") || Str.contains(t, ".E")) { self.fail("not a number: " + raw); }
-                let f = Float.tryParse(t);
-                if (f == null) { self.fail("not a number: " + raw); }
-                return Json.of(f!);
+                if (!Format.isNumber(t)) { self.fail("not a number: " + raw); }
+                return Json.of(Format.toFloat(t));
             }
             let body = Str.startsWith(t, "+") || Str.startsWith(t, "-") ? t[1..] : t;
             if (body == "" || !Str.isDigits(body) || (body.length > 1 && body[0] == 48)) { self.fail("not a number: " + raw); }
-            let n = Integer.tryParse(t);
-            if (n == null) { self.fail("not a number: " + raw); }
-            return Json.of(n!);
+            if (!Format.isInt(t)) { self.fail("not a number: " + raw); }
+            try { return Json.of(Format.toLong(t)); } catch (e: ValueError) { self.fail("out of range: " + raw); }
+            return Json.nil();
         }
         private static fn digit(b: int) -> int {
             if (b >= 48 && b <= 57) { return b - 48; }

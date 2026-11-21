@@ -20,8 +20,8 @@
 // OpenSSL 3.
 import "../core/exception.grav"
 import "../text/string.grav"
+import "../text/convert.grav"
 import "../collections/array.grav"
-import "../types/integer.grav"
 import "bytes.grav"
 import "encoding.grav"
 import "json.grav"
@@ -624,7 +624,7 @@ namespace std.data {
             for (kv in Str.split(parts[2], ",")) {
                 let eq = Str.indexOf(kv, "=");
                 if (eq < 0) { return false; }
-                let v = Integer.parseOr(kv[eq + 1..], 0) as int;
+                let v = Format.toLongOr(kv[eq + 1..], 0) as int;
                 if (kv[..eq] == "ln") { ln = v; } else if (kv[..eq] == "r") { r = v; } else if (kv[..eq] == "p") { p = v; }
             }
             if (ln < 1 || ln > 24 || r < 1 || r > 32 || p < 1 || p > 16) { return false; }

@@ -14,8 +14,8 @@
 // with a prerelease (as npm does), so "^1.0" does not pick "2.0.0-beta".
 import "../core/exception.grav"
 import "../text/string.grav"
+import "../text/convert.grav"
 import "../collections/array.grav"
-import "../types/integer.grav"
 
 namespace std.data {
 
@@ -48,7 +48,7 @@ namespace std.data {
             let parts = Str.split(t, ".");
             if (parts.size() != 3) { return null; }
             for (p in parts) { if (!Semver.numeric(p)) { return null; } }
-            let v = new Semver(Integer.parseOr(parts[0], 0), Integer.parseOr(parts[1], 0), Integer.parseOr(parts[2], 0));
+            let v = new Semver(Format.toLongOr(parts[0], 0), Format.toLongOr(parts[1], 0), Format.toLongOr(parts[2], 0));
             if (pre != "") {
                 for (id in Str.split(pre, ".")) {
                     if (id == "" || (Semver.digitsOnly(id) && id.length > 1 && id[0] == 48)) { return null; }
@@ -77,7 +77,7 @@ namespace std.data {
                 if (x == y) { continue; }
                 let xn = Semver.digitsOnly(x);
                 let yn = Semver.digitsOnly(y);
-                if (xn && yn) { let p = Integer.parseOr(x, 0); let q = Integer.parseOr(y, 0); return p < q ? -1 : 1; }
+                if (xn && yn) { let p = Format.toLongOr(x, 0); let q = Format.toLongOr(y, 0); return p < q ? -1 : 1; }
                 if (xn != yn) { return xn ? -1 : 1; }                    // numbers before words
                 return Str.compare(x, y) < 0 ? -1 : 1;
             }
@@ -245,7 +245,7 @@ namespace std.data {
                 let q = parts[i];
                 if (q == "x" || q == "X" || q == "*") { break; }
                 if (q == "" || !Str.isDigits(q)) { return null; }
-                nums[i] = Integer.parseOr(q, 0);
+                nums[i] = Format.toLongOr(q, 0);
             }
             if (nums[0] < 0) { return null; }
             return new SemverPartial(nums[0], nums[1], nums[2], new Array<string>());
