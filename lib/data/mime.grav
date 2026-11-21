@@ -1,0 +1,86 @@
+// lib/data/mime.grav — media (MIME) types by file extension and back, for
+// serving files and naming uploads:
+//
+//   MimeType.of("report.pdf")           // "application/pdf"
+//   MimeType.of("photo.JPG")            // "image/jpeg"
+//   MimeType.extensionOf("image/png")   // "png"
+//
+// Unknown extensions are "application/octet-stream". Text types carry no
+// charset here; add "; charset=utf-8" when sending them.
+import "../text/string.grav"
+import "../collections/hashmap.grav"
+
+namespace std.data {
+
+    class MimeType {
+        private static byExt: HashMap<string, string> = MimeType.table()
+        private static byType: HashMap<string, string> = MimeType.reverse()
+
+        // The type for a file name, path or bare extension ("pdf", ".pdf", "a/b.pdf").
+        static fn of(nameOrExtension: string) -> string {
+            let s = Str.lower(nameOrExtension);
+            let dot = Str.lastIndexOf(s, ".");
+            let slash = Str.lastIndexOf(s, "/");
+            let ext = dot >= 0 && dot > slash ? s[dot + 1..] : (slash >= 0 ? s[slash + 1..] : s);
+            return MimeType.byExt.getOr(ext, "application/octet-stream");
+        }
+        // The usual extension for a type (without the dot), "" when unknown.
+        static fn extensionOf(mimeType: string) -> string {
+            let t = Str.lower(Str.trim(Str.before(mimeType, ";")));
+            return MimeType.byType.getOr(t, "");
+        }
+        // Whether a type is text a person can read (text/*, JSON, XML, JavaScript, SVG...).
+        static fn isText(mimeType: string) -> bool {
+            let t = Str.lower(Str.trim(Str.before(mimeType, ";")));
+            return Str.startsWith(t, "text/") || Str.endsWith(t, "+json") || Str.endsWith(t, "+xml") ||
+                   t == "application/json" || t == "application/xml" || t == "application/javascript" ||
+                   t == "application/toml" || t == "application/x-yaml" || t == "image/svg+xml" || t == "application/sql";
+        }
+        // Whether the type is worth compressing for transfer (text, and a few binary formats that are not already compressed).
+        static fn isCompressible(mimeType: string) -> bool {
+            let t = Str.lower(Str.trim(Str.before(mimeType, ";")));
+            return MimeType.isText(t) || t == "application/wasm" || t == "font/ttf" || t == "font/otf" || t == "image/bmp" || t == "application/x-tar";
+        }
+
+        private static fn table() -> HashMap<string, string> {
+            let m = new HashMap<string, string>();
+            let pairs: Array<string> = ["html", "text/html", "htm", "text/html", "css", "text/css", "js", "text/javascript", "mjs", "text/javascript",
+                         "json", "application/json", "map", "application/json", "xml", "application/xml", "txt", "text/plain",
+                         "md", "text/markdown", "csv", "text/csv", "tsv", "text/tab-separated-values", "ics", "text/calendar",
+                         "yaml", "application/x-yaml", "yml", "application/x-yaml", "toml", "application/toml", "sql", "application/sql",
+                         "grav", "text/plain", "sh", "application/x-sh", "wasm", "application/wasm",
+                         "png", "image/png", "jpg", "image/jpeg", "jpeg", "image/jpeg", "gif", "image/gif", "webp", "image/webp",
+                         "avif", "image/avif", "svg", "image/svg+xml", "ico", "image/x-icon", "bmp", "image/bmp", "tif", "image/tiff",
+                         "tiff", "image/tiff", "heic", "image/heic",
+                         "mp3", "audio/mpeg", "wav", "audio/wav", "ogg", "audio/ogg", "oga", "audio/ogg", "flac", "audio/flac",
+                         "m4a", "audio/mp4", "aac", "audio/aac", "weba", "audio/webm", "opus", "audio/opus",
+                         "mp4", "video/mp4", "m4v", "video/mp4", "webm", "video/webm", "ogv", "video/ogg", "mov", "video/quicktime",
+                         "avi", "video/x-msvideo", "mkv", "video/x-matroska",
+                         "woff", "font/woff", "woff2", "font/woff2", "ttf", "font/ttf", "otf", "font/otf", "eot", "application/vnd.ms-fontobject",
+                         "pdf", "application/pdf", "zip", "application/zip", "gz", "application/gzip", "tgz", "application/gzip",
+                         "tar", "application/x-tar", "7z", "application/x-7z-compressed", "rar", "application/vnd.rar", "bz2", "application/x-bzip2",
+                         "xz", "application/x-xz", "jar", "application/java-archive", "apk", "application/vnd.android.package-archive",
+                         "doc", "application/msword", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                         "xls", "application/vnd.ms-excel", "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         "ppt", "application/vnd.ms-powerpoint", "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                         "odt", "application/vnd.oasis.opendocument.text", "ods", "application/vnd.oasis.opendocument.spreadsheet",
+                         "rtf", "application/rtf", "epub", "application/epub+zip", "exe", "application/vnd.microsoft.portable-executable",
+                         "bin", "application/octet-stream", "dmg", "application/x-apple-diskimage", "iso", "application/x-iso9660-image",
+                         "webmanifest", "application/manifest+json", "rss", "application/rss+xml", "atom", "application/atom+xml",
+                         "jsonld", "application/ld+json", "pem", "application/x-pem-file", "crt", "application/x-x509-ca-cert"];
+            let i = 0;
+            while (i + 1 < pairs.size()) { m.put(pairs[i], pairs[i + 1]); i += 2; }
+            return m;
+        }
+        private static fn reverse() -> HashMap<string, string> {
+            let r = new HashMap<string, string>();
+            let t = MimeType.table();
+            // (the usual extension where a type has several)
+            let preferred = ["html", "css", "js", "json", "xml", "txt", "md", "csv", "yaml", "png", "jpg", "gif", "webp", "svg", "ico",
+                             "mp3", "wav", "ogg", "mp4", "webm", "woff", "woff2", "ttf", "otf", "pdf", "zip", "gz", "tar", "docx", "xlsx", "pptx"];
+            for (e in preferred) { r.put(t.get(e), e); }
+            for ((e, ty) in t) { if (!r.containsKey(ty)) { r.put(ty, e); } }
+            return r;
+        }
+    }
+}
