@@ -1,0 +1,102 @@
+// std/data's formats: TOML (reading every kind of value, writing and reading
+// back, and the errors), ZIP (round trip, corruption, zip slip), XML (paths,
+// entities, CDATA, writing, refusing DTDs), MIME types and semantic versions.
+import "std"
+
+test "TOML" {
+    let doc = Toml.parse("title = \"T\"\n[db]\nports = [1, 2]\nratio = 0.5\non = true\nhex = 0xff\nwhen = 1979-05-27T07:32:00Z\n[db.inner]\nk = 'v'\n[[items]]\nn = 1\n[[items]]\nn = 2\n")
+    assertEq(doc.getString("title", ""), "T")
+    assertEq(doc.get("db").get("ports").size(), 2)
+    assertEq(doc.get("db").get("hex").asLong(), 255 as long)
+    assertEq(doc.get("db").getString("when", ""), "1979-05-27T07:32:00Z")
+    assertEq(doc.get("db").get("inner").getString("k", ""), "v")
+    assertEq(doc.get("items").at(1).get("n").asLong(), 2 as long)
+    let back = Toml.parse(Toml.stringify(doc))
+    assertEq(back.toJson(), doc.toJson())
+    println(Toml.stringify(doc))
+    let errs = new Array<string>()
+    for (bad in ["a = 1\na = 2", "[t]\n[t]", "x = ", "x = 01", "x = \"unterminated", "[a\nb = 1", "x = 1 2"]) {
+        try { Toml.parse(bad); errs.push("parsed: " + bad) } catch (e: ValueError) { errs.push(e.message()) }
+    }
+    for (e in errs) { println(e) }
+}
+
+test "ZIP" {
+    let z = new ZipWriter()
+    z.addText("a.txt", "hello")
+    z.add("dir/big.txt", Bytes.fromString(Str.repeat("compress me ", 1000)))
+    z.addDirectory("empty")
+    let bytes = z.toBytes()
+    let r = ZipReader.open(bytes)
+    assertEq(Str.join(r.names(), ","), "a.txt,dir/big.txt,empty/")
+    assertEq(r.readText("a.txt"), "hello")
+    assertEq(r.entry("dir/big.txt").method, 8)
+    assert(r.entry("dir/big.txt").compressedSize < 200)
+    assertEq(r.read("dir/big.txt").size(), 12000)
+    let out = Dir.temp() + "/grav_zip_" + str(Process.pid())
+    Dir.removeAll(out)
+    assertEq(r.extractTo(out).size(), 2)
+    assertEq(new File(out + "/dir/big.txt").size(), 12000 as long)
+    assert(Dir.exists(out + "/empty"))
+    Dir.removeAll(out)
+    let msgs = new Array<string>()
+    // a flipped byte inside the stored entry
+    let bad = bytes.copy()
+    bad.set(35, bad.get(35) ^ 1)
+    try { ZipReader.open(bad).read("a.txt") } catch (e: ValueError) { msgs.push(e.message()) }
+    let slip = new ZipWriter()
+    slip.addText("ok.txt", "fine")
+    try { slip.addText("/etc/passwd", "x") } catch (e: ValueError) { msgs.push("absolute name refused") }
+    try { ZipReader.open(Bytes.fromString("not a zip at all, honestly")) } catch (e: ValueError) { msgs.push(e.message()) }
+    try { r.read("missing") } catch (e: ValueError) { msgs.push(e.message()) }
+    for (m in msgs) { println(m) }
+}
+
+test "XML" {
+    let doc = Xml.parse("<?xml version=\"1.0\"?><feed xmlns:m=\"urn:m\"><entry id=\"1\"><title>A &amp; B</title><m:note><![CDATA[<b>raw</b>]]></m:note></entry><entry id=\"2\"><title>&#65;&#x42;</title></entry></feed>")
+    assertEq(doc.name, "feed")
+    assertEq(doc.findAll("entry").size(), 2)
+    assertEq(doc.find("entry/title").text(), "A & B")
+    assertEq(doc.findAll("entry")[1].find("title").text(), "AB")
+    assertEq(doc.find("entry/note").text(), "<b>raw</b>")
+    assertEq(doc.find("entry/m:note").localName(), "note")
+    assertEq(doc.child("entry").attr("id"), "1")
+    assertEq(doc.child("entry").attr("missing", "-"), "-")
+    let s = XmlNode.element("urlset").setAttr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9")
+    s.add(XmlNode.element("url").add(XmlNode.element("loc").addText("https://example.com/?a=1&b=<2>")))
+    println(s.toString(true))
+    assertEq(Xml.parse(s.toString()).find("url/loc").text(), "https://example.com/?a=1&b=<2>")
+    for (bad in ["<!DOCTYPE a><a/>", "<a>&nope;</a>", "<a><b></a>", "<a x=1/>", "<a/><b/>", "<a>"]) {
+        try { Xml.parse(bad); println("parsed: " + bad) } catch (e: ValueError) { println(e.message()) }
+    }
+}
+
+test "MIME types" {
+    assertEq(MimeType.of("index.HTML"), "text/html")
+    assertEq(MimeType.of("a/b/report.pdf"), "application/pdf")
+    assertEq(MimeType.of("woff2"), "font/woff2")
+    assertEq(MimeType.of(".svg"), "image/svg+xml")
+    assertEq(MimeType.of("Makefile"), "application/octet-stream")
+    assertEq(MimeType.extensionOf("image/jpeg"), "jpg")
+    assertEq(MimeType.extensionOf("text/html; charset=utf-8"), "html")
+    assert(MimeType.isText("application/vnd.api+json") && !MimeType.isText("image/png"))
+    assert(MimeType.isCompressible("text/css") && !MimeType.isCompressible("image/jpeg"))
+}
+
+test "semantic versions" {
+    let pairs = [["1.4.2", "^1.2", "true"], ["2.0.0", "^1.2", "false"], ["0.2.5", "^0.2.3", "true"], ["0.3.0", "^0.2.3", "false"],
+                 ["0.0.4", "^0.0.3", "false"], ["1.2.9", "~1.2", "true"], ["1.3.0", "~1.2", "false"], ["1.9.0", "~1", "true"],
+                 ["2.0.0-beta.1", "^1.0", "false"], ["1.5.0-rc.1", ">=1.5.0-rc.0", "true"], ["1.6.0-rc.1", ">=1.5.0-rc.0", "false"],
+                 ["1.4.9", "1.2 - 1.4", "true"], ["1.5.0", "1.2 - 1.4", "false"], ["3.0.0", ">=1.0 <2.0 || =3.0.0", "true"],
+                 ["1.9.0", "1.x", "true"], ["1.0.0", "> 0.9", "true"], ["1.2.3", "<=1.2", "true"], ["v1.0.0", "=1.0.0", "true"]]
+    for (p in pairs) { assertEq(str(Semver.satisfies(p[0], p[1])), p[2]) }
+    let v = Semver.parse("1.2.3-rc.1+build.7")
+    assertEq("${v.major}.${v.minor}.${v.patch} ${Str.join(v.prerelease, ".")} ${v.build} ${v.isPrerelease()}", "1.2.3 rc.1 build.7 true")
+    assertEq(v.toString(), "1.2.3-rc.1+build.7")
+    assertEq(v.nextMinor().toString(), "1.3.0")
+    assert(Semver.parse("1.0.0-alpha").compare(Semver.parse("1.0.0")) < 0)
+    assert(Semver.parse("1.0.0+a").equals(Semver.parse("1.0.0+b")))
+    assertEq(Str.join(Semver.sort(["1.0.0", "1.0.0-rc.1", "1.0.0-beta.11", "1.0.0-beta.2", "1.0.0-alpha"]), " "), "1.0.0-alpha 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1 1.0.0")
+    assertEq(Semver.maxSatisfying(["1.2.0", "1.9.9", "2.1.0"], "~1.9"), "1.9.9")
+    for (bad in ["1.2", "01.2.3", "1.2.3-", "1.2.3-01", "a.b.c"]) { assert(Semver.tryParse(bad) == null) }
+}

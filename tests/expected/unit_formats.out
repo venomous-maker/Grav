@@ -1,0 +1,47 @@
+running 5 tests
+title = "T"
+
+[db]
+ports = [1, 2]
+ratio = 0.5
+on = true
+hex = 255
+when = "1979-05-27T07:32:00Z"
+
+[db.inner]
+k = "v"
+
+[[items]]
+n = 1
+
+[[items]]
+n = 2
+
+TOML line 2: 'a' is defined twice
+TOML line 2: table [t] is defined twice
+TOML line 1: expected a value
+TOML line 1: not a number: 01
+TOML line 1: unterminated string
+TOML line 1: expected ']' to close the table header
+TOML line 1: unexpected text after the value
+  ok    TOML
+'a.txt' is corrupt (size or CRC)
+absolute name refused
+not a zip archive (no end record)
+no 'missing' in the archive
+  ok    ZIP
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://example.com/?a=1&amp;b=&lt;2&gt;</loc>
+  </url>
+</urlset>
+XML line 1: documents with a DTD (<!DOCTYPE>) are not accepted
+XML line 1: unknown entity &nope; (DTD entities are not accepted)
+XML line 1: </a> closes <b>
+XML line 1: attribute values are quoted
+XML line 1: text after the root element
+XML line 1: <a> is never closed
+  ok    XML
+  ok    MIME types
+  ok    semantic versions
+result: 5 passed, 0 failed
