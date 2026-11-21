@@ -1,0 +1,72 @@
+// std's system additions: OS load, memory and uptime; Dir.glob (with ** and
+// hidden files); FileWatcher's looks (created, modified, deleted, ignored
+// names); Process.onSignal with a real signal sent to this process.
+import "std"
+
+test "load, memory and uptime" {
+    let l = OS.loadAverage()
+    assertEq(l.size(), 3)
+    assert(l[0] >= 0.0 && l[2] >= 0.0)
+    assert(OS.memoryTotal() > 0 && OS.memoryAvailable() > 0 && OS.memoryAvailable() <= OS.memoryTotal())
+    assert(OS.uptime() > 0)
+}
+
+fn tree() -> string {
+    let root = Dir.temp() + "/grav_glob_" + str(Process.pid())
+    Dir.removeAll(root)
+    for (d in ["src/app", "src/app/deep", "src/.hidden", "docs"]) { Dir.create(root + "/" + d) }
+    for (f in ["src/main.grav", "src/app/a.grav", "src/app/b.txt", "src/app/deep/c.grav", "src/.hidden/d.grav", "src/.e.grav", "docs/x.md"]) {
+        new File(root + "/" + f).write("x")
+    }
+    return root
+}
+
+test "glob" {
+    let root = tree()
+    let rel = fn(xs: Array<string>) -> string { return Str.join(xs.map(fn(p) => Str.replace(p, root + "/", "")), " ") }
+    assertEq(rel(Dir.glob(root + "/src/*.grav")), "src/main.grav")
+    assertEq(rel(Dir.glob(root + "/src/**/*.grav")), "src/app/a.grav src/app/deep/c.grav src/main.grav")
+    assertEq(rel(Dir.glob(root + "/src/.*.grav")), "src/.e.grav")
+    assertEq(rel(Dir.glob(root + "/*/app/?.*")), "src/app/a.grav src/app/b.txt")
+    assertEq(rel(Dir.glob(root + "/**/*.md")), "docs/x.md")
+    assertEq(rel(Dir.glob(root + "/src/app/[ab].grav")), "src/app/a.grav")
+    assertEq(Dir.glob(root + "/nothing/*").size(), 0)
+    Dir.removeAll(root)
+}
+
+test "a file watcher's looks" {
+    let root = tree()
+    let w = new FileWatcher([root], 100)
+    w.ignore.push("docs")
+    assertEq(w.poll().size(), 0)                                   // the starting point
+    new File(root + "/src/new.grav").write("new")
+    new File(root + "/src/app/a.grav").write("changed, and longer")
+    new File(root + "/src/app/b.txt").delete()
+    new File(root + "/docs/y.md").write("ignored")
+    let seen = w.poll().mapTo(fn(c: FileChange) -> string => c.kind + " " + Str.replace(c.path, root + "/", ""))
+    assertEq(Str.join(seen, ", "), "modified src/app/a.grav, deleted src/app/b.txt, created src/new.grav")
+    assertEq(w.poll().size(), 0)
+    // and on its own thread
+    let got = new AtomicInt(0)
+    w.start(fn(changes: Array<FileChange>) { got.add(changes.size()) })
+    new File(root + "/src/later.grav").write("x")
+    let waited = 0
+    while (got.get() == 0 && waited < 3000) { Thread.sleepMs(50); waited += 50 }
+    w.stop()
+    assertEq(got.get(), 1)
+    Dir.removeAll(root)
+}
+
+test "a signal runs its handler" {
+    let hits = new AtomicInt(0)
+    Process.onSignal(Process.SIGUSR1(), fn() { hits.add(1) })
+    Process.onSignal(Process.SIGUSR1(), fn() { hits.add(10) })
+    Process.kill(Process.pid(), Process.SIGUSR1())
+    let waited = 0
+    while (hits.get() < 11 && waited < 3000) { Thread.sleepMs(20); waited += 20 }
+    assertEq(hits.get(), 11)
+    Process.kill(Process.pid(), Process.SIGUSR1())
+    waited = 0
+    while (hits.get() < 22 && waited < 3000) { Thread.sleepMs(20); waited += 20 }
+    assertEq(hits.get(), 22)
+}
