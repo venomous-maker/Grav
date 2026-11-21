@@ -1,0 +1,70 @@
+gravc: tests/warnings/lints.grav:12:5: warning: this `if` returns its own condition [needless-bool]
+        if (n > 10) { return true } else { return false }
+        ^
+    help: write `return n > 10`
+gravc: tests/warnings/lints.grav:15:5: warning: `small` is returned right after it is made [let-and-return]
+        let small = n < 3
+        ^
+    help: write `return n < 3`
+gravc: tests/warnings/lints.grav:20:5: warning: `i` is only used to index `xs` [needless-range-loop]
+        for (i in 0..xs.size()) { sum = sum + xs[i] }
+        ^
+    help: write `for (x in xs)` and use `x`
+gravc: tests/warnings/lints.grav:20:35: warning: this can use a compound assignment [assign-op]
+        for (i in 0..xs.size()) { sum = sum + xs[i] }
+                                      ^
+    help: write `sum += xs[i]`
+gravc: tests/warnings/lints.grav:25:12: warning: this never runs: it comes after a `return` [unreachable-code]
+        println("never")
+               ^
+gravc: tests/warnings/lints.grav:34:12: warning: comparing with `true` is redundant [bool-comparison]
+        if (ok == true) { println("a") }
+               ^
+    help: write `ok`
+gravc: tests/warnings/lints.grav:35:12: warning: comparing with `false` is redundant [bool-comparison]
+        if (ok != false) { println("b") }
+               ^
+    help: write `ok`
+gravc: tests/warnings/lints.grav:36:24: warning: comparing the size with zero: say what you mean [len-zero]
+        if (b.items.size() == 0 && name.length == 0) { println("c") }
+                           ^
+    help: write `b.items.isEmpty()`
+gravc: tests/warnings/lints.grav:36:44: warning: comparing the length with zero: compare with the empty string [len-zero]
+        if (b.items.size() == 0 && name.length == 0) { println("c") }
+                                               ^
+    help: write `name == ""`
+gravc: tests/warnings/lints.grav:37:13: warning: both sides of `==` are `b.n`: probably a mistake [identical-operands]
+        if (b.n == b.n) { println("d") }
+                ^
+gravc: tests/warnings/lints.grav:38:9: warning: this assigns `b.n` to itself [self-assignment]
+        b.n = b.n
+            ^
+gravc: tests/warnings/lints.grav:39:9: warning: two `!`s cancel out [double-negation]
+        if (!!ok) { println("e") }
+            ^
+    help: write `ok`
+gravc: tests/warnings/lints.grav:40:9: warning: a negated comparison reads better as its opposite [negated-comparison]
+        if (!(x == 3)) { println("f") }
+            ^
+    help: write `x != 3`
+gravc: tests/warnings/lints.grav:41:19: warning: this `?:` gives back its own condition [needless-bool]
+        let same = ok ? true : false
+                      ^
+    help: write `ok`
+gravc: tests/warnings/lints.grav:42:16: warning: this is already a string: `str(...)` does nothing [redundant-str]
+        let s = str(name)
+                   ^
+    help: write `name`
+gravc: tests/warnings/lints.grav:43:15: warning: this value is already a number of that type: the cast does nothing [redundant-cast]
+        let y = x as int
+                  ^
+    help: write `x`
+gravc: tests/warnings/lints.grav:44:5: warning: this `if` does nothing [empty-if]
+        if (x > 1) {}
+        ^
+    help: remove it
+gravc: tests/warnings/lints.grav:45:40: warning: an `if` alone in an `else` block [collapsible-else-if]
+        if (x > 2) { println("g") } else { if (x > 1) { println("h") } }
+                                           ^
+    help: write `else if (...) { ... }`
+gravc: ok (18 warning(s))

@@ -1,0 +1,54 @@
+// `grav check`'s lints (golden-checked): each one once, then code that looks
+// alike but is fine, and an allowed one.
+import "std"
+
+class Box {
+    public n: int = 0
+    public items: Array<int> = new Array<int>()
+    constructor() {}
+}
+
+fn isBig(n: int) -> bool {
+    if (n > 10) { return true } else { return false }
+}
+fn isSmall(n: int) -> bool {
+    let small = n < 3
+    return small
+}
+fn total(xs: Array<int>) -> int {
+    let sum = 0
+    for (i in 0..xs.size()) { sum = sum + xs[i] }
+    return sum
+}
+fn early(n: int) -> int {
+    return n
+    println("never")
+}
+
+fn main() {
+    let ok = true
+    let name = "ada"
+    let b = new Box()
+    let x = 3
+    let f = 0.5
+    if (ok == true) { println("a") }
+    if (ok != false) { println("b") }
+    if (b.items.size() == 0 && name.length == 0) { println("c") }
+    if (b.n == b.n) { println("d") }
+    b.n = b.n
+    if (!!ok) { println("e") }
+    if (!(x == 3)) { println("f") }
+    let same = ok ? true : false
+    let s = str(name)
+    let y = x as int
+    if (x > 1) {}
+    if (x > 2) { println("g") } else { if (x > 1) { println("h") } }
+    println(str(isBig(x)) + str(isSmall(x)) + str(total(b.items)) + str(early(x)) + str(same) + s + str(y))
+    // fine: a float compared with itself is the NaN check; a nullable string; x += 1
+    if (f != f) { println("nan") }
+    let maybe: string? = null
+    if (maybe == null) { println("none") }
+    let z = x
+    if (ok == true) { println("allowed") } // allow(bool-comparison)
+    println(str(z))
+}

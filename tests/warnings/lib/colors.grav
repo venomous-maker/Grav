@@ -1,0 +1,5 @@
+// A local module nothing uses (tests/warnings/unused_imports.grav).
+import "std"
+
+enum Color { Red, Green }
+#define SHADE 3

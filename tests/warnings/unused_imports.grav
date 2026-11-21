@@ -1,0 +1,16 @@
+// `grav check` warns about imports nothing in the file uses (golden-checked):
+// std/net and colors.grav are unused; shapes.grav is used (by name and in a
+// string's ${...}); all.grav only re-exports; an `// allow(unused)` is quiet.
+import "std"
+import "std/net"
+import "lib/shapes.grav"
+import "lib/colors.grav"
+import "lib/all.grav"
+import "lib/colors.grav" // allow(unused)
+
+fn main() {
+    let s = new Square(3)
+    println("area ${area(s)}")
+    // Color and SHADE appear only in this comment and in "Color" text
+    println("Color")
+}

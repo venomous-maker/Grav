@@ -1,0 +1,4 @@
+gravc: tests/warnings/import_names.grav:4:1: warning: unused import "std/net" (nothing it declares is used here)
+    import "std/net" as web
+    ^
+gravc: ok (1 warning(s))

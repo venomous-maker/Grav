@@ -1,0 +1,8 @@
+// A local module for tests/warnings/unused_imports.grav.
+import "std"
+
+class Square {
+    public side: int = 1
+    constructor(side: int) { self.side = side }
+}
+fn area(s: Square) -> int { return s.side * s.side }

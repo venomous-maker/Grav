@@ -1,0 +1,11 @@
+// An aliased or named import is used when its name is: `web` is not.
+import "std"
+import "std/net" as net
+import "std/net" as web
+import { HttpServer, TcpListener as Listener } from "std/net"
+
+fn main() {
+    let a: net.HttpServer? = null
+    let b: HttpServer? = null
+    println(str(a == null) + str(b == null))
+}
