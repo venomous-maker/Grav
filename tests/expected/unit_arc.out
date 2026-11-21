@@ -4,7 +4,7 @@ gravc: tests/unit/arc.grav:404:5: warning: unused variable 'other'
 gravc: tests/unit/arc.grav:408:5: warning: unused variable 'g'
         let g = f.step().step()
         ^
-running 22 tests
+running 23 tests
   ok    locals and temporaries are freed at once
   ok    reassignment frees the old object
   ok    a long chain is freed without deep recursion
@@ -27,4 +27,5 @@ running 22 tests
   ok    threads that end give their unwind registry back
   ok    early returns, continue and break leave nothing on the release list
   ok    fluent chains on temporaries and locals count correctly
-result: 22 passed, 0 failed
+  ok    the collector runs a destructor while what its object holds is whole
+result: 23 passed, 0 failed
