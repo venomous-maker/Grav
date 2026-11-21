@@ -41,7 +41,7 @@ const KEYWORDS = [
   "import", "from", "export", "new", "return", "async", "await", "let", "const",
   "static", "readonly", "weak", "public", "private", "protected", "if", "else", "while", "for",
   "do", "switch", "case", "default", "match", "break", "continue", "in", "step", "try",
-  "catch", "finally", "throw", "as", "is", "sizeof", "defer", "yield", "operator", "test",
+  "catch", "finally", "throw", "as", "is", "sizeof", "defer", "yield", "operator", "test", "bench",
   "self", "this", "super", "true", "false", "null", "free", "auto", "typedef",
 ];
 const TYPES = [
@@ -149,6 +149,7 @@ const KEYWORD_DOCS = {
   sizeof: ["The size in bytes of a type or value.", "sizeof(Point)"],
   operator: ["Defines an operator for a class: + - * / % == < [] []= ...", "fn operator+(o: Vec) -> Vec { ... }"],
   test: ["A test block, run by `grav test`.", "test \"adds\" { assertEq(1 + 1, 2) }"],
+  bench: ["A benchmark block, timed by `grav bench` (and skipped by `grav test`).", "bench \"parses a line\" { Json.parse(line) }"],
   self: ["The object (or struct) a method, or an extension method, was called on. `this` is a synonym.", "self.count += 1"],
   this: ["A synonym of `self`: the object a method was called on.", "this.count += 1"],
   super: ["The parent class: `super(...)` runs its constructor, `super.m()` its method.", "super(name)"],
@@ -204,6 +205,7 @@ const SNIPPETS = [
   ["gen", "generator function", "fn ${1:name}() -> Iterator<${2:int}> {\n\tyield ${0:value}\n}"],
   ["tryv", "try as a value", "try ${1:value} catch ${0:fallback}"],
   ["test", "test block", "test \"${1:does something}\" {\n\tassertEq(${2:actual}, ${3:expected})\n}"],
+  ["bench", "bench block (grav bench)", "bench \"${1:what it times}\" {\n\t${2:// one run of the code to time}\n}"],
   ["lambda", "lambda", "fn(${1:x}) => ${0}"],
   ["defer", "defer block", "defer { $0 }"],
   ["label", "labeled loop", "${1:outer}: for (${2:x} in ${3:xs}) {\n\t$0\n}"],
@@ -369,7 +371,7 @@ const RE = {
   global: new RegExp(`^\\s*${MODS}(const|let)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=`),
   local: new RegExp(`\\b(let|const)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=\\s*(.*)$`),
   field: new RegExp(`^\\s*(?:(?:public|private|protected|readonly|static|weak)\\s+)*(${IDENT})\\s*:\\s*([^=]+?)\\s*(?:=.*)?$`),
-  test: /^\s*test\s+"([^"]*)"/,
+  test: /^\s*(test|bench)\s+"([^"]*)"/,
   forVar: new RegExp(`\\bfor\\s*\\(\\s*(${IDENT})(?:\\s*,\\s*(${IDENT}))?\\s+in\\b\\s*(.*)$`),
   caseBind: new RegExp(`\\bcase\\s+(?:${IDENT}\\.)*${IDENT}\\s*\\(([^()]*)\\)`, "g"),
   catchVar: new RegExp(`\\bcatch\\s*\\(\\s*(${IDENT})\\s*:\\s*(${IDENT}(?:\\.${IDENT})*)`),
@@ -472,8 +474,8 @@ function parseFile(text) {
       add({ name: mm[1], kind: KIND.TypeParameter, line: i, ch: m.indexOf(mm[1], mm.index + 4), namespace: ns,
         detail: raw.trim(), doc: docAbove(lines, i), aliasOf: mm[3].trim() });
     } else if ((mm = RE.test.exec(raw)) && !inBody && !inType) {
-      opened = add({ name: `test "${mm[1]}"`, kind: KIND.Event, line: i, ch: raw.indexOf("test"), namespace: ns,
-        detail: `test "${mm[1]}"`, doc: "", children: [] });
+      opened = add({ name: `${mm[1]} "${mm[2]}"`, kind: KIND.Event, line: i, ch: raw.indexOf(mm[1]), namespace: ns,
+        detail: `${mm[1]} "${mm[2]}"`, doc: "", children: [] });
     } else if ((mm = RE.ext.exec(m)) && !inBody && !inType) {
       const paren = m.indexOf("(", mm.index + mm[0].length - 1);
       const sig = signatureFrom(raw, paren);

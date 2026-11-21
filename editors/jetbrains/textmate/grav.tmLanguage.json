@@ -581,8 +581,8 @@
           }
         },
         {
-          "comment": "test \"name\"",
-          "match": "^\\s*(test)\\s+(\\\"[^\\\"]*\\\")",
+          "comment": "test \"name\" / bench \"name\"",
+          "match": "^\\s*(test|bench)\\s+(\\\"[^\\\"]*\\\")",
           "captures": {
             "1": {
               "name": "keyword.other.test.grav"

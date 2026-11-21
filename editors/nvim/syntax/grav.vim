@@ -21,7 +21,7 @@ syn match gravTypeName "\<\u\w*\>"
 syn keyword gravKeyword fn nextgroup=gravFuncName skipwhite
 syn match   gravFuncName "\%(operator\>\)\@!\h\w*" contained
 syn keyword gravKeyword class struct enum type typedef interface abstract namespace
-syn keyword gravKeyword constructor extends implements uses new return import export from use test
+syn keyword gravKeyword constructor extends implements uses new return import export from use test bench
 syn keyword gravKeyword trait destructor operator final
 syn keyword gravStorage  let const static readonly public private protected weak
 syn keyword gravKeyword async await
@@ -111,7 +111,7 @@ syn match gravEnumMember  "\%(\<case\s\+\%(\w\+\.\)*\)\@<=\u\w*\ze\s*[(:,]"   " 
 syn match gravEnumMember  "\%(^\s*\|[{,]\s*\)\@<=\u\w*\ze\s*\%([(,}=]\|//\|$\)"
 syn match gravTypeRef     "\%(\<implements\>[^{]*\)\@<=\<\u\w*"         " implements A, B<T>
 syn match gravImportPath  +\%(\<\%(import\|from\)\s*\)\@<="[^"]*"+
-syn match gravTestName    +\%(^\s*test\s\+\)\@<="[^"]*"+
+syn match gravTestName    +\%(^\s*\%(test\|bench\)\s\+\)\@<="[^"]*"+
 syn match gravLabel       "^\s*\zs\w\+\ze\s*:\s*\%(for\|while\|do\)\>"      " outer: for (...)
 syn match gravLabel       "\%(\<\%(break\|continue\)\s\+\)\@<=\w\+"        " break outer
 syn match gravNamedArg    "\%([(,]\s*\)\@<=\w\+\ze\s*:[^:]"                " f(name: value)

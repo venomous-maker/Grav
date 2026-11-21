@@ -193,6 +193,9 @@ defer close()
 test "adds numbers" { assertEq(1 + 1, 2) }
 // <- keyword.other.test
 //   ^^^^^^^^^^^^^^ string.quoted.double
+bench "parses a line" { Json.parse("{}") }
+// <- keyword.other.test
+//    ^^^^^^^^^^^^^^^ string.quoted.double
 
 // ---- strings ----
 let u = "v=${price:.2f} n=${n:>8} ${a ? "y" : "n"}"
