@@ -5,7 +5,7 @@ import "std"
 
 class Util {
     static fn count<T>(xs: Array<T>) -> int { return xs.size() }
-    static fn firstOr<T>(xs: Array<T>, fallback: T) -> T { return xs.size() > 0 ? xs[0] : fallback }
+    static fn firstOr<T>(xs: Array<T>, fallback: T) -> T { return !xs.isEmpty() ? xs[0] : fallback }
 }
 class Box<T> {
     public items: Array<T> = new Array<T>()

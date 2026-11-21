@@ -8,7 +8,7 @@ class Coll<T> {
     fn chunk(n: int) -> Coll<Coll<T>> {
         let out = new Array<Coll<T>>()
         let i = 0
-        while (i < self.items.size()) { out.push(new Coll<T>(self.items.slice(i, i + n))); i = i + n }
+        while (i < self.items.size()) { out.push(new Coll<T>(self.items.slice(i, i + n))); i += n }
         return new Coll<Coll<T>>(out)
     }
     fn pairs() -> Duo<Coll<T>> { return new Duo<Coll<T>>(self, self) }

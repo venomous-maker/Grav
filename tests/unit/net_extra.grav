@@ -68,7 +68,7 @@ test "Unix sockets carry lines" {
 
 test "DNS and reachability helpers" {
     assert(Net.hostname() != "")
-    assert(Net.resolve("localhost").size() > 0)
+    assert(!Net.resolve("localhost").isEmpty())
     assertEq(Net.reverse("not an ip"), "")
     let port = Net.freePort()
     assert(port > 0)

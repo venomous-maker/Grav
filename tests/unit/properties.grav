@@ -40,7 +40,7 @@ class Node {
     private nm: string = ""
     get name() -> string { return self.nm }
     set name(v: string) { self.nm = v + "!" }
-    get first() -> Node { return self.kids.size() > 0 ? self.kids[0] : null }
+    get first() -> Node { return !self.kids.isEmpty() ? self.kids[0] : null }
 }
 class Box<T> {
     private v: T
