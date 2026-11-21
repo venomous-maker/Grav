@@ -12,6 +12,16 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- `grav check` and the build warn about unused imports: an import nothing in
+  its file names (`// allow(unused)` after it keeps it quiet).
+- Lints: warnings for code that is probably a mistake (`a == a`, `x = x`, code
+  after a `return`, an empty `if`, a `?:` with the same value twice) or has a
+  plainer form (`ok == true`, `c ? true : false`, `!(a == b)`, `!!x`,
+  `xs.size() == 0`, `x = x + y`, `let x = e; return x`, a range loop that only
+  indexes, `else { if }`, a cast or `str()` that changes nothing), each with a
+  suggested fix. For the program's own files; `// allow(name)` on a line.
+- `grav fmt` lays out a declared function's one-line body as a block.
+
 ## 1.10.1 (2026-11-21)
 
 ### Fixes
