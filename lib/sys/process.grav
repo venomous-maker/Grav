@@ -2,7 +2,11 @@
 //
 //   let r = Process.run("ls /tmp")
 //   if (r.code == 0) { print(r.output) }
+import "../core/exception.grav"
 import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../concurrency/async.grav"
+import "../concurrency/thread.grav"
 
 namespace std.sys {
 
@@ -32,6 +36,42 @@ namespace std.sys {
     /* The last trapped signal, until signalReceived() takes it (async-signal-safe: one store). */
     static volatile sig_atomic_t grav_pending_signal = 0;
     static void grav_on_signal(int sig) { grav_pending_signal = sig; }
+    /* onSignal: the handler only writes the signal's number to a pipe (all a
+       handler may safely do); a Grav thread reads it and runs the callbacks. A
+       second SIGINT or SIGTERM ends the program at once (a stuck shutdown). */
+    #include <errno.h>
+    #include <fcntl.h>
+    static int grav_sig_pipe[2] = { -1, -1 };
+    static volatile sig_atomic_t grav_sig_seen[65];
+    static void grav_sig_forward(int sig) {
+        int saved = errno;
+        if ((sig == SIGINT || sig == SIGTERM) && sig < 65 && grav_sig_seen[sig]++ > 0) _exit(128 + sig);
+        unsigned char b = (unsigned char)sig;
+        ssize_t w = write(grav_sig_pipe[1], &b, 1);
+        (void)w;
+        errno = saved;
+    }
+    static int grav_sig_listen(int sig) {
+        if (grav_sig_pipe[0] < 0) {
+            if (pipe(grav_sig_pipe) != 0) return 0;
+            fcntl(grav_sig_pipe[0], F_SETFD, FD_CLOEXEC);
+            fcntl(grav_sig_pipe[1], F_SETFD, FD_CLOEXEC);
+        }
+        struct sigaction sa; memset(&sa, 0, sizeof sa);
+        sa.sa_handler = grav_sig_forward; sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        return sigaction(sig, &sa, 0) == 0;
+    }
+    /* The next signal onSignal listens for (blocks); -1 when the pipe fails. */
+    static int grav_sig_next(void) {
+        unsigned char b;
+        for (;;) {
+            ssize_t r = read(grav_sig_pipe[0], &b, 1);
+            if (r == 1) return b;
+            if (r < 0 && errno == EINTR) continue;
+            return -1;
+        }
+    }
     static void grav_trap_signal(int sig) {
         struct sigaction sa; memset(&sa, 0, sizeof sa);
         sa.sa_handler = grav_on_signal; sigemptyset(&sa.sa_mask);
@@ -89,7 +129,7 @@ namespace std.sys {
             return out;
         }
         // Pauses for `ms` milliseconds.
-        static fn sleepMs(ms: int) { %{ usleep((unsigned)ms * 1000); %}; }
+        static fn sleepMs(ms: int) { %{ if (ms > 0) { struct timespec grav_t; grav_t.tv_sec = (time_t)(ms / 1000); grav_t.tv_nsec = (long)(ms % 1000) * 1000000L; while (nanosleep(&grav_t, &grav_t) != 0) {} } %}; }
         // Ends the program with an exit status.
         static fn exit(code: int) { exit(code); }
 
@@ -113,6 +153,43 @@ namespace std.sys {
             %{ grav_pending_signal = 0; %};
             return s;
         }
+        // Runs `handler` (on a thread of its own, as ordinary code) each time
+        // `sig` arrives, instead of the signal's default action. A second SIGINT
+        // or SIGTERM while the first is being handled ends the program at once.
+        static fn onSignal(sig: int, handler: fn()) {
+            Process.sigLock.lock();
+            let list = Process.sigHandlers.getOr(sig, null);
+            let first = list == null;
+            if (first) { list = new Array<fn()>(); Process.sigHandlers.put(sig, list); }
+            list.push(handler);
+            let start = !Process.sigWatching;
+            Process.sigWatching = true;
+            Process.sigLock.unlock();
+            if (first && !(%{ grav_sig_listen(sig) %} as bool)) { throw new StateError("cannot listen for signal ${sig}"); }
+            if (start) {
+                Thread.spawn("signals", fn() {
+                    while (true) {
+                        let s = %{ grav_sig_next() %} as int;
+                        if (s < 0) { break; }
+                        Process.sigLock.lock();
+                        let hs = Process.sigHandlers.getOr(s, null);
+                        let run = hs == null ? new Array<fn()>() : hs.copy();
+                        Process.sigLock.unlock();
+                        for (h in run) { try { h(); } catch (e: Exception) {} }
+                    }
+                });
+            }
+        }
+        // Runs `handler` when the program is asked to stop (SIGTERM, as from a
+        // process manager or `kill`, or SIGINT, Ctrl+C): finish the work in hand
+        // and exit. A second request ends the program at once.
+        static fn onShutdown(handler: fn()) {
+            Process.onSignal(Process.SIGTERM(), handler);
+            Process.onSignal(Process.SIGINT(), handler);
+        }
+        private static sigHandlers: HashMap<int, Array<fn()>> = new HashMap<int, Array<fn()>>()
+        private static sigLock: Mutex = new Mutex()
+        private static sigWatching: bool = false
         // Sends `sig` to process `pid` (to itself: Process.pid()); whether it went.
         static fn kill(pid: int, sig: int) -> bool { return %{ kill(pid, sig) == 0 %} as bool; }
         // The memory this process holds now (resident set), in bytes.
