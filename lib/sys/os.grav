@@ -1,5 +1,7 @@
 // lib/sys/os.grav — operating-system queries: platform, host, user, environment,
-// CPU count, and working directory.
+// CPU count, working directory, load average, memory and uptime.
+
+import "../collections/array.grav"
 
 namespace std.sys {
 
@@ -9,6 +11,66 @@ namespace std.sys {
     #include <string.h>
     #include <unistd.h>
     #include <sys/utsname.h>
+    #include <time.h>
+    #include <sys/time.h>
+    #if defined(__APPLE__)
+    /* (declared here: an #include would be lifted out of the #if) */
+    int sysctlbyname(const char*, void*, size_t*, void*, size_t);
+    #endif
+    /* The 1, 5 and 15 minute load averages (-1 where the system cannot tell). */
+    static double grav_os_load(int i) {
+        double l[3] = { -1, -1, -1 };
+        if (getloadavg(l, 3) < 3) return -1;
+        return l[i < 0 || i > 2 ? 0 : i];
+    }
+    /* Memory in bytes: which 0 = total, 1 = available to new work (free plus
+       reclaimable caches); -1 where the system cannot tell. */
+    static long long grav_os_memory(int which) {
+    #if defined(__APPLE__)
+        if (which == 0) {
+            long long total = 0; size_t len = sizeof total;
+            return sysctlbyname("hw.memsize", &total, &len, 0, 0) == 0 ? total : -1;
+        }
+        unsigned int pages = 0; size_t len = sizeof pages;
+        return sysctlbyname("vm.page_free_count", &pages, &len, 0, 0) == 0 ? (long long)pages * sysconf(_SC_PAGESIZE) : -1;
+    #else
+        FILE* f = fopen("/proc/meminfo", "r");
+        if (f) {
+            char key[64]; long long kb = 0, total = -1, avail = -1;
+            while (fscanf(f, "%63s %lld kB", key, &kb) == 2) {
+                if (!strcmp(key, "MemTotal:")) total = kb * 1024;
+                else if (!strcmp(key, "MemAvailable:")) avail = kb * 1024;
+            }
+            fclose(f);
+            if (which == 0 && total >= 0) return total;
+            if (which == 1 && avail >= 0) return avail;
+        }
+        long page = sysconf(_SC_PAGESIZE);
+        long n = which == 0 ? sysconf(_SC_PHYS_PAGES) :
+    #ifdef _SC_AVPHYS_PAGES
+                 sysconf(_SC_AVPHYS_PAGES);
+    #else
+                 -1;
+    #endif
+        return n > 0 && page > 0 ? (long long)n * page : -1;
+    #endif
+    }
+    /* Seconds since the system started (-1 where it cannot tell). */
+    static long long grav_os_uptime(void) {
+    #if defined(__APPLE__)
+        struct timeval boot; size_t len = sizeof boot;
+        if (sysctlbyname("kern.boottime", &boot, &len, 0, 0) != 0) return -1;
+        return (long long)time(0) - (long long)boot.tv_sec;
+    #elif defined(CLOCK_BOOTTIME)
+        struct timespec ts;
+        return clock_gettime(CLOCK_BOOTTIME, &ts) == 0 ? (long long)ts.tv_sec : -1;
+    #else
+        FILE* f = fopen("/proc/uptime", "r");
+        double up = -1;
+        if (f) { if (fscanf(f, "%lf", &up) != 1) up = -1; fclose(f); }
+        return (long long)up;
+    #endif
+    }
     static const char* grav_os_platform(void) {
     #if defined(__linux__)
         return "linux";
@@ -52,6 +114,20 @@ namespace std.sys {
         static fn ppid() -> int { return %{ (int)getppid() %} as int; }
         // The number of CPU cores online.
         static fn cpuCount() -> int { return %{ (int)sysconf(_SC_NPROCESSORS_ONLN) %} as int; }
+        // The load averages over 1, 5 and 15 minutes (runnable processes, to compare
+        // with cpuCount()); -1 each where the system cannot tell.
+        static fn loadAverage() -> Array<double> {
+            let out = new Array<double>();
+            for (i in 0..3) { out.push(%{ grav_os_load(i) %} as double); }
+            return out;
+        }
+        // The machine's memory in bytes (-1 where the system cannot tell).
+        static fn memoryTotal() -> long { return %{ grav_os_memory(0) %} as long; }
+        // Memory available to new work in bytes: free plus caches the system can
+        // reclaim (Linux's MemAvailable); -1 where it cannot tell.
+        static fn memoryAvailable() -> long { return %{ grav_os_memory(1) %} as long; }
+        // Seconds since the machine started (-1 where the system cannot tell).
+        static fn uptime() -> long { return %{ grav_os_uptime() %} as long; }
         // The memory page size in bytes.
         static fn pageSize() -> int { return %{ (int)sysconf(_SC_PAGESIZE) %} as int; }
 
