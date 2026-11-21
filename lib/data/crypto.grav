@@ -1,0 +1,655 @@
+// lib/data/crypto.grav — cryptography through the system's OpenSSL (libcrypto):
+// digests and HMAC (SHA-1, SHA-256, SHA-384, SHA-512), secure random bytes,
+// AES-GCM authenticated encryption, asymmetric keys (RSA, ECDSA on P-256,
+// P-384 and P-521, Ed25519) that sign and verify and read and write PEM and
+// JWK, and scrypt password hashes.
+//
+//   let key = AesGcm.generateKey()
+//   let sealed = AesGcm.encrypt(key, Bytes.fromString("secret"))
+//   print(AesGcm.decrypt(key, sealed).toString())      // secret
+//
+//   let k = CryptoKey.generate("ed25519")
+//   let sig = k.sign(Bytes.fromString("hello"))
+//   print(k.publicKey().verify(Bytes.fromString("hello"), sig))   // true
+//
+//   let h = PasswordHash.make("hunter2")              // "$scrypt$ln=15,r=8,p=1$...$..."
+//   print(PasswordHash.verify("hunter2", h))          // true
+//
+// libcrypto is loaded the first time it is needed; without it Crypto.available()
+// is false and the calls throw StateError. Key generation and JWK output need
+// OpenSSL 3.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "../types/integer.grav"
+import "bytes.grav"
+import "encoding.grav"
+import "json.grav"
+
+namespace std.data {
+
+    %{
+    #include <dlfcn.h>
+    #include <pthread.h>
+    #include <stdint.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+
+    static struct {
+        void* (*EVP_MD_CTX_new)(void);
+        void (*EVP_MD_CTX_free)(void*);
+        int (*EVP_DigestInit_ex)(void*, const void*, void*);
+        int (*EVP_DigestUpdate)(void*, const void*, size_t);
+        int (*EVP_DigestFinal_ex)(void*, unsigned char*, unsigned int*);
+        const void* (*EVP_sha1)(void);
+        const void* (*EVP_sha256)(void);
+        const void* (*EVP_sha384)(void);
+        const void* (*EVP_sha512)(void);
+        unsigned char* (*HMAC)(const void*, const void*, int, const unsigned char*, size_t, unsigned char*, unsigned int*);
+        int (*RAND_bytes)(unsigned char*, int);
+        void* (*EVP_CIPHER_CTX_new)(void);
+        void (*EVP_CIPHER_CTX_free)(void*);
+        const void* (*EVP_aes_128_gcm)(void);
+        const void* (*EVP_aes_256_gcm)(void);
+        int (*EVP_EncryptInit_ex)(void*, const void*, void*, const unsigned char*, const unsigned char*);
+        int (*EVP_EncryptUpdate)(void*, unsigned char*, int*, const unsigned char*, int);
+        int (*EVP_EncryptFinal_ex)(void*, unsigned char*, int*);
+        int (*EVP_DecryptInit_ex)(void*, const void*, void*, const unsigned char*, const unsigned char*);
+        int (*EVP_DecryptUpdate)(void*, unsigned char*, int*, const unsigned char*, int);
+        int (*EVP_DecryptFinal_ex)(void*, unsigned char*, int*);
+        int (*EVP_CIPHER_CTX_ctrl)(void*, int, int, void*);
+        void* (*BIO_new_mem_buf)(const void*, int);
+        void* (*BIO_new)(const void*);
+        const void* (*BIO_s_mem)(void);
+        long (*BIO_ctrl)(void*, int, long, void*);
+        int (*BIO_free)(void*);
+        void* (*PEM_read_bio_PrivateKey)(void*, void**, void*, void*);
+        void* (*PEM_read_bio_PUBKEY)(void*, void**, void*, void*);
+        int (*PEM_write_bio_PrivateKey)(void*, void*, const void*, unsigned char*, int, void*, void*);
+        int (*PEM_write_bio_PUBKEY)(void*, void*);
+        void (*EVP_PKEY_free)(void*);
+        int (*EVP_PKEY_up_ref)(void*);
+        int (*EVP_PKEY_base_id)(const void*);
+        int (*EVP_PKEY_bits)(const void*);
+        int (*EVP_DigestSignInit)(void*, void**, const void*, void*, void*);
+        int (*EVP_DigestSign)(void*, unsigned char*, size_t*, const unsigned char*, size_t);
+        int (*EVP_DigestVerifyInit)(void*, void**, const void*, void*, void*);
+        int (*EVP_DigestVerify)(void*, const unsigned char*, size_t, const unsigned char*, size_t);
+        int (*EVP_PBE_scrypt)(const char*, size_t, const unsigned char*, size_t, uint64_t, uint64_t, uint64_t, uint64_t, unsigned char*, size_t);
+        int (*EVP_PKEY_get_raw_public_key)(const void*, unsigned char*, size_t*);
+        unsigned long (*ERR_get_error)(void);
+        void (*ERR_error_string_n)(unsigned long, char*, size_t);
+        /* OpenSSL 3 only (0 before): key generation, and a key's parameters for JWK. */
+        void* (*EVP_PKEY_Q_keygen)(void*, const char*, const char*, ...);
+        int (*EVP_PKEY_get_bn_param)(const void*, const char*, void**);
+        int (*EVP_PKEY_get_utf8_string_param)(const void*, const char*, char*, size_t, size_t*);
+        int (*BN_num_bits)(const void*);
+        int (*BN_bn2binpad)(const void*, unsigned char*, int);
+        void (*BN_free)(void*);
+    } grav_cr;
+    static int grav_cr_ok = 0;
+    static pthread_once_t grav_cr_once = PTHREAD_ONCE_INIT;
+    enum { GRAV_PKEY_RSA = 6, GRAV_PKEY_EC = 408, GRAV_PKEY_ED25519 = 1087 };
+
+    static void grav_cr_load(void) {
+        static const char* const names[] = { "libcrypto.so.3", "libcrypto.so", "libcrypto.3.dylib", "libcrypto.dylib",
+                                             "libcrypto.so.1.1", 0 };
+        void* h = 0;
+        for (int i = 0; names[i] && !h; i++) h = dlopen(names[i], RTLD_NOW | RTLD_GLOBAL);
+        if (!h) return;
+        int missing = 0;
+    #define GRAV_CR_FN(name) do { *(void**)(&grav_cr.name) = dlsym(h, #name); if (!grav_cr.name) missing++; } while (0)
+    #define GRAV_CR_OPT(name) *(void**)(&grav_cr.name) = dlsym(h, #name)
+        GRAV_CR_FN(EVP_MD_CTX_new); GRAV_CR_FN(EVP_MD_CTX_free); GRAV_CR_FN(EVP_DigestInit_ex);
+        GRAV_CR_FN(EVP_DigestUpdate); GRAV_CR_FN(EVP_DigestFinal_ex); GRAV_CR_FN(EVP_sha1); GRAV_CR_FN(EVP_sha256);
+        GRAV_CR_FN(EVP_sha384); GRAV_CR_FN(EVP_sha512); GRAV_CR_FN(HMAC); GRAV_CR_FN(RAND_bytes);
+        GRAV_CR_FN(EVP_CIPHER_CTX_new); GRAV_CR_FN(EVP_CIPHER_CTX_free); GRAV_CR_FN(EVP_aes_128_gcm);
+        GRAV_CR_FN(EVP_aes_256_gcm); GRAV_CR_FN(EVP_EncryptInit_ex); GRAV_CR_FN(EVP_EncryptUpdate);
+        GRAV_CR_FN(EVP_EncryptFinal_ex); GRAV_CR_FN(EVP_DecryptInit_ex); GRAV_CR_FN(EVP_DecryptUpdate);
+        GRAV_CR_FN(EVP_DecryptFinal_ex); GRAV_CR_FN(EVP_CIPHER_CTX_ctrl); GRAV_CR_FN(BIO_new_mem_buf);
+        GRAV_CR_FN(BIO_new); GRAV_CR_FN(BIO_s_mem); GRAV_CR_FN(BIO_ctrl); GRAV_CR_FN(BIO_free);
+        GRAV_CR_FN(PEM_read_bio_PrivateKey); GRAV_CR_FN(PEM_read_bio_PUBKEY); GRAV_CR_FN(PEM_write_bio_PrivateKey);
+        GRAV_CR_FN(PEM_write_bio_PUBKEY); GRAV_CR_FN(EVP_PKEY_free); GRAV_CR_FN(EVP_PKEY_up_ref);
+        GRAV_CR_FN(EVP_DigestSignInit); GRAV_CR_FN(EVP_DigestSign); GRAV_CR_FN(EVP_DigestVerifyInit);
+        GRAV_CR_FN(EVP_DigestVerify); GRAV_CR_FN(EVP_PBE_scrypt); GRAV_CR_FN(EVP_PKEY_get_raw_public_key);
+        GRAV_CR_FN(ERR_get_error); GRAV_CR_FN(ERR_error_string_n);
+        /* (renamed in OpenSSL 3: get_base_id / get_bits) */
+        *(void**)(&grav_cr.EVP_PKEY_base_id) = dlsym(h, "EVP_PKEY_get_base_id");
+        if (!grav_cr.EVP_PKEY_base_id) *(void**)(&grav_cr.EVP_PKEY_base_id) = dlsym(h, "EVP_PKEY_base_id");
+        *(void**)(&grav_cr.EVP_PKEY_bits) = dlsym(h, "EVP_PKEY_get_bits");
+        if (!grav_cr.EVP_PKEY_bits) *(void**)(&grav_cr.EVP_PKEY_bits) = dlsym(h, "EVP_PKEY_bits");
+        if (!grav_cr.EVP_PKEY_base_id || !grav_cr.EVP_PKEY_bits) missing++;
+        GRAV_CR_OPT(EVP_PKEY_Q_keygen); GRAV_CR_OPT(EVP_PKEY_get_bn_param); GRAV_CR_OPT(EVP_PKEY_get_utf8_string_param);
+        GRAV_CR_OPT(BN_num_bits); GRAV_CR_OPT(BN_bn2binpad); GRAV_CR_OPT(BN_free);
+    #undef GRAV_CR_FN
+    #undef GRAV_CR_OPT
+        grav_cr_ok = missing == 0;
+    }
+    static int grav_cr_ready(void) { pthread_once(&grav_cr_once, grav_cr_load); return grav_cr_ok; }
+    static int grav_cr_v3(void) { return grav_cr_ready() && grav_cr.EVP_PKEY_Q_keygen && grav_cr.EVP_PKEY_get_bn_param &&
+                                         grav_cr.BN_bn2binpad && grav_cr.BN_num_bits && grav_cr.BN_free; }
+
+    /* OpenSSL's queued errors as one line (or `fallback`), the queue cleared. */
+    static const char* grav_cr_error(const char* fallback) {
+        char line[512] = "", one[256];
+        unsigned long e;
+        while ((e = grav_cr.ERR_get_error()) != 0) {
+            grav_cr.ERR_error_string_n(e, one, sizeof one);
+            if (line[0]) strncat(line, "; ", sizeof line - strlen(line) - 1);
+            strncat(line, one, sizeof line - strlen(line) - 1);
+        }
+        return grav_strdup(line[0] ? line : fallback);
+    }
+    static const void* grav_cr_md(int which) {
+        switch (which) {
+            case 1: return grav_cr.EVP_sha1();
+            case 384: return grav_cr.EVP_sha384();
+            case 512: return grav_cr.EVP_sha512();
+            default: return grav_cr.EVP_sha256();
+        }
+    }
+    /* A digest of n bytes into out (64 bytes of room); its length. */
+    static int grav_cr_digest(int which, const unsigned char* in, size_t n, unsigned char* out) {
+        void* c = grav_cr.EVP_MD_CTX_new();
+        unsigned int len = 0;
+        int ok = c && grav_cr.EVP_DigestInit_ex(c, grav_cr_md(which), 0) && grav_cr.EVP_DigestUpdate(c, in, n) &&
+                 grav_cr.EVP_DigestFinal_ex(c, out, &len);
+        if (c) grav_cr.EVP_MD_CTX_free(c);
+        return ok ? (int)len : -1;
+    }
+    /* AES-GCM: nonce (12) || ciphertext || tag (16) into out (n + 28 bytes of room); 0 on failure. */
+    static int grav_cr_gcm_seal(const unsigned char* key, int keyLen, const unsigned char* in, int n,
+                                const unsigned char* aad, int aadLen, unsigned char* out) {
+        if (grav_cr.RAND_bytes(out, 12) != 1) return 0;
+        void* c = grav_cr.EVP_CIPHER_CTX_new();
+        int len = 0, fin = 0;
+        int ok = c && grav_cr.EVP_EncryptInit_ex(c, keyLen == 16 ? grav_cr.EVP_aes_128_gcm() : grav_cr.EVP_aes_256_gcm(), 0, 0, 0) &&
+                 grav_cr.EVP_CIPHER_CTX_ctrl(c, 0x9 /* SET_IVLEN */, 12, 0) &&
+                 grav_cr.EVP_EncryptInit_ex(c, 0, 0, key, out) &&
+                 (aadLen == 0 || grav_cr.EVP_EncryptUpdate(c, 0, &len, aad, aadLen)) &&
+                 grav_cr.EVP_EncryptUpdate(c, out + 12, &len, in, n) &&
+                 grav_cr.EVP_EncryptFinal_ex(c, out + 12 + len, &fin) &&
+                 grav_cr.EVP_CIPHER_CTX_ctrl(c, 0x10 /* GET_TAG */, 16, out + 12 + len + fin);
+        if (c) grav_cr.EVP_CIPHER_CTX_free(c);
+        return ok;
+    }
+    /* The plaintext (n - 28 bytes) into out; 0 when the data was altered or the key is wrong. */
+    static int grav_cr_gcm_open(const unsigned char* key, int keyLen, const unsigned char* in, int n,
+                                const unsigned char* aad, int aadLen, unsigned char* out) {
+        if (n < 28) return 0;
+        void* c = grav_cr.EVP_CIPHER_CTX_new();
+        int len = 0, fin = 0;
+        int ok = c && grav_cr.EVP_DecryptInit_ex(c, keyLen == 16 ? grav_cr.EVP_aes_128_gcm() : grav_cr.EVP_aes_256_gcm(), 0, 0, 0) &&
+                 grav_cr.EVP_CIPHER_CTX_ctrl(c, 0x9, 12, 0) &&
+                 grav_cr.EVP_DecryptInit_ex(c, 0, 0, key, in) &&
+                 (aadLen == 0 || grav_cr.EVP_DecryptUpdate(c, 0, &len, aad, aadLen)) &&
+                 grav_cr.EVP_DecryptUpdate(c, out, &len, in + 12, n - 28) &&
+                 grav_cr.EVP_CIPHER_CTX_ctrl(c, 0x11 /* SET_TAG */, 16, (void*)(in + n - 16)) &&
+                 grav_cr.EVP_DecryptFinal_ex(c, out + len, &fin) > 0;
+        if (c) grav_cr.EVP_CIPHER_CTX_free(c);
+        return ok;
+    }
+    /* A key from PEM text (a private key, else a public one); 0 with *err. */
+    static void* grav_cr_pem_key(const char* pem, int* isPrivate, const char** err) {
+        void* bio = grav_cr.BIO_new_mem_buf(pem, -1);
+        void* k = grav_cr.PEM_read_bio_PrivateKey(bio, 0, 0, 0);
+        *isPrivate = k != 0;
+        if (!k) {
+            grav_cr.BIO_free(bio);
+            bio = grav_cr.BIO_new_mem_buf(pem, -1);
+            k = grav_cr.PEM_read_bio_PUBKEY(bio, 0, 0, 0);
+        }
+        grav_cr.BIO_free(bio);
+        if (!k) *err = grav_cr_error("not a PEM key");
+        else while (grav_cr.ERR_get_error()) {}
+        return k;
+    }
+    /* A key as PEM (private: PKCS#8, unencrypted; else the public key). */
+    static const char* grav_cr_key_pem(void* k, int privatePart) {
+        void* bio = grav_cr.BIO_new(grav_cr.BIO_s_mem());
+        int ok = privatePart ? grav_cr.PEM_write_bio_PrivateKey(bio, k, 0, 0, 0, 0, 0) : grav_cr.PEM_write_bio_PUBKEY(bio, k);
+        char* data = 0;
+        long n = grav_cr.BIO_ctrl(bio, 3 /* BIO_CTRL_INFO */, 0, &data);
+        char* out = (char*)malloc((size_t)(ok && n > 0 ? n : 0) + 1);
+        if (!out) abort();
+        if (ok && n > 0) memcpy(out, data, (size_t)n);
+        out[ok && n > 0 ? n : 0] = 0;
+        grav_cr.BIO_free(bio);
+        return grav_str_take(out);
+    }
+    /* A DER ECDSA signature as r || s, each `size` bytes, into out; 0 when malformed. */
+    static int grav_cr_der_to_raw(const unsigned char* d, size_t n, int size, unsigned char* out) {
+        size_t i = 0;
+        if (n < 8 || d[i++] != 0x30) return 0;
+        size_t len = d[i++];
+        if (len & 0x80) { int k = len & 0x7f; if (k != 1) return 0; len = d[i++]; }
+        if (i + len != n) return 0;
+        memset(out, 0, (size_t)size * 2);
+        for (int part = 0; part < 2; part++) {
+            if (i + 2 > n || d[i++] != 0x02) return 0;
+            size_t l = d[i++];
+            if (i + l > n) return 0;
+            const unsigned char* v = d + i;
+            while (l > 0 && *v == 0) { v++; l--; }
+            if (l > (size_t)size) return 0;
+            memcpy(out + part * size + (size - l), v, l);
+            i += (size_t)(v - (d + i)) + l;
+        }
+        return 1;
+    }
+    /* r || s (each `size` bytes) as a DER ECDSA signature into out (size * 2 + 9 bytes of room); its length. */
+    static int grav_cr_raw_to_der(const unsigned char* raw, int size, unsigned char* out) {
+        unsigned char body[2 * 70];
+        size_t b = 0;
+        for (int part = 0; part < 2; part++) {
+            const unsigned char* v = raw + part * size;
+            int l = size;
+            while (l > 1 && *v == 0) { v++; l--; }
+            int pad = (*v & 0x80) ? 1 : 0;
+            body[b++] = 0x02;
+            body[b++] = (unsigned char)(l + pad);
+            if (pad) body[b++] = 0;
+            memcpy(body + b, v, (size_t)l);
+            b += (size_t)l;
+        }
+        size_t o = 0;
+        out[o++] = 0x30;
+        if (b >= 0x80) { out[o++] = 0x81; }
+        out[o++] = (unsigned char)b;
+        memcpy(out + o, body, b);
+        return (int)(o + b);
+    }
+    /* A key's big-number parameter (OpenSSL 3), big-endian, at least `pad` bytes; its length or -1. */
+    static int grav_cr_bn_param(const void* k, const char* name, int pad, unsigned char* out, int room) {
+        void* bn = 0;
+        if (!grav_cr.EVP_PKEY_get_bn_param(k, name, &bn) || !bn) return -1;
+        int n = (grav_cr.BN_num_bits(bn) + 7) / 8;
+        if (n < pad) n = pad;
+        int r = n <= room ? grav_cr.BN_bn2binpad(bn, out, n) : -1;
+        grav_cr.BN_free(bn);
+        return r;
+    }
+    %}
+
+    // Digests, HMAC, random bytes and constant-time comparison, through libcrypto.
+    class Crypto {
+        // Whether libcrypto could be loaded.
+        static fn available() -> bool { return %{ grav_cr_ready() %} as bool; }
+        // Whether key generation and JWK output work (OpenSSL 3).
+        static fn hasKeyGeneration() -> bool { return %{ grav_cr_v3() %} as bool; }
+
+        // The digest of `data` with "sha1", "sha256", "sha384" or "sha512".
+        static fn digest(algorithm: string, data: Bytes) -> Bytes {
+            Crypto.require();
+            let which = Crypto.digestId(algorithm);
+            let p = data.rawData();
+            let n = data.size();
+            let out = new Bytes(64);
+            let len = %{ grav_cr_digest(which, p, (size_t)n, out->data) %} as int;
+            if (len < 0) { throw new StateError("the digest failed"); }
+            %{ out->len = len; %};
+            return out;
+        }
+        static fn sha256(data: Bytes) -> Bytes { return Crypto.digest("sha256", data); }
+        static fn sha384(data: Bytes) -> Bytes { return Crypto.digest("sha384", data); }
+        static fn sha512(data: Bytes) -> Bytes { return Crypto.digest("sha512", data); }
+        // SHA-512 of text, as 128 hex digits.
+        static fn sha512Hex(text: string) -> string { return Crypto.sha512(Bytes.fromString(text)).toHex(); }
+        // The HMAC of `data` under `key` with "sha1", "sha256", "sha384" or "sha512".
+        static fn hmac(algorithm: string, key: Bytes, data: Bytes) -> Bytes {
+            Crypto.require();
+            let which = Crypto.digestId(algorithm);
+            let kp = key.rawData();
+            let kn = key.size();
+            let p = data.rawData();
+            let n = data.size();
+            let out = new Bytes(64);
+            let ok = %{ ({ unsigned int grav_l = 0;
+                           int grav_ok = grav_cr.HMAC(grav_cr_md(which), kp ? (const void*)kp : (const void*)"", kn,
+                                                      p ? p : (const unsigned char*)"", (size_t)n, out->data, &grav_l) != 0;
+                           out->len = (int)grav_l; grav_ok; }) %} as bool;
+            if (!ok) { throw new StateError("HMAC failed"); }
+            return out;
+        }
+        // `n` bytes from the system's secure random source.
+        static fn randomBytes(n: int) -> Bytes {
+            Crypto.require();
+            if (n < 0) { throw new ValueError("cannot make ${n} random bytes"); }
+            let out = new Bytes(n > 0 ? n : 1);
+            let ok = %{ (n == 0 || grav_cr.RAND_bytes(out->data, n) == 1) %} as bool;
+            if (!ok) { throw new StateError("the random source failed"); }
+            %{ out->len = n; %};
+            return out;
+        }
+        // Whether `a` and `b` hold the same bytes, in time that depends only on their lengths.
+        static fn equals(a: Bytes, b: Bytes) -> bool {
+            if (a.size() != b.size()) { return false; }
+            let pa = a.rawData();
+            let pb = b.rawData();
+            let n = a.size();
+            return %{ ({ unsigned char grav_d = 0; for (int grav_i = 0; grav_i < n; grav_i++) grav_d |= pa[grav_i] ^ pb[grav_i]; grav_d == 0; }) %} as bool;
+        }
+
+        static fn require() {
+            if (!Crypto.available()) { throw new StateError("cryptography needs OpenSSL (libcrypto), which could not be loaded"); }
+        }
+        static fn digestId(algorithm: string) -> int {
+            switch (Str.lower(algorithm)) {
+                case "sha1": return 1
+                case "sha256": return 256
+                case "sha384": return 384
+                case "sha512": return 512
+                default: throw new ValueError("unknown digest '${algorithm}' (sha1, sha256, sha384 or sha512)")
+            }
+        }
+    }
+
+    // AES-GCM authenticated encryption: what comes out is the nonce (12 bytes),
+    // the ciphertext and the tag (16 bytes); decrypting checks the tag, so
+    // altered data (or the wrong key) is a ValueError, never garbage.
+    class AesGcm {
+        // A new random 256-bit (or 128-bit) key.
+        static fn generateKey(bits: int = 256) -> Bytes {
+            if (bits != 128 && bits != 256) { throw new ValueError("AES-GCM keys are 128 or 256 bits, not ${bits}"); }
+            return Crypto.randomBytes(bits / 8);
+        }
+        // `plaintext` sealed under `key` (16 or 32 bytes), with optional
+        // associated data that must match on decryption (and is not encrypted).
+        static fn encrypt(key: Bytes, plaintext: Bytes, associated: Bytes = null) -> Bytes {
+            AesGcm.checkKey(key);
+            let kp = key.rawData();
+            let kn = key.size();
+            let p = plaintext.rawData();
+            let n = plaintext.size();
+            let ap = associated == null ? %{ (unsigned char*)0 %} as byte* : associated.rawData();
+            let an = associated == null ? 0 : associated.size();
+            let out = new Bytes(n + 28);
+            let ok = %{ grav_cr_gcm_seal(kp, kn, p ? p : (const unsigned char*)"", n, ap, an, out->data) %} as bool;
+            if (!ok) { throw new StateError("encryption failed"); }
+            %{ out->len = n + 28; %};
+            return out;
+        }
+        // The plaintext of `sealed`; ValueError when it was altered or the key is wrong.
+        static fn decrypt(key: Bytes, sealed: Bytes, associated: Bytes = null) -> Bytes {
+            AesGcm.checkKey(key);
+            let kp = key.rawData();
+            let kn = key.size();
+            let p = sealed.rawData();
+            let n = sealed.size();
+            let ap = associated == null ? %{ (unsigned char*)0 %} as byte* : associated.rawData();
+            let an = associated == null ? 0 : associated.size();
+            let out = new Bytes(n > 28 ? n - 28 : 1);
+            let ok = %{ grav_cr_gcm_open(kp, kn, p, n, ap, an, out->data) %} as bool;
+            if (!ok) { throw new ValueError("the data was altered, or the key is wrong"); }
+            %{ out->len = n - 28; %};
+            return out;
+        }
+        // Text sealed, as URL-safe Base64.
+        static fn encryptText(key: Bytes, text: string) -> string { return Base64.encodeBytesUrl(AesGcm.encrypt(key, Bytes.fromString(text))); }
+        // The text that encryptText sealed.
+        static fn decryptText(key: Bytes, sealed: string) -> string { return AesGcm.decrypt(key, Base64.decodeBytes(sealed)).toString(); }
+        private static fn checkKey(key: Bytes) {
+            Crypto.require();
+            if (key.size() != 16 && key.size() != 32) { throw new ValueError("an AES-GCM key is 16 or 32 bytes, not ${key.size()}"); }
+        }
+    }
+
+    // An asymmetric key: RSA, ECDSA (P-256, P-384, P-521) or Ed25519, private
+    // (signs, and holds its public half) or public (verifies).
+    class CryptoKey {
+        private h: long = 0
+        private priv: bool = false
+        private constructor(h: long, priv: bool) { self.h = h; self.priv = priv; }
+        destructor() { let k = self.h; %{ if (k) grav_cr.EVP_PKEY_free((void*)(intptr_t)k); %}; }
+
+        // A new key: "rsa" (3072 bits), "rsa-2048", "rsa-3072", "rsa-4096",
+        // "p256", "p384", "p521", or "ed25519" (needs OpenSSL 3).
+        static fn generate(kind: string) -> CryptoKey {
+            Crypto.require();
+            if (!Crypto.hasKeyGeneration()) { throw new StateError("generating keys needs OpenSSL 3"); }
+            let k = Str.lower(kind);
+            let bits = 0;
+            let curve = "";
+            switch (k) {
+                case "rsa": bits = 3072
+                case "rsa-2048": bits = 2048
+                case "rsa-3072": bits = 3072
+                case "rsa-4096": bits = 4096
+                case "p256": curve = "P-256"
+                case "p384": curve = "P-384"
+                case "p521": curve = "P-521"
+                case "ed25519": curve = ""
+                default: throw new ValueError("unknown key kind '${kind}' (rsa, rsa-2048, rsa-4096, p256, p384, p521, ed25519)")
+            }
+            let h = %{ (long long)(intptr_t)(bits > 0 ? grav_cr.EVP_PKEY_Q_keygen(0, 0, "RSA", (size_t)bits)
+                                           : curve[0] ? grav_cr.EVP_PKEY_Q_keygen(0, 0, "EC", curve)
+                                           : grav_cr.EVP_PKEY_Q_keygen(0, 0, "ED25519")) %} as long;
+            if (h == 0) { throw new StateError(%{ grav_cr_error("key generation failed") %} as string); }
+            return new CryptoKey(h, true);
+        }
+        // A key from PEM: a private key ("PRIVATE KEY", "RSA PRIVATE KEY", "EC
+        // PRIVATE KEY") or a public one ("PUBLIC KEY"); ValueError otherwise.
+        static fn fromPem(pem: string) -> CryptoKey {
+            Crypto.require();
+            let priv = 0;
+            let err = %{ (const char*)0 %} as byte*;
+            let h = %{ ({ const char* grav_e = 0; void* grav_k = grav_cr_pem_key(pem, &priv, &grav_e);
+                           err = (unsigned char*)grav_e; (long long)(intptr_t)grav_k; }) %} as long;
+            if (h == 0) { throw new ValueError(%{ (const char*)err %} as string); }
+            return new CryptoKey(h, priv != 0);
+        }
+        // A public key from a JWK (kty RSA with n and e, EC with crv, x and y,
+        // or OKP Ed25519 with x).
+        static fn fromJwk(jwk: JsonValue) -> CryptoKey {
+            let kty = jwk.getString("kty", "");
+            let der = new Bytes();
+            if (kty == "RSA") {
+                let n = Base64.decodeBytes(jwk.getString("n", ""));
+                let e = Base64.decodeBytes(jwk.getString("e", ""));
+                let alg = Der.seq(Der.raw("06092a864886f70d0101010500"));
+                der = Der.seq(alg.append(Der.bitString(Der.seq(Der.uint(n).append(Der.uint(e))))));
+            } else if (kty == "EC") {
+                let crv = jwk.getString("crv", "");
+                let oid = crv == "P-256" ? "06082a8648ce3d030107" : (crv == "P-384" ? "06052b81040022" : (crv == "P-521" ? "06052b81040023" : ""));
+                if (oid == "") { throw new ValueError("unknown curve '${crv}'"); }
+                let point = new Bytes();
+                point.appendByte(4);
+                point.append(Base64.decodeBytes(jwk.getString("x", "")));
+                point.append(Base64.decodeBytes(jwk.getString("y", "")));
+                der = Der.seq(Der.seq(Der.raw("06072a8648ce3d0201" + oid)).append(Der.bitString(point)));
+            } else if (kty == "OKP" && jwk.getString("crv", "") == "Ed25519") {
+                der = Der.seq(Der.seq(Der.raw("06032b6570")).append(Der.bitString(Base64.decodeBytes(jwk.getString("x", "")))));
+            } else {
+                throw new ValueError("unsupported JWK (kty '${kty}')");
+            }
+            return CryptoKey.fromPem(Der.pem("PUBLIC KEY", der));
+        }
+
+        // "rsa", "ec" or "ed25519".
+        fn kind() -> string {
+            let h = self.h;
+            let id = %{ grav_cr.EVP_PKEY_base_id((void*)(intptr_t)h) %} as int;
+            return id == 6 ? "rsa" : (id == 408 ? "ec" : (id == 1087 ? "ed25519" : "other"));
+        }
+        // The key's size in bits (3072 for RSA-3072, 256 for P-256 and Ed25519's 253).
+        fn bits() -> int { let h = self.h; return %{ grav_cr.EVP_PKEY_bits((void*)(intptr_t)h) %} as int; }
+        fn isPrivate() -> bool { return self.priv; }
+        // The private key as PKCS#8 PEM (unencrypted: keep it secret).
+        fn privatePem() -> string {
+            if (!self.priv) { throw new StateError("this is a public key"); }
+            let h = self.h;
+            return %{ grav_cr_key_pem((void*)(intptr_t)h, 1) %} as string;
+        }
+        // The public key as PEM ("PUBLIC KEY").
+        fn publicPem() -> string { let h = self.h; return %{ grav_cr_key_pem((void*)(intptr_t)h, 0) %} as string; }
+        // The public half, as its own key.
+        fn publicKey() -> CryptoKey { return CryptoKey.fromPem(self.publicPem()); }
+
+        // A signature of `data` (`hash`: "sha256", "sha384" or "sha512"; Ed25519
+        // ignores it). ECDSA signatures are DER (see JWT for r || s).
+        fn sign(data: Bytes, hash: string = "sha256") -> Bytes {
+            if (!self.priv) { throw new StateError("a public key cannot sign"); }
+            let h = self.h;
+            let md = self.kind() == "ed25519" ? 0 : Crypto.digestId(hash);
+            let p = data.rawData();
+            let n = data.size();
+            let out = new Bytes(1024);
+            let ok = %{ ({ void* grav_c = grav_cr.EVP_MD_CTX_new(); size_t grav_l = 1024;
+                           int grav_ok = grav_c && grav_cr.EVP_DigestSignInit(grav_c, 0, md ? grav_cr_md(md) : 0, 0, (void*)(intptr_t)h) == 1 &&
+                                         grav_cr.EVP_DigestSign(grav_c, out->data, &grav_l, p ? p : (const unsigned char*)"", (size_t)n) == 1;
+                           if (grav_c) grav_cr.EVP_MD_CTX_free(grav_c);
+                           out->len = grav_ok ? (int)grav_l : 0; grav_ok; }) %} as bool;
+            if (!ok) { throw new StateError(%{ grav_cr_error("signing failed") %} as string); }
+            return out;
+        }
+        // Whether `signature` is this key's (or its private half's) signature of `data`.
+        fn verify(data: Bytes, signature: Bytes, hash: string = "sha256") -> bool {
+            let h = self.h;
+            let md = self.kind() == "ed25519" ? 0 : Crypto.digestId(hash);
+            let p = data.rawData();
+            let n = data.size();
+            let s = signature.rawData();
+            let sn = signature.size();
+            return %{ ({ void* grav_c = grav_cr.EVP_MD_CTX_new();
+                         int grav_ok = grav_c && sn > 0 && grav_cr.EVP_DigestVerifyInit(grav_c, 0, md ? grav_cr_md(md) : 0, 0, (void*)(intptr_t)h) == 1 &&
+                                       grav_cr.EVP_DigestVerify(grav_c, s, (size_t)sn, p ? p : (const unsigned char*)"", (size_t)n) == 1;
+                         if (grav_c) grav_cr.EVP_MD_CTX_free(grav_c);
+                         while (grav_cr.ERR_get_error()) {}
+                         grav_ok; }) %} as bool;
+        }
+        // The public key as a JWK (kty, and n/e, crv/x/y or crv/x), for publishing
+        // in a JWKS (OpenSSL 3).
+        fn toJwk() -> JsonValue {
+            if (!Crypto.hasKeyGeneration()) { throw new StateError("JWK output needs OpenSSL 3"); }
+            let h = self.h;
+            let o = Json.object();
+            let kind = self.kind();
+            if (kind == "ed25519") {
+                let x = new Bytes(32);
+                %{ { size_t grav_l = 32; if (grav_cr.EVP_PKEY_get_raw_public_key((void*)(intptr_t)h, x->data, &grav_l)) x->len = (int)grav_l; } %};
+                o.set("kty", "OKP");
+                o.set("crv", "Ed25519");
+                o.set("x", Base64.encodeBytesUrl(x));
+                return o;
+            }
+            if (kind == "rsa") {
+                o.set("kty", "RSA");
+                o.set("n", Base64.encodeBytesUrl(CryptoKey.param(h, "n", 0)));
+                o.set("e", Base64.encodeBytesUrl(CryptoKey.param(h, "e", 0)));
+                return o;
+            }
+            let size = (self.bits() + 7) / 8;
+            o.set("kty", "EC");
+            o.set("crv", size == 32 ? "P-256" : (size == 48 ? "P-384" : "P-521"));
+            o.set("x", Base64.encodeBytesUrl(CryptoKey.param(h, "qx", size)));
+            o.set("y", Base64.encodeBytesUrl(CryptoKey.param(h, "qy", size)));
+            return o;
+        }
+        private static fn param(h: long, name: string, pad: int) -> Bytes {
+            let out = new Bytes(1024);
+            let n = %{ grav_cr_bn_param((void*)(intptr_t)h, name, pad, out->data, 1024) %} as int;
+            if (n < 0) { throw new StateError("cannot read the key's '${name}'"); }
+            %{ out->len = n; %};
+            return out;
+        }
+    }
+
+    // DER pieces, for writing keys (SubjectPublicKeyInfo) from their parts.
+    class Der {
+        static fn raw(hex: string) -> Bytes { return Bytes.fromHex(hex); }
+        static fn tagged(tag: int, body: Bytes) -> Bytes {
+            let out = new Bytes();
+            out.appendByte(tag);
+            let n = body.size();
+            if (n < 128) { out.appendByte(n); }
+            else if (n < 256) { out.appendByte(0x81); out.appendByte(n); }
+            else if (n < 65536) { out.appendByte(0x82); out.appendByte(n >> 8); out.appendByte(n & 255); }
+            else { out.appendByte(0x83); out.appendByte(n >> 16); out.appendByte((n >> 8) & 255); out.appendByte(n & 255); }
+            out.append(body);
+            return out;
+        }
+        static fn seq(body: Bytes) -> Bytes { return Der.tagged(0x30, body); }
+        // A non-negative INTEGER from big-endian bytes.
+        static fn uint(b: Bytes) -> Bytes {
+            let start = 0;
+            while (start < b.size() - 1 && b.get(start) == 0) { start += 1; }
+            let body = new Bytes();
+            if (b.size() == 0 || b.get(start) >= 0x80) { body.appendByte(0); }
+            body.append(b.slice(start, b.size()));
+            return Der.tagged(0x02, body);
+        }
+        static fn bitString(b: Bytes) -> Bytes {
+            let body = new Bytes();
+            body.appendByte(0);
+            body.append(b);
+            return Der.tagged(0x03, body);
+        }
+        // DER as PEM with the given label.
+        static fn pem(label: string, der: Bytes) -> string {
+            let b64 = Base64.encodeBytes(der);
+            let out = "-----BEGIN " + label + "-----\n";
+            let i = 0;
+            while (i < b64.length) {
+                let end = i + 64 < b64.length ? i + 64 : b64.length;
+                out = out + b64[i..end] + "\n";
+                i = end;
+            }
+            return out + "-----END " + label + "-----\n";
+        }
+    }
+
+    // Password hashes with scrypt (memory-hard), as text that carries its own
+    // parameters and salt: "$scrypt$ln=15,r=8,p=1$<salt>$<hash>". The default
+    // cost (N = 2^15, r = 8) uses 32 MiB and about a tenth of a second per hash.
+    class PasswordHash {
+        // log2 of N, r and p for new hashes.
+        static costLog: int = 15
+        static blockSize: int = 8
+        static parallelism: int = 1
+
+        static fn make(password: string) -> string {
+            let salt = Crypto.randomBytes(16);
+            let key = PasswordHash.derive(password, salt, PasswordHash.costLog, PasswordHash.blockSize, PasswordHash.parallelism, 32);
+            return "$scrypt$ln=${PasswordHash.costLog},r=${PasswordHash.blockSize},p=${PasswordHash.parallelism}$" +
+                   PasswordHash.b64(salt) + "$" + PasswordHash.b64(key);
+        }
+        // Whether `password` is the one `hash` was made from (false for text that is not such a hash).
+        static fn verify(password: string, hash: string) -> bool {
+            let parts = Str.split(hash, "$");
+            if (parts.size() != 5 || parts[1] != "scrypt") { return false; }
+            let ln = 0;
+            let r = 0;
+            let p = 0;
+            for (kv in Str.split(parts[2], ",")) {
+                let eq = Str.indexOf(kv, "=");
+                if (eq < 0) { return false; }
+                let v = Integer.parseOr(kv[eq + 1..], 0) as int;
+                if (kv[..eq] == "ln") { ln = v; } else if (kv[..eq] == "r") { r = v; } else if (kv[..eq] == "p") { p = v; }
+            }
+            if (ln < 1 || ln > 24 || r < 1 || r > 32 || p < 1 || p > 16) { return false; }
+            let salt = Base64.decodeBytes(parts[3]);
+            let want = Base64.decodeBytes(parts[4]);
+            if (want.size() < 16) { return false; }
+            return Crypto.equals(PasswordHash.derive(password, salt, ln, r, p, want.size()), want);
+        }
+        // Whether `hash` was made with weaker settings than the current ones (make a new one at sign-in).
+        static fn needsRehash(hash: string) -> bool {
+            return !Str.startsWith(hash, "$scrypt$ln=${PasswordHash.costLog},r=${PasswordHash.blockSize},p=${PasswordHash.parallelism}$");
+        }
+        private static fn derive(password: string, salt: Bytes, ln: int, r: int, p: int, len: int) -> Bytes {
+            Crypto.require();
+            let sp = salt.rawData();
+            let sn = salt.size();
+            let out = new Bytes(len);
+            let ok = %{ ({ uint64_t grav_N = (uint64_t)1 << ln;
+                           uint64_t grav_mem = 128 * grav_N * (uint64_t)r * (uint64_t)p + 128 * (uint64_t)r * (uint64_t)p + (16u << 20);
+                           grav_cr.EVP_PBE_scrypt(password, (size_t)grav_str_len(password), sp, (size_t)sn, grav_N, (uint64_t)r,
+                                                  (uint64_t)p, grav_mem, out->data, (size_t)len) == 1; }) %} as bool;
+            if (!ok) { throw new StateError(%{ grav_cr_error("scrypt failed") %} as string); }
+            %{ out->len = len; %};
+            return out;
+        }
+        private static fn b64(b: Bytes) -> string { return Str.replace(Base64.encodeBytes(b), "=", ""); }
+    }
+}
