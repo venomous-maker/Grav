@@ -181,11 +181,9 @@ namespace std.text {
         static fn compare(a: string, b: string) -> int { return %{ strcmp(a, b) %} as int; }
         // Like compare, ignoring ASCII letter case.
         static fn compareIgnoreCase(a: string, b: string) -> int { return %{ grav_str_casecmp(a, b) %} as int; }
-        // The byte at index i (bounds-checked).
-        static fn charAt(s: string, i: int) -> int {
-            if (i < 0 || i >= Str.length(s)) { throw new IndexError("Str.charAt index ${i} out of range"); }
-            return %{ (int)(unsigned char)s[i] %} as int;
-        }
+        // The byte at index i (bounds-checked; IndexError outside). In a loop,
+        // `s[i]` or `for (b in s as binary)` is faster: no call per byte.
+        static fn charAt(s: string, i: int) -> int { return %{ (int)grav_str_byte(s, i) %} as int; }
         // A one-character string from a byte value (65 -> "A").
         static fn fromChar(code: int) -> string { return %{ grav_str_from_char(code) %} as string; }
         // Whether every character is a digit 0-9 (false for "").
@@ -208,6 +206,13 @@ namespace std.text {
         static fn lastIndexOf(s: string, sub: string) -> int { return %{ grav_str_lastindexof(s, sub) %} as int; }
         // Whether `sub` occurs in the string.
         static fn contains(s: string, sub: string) -> bool { return Str.indexOf(s, sub) >= 0; }
+        // The index of the first byte of `s` that is one of `chars`' bytes, or -1
+        // ("a/b?c", "/?" -> 1): one pass, for splitting on any of several separators.
+        static fn indexOfAny(s: string, chars: string) -> int { return %{ (int)({ size_t grav_k = strcspn(s, chars); s[grav_k] ? (long long)grav_k : -1LL; }) %} as int; }
+        // The index of the last byte of `s` that is one of `chars`' bytes, or -1.
+        static fn lastIndexOfAny(s: string, chars: string) -> int {
+            return %{ (int)({ long long grav_r = -1; for (long long grav_k = grav_str_len(s) - 1; grav_k >= 0; grav_k--) if (strchr(chars, s[grav_k]) && s[grav_k]) { grav_r = grav_k; break; } grav_r; }) %} as int;
+        }
         // How many non-overlapping times `sub` occurs (0 for an empty `sub`).
         static fn count(s: string, sub: string) -> int { return %{ grav_str_count(s, sub) %} as int; }
         // Whether the string begins with `prefix`.
