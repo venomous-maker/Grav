@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.11.0 (2026-11-21)
+
 - `grav check` and the build warn about unused imports: an import nothing in
   its file names (`// allow(unused)` after it keeps it quiet).
 - Lints: warnings for code that is probably a mistake (`a == a`, `x = x`, code
