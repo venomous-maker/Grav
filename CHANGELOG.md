@@ -12,6 +12,22 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Fixes
+
+- The cycle collector disposes of a dead cycle's objects in order, an object
+  before the objects it holds, as plain reference counting would: a destructor
+  no longer finds what its object holds already torn down. (A database
+  connection pool caught in a cycle crashed or corrupted memory when its
+  connections' destructors walked their statement caches.)
+- A bad memory access other than a null reference or a stack overflow ends the
+  program at once with its report, in tests and recovery regions too:
+  unwinding from it freed memory and could hang, when the fault was inside
+  `malloc`.
+- `grav install` after a dependency's version was changed by hand in
+  `grav.toml`: the old version's commit from `grav.lock` is no longer checked
+  out and filed under the new version's name, and a cached package folder that
+  is not at its tag (left by an older grav) is fetched again.
+
 ## 1.10.0 (2026-11-20)
 
 ### Language
