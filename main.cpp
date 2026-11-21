@@ -40,6 +40,7 @@
 #include "sema/sanitize.h"
 #include "sema/symbols.h"
 #include "sema/typechecker.h"
+#include "sema/lints.h"
 
 namespace fs = std::filesystem;
 
@@ -179,6 +180,12 @@ void reportError(const std::string &msg) {
 
 void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
     std::string label = (d.stage() == "warning") ? "warning" : d.stage() + " error";
+    // A lint's suggestion comes after its message (see sema/lints.h).
+    std::string message = d.message(), help;
+    if (size_t h = message.find(grav::kLintHelp); h != std::string::npos) {
+        help = message.substr(h + 1);
+        message = message.substr(0, h);
+    }
     int combined = d.line();
     SrcLoc loc;
     bool mapped = combined >= 1 && combined <= (int)srcMap.size();
@@ -190,16 +197,17 @@ void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
         j.col = d.col();
         j.severity = d.stage() == "warning" ? "warning" : "error";
         j.stage = d.stage();
-        j.message = grav::prettyNames(d.message());
+        j.message = grav::prettyNames(message);
         std::string hint = unknownNameHint(d.message());
         if (!hint.empty()) j.note = hint.substr(hint.find("note: ") + 6);
+        if (!help.empty()) j.note = help.substr(help.find("help: ") == 0 ? 6 : 0);
         gJsonDiags.push_back(j);
         return;
     }
     std::string where = mapped ? (loc.file + ":" + std::to_string(loc.line))
                                : ("line " + std::to_string(combined));
     std::cerr << "gravc: " << where << ":" << d.col() << ": " << label << ": "
-              << grav::prettyNames(d.message()) << unknownNameHint(d.message()) << "\n";
+              << grav::prettyNames(message) << unknownNameHint(message) << "\n";
     if (mapped) {
         std::ifstream f(loc.file);
         std::string ln;
@@ -208,6 +216,9 @@ void printDiag(const grav::GravError &d, const std::vector<SrcLoc> &srcMap) {
             std::cerr << "    " << ln << "\n";
             std::cerr << "    " << std::string(std::max(0, d.col() - 1), ' ') << "^\n";
         }
+    }
+    if (!help.empty()) {
+        std::cerr << "    " << help << "\n";
     }
 }
 
@@ -616,8 +627,49 @@ int main(int argc, char **argv) {
         grav::TypeChecker &checker = *checkerPtr;
         if (gTypes && !useStdin) collectTypes(checker, srcMap, inputPath);
 
-        // Warnings (e.g. unused variables). With -Werror they are fatal.
-        const auto &warnings = checker.warnings();
+        // Warnings (e.g. unused variables and imports). With -Werror they are fatal.
+        std::vector<grav::GravError> warnings = checker.warnings();
+        if (gLoader && errors.empty()) {
+            // (an import line is in the combined source too: its warning points there)
+            std::map<std::string, std::string> canon;
+            auto canonical = [&](const std::string &f) -> const std::string & {
+                auto it = canon.find(f);
+                if (it != canon.end()) return it->second;
+                std::error_code ec;
+                return canon.emplace(f, fs::weakly_canonical(f, ec).string()).first->second;
+            };
+            // Lints, on the program's own files, unless `// allow(name)` or `allow(lints)` is on the line.
+            std::map<std::string, bool> own;
+            std::map<std::pair<std::string, int>, std::string> lines;
+            auto sourceLine = [&](const SrcLoc &loc) -> const std::string & {
+                auto key = std::make_pair(loc.file, loc.line);
+                auto it = lines.find(key);
+                if (it != lines.end()) return it->second;
+                std::ifstream f(loc.file);
+                std::string ln;
+                for (int i = 0; i < loc.line && std::getline(f, ln); ++i) {}
+                return lines.emplace(key, ln).first->second;
+            };
+            for (auto &w : grav::lintProgram(program)) {
+                if (w.line() < 1 || w.line() > (int)srcMap.size()) continue;
+                const SrcLoc &loc = srcMap[w.line() - 1];
+                auto it = own.find(loc.file);
+                if (it == own.end()) it = own.emplace(loc.file, gLoader->isOwnFile(loc.file)).first;
+                if (!it->second) continue;
+                const std::string &m = w.message();
+                size_t open = m.rfind(" ["), close = m.find(']', open == std::string::npos ? 0 : open);
+                std::string name = open == std::string::npos ? "" : m.substr(open + 2, close - open - 2);
+                const std::string &text = sourceLine(loc);
+                if (text.find("allow(lints)") != std::string::npos || (!name.empty() && text.find("allow(" + name + ")") != std::string::npos)) continue;
+                warnings.push_back(w);
+            }
+            for (const auto &u : gLoader->unusedImports())
+                for (size_t i = 0; i < srcMap.size(); ++i)
+                    if (srcMap[i].line == u.line && canonical(srcMap[i].file) == u.file) {
+                        warnings.emplace_back("warning", static_cast<int>(i) + 1, u.col, u.message);
+                        break;
+                    }
+        }
         for (const auto &w : warnings) printDiag(w, srcMap);
 
         if (!errors.empty() || (werror && !warnings.empty())) {
