@@ -56,7 +56,7 @@ namespace std.sys {
     }
     /* An HTTP date ("Sun, 06 Nov 1994 08:49:37 GMT", RFC 9110; also the RFC 850 and
        asctime forms old clients send) as unix seconds; -1 when it is none of them. */
-    static long long grav_http_date(const char* s) {
+    static long long grav_parse_http_date(const char* s) {
         static const char* const months[] = { "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec" };
         char mon[4] = {0}, wd[16] = {0};
         int d = 0, y = 0, h = 0, mi = 0, sec = 0;
@@ -288,7 +288,7 @@ namespace std.sys {
         }
         // An HTTP date (RFC 9110, and the older RFC 850 and asctime forms); null when it is none.
         static fn parseHttpDate(text: string) -> DateTime {
-            let t = %{ grav_http_date(text) %} as long;
+            let t = %{ grav_parse_http_date(text) %} as long;
             return t < 0 ? null : new DateTime(t);
         }
         // Midnight at the start of this day.
