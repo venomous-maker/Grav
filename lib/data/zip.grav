@@ -1,0 +1,221 @@
+// lib/data/zip.grav — ZIP archives: writing (stored or deflated entries) and
+// reading, compatible with zip/unzip, Windows, macOS and other languages'
+// libraries (and so with .docx, .xlsx and .jar files, which are ZIPs).
+//
+//   let z = new ZipWriter()
+//   z.add("hello.txt", Bytes.fromString("hello"))
+//   z.add("data/big.csv", rows)                     // deflated
+//   new File("out.zip").writeBinary(z.toBytes().toBinary())
+//
+//   let r = ZipReader.open(bytes)
+//   for (e in r.entries()) { print("${e.name} ${e.size}") }
+//   print(r.read("hello.txt").toString())
+//
+// Entries are inflated with a size limit (the size the archive states, checked
+// against `maxEntryBytes`), so a small malicious archive cannot expand into
+// gigabytes; extractTo refuses names that would land outside its folder.
+// ZIP64 (archives or entries over 4 GiB) is not supported.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "bytes.grav"
+import "hash.grav"
+import "compress.grav"
+import "../io/fs.grav"
+
+namespace std.data {
+
+    // Little-endian numbers, as ZIP writes them.
+    class ZipLe {
+        static fn put(b: Bytes, v: long, width: int) { for (k in 0..width) { b.appendByte(((v >> (k * 8)) & 255) as int); } }
+        static fn get(b: Bytes, at: int, width: int) -> long {
+            let v: long = 0;
+            for (k in width - 1..=0 step -1) { v = (v << 8) | (b.get(at + k) as long); }
+            return v;
+        }
+    }
+
+    // One file in an archive.
+    class ZipEntry {
+        public name: string
+        // 0 stored, 8 deflated.
+        public method: int
+        public crc: long
+        public compressedSize: long
+        public size: long
+        public offset: long
+        // MS-DOS date and time, as stored.
+        public dosTime: int = 0
+        public dosDate: int = 0
+        constructor(name: string, method: int, crc: long, compressedSize: long, size: long, offset: long) {
+            self.name = name; self.method = method; self.crc = crc; self.compressedSize = compressedSize; self.size = size; self.offset = offset;
+        }
+        fn isDirectory() -> bool { return Str.endsWith(self.name, "/"); }
+    }
+
+    class ZipWriter {
+        private out: Bytes = new Bytes()
+        private central: Bytes = new Bytes()
+        private count: int = 0
+        private names: HashMap<string, bool> = new HashMap<string, bool>()
+        private dosTime: int
+        private dosDate: int
+        constructor() {
+            // now, as MS-DOS time (2-second steps, local fields from UTC)
+            let t = %{ (long long)time(0) %} as long;
+            let days = t / 86400;
+            let secs = t % 86400;
+            let ymd = ZipWriter.civil(days);
+            self.dosTime = ((secs / 3600) << 11 | ((secs / 60) % 60) << 5 | (secs % 60) / 2) as int;
+            self.dosDate = ((ymd[0] - 1980) << 9 | ymd[1] << 5 | ymd[2]) as int;
+        }
+        // Adds a file (deflated when that makes it smaller, unless `compress` is false).
+        fn add(name: string, data: Bytes, compress: bool = true) -> ZipWriter {
+            if (name == "" || Str.startsWith(name, "/") || Str.contains(name, "\\")) { throw new ValueError("a zip entry name is a relative path with /: '${name}'"); }
+            if (self.names.containsKey(name)) { throw new ValueError("'${name}' is already in the archive"); }
+            self.names.put(name, true);
+            let crc = Hash.crc32Bytes(data);
+            let body = data;
+            let method = 0;
+            if (compress && data.size() > 64) {
+                let packed = Compress.deflateRaw(data);
+                if (packed.size() < data.size()) { body = packed; method = 8; }
+            }
+            let nameBytes = Bytes.fromString(name);
+            let offset = self.out.size();
+            // local file header
+            ZipLe.put(self.out, 0x04034b50, 4); ZipLe.put(self.out, 20, 2); ZipLe.put(self.out, 0x0800, 2); ZipLe.put(self.out, method, 2); ZipLe.put(self.out, self.dosTime, 2); ZipLe.put(self.out, self.dosDate, 2); ZipLe.put(self.out, crc, 4); ZipLe.put(self.out, body.size(), 4); ZipLe.put(self.out, data.size(), 4); ZipLe.put(self.out, nameBytes.size(), 2); ZipLe.put(self.out, 0, 2);
+            self.out.append(nameBytes);
+            self.out.append(body);
+            // central directory entry (written at the end)
+            ZipLe.put(self.central, 0x02014b50, 4); ZipLe.put(self.central, 0x031e, 2); ZipLe.put(self.central, 20, 2); ZipLe.put(self.central, 0x0800, 2); ZipLe.put(self.central, method, 2); ZipLe.put(self.central, self.dosTime, 2); ZipLe.put(self.central, self.dosDate, 2); ZipLe.put(self.central, crc, 4); ZipLe.put(self.central, body.size(), 4); ZipLe.put(self.central, data.size(), 4); ZipLe.put(self.central, nameBytes.size(), 2); ZipLe.put(self.central, 0, 2); ZipLe.put(self.central, 0, 2); ZipLe.put(self.central, 0, 2); ZipLe.put(self.central, 0, 2); ZipLe.put(self.central, Str.endsWith(name, "/") ? 0x41ed0010 : 0x81a40000, 4); ZipLe.put(self.central, offset, 4);
+            self.central.append(nameBytes);
+            self.count += 1;
+            return self;
+        }
+        fn addText(name: string, text: string) -> ZipWriter { return self.add(name, Bytes.fromString(text)); }
+        // An empty directory entry ("logs/").
+        fn addDirectory(name: string) -> ZipWriter { return self.add(Str.endsWith(name, "/") ? name : name + "/", new Bytes(), false); }
+        // The archive.
+        fn toBytes() -> Bytes {
+            if (self.count > 65535) { throw new ValueError("more than 65535 entries needs ZIP64"); }
+            let z = self.out.copy();
+            let cdOffset = z.size();
+            z.append(self.central);
+            ZipLe.put(z, 0x06054b50, 4); ZipLe.put(z, 0, 2); ZipLe.put(z, 0, 2); ZipLe.put(z, self.count, 2); ZipLe.put(z, self.count, 2); ZipLe.put(z, self.central.size(), 4); ZipLe.put(z, cdOffset, 4); ZipLe.put(z, 0, 2);
+            return z;
+        }
+        // Days since 1970-01-01 as [year, month, day].
+        private static fn civil(days: long) -> Array<long> {
+            let z = days + 719468;
+            let era = (z >= 0 ? z : z - 146096) / 146097;
+            let doe = z - era * 146097;
+            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = mp < 10 ? mp + 3 : mp - 9;
+            return [yoe + era * 400 + (m <= 2 ? 1 : 0), m, d];
+        }
+    }
+
+    class ZipReader {
+        // The largest entry read() inflates (bytes).
+        public maxEntryBytes: long = 1 << 30
+        private data: Bytes
+        private list: Array<ZipEntry> = new Array<ZipEntry>()
+        private byName: HashMap<string, ZipEntry> = new HashMap<string, ZipEntry>()
+        private constructor(data: Bytes) { self.data = data; }
+
+        // Reads an archive's directory; ValueError when it is not a ZIP.
+        static fn open(data: Bytes) -> ZipReader {
+            let r = new ZipReader(data);
+            r.readDirectory();
+            return r;
+        }
+        fn entries() -> Array<ZipEntry> { return self.list; }
+        fn names() -> Array<string> {
+            let out = new Array<string>();
+            for (e in self.list) { out.push(e.name); }
+            return out;
+        }
+        fn has(name: string) -> bool { return self.byName.containsKey(name); }
+        fn entry(name: string) -> ZipEntry { return self.byName.getOr(name, null); }
+        // An entry's bytes (CRC-checked); ValueError when missing or corrupt.
+        fn read(name: string) -> Bytes {
+            let e = self.byName.getOr(name, null);
+            if (e == null) { throw new ValueError("no '${name}' in the archive"); }
+            return self.readEntry(e);
+        }
+        fn readText(name: string) -> string { return self.read(name).toString(); }
+        fn readEntry(e: ZipEntry) -> Bytes {
+            if (e.size > self.maxEntryBytes) { throw new ValueError("'${e.name}' is larger than maxEntryBytes"); }
+            let at = e.offset;
+            if (at + 30 > self.data.size() || ZipLe.get(self.data, at as int, 4) != 0x04034b50) { throw new ValueError("'${e.name}': bad local header"); }
+            let nameLen = ZipLe.get(self.data, at as int + 26, 2);
+            let extraLen = ZipLe.get(self.data, at as int + 28, 2);
+            let start = at + 30 + nameLen + extraLen;
+            if (start + e.compressedSize > self.data.size()) { throw new ValueError("'${e.name}' runs past the end of the archive"); }
+            let raw = self.data.slice(start as int, (start + e.compressedSize) as int);
+            let out: Bytes = null;
+            if (e.method == 0) { out = raw; }
+            else if (e.method == 8) { out = Compress.decompress(raw, (e.size + 1) as int); }
+            else { throw new ValueError("'${e.name}' uses compression method ${e.method} (only stored and deflate)"); }
+            if (out.size() != e.size || Hash.crc32Bytes(out) != e.crc) { throw new ValueError("'${e.name}' is corrupt (size or CRC)"); }
+            return out;
+        }
+        // Writes every entry under `dir` (folders made as needed); refuses names
+        // that would land outside it ("../", absolute paths). The paths written.
+        fn extractTo(dir: string) -> Array<string> {
+            let written = new Array<string>();
+            for (e in self.list) {
+                let n = e.name;
+                if (Str.startsWith(n, "/") || Str.contains(n, "\\") || n == ".." || Str.startsWith(n, "../") || Str.contains(n, "/../") || Str.endsWith(n, "/..")) {
+                    throw new ValueError("'${n}' would land outside the folder");
+                }
+                let path = dir + "/" + n;
+                if (e.isDirectory()) { Dir.create(path); continue; }
+                let slash = Str.lastIndexOf(path, "/");
+                if (slash > 0) { Dir.create(path[..slash]); }
+                new File(path).writeBinary(self.readEntry(e).toBinary());
+                written.push(path);
+            }
+            return written;
+        }
+
+        private fn readDirectory() {
+            let d = self.data;
+            let n = d.size();
+            if (n < 22) { throw new ValueError("not a zip archive (too short)"); }
+            // the end-of-central-directory record, searched from the end (a comment may follow it)
+            let eocd = -1;
+            let lowest = n - 22 - 65535 < 0 ? 0 : n - 22 - 65535;
+            let i = n - 22;
+            while (i >= lowest) {
+                if (d.get(i) == 0x50 && d.get(i + 1) == 0x4b && d.get(i + 2) == 0x05 && d.get(i + 3) == 0x06) { eocd = i; break; }
+                i -= 1;
+            }
+            if (eocd < 0) { throw new ValueError("not a zip archive (no end record)"); }
+            let count = ZipLe.get(d, eocd + 10, 2);
+            let cdOffset = ZipLe.get(d, eocd + 16, 4);
+            if (cdOffset == 0xffffffff || count == 0xffff) { throw new ValueError("ZIP64 archives are not supported"); }
+            let at = cdOffset as int;
+            for (k in 0..count) {
+                if (at + 46 > n || ZipLe.get(d, at, 4) != 0x02014b50) { throw new ValueError("corrupt central directory"); }
+                let method = ZipLe.get(d, at + 10, 2) as int;
+                let e = new ZipEntry("", method, ZipLe.get(d, at + 16, 4), ZipLe.get(d, at + 20, 4), ZipLe.get(d, at + 24, 4), ZipLe.get(d, at + 42, 4));
+                e.dosTime = ZipLe.get(d, at + 12, 2) as int;
+                e.dosDate = ZipLe.get(d, at + 14, 2) as int;
+                let nameLen = ZipLe.get(d, at + 28, 2) as int;
+                let extraLen = ZipLe.get(d, at + 30, 2) as int;
+                let commentLen = ZipLe.get(d, at + 32, 2) as int;
+                if (at + 46 + nameLen > n) { throw new ValueError("corrupt central directory"); }
+                e.name = d.slice(at + 46, at + 46 + nameLen).toString();
+                self.list.push(e);
+                self.byName.put(e.name, e);
+                at += 46 + nameLen + extraLen + commentLen;
+            }
+        }
+    }
+}
