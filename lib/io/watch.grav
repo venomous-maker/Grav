@@ -1,0 +1,123 @@
+// lib/io/watch.grav — watching files for changes: a thread looks at the files
+// under some paths every so often and reports what was created, changed or
+// deleted since its last look.
+//
+//   let w = new FileWatcher(["src", "config/app.json"], 500)
+//   w.start(fn(changes: Array<FileChange>) {
+//       for (c in changes) { print("${c.kind} ${c.path}") }   // created src/new.grav ...
+//   })
+//   ...
+//   w.stop()
+//
+// It compares each file's modification time (to the nanosecond) and size, so it
+// works the same on every system and file system (network mounts and
+// containers included), and between looks it costs nothing but sleep. It
+// keeps one small entry per file.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../concurrency/async.grav"
+import "../concurrency/thread.grav"
+import "fs.grav"
+
+namespace std.io {
+
+    %{
+    #include <sys/stat.h>
+    /* A file's modification time in nanoseconds, or -1 when it is gone. */
+    static long long grav_watch_mtime(const char* path, long long* size) {
+        struct stat st;
+        if (stat(path, &st) != 0) return -1;
+        *size = (long long)st.st_size;
+    #if defined(__APPLE__)
+        return (long long)st.st_mtimespec.tv_sec * 1000000000LL + st.st_mtimespec.tv_nsec;
+    #else
+        return (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+    #endif
+    }
+    %}
+
+    // One change: "created", "modified" or "deleted", and the file's path.
+    class FileChange {
+        public kind: string
+        public path: string
+        constructor(kind: string, path: string) { self.kind = kind; self.path = path; }
+    }
+
+    // What a watcher saw of a file the last time.
+    class FileStamp {
+        public mtime: long
+        public size: long
+        constructor(mtime: long, size: long) { self.mtime = mtime; self.size = size; }
+    }
+
+    class FileWatcher {
+        // The files and directories watched (directories with everything under them).
+        public paths: Array<string>
+        // How long (ms) between looks.
+        public intervalMs: int
+        // Names under a watched directory left out (exact names, such as ".git" or "build").
+        public ignore: Array<string> = [".git", "node_modules", "build", "target"]
+        private seen: HashMap<string, FileStamp> = new HashMap<string, FileStamp>()
+        private looked: bool = false
+        private running: AtomicInt = new AtomicInt(0)
+        private thread: Thread = null
+        constructor(paths: Array<string>, intervalMs: int = 500) { self.paths = paths; self.intervalMs = intervalMs; }
+
+        // Watches on a thread of its own, calling `onChange` with each look's
+        // changes (never with none). The files there now are the starting point.
+        fn start(onChange: fn(Array<FileChange>)) {
+            if (self.running.get() == 1) { return; }
+            self.poll();
+            self.running.set(1);
+            let me = self;
+            self.thread = Thread.spawn("file-watcher", fn() {
+                while (me.running.get() == 1) {
+                    let waited = 0;
+                    while (waited < me.intervalMs && me.running.get() == 1) { Thread.sleepMs(50); waited += 50; }
+                    if (me.running.get() != 1) { break; }
+                    let changes = me.poll();
+                    if (!changes.isEmpty()) { try { onChange(changes); } catch (e: Exception) {} }
+                }
+            });
+        }
+        // Stops watching (and waits for the thread).
+        fn stop() {
+            if (self.running.get() == 0) { return; }
+            self.running.set(0);
+            if (self.thread != null) { self.thread.join(); self.thread = null; }
+        }
+        // Looks once: what changed since the last look (the first look reports nothing).
+        fn poll() -> Array<FileChange> {
+            let first = !self.looked;
+            self.looked = true;
+            let now = new HashMap<string, FileStamp>();
+            for (p in self.paths) { self.scan(p, now); }
+            let changes = new Array<FileChange>();
+            if (!first) {
+                for ((path, st) in now) {
+                    let was = self.seen.getOr(path, null);
+                    if (was == null) { changes.push(new FileChange("created", path)); }
+                    else if (was.mtime != st.mtime || was.size != st.size) { changes.push(new FileChange("modified", path)); }
+                }
+                for (path in self.seen.keys()) { if (!now.containsKey(path)) { changes.push(new FileChange("deleted", path)); } }
+                changes.sortBy(fn(a, b) => Str.compare(a.path, b.path));
+            }
+            self.seen = now;
+            return changes;
+        }
+        private fn scan(path: string, into: HashMap<string, FileStamp>) {
+            if (Dir.exists(path) && !Dir.isLink(path)) {
+                for (name in Dir.list(path)) {
+                    if (self.ignore.contains(name)) { continue; }
+                    self.scan(path == "." ? name : path + "/" + name, into);
+                }
+                return;
+            }
+            let size: long = 0;
+            let m = %{ grav_watch_mtime(path, &size) %} as long;
+            if (m >= 0) { into.put(path, new FileStamp(m, size)); }
+        }
+    }
+}

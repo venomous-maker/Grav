@@ -1,5 +1,6 @@
-// lib/io.grav — `import "std/io"`: IO (console), File/Dir, Path, Term (colors, cursor).
+// lib/io.grav — `import "std/io"`: IO (console), File/Dir, Path, Term (colors, cursor), FileWatcher.
 import "io/io.grav"
 import "io/fs.grav"
 import "io/path.grav"
 import "io/term.grav"
+import "io/watch.grav"
