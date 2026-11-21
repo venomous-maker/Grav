@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.10.1 (2026-11-21)
+
 ### Fixes
 
 - The cycle collector disposes of a dead cycle's objects in order, an object
