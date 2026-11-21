@@ -10,6 +10,7 @@ installed, it is `build/gravc`; both behave the same.)
 | `grav run [file.grav] [-- args]` | builds and runs a program; arguments after `--` go to the program |
 | `grav build [file.grav]` | builds a native executable next to the source |
 | `grav test [file.grav] [--filter text]` | runs the `test` blocks ([Testing](../learn/19-testing.md)) |
+| `grav bench [file.grav] [--filter text]` | times the `bench` blocks, built with `-O2` ([Benchmarks](../learn/19-testing.md#benchmarks)) |
 | `grav check [--json] [file.grav]` | type-checks without building; prints `gravc: ok` or the errors |
 | `grav fmt [--check] [paths]` | formats source files; `grav fmt -` formats standard input |
 | `grav env [--json]` | shows where the compiler, standard library and packages are |

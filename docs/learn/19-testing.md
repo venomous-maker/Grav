@@ -144,6 +144,38 @@ import the code they test.
 Tests run one after another on the main thread. A test may start `async` tasks
 and `await` them.
 
+## Benchmarks
+
+A `bench` block times a piece of code. `grav bench file.grav` builds the file
+with optimization (`-O2`) and runs each bench: once to warm up, then in batches
+sized to take about 50 ms, five times over. It reports the median time per run,
+the fastest, and runs per second. `grav test` skips bench blocks and `grav bench`
+skips tests, so both can live in one file, and `--filter` picks benches by name.
+
+```grav
+// file: bench_example.grav
+import "std"
+
+class Data { static words: Array<string> = Str.split(Str.repeat("alpha beta gamma ", 200), " ") }
+
+bench "join 600 words" { Str.join(Data.words, ",") }
+bench "join with a StringBuilder" {
+    let b = new StringBuilder()
+    for (w in Data.words) { b.append(w).append(",") }
+}
+```
+
+```text
+$ grav bench bench_example.grav
+running 2 benches
+  join 600 words                                8.21 us/op  (fastest 8.02 us, 121803 ops/s, 6089 runs per sample)
+  join with a StringBuilder                     11.40 us/op  (fastest 11.1 us, 87719 ops/s, 4386 runs per sample)
+```
+
+Keep a bench to one operation, and keep its setup out: put shared data in a
+class's statics, as `Data.words` is here, so the bench times the work and not
+the preparation.
+
 ## Writing good tests
 
 - **Test behaviour, not implementation.** Check what a function returns or
