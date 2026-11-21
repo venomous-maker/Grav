@@ -87,6 +87,39 @@ hover and inlay hints. It is printed even when the file has type errors:
 ]}
 ```
 
+### Warnings and lints
+
+Besides errors, `grav check` and the build report warnings, each with the line
+it is about. A lint's warning names itself in brackets and suggests a fix:
+
+```text
+gravc: app.grav:12:5: warning: this `if` returns its own condition [needless-bool]
+        if (n > 10) { return true } else { return false }
+        ^
+    help: write `return n > 10`
+```
+
+- **Unused variables**, and **unused imports**: an import nothing in the file
+  names (a package counts with everything it brings in; a file made only of
+  imports re-exports and is left alone; `import "std"` always is).
+- **Probable mistakes**: `identical-operands` (`a == a`, `x - x` on integers),
+  `self-assignment` (`x = x`), `unreachable-code` (after a `return`, `throw`,
+  `break` or `continue`), `empty-if`, `identical-branches` (`c ? v : v`).
+- **Plainer ways to say it**: `bool-comparison` (`ok == true` is `ok`),
+  `needless-bool` (`c ? true : false`, an `if` returning `true` or `false`),
+  `negated-comparison` (`!(a == b)` is `a != b`), `double-negation`,
+  `len-zero` (`xs.size() == 0` is `xs.isEmpty()`, `s.length == 0` is `s == ""`),
+  `assign-op` (`x = x + y` is `x += y`), `let-and-return`,
+  `needless-range-loop` (`for (i in 0..xs.size())` that only reads `xs[i]`),
+  `collapsible-else-if` (`else { if ... }`), `redundant-cast` (`n as int` on an
+  int), `redundant-str` (`str(s)` on a string).
+
+Lints and unused imports are reported for the program's own files, not the
+standard library's or a package's, and only once it type-checks. Write
+`// allow(name)` on a line to keep one lint quiet there (`// allow(lints)` for
+all), and `// allow(unused)` after an import. With `-Werror` warnings are fatal;
+in `--json` output a lint's suggestion is the diagnostic's `note`.
+
 Like every command, it reads the `grav.toml` found from the file's folder
 upward, so `import "<package>"` resolves to the installed copy (or a `path`
 dependency's folder) without fetching anything.
@@ -104,7 +137,10 @@ dependency's folder) without fetching anything.
   things up) are kept as written.
 - **Blocks**: a `{ a; b }` written on one line becomes one statement per line
   (dropping the `;`s, except after a bare `return`, `break`, `continue` or
-  `yield`); `{ return x }` stays on its line. A `{` followed by code that runs
+  `yield`). A declared function's, method's, constructor's or destructor's
+  body written on one line, `fn f() -> int { return 1; }`, becomes a block too
+  (its `;` kept); an empty `{}`, a lambda's body and an `if`'s `{ return x }`
+  stay on their line. A `{` followed by code that runs
   past its line, and a `}` after code on an earlier block's last line, get a
   line break.
 - **Indentation**: 4 spaces per level (brackets opened on one line indent the

@@ -145,7 +145,7 @@ gravc -                       # read source from stdin, write C to stdout
 | `--sanitize`                 | Build with AddressSanitizer + UBSan (memory errors, UB).       |
 | `-g`, `-g3`                  | Include debug info.                                            |
 | `--cc <compiler>`            | C compiler to use (default `$CC`, else `cc`).                  |
-| `-Werror`                    | Treat warnings (e.g. unused variables) as fatal.              |
+| `-Werror`                    | Treat warnings (unused variables and imports, lints) as fatal. |
 | `-v`, `--verbose`            | Print the C compiler command.                                  |
 | `-h`, `--help`               | Show usage.                                                    |
 | `-`                          | Read from stdin and print C to stdout.                         |
@@ -1091,8 +1091,11 @@ export class User { public name: string }
 ### Diagnostics & warnings
 
 Errors carry a `[line:col]` location and are grouped by stage (`lex` / `parse` /
-`sema` / `type`). Unused local variables produce a `warning`; pass `-Werror` to make
-warnings fatal.
+`sema` / `type`). Unused local variables and imports produce a `warning`, and so do
+lints: code that is probably a mistake (`a == a`, code after a `return`) or has a
+plainer form (`ok == true`, `xs.size() == 0`), each with a suggested fix (see
+[Warnings and lints](docs/reference/cli.md#warnings-and-lints)). Pass `-Werror` to
+make warnings fatal.
 
 ```
 gravc: type error [3:16]: operator '+' requires matching types, but got int and float
