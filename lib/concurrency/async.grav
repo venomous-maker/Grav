@@ -48,7 +48,7 @@ namespace std.concurrency {
         // An identifier for the calling thread (differs between workers).
         static fn threadId() -> long { return %{ (long long)(uintptr_t)pthread_self() %} as long; }
         // Pauses the calling thread for `ms` milliseconds.
-        static fn sleepMs(ms: int) { %{ usleep((useconds_t)ms * 1000); %}; }
+        static fn sleepMs(ms: int) { %{ if (ms > 0) { struct timespec grav_t; grav_t.tv_sec = (time_t)(ms / 1000); grav_t.tv_nsec = (long)(ms % 1000) * 1000000L; while (nanosleep(&grav_t, &grav_t) != 0) {} } %}; }
     }
 
     // A mutual-exclusion lock. Prefer withLock, which unlocks even on exceptions.

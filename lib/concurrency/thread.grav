@@ -210,7 +210,7 @@ namespace std.concurrency {
         public fn isStarted() -> bool { return self.started; }
 
         // Pauses the calling thread for `ms` milliseconds.
-        static fn sleepMs(ms: int) { %{ usleep((useconds_t)ms * 1000); %}; }
+        static fn sleepMs(ms: int) { %{ if (ms > 0) { struct timespec grav_t; grav_t.tv_sec = (time_t)(ms / 1000); grav_t.tv_nsec = (long)(ms % 1000) * 1000000L; while (nanosleep(&grav_t, &grav_t) != 0) {} } %}; }
         // Give other threads a chance to run.
         static fn yieldNow() { %{ sched_yield(); %}; }
         // An id for the calling thread.
