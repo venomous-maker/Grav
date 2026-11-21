@@ -95,7 +95,7 @@ with that name is in scope:
 | number → `bool` | `0` is `false`, anything else `true` |
 | integer → enum (`n as Color`) | checked: a number that names no member throws `ValueError` |
 | enum → integer (`int(c)`) | the member's value |
-| `string` ↔ `binary` | the same bytes |
+| `string` ↔ `binary` | the same bytes (shared, not copied); both index as bytes: `s[i]`, `b[i]`, and `b.length` |
 | class → subclass, class or interface → interface | checked at run time: throws `TypeError` |
 | `any` → `T` | checked at run time: stops with a message naming both types |
 | `T` → `any` | boxes the value |

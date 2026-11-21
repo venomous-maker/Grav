@@ -108,6 +108,41 @@ A 64-bit integer updated atomically (no lock needed).
 - `fn decrement() -> long` — Subtracts 1 and returns the new value.
 - `fn compareAndSet(expected: long, desired: long) -> bool` — Sets to `desired` only if the value is `expected`; reports success.
 
+### class AtomicLong
+
+A 64-bit counter or value updated atomically (the same as AtomicInt, which
+is 64-bit too; the name says so). updateMax keeps the largest value seen.
+
+**Constructors**
+
+- `new AtomicLong(initial: long = 0)`
+
+**Methods**
+
+- `fn get() -> long`
+- `fn set(n: long)`
+- `fn add(n: long) -> long` — Adds and returns the new value.
+- `fn increment() -> long`
+- `fn decrement() -> long`
+- `fn exchange(n: long) -> long` — Sets a new value and returns the old one.
+- `fn compareAndSet(expected: long, desired: long) -> bool`
+- `fn updateMax(n: long) -> long` — Raises the value to `n` if `n` is larger (a running maximum); the value after.
+
+### class AtomicBool
+
+A flag set and read atomically across threads (a stop request, say).
+
+**Constructors**
+
+- `new AtomicBool(initial: bool = false)`
+
+**Methods**
+
+- `fn get() -> bool`
+- `fn set(b: bool)`
+- `fn getAndSet(b: bool) -> bool` — Sets it and returns what it was (true: someone set it first).
+- `fn compareAndSet(expected: bool, desired: bool) -> bool`
+
 ### class Channel<T>
 
 A bounded, blocking, thread-safe queue for handing values between tasks.

@@ -112,7 +112,8 @@ gravc: app.grav:12:5: warning: this `if` returns its own condition [needless-boo
   `assign-op` (`x = x + y` is `x += y`), `let-and-return`,
   `needless-range-loop` (`for (i in 0..xs.size())` that only reads `xs[i]`),
   `collapsible-else-if` (`else { if ... }`), `redundant-cast` (`n as int` on an
-  int), `redundant-str` (`str(s)` on a string).
+  int), `redundant-str` (`str(s)` on a string), `slow-char-at` (`Str.charAt(s, i)`
+  is a call per byte; `s[i]` is not).
 
 Lints and unused imports are reported for the program's own files, not the
 standard library's or a package's, and only once it type-checks. Write

@@ -121,8 +121,9 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 
 | Module | Contents |
 |--------|----------|
-| [async](concurrency/async.md) | `Async`, `Mutex`, `AtomicInt`, `Channel<T>`, `awaitAll` |
+| [async](concurrency/async.md) | `Async`, `Mutex`, `AtomicInt`, `AtomicLong`, `AtomicBool`, `Channel<T>`, `awaitAll` |
 | [thread](concurrency/thread.md) | `Thread`, `WaitGroup`, `CountDownLatch`, `Semaphore`, `RWLock`, `Once` |
+| [shared](concurrency/shared.md) | `ThreadLocal<T>`, `ConcurrentMap<K, V>`: per-thread values and a sharded map |
 | [generator](concurrency/generator.md) | `Generator<T>`: what a function that `yield`s becomes |
 
 ### net (import "std/net")
