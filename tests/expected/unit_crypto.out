@@ -1,0 +1,21 @@
+running 5 tests
+  ok    digests and HMAC match the published vectors
+  ok    AES-GCM seals, and refuses altered data or the wrong key
+rsa-2048: rsa 2048 bits, jwk RSA
+p256: ec 256 bits, jwk EC
+p384: ec 384 bits, jwk EC
+p521: ec 521 bits, jwk EC
+ed25519: ed25519 256 bits, jwk OKP
+  ok    keys sign and verify, through PEM and JWK
+  ok    scrypt password hashes
+HS256 HS512 RS256 RS512 ES256 ES384 ES512 EdDSA
+tampered: the signature does not match
+none: the token's algorithm is not the key's
+other alg: the token's algorithm is not the key's
+expired: the token has expired
+not yet: the token is not valid yet
+no exp: the token has no expiry
+audience: the token is for another audience
+garbage: a JWT has three parts
+  ok    JWTs: every algorithm, and what refuses a token
+result: 5 passed, 0 failed

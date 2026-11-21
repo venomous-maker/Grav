@@ -1,0 +1,122 @@
+// std/data's crypto and JWT: digests and HMAC against published vectors,
+// AES-GCM (and tampering), every key kind signing and verifying through PEM
+// and JWK, scrypt password hashes, and JWTs (each algorithm, and the checks
+// that refuse a token).
+import "std"
+
+fn b(s: string) -> Bytes { return Bytes.fromString(s) }
+
+test "digests and HMAC match the published vectors" {
+    assertEq(Crypto.sha512(b("abc")).toHex(), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
+    assertEq(Crypto.sha384(b("abc")).toHex(), "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7")
+    assertEq(Crypto.sha256(b("abc")).toHex(), Hash.sha256("abc"))
+    assertEq(Crypto.digest("sha1", b("abc")).toHex(), "a9993e364706816aba3e25717850c26c9cd0d89d")
+    // RFC 4231, test case 2
+    assertEq(Crypto.hmac("sha256", b("Jefe"), b("what do ya want for nothing?")).toHex(), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    assertEq(Crypto.randomBytes(32).size(), 32)
+    assert(!Crypto.equals(Crypto.randomBytes(16), Crypto.randomBytes(16)))
+    assert(Crypto.equals(b("same"), b("same")) && !Crypto.equals(b("same"), b("sane")) && !Crypto.equals(b("a"), b("ab")))
+}
+
+test "AES-GCM seals, and refuses altered data or the wrong key" {
+    let key = AesGcm.generateKey()
+    let sealed = AesGcm.encrypt(key, b("attack at dawn"), b("v1"))
+    assertEq(sealed.size(), 14 + 28)
+    assertEq(AesGcm.decrypt(key, sealed, b("v1")).toString(), "attack at dawn")
+    assert(!Crypto.equals(sealed, AesGcm.encrypt(key, b("attack at dawn"), b("v1"))))   // a new nonce each time
+    let bad = sealed.copy()
+    bad.set(20, bad.get(20) ^ 1)
+    let msgs = new Array<string>()
+    try { AesGcm.decrypt(key, bad, b("v1")) } catch (e: ValueError) { msgs.push("altered") }
+    try { AesGcm.decrypt(key, sealed, b("v2")) } catch (e: ValueError) { msgs.push("other aad") }
+    try { AesGcm.decrypt(AesGcm.generateKey(), sealed, b("v1")) } catch (e: ValueError) { msgs.push("other key") }
+    assertEq(Str.join(msgs, ", "), "altered, other aad, other key")
+    let k128 = AesGcm.generateKey(128)
+    assertEq(AesGcm.decryptText(k128, AesGcm.encryptText(k128, "héllo")), "héllo")
+    assertEq(AesGcm.decrypt(key, AesGcm.encrypt(key, new Bytes())).size(), 0)
+}
+
+test "keys sign and verify, through PEM and JWK" {
+    for (kind in ["rsa-2048", "p256", "p384", "p521", "ed25519"]) {
+        let k = CryptoKey.generate(kind)
+        let msg = b("the message")
+        let sig = k.sign(msg, "sha384")
+        let pub = CryptoKey.fromPem(k.publicPem())
+        assert(!pub.isPrivate() && k.isPrivate())
+        assert(pub.verify(msg, sig, "sha384"))
+        assert(!pub.verify(b("another message"), sig, "sha384"))
+        let back = CryptoKey.fromPem(k.privatePem())
+        assert(back.isPrivate() && back.publicKey().verify(msg, back.sign(msg, "sha384"), "sha384"))
+        let viaJwk = CryptoKey.fromJwk(k.toJwk())
+        assert(viaJwk.verify(msg, sig, "sha384"))
+        println("${kind}: ${k.kind()} ${k.bits()} bits, jwk ${k.toJwk().getString("kty", "")}")
+    }
+    let bad = new Array<string>()
+    try { CryptoKey.fromPem("not a key") } catch (e: ValueError) { bad.push("pem") }
+    try { CryptoKey.generate("dsa") } catch (e: ValueError) { bad.push("kind") }
+    try { CryptoKey.generate("p256").publicKey().sign(b("x")) } catch (e: StateError) { bad.push("public sign") }
+    assertEq(Str.join(bad, ", "), "pem, kind, public sign")
+}
+
+test "scrypt password hashes" {
+    PasswordHash.costLog = 12                     // (quick for the test)
+    let h = PasswordHash.make("correct horse")
+    assert(Str.startsWith(h, "$scrypt$ln=12,r=8,p=1$"))
+    assert(PasswordHash.verify("correct horse", h))
+    assert(!PasswordHash.verify("correct horsf", h))
+    assert(h != PasswordHash.make("correct horse"))   // a new salt each time
+    assert(!PasswordHash.verify("x", "$2y$10$not-scrypt"))
+    assert(!PasswordHash.needsRehash(h))
+    PasswordHash.costLog = 13
+    assert(PasswordHash.needsRehash(h) && PasswordHash.verify("correct horse", h))
+    PasswordHash.costLog = 15
+}
+
+test "JWTs: every algorithm, and what refuses a token" {
+    let claims = Json.object()
+    claims.set("sub", "42")
+    claims.set("iss", "https://id.test")
+    claims.set("aud", "app")
+    claims.set("exp", Time.now() + 600)
+    let keys = [JwtKey.hmac(Bytes.fromString("0123456789abcdef0123456789abcdef")), JwtKey.hmac(Crypto.randomBytes(64), "HS512"),
+                JwtKey.of(CryptoKey.generate("rsa-2048")), JwtKey.of(CryptoKey.generate("rsa-2048"), "RS512"),
+                JwtKey.of(CryptoKey.generate("p256")), JwtKey.of(CryptoKey.generate("p384")), JwtKey.of(CryptoKey.generate("p521")),
+                JwtKey.of(CryptoKey.generate("ed25519"))]
+    let opts = new JwtOptions()
+    opts.issuer = "https://id.test"
+    opts.audience = "app"
+    let algs = new Array<string>()
+    for (k in keys) {
+        let token = Jwt.sign(claims, k)
+        let verifier = k.key == null ? k : JwtKey.fromJwk(k.toJwk())       // (the public half, as a JWK)
+        assertEq(Jwt.verify(token, verifier, opts).getString("sub", ""), "42")
+        algs.push(Jwt.decode(token).header.getString("alg", ""))
+    }
+    println(Str.join(algs, " "))
+    let k = JwtKey.of(CryptoKey.generate("p256")).withKid("k1")
+    let set = new Jwks().add(JwtKey.fromJwk(k.toJwk()))
+    let token = Jwt.sign(claims, k)
+    assertEq(Jwt.verifyWith(token, Jwks.parse(set.toJson().toJson()), opts).getString("sub", ""), "42")
+    let refused = new Array<string>()
+    let check = fn(label: string, t: string, key: JwtKey, o: JwtOptions) {
+        try { Jwt.verify(t, key, o); refused.push(label + ": accepted") } catch (e: JwtException) { refused.push(label + ": " + e.message()) }
+    }
+    let hs = keys[0]
+    let parts = Str.split(Jwt.sign(claims, hs), ".")
+    check("tampered", parts[0] + "." + Base64.encodeUrl("{\"sub\":\"1\",\"exp\":9999999999}") + "." + parts[2], hs, opts)
+    check("none", Base64.encodeUrl("{\"alg\":\"none\"}") + "." + parts[1] + ".", hs, opts)
+    check("other alg", Jwt.sign(claims, keys[1]), hs, opts)
+    let old = Json.object()
+    old.set("exp", Time.now() - 3600)
+    check("expired", Jwt.sign(old, hs), hs, new JwtOptions())
+    let later = Json.object()
+    later.set("exp", Time.now() + 3600)
+    later.set("nbf", Time.now() + 1800)
+    check("not yet", Jwt.sign(later, hs), hs, new JwtOptions())
+    check("no exp", Jwt.sign(Json.object(), hs), hs, new JwtOptions())
+    let other = new JwtOptions()
+    other.audience = "another app"
+    check("audience", Jwt.sign(claims, hs), hs, other)
+    check("garbage", "a.b", hs, opts)
+    for (r in refused) { println(r) }
+}
