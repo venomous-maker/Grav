@@ -467,6 +467,9 @@ std::string CodeGen::emitExprRaw(const Expr &expr) const {
         if (e->base->type.isArray() && !e->base->type.isSlice())
             return "(" + base + ").data[" + checkedIndex(idx, e->base->type.arrayLen) + "]";
         if (e->base->type.kind == TypeRef::Kind::String) return "grav_str_byte(" + base + ", " + idx + ")";
+        // `b[i]` on a binary value: its byte, checked against its length (the value read once).
+        if (e->base->type.isBinary())
+            return "({ GravBytes grav_bb = " + base + "; grav_bb.data[grav_idx(" + idx + ", grav_bb.len)]; })";
         // A slice (a variadic parameter) carries its length alongside.
         if (e->base->type.isSlice() && as<const NameExpr>(e->base.get()))
             return "(" + base + ")[grav_idx(" + idx + ", " + base + "__n)]";

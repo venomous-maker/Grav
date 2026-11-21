@@ -935,10 +935,10 @@ TypeRef TypeChecker::checkIndex(IndexExpr &e) {
               "an array index must be int, but got " + typeRefName(idx));
     if (base.isError()) return TypeRef::prim(TypeRef::Kind::Error);
     if (base.isArray() || base.isPointer()) return *base.elem; // an lvalue of the element type
-    if (base.kind == TypeRef::Kind::String) return TypeRef::integer(8, true); // the byte at an index
+    if (base.kind == TypeRef::Kind::String || base.isBinary()) return TypeRef::integer(8, true); // the byte at an index
     error(e.base->line, e.base->col,
           "cannot index a value of type " + typeRefName(base) +
-              " (only arrays, strings and pointers are indexable)");
+              " (only arrays, strings, binary values and pointers are indexable)");
     return TypeRef::prim(TypeRef::Kind::Error);
 }
 
