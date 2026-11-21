@@ -44,6 +44,15 @@ rm -rf "$GRAV_PACKAGES"
 "$GRAV" run >/dev/null 2>&1 && fail "a missing package should be an error"
 "$GRAV" install >/dev/null 2>&1 || fail "grav install"
 [ "$("$GRAV" run 2>/dev/null)" = "<hi grav>" ] || fail "install from grav.lock"
+# grav.toml edited by hand to another version than grav.lock holds: the lock's
+# commit is the old version's, so install fetches the one asked for (an older
+# grav checked out the lock's commit and filed it under the new version's name).
+sed -i 's/greet@v1.1.0/greet@v1.0.0/' grav.toml
+"$GRAV" install >/dev/null 2>&1 || fail "install after editing the version"
+[ "$("$GRAV" run 2>/dev/null)" = "<hello grav>" ] || fail "install of a hand-edited version"
+sed -i 's/greet@v1.0.0/greet@v1.1.0/' grav.toml
+"$GRAV" install >/dev/null 2>&1 || fail "install after editing the version back"
+[ "$("$GRAV" run 2>/dev/null)" = "<hi grav>" ] || fail "install of the version edited back"
 case "$(edef src/main.grav '"greet"')" in -|"$GRAV_PACKAGES"/*/greet@v1.1.0/src/greet.grav) ;; *) fail "editor: import of a git package";; esac
 case "$(edef src/main.grav 'greet(')" in -|"$GRAV_PACKAGES"/*/greet@v1.1.0/src/greet.grav) ;; *) fail "editor: definition in a git package";; esac
 case "$(edef "$(find "$GRAV_PACKAGES" -path '*/greet@v1.1.0/src/greet.grav')" 'red(')" in -|"$GRAV_PACKAGES"/*/colors@*/lib.grav) ;; *) fail "editor: a package's own dependency";; esac
