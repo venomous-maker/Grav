@@ -89,6 +89,45 @@ namespace std.concurrency {
         }
     }
 
+    // A 64-bit counter or value updated atomically (the same as AtomicInt, which
+    // is 64-bit too; the name says so). updateMax keeps the largest value seen.
+    class AtomicLong {
+        private v: long
+        constructor(initial: long = 0) { self.v = initial; }
+        public fn get() -> long { return %{ __atomic_load_n(&self->v, __ATOMIC_SEQ_CST) %} as long; }
+        public fn set(n: long) { %{ __atomic_store_n(&self->v, n, __ATOMIC_SEQ_CST); %}; }
+        // Adds and returns the new value.
+        public fn add(n: long) -> long { return %{ __atomic_add_fetch(&self->v, n, __ATOMIC_SEQ_CST) %} as long; }
+        public fn increment() -> long { return self.add(1); }
+        public fn decrement() -> long { return self.add(-1); }
+        // Sets a new value and returns the old one.
+        public fn exchange(n: long) -> long { return %{ __atomic_exchange_n(&self->v, n, __ATOMIC_SEQ_CST) %} as long; }
+        public fn compareAndSet(expected: long, desired: long) -> bool {
+            return %{ __atomic_compare_exchange_n(&self->v, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) %} as bool;
+        }
+        // Raises the value to `n` if `n` is larger (a running maximum); the value after.
+        public fn updateMax(n: long) -> long {
+            return %{ ({ long long grav_c = __atomic_load_n(&self->v, __ATOMIC_RELAXED);
+                         while (n > grav_c && !__atomic_compare_exchange_n(&self->v, &grav_c, n, 1, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {}
+                         n > grav_c ? n : grav_c; }) %} as long;
+        }
+    }
+
+    // A flag set and read atomically across threads (a stop request, say).
+    class AtomicBool {
+        private v: int
+        constructor(initial: bool = false) { self.v = initial ? 1 : 0; }
+        public fn get() -> bool { return %{ __atomic_load_n(&self->v, __ATOMIC_SEQ_CST) != 0 %} as bool; }
+        public fn set(b: bool) { let n = b ? 1 : 0; %{ __atomic_store_n(&self->v, n, __ATOMIC_SEQ_CST); %}; }
+        // Sets it and returns what it was (true: someone set it first).
+        public fn getAndSet(b: bool) -> bool { let n = b ? 1 : 0; return %{ __atomic_exchange_n(&self->v, n, __ATOMIC_SEQ_CST) != 0 %} as bool; }
+        public fn compareAndSet(expected: bool, desired: bool) -> bool {
+            let e = expected ? 1 : 0;
+            let d = desired ? 1 : 0;
+            return %{ __atomic_compare_exchange_n(&self->v, &e, d, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) %} as bool;
+        }
+    }
+
     // A bounded, blocking, thread-safe queue for handing values between tasks.
     // send() waits while full; receive() waits while empty. After close(), sends
     // fail and receivers drain what is left; hasNext() reports whether more will come.
