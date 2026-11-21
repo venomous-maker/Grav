@@ -92,6 +92,18 @@ public:
               std::string &err);
     // Namespaces in which a loaded module declares `name` (for "did you mean" hints).
     std::vector<std::string> whereIs(const std::string &name) const;
+    // Imports in the program's own files (not the standard library's or a
+    // package's) whose file names nothing the import provides: each as the
+    // importing file, its line and column, and a message.
+    struct Unused {
+        std::string file;
+        int line = 0, col = 0;
+        std::string message;
+    };
+    std::vector<Unused> unusedImports() const;
+    // Whether `p` is one of the program's own files (not the standard library's
+    // or a package's): lints are reported for these only.
+    bool isOwnFile(const std::filesystem::path &p) const { return !isLibrary(p) && packageRootOf(p).empty(); }
 
 private:
     // Resolve an import spec written in `fromDir`; empty path when not found.
@@ -113,6 +125,15 @@ private:
         std::vector<std::string> namespaces;
         std::vector<std::pair<std::string, std::string>> names;
         std::vector<std::string> imports;
+        // Each import line as written (for unusedImports()).
+        struct ImportLine {
+            std::string spec, alias, key;
+            std::vector<std::pair<std::string, std::string>> only;
+            int line = 0, col = 0;
+            bool allowed = false; // `// allow(unused)` after it
+        };
+        std::vector<ImportLine> importLines;
+        std::vector<std::string> macros; // #define names
     };
     bool isLibrary(const std::filesystem::path &p) const; // under the std dir
     // The root of the package (a dependency) holding `p`, or "" (see packageRoots_).

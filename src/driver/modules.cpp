@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <cstring>
+#include <functional>
 #include <sstream>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -441,6 +443,117 @@ bool ModuleLoader::isLibrary(const fs::path &p) const {
     return s.size() > d.size() && s.compare(0, d.size(), d) == 0 && s[d.size()] == '/';
 }
 
+namespace {
+
+// The words a file's code uses: identifiers outside comments and string text
+// (but inside a string's `${...}`), leaving out `use` and `import` lines. Sets
+// `hasC` when the file holds inline C (whose names it cannot see).
+std::set<std::string> usedWords(const std::string &src, bool &hasC, bool &declares) {
+    std::set<std::string> out;
+    hasC = false;
+    declares = false;
+    size_t i = 0, n = src.size();
+    auto ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+    bool lineStart = true, skipLine = false;
+    std::function<void(size_t &, char)> code; // (forward: strings hold code in ${})
+    auto string = [&](size_t &k) {             // from just past the opening quote
+        while (k < n && src[k] != '"' && src[k] != '\n') {
+            if (src[k] == '\\') { k += 2; continue; }
+            if (src[k] == '$' && k + 1 < n && src[k + 1] == '{') { k += 2; code(k, '}'); continue; }
+            ++k;
+        }
+        if (k < n && src[k] == '"') ++k;
+    };
+    code = [&](size_t &k, char until) {
+        int depth = 0;
+        while (k < n) {
+            char c = src[k];
+            if (until && c == '{') ++depth;
+            if (until && c == until && depth-- == 0) { ++k; return; }
+            if (c == '\n') { lineStart = true; skipLine = false; ++k; continue; }
+            if (c == ' ' || c == '\t' || c == '\r') { ++k; continue; }
+            if (lineStart && !until) {
+                lineStart = false;
+                auto starts = [&](const char *w) { size_t l = strlen(w); return src.compare(k, l, w) == 0 && (k + l >= n || !ident(src[k + l])); };
+                skipLine = starts("use") || starts("import");
+                if (!skipLine && !starts("namespace") && c != '}' && c != '/' && c != '#') declares = true;
+            }
+            if (c == '/' && k + 1 < n && src[k + 1] == '/') { while (k < n && src[k] != '\n') ++k; continue; }
+            if (c == '/' && k + 1 < n && src[k + 1] == '*') { size_t e = src.find("*/", k + 2); k = e == std::string::npos ? n : e + 2; continue; }
+            if (c == '%' && k + 1 < n && src[k + 1] == '{') { hasC = true; size_t e = src.find("%}", k + 2); k = e == std::string::npos ? n : e + 2; continue; }
+            if (src.compare(k, 3, "\"\"\"") == 0 || src.compare(k, 4, "r\"\"\"") == 0) {
+                size_t q = src[k] == 'r' ? k + 1 : k;
+                size_t e = src.find("\"\"\"", q + 3);
+                k = e == std::string::npos ? n : e + 3;
+                continue;
+            }
+            if (c == 'r' && k + 1 < n && src[k + 1] == '"' && (k == 0 || !ident(src[k - 1]))) { size_t e = src.find('"', k + 2); k = e == std::string::npos ? n : e + 1; continue; }
+            if (c == '"') { ++k; string(k); continue; }
+            if (c == '\'') { ++k; while (k < n && src[k] != '\'' && src[k] != '\n') k += src[k] == '\\' ? 2 : 1; if (k < n) ++k; continue; }
+            if (ident(c)) {
+                size_t s = k;
+                while (k < n && ident(src[k])) ++k;
+                if (!skipLine && !std::isdigit(static_cast<unsigned char>(src[s]))) out.insert(src.substr(s, k - s));
+                continue;
+            }
+            ++k;
+        }
+    };
+    code(i, 0);
+    return out;
+}
+
+} // namespace
+
+std::vector<ModuleLoader::Unused> ModuleLoader::unusedImports() const {
+    std::vector<Unused> out;
+    std::set<std::string> stdAll; // what bare `import "std"` brings
+    if (fs::path dir = stdLibDir(); !dir.empty()) {
+        std::error_code ec;
+        std::string stdKey = fs::weakly_canonical(dir / "std.grav", ec).string();
+        if (info_.count(stdKey)) for (const auto &f : closure(stdKey)) stdAll.insert(f);
+    }
+    for (const auto &[file, mi] : info_) {
+        if (mi.importLines.empty() || isLibrary(file) || !packageRootOf(file).empty()) continue;
+        std::ifstream in(file);
+        if (!in) continue;
+        std::stringstream buf;
+        buf << in.rdbuf();
+        bool hasC = false, declares = false;
+        std::set<std::string> used = usedWords(buf.str(), hasC, declares);
+        if (hasC || !declares) continue; // (inline C's names are unseen; a file of imports only re-exports)
+        for (const auto &il : mi.importLines) {
+            if (il.allowed || il.spec == "std") continue;
+            bool isUsed = false, known = true;
+            if (!il.alias.empty()) isUsed = used.count(il.alias) > 0;
+            else if (!il.only.empty()) {
+                for (const auto &[name, as] : il.only) isUsed = isUsed || used.count(as) > 0;
+            } else {
+                // What the import provides: a std module's files beyond bare std's; a
+                // package's files and every package it brings (an umbrella package
+                // re-exports its dependencies); a local file and the local files it imports.
+                bool lib = isLibrary(il.key);
+                std::string root = packageRootOf(il.key);
+                size_t names = 0;
+                for (const auto &f : closure(il.key)) {
+                    bool provides = lib ? isLibrary(f) && !stdAll.count(f)
+                                        : !isLibrary(f) && (!root.empty() || packageRootOf(f) == root);
+                    if (!provides) continue;
+                    auto it = info_.find(f);
+                    if (it == info_.end()) continue;
+                    for (const auto &[name, ns] : it->second.names) { ++names; isUsed = isUsed || used.count(name) > 0; }
+                    for (const auto &m : it->second.macros) { ++names; isUsed = isUsed || used.count(m) > 0; }
+                    if (isUsed) break;
+                }
+                known = names > 0; // (nothing to tell by: say nothing)
+            }
+            if (!isUsed && known)
+                out.push_back({file, il.line, il.col, "unused import \"" + il.spec + "\" (nothing it declares is used here)"});
+        }
+    }
+    return out;
+}
+
 std::vector<std::string> ModuleLoader::closure(const std::string &key) const {
     std::vector<std::string> order;
     std::set<std::string> seen;
@@ -618,8 +731,19 @@ bool ModuleLoader::load(const fs::path &path, std::string &out, std::vector<SrcL
             currentNs.clear();
         } else if (!t.empty()) {
             std::string w = t;
+            while (w.size() > 1 && w[0] == '@') { // `@Event class Welcomed`: past its decorators
+                size_t e = 1;
+                while (e < w.size() && (std::isalnum(static_cast<unsigned char>(w[e])) || w[e] == '_' || w[e] == '.')) ++e;
+                if (e < w.size() && w[e] == '(') { int d = 0; for (; e < w.size(); ++e) { if (w[e] == '(') ++d; else if (w[e] == ')' && --d == 0) { ++e; break; } } }
+                w = trim(w.substr(std::min(e, w.size())));
+            }
             for (const char *m : {"export ", "final ", "abstract ", "async "})
                 if (w.rfind(m, 0) == 0) w = trim(w.substr(std::string(m).size()));
+            if (w.rfind("#define ", 0) == 0) {
+                size_t s = 8, e = s;
+                while (e < w.size() && (std::isalnum(static_cast<unsigned char>(w[e])) || w[e] == '_')) ++e;
+                if (e > s) mi.macros.push_back(w.substr(s, e - s));
+            }
             for (const char *kw : {"class ", "struct ", "enum ", "interface ", "trait ", "fn ", "type ", "const ", "let "}) {
                 if (w.rfind(kw, 0) != 0) continue;
                 size_t s = std::string(kw).size(), e = s;
@@ -650,6 +774,14 @@ bool ModuleLoader::load(const fs::path &path, std::string &out, std::vector<SrcL
             if (!load(found, out, srcMap, err)) return false;
             std::string foundKey = fs::weakly_canonical(found, ec).string();
             info_[key].imports.push_back(foundKey);
+            {
+                ModInfo::ImportLine il;
+                il.spec = spec; il.alias = alias; il.key = foundKey; il.only = only; il.line = lineNo;
+                il.col = static_cast<int>(lineText.find_first_not_of(" \t")) + 1;
+                size_t cm = lineText.find("//", lineText.find('"', lineText.find('"') + 1));
+                il.allowed = cm != std::string::npos && lineText.find("allow(unused)", cm) != std::string::npos;
+                info_[key].importLines.push_back(il);
+            }
             // A program importing the library (or asking for names/aliases) gets
             // `use` declarations in its own scope, on this same line.
             std::string uses;
