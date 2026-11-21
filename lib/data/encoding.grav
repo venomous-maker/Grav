@@ -149,6 +149,12 @@ namespace std.data {
         static fn encodeUrl(s: string) -> string {
             return %{ grav_b64_encode((const unsigned char*)s, (long long)strlen(s), 1) %} as string
         }
+        // Raw bytes as URL- and filename-safe Base64 (- and _, no padding), as JWTs and JWKs write them.
+        static fn encodeBytesUrl(b: Bytes) -> string {
+            let p = b.rawData()
+            let n = b.size()
+            return %{ grav_b64_encode(p, n, 1) %} as string
+        }
         // The text that Base64 `s` encodes (standard or URL-safe; padding and whitespace
         // optional); ValueError when `s` is not Base64. Use decodeBytes for binary data.
         static fn decode(s: string) -> string {
