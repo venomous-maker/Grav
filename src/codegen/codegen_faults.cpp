@@ -223,7 +223,11 @@ static void grav_on_fault(int sig, siginfo_t* si, void* ctx) {
     else if (grav_stack_top && addr < grav_stack_top && addr + grav_stack_size + (1 << 20) > grav_stack_top)
         what = "stack overflow (is a recursion missing its base case?)";
     else what = "invalid memory access";
-    if (grav_recovery_active() || grav_testing) grav_panic(what);
+    /* A null reference or a stack overflow unwinds like a panic. Any other bad
+       access means memory is already damaged (the fault may even be inside
+       malloc, holding its lock): unwinding would free memory and could hang, so
+       it is reported and the program ends here, tests and recovery regions too. */
+    if ((grav_recovery_active() || grav_testing) && sig != SIGBUS && what[0] != 'i') grav_panic(what);
     fflush(stdout);
     fprintf(stderr, "panic: %s\n", what);
 #ifndef GRAV_NO_TRACE
