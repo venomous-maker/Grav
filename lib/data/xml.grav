@@ -1,0 +1,284 @@
+// lib/data/xml.grav — XML read into a tree of elements and text, queried by
+// simple paths, and written back out (feeds, sitemaps, SOAP and SAML replies,
+// office files' XML parts).
+//
+//   let doc = Xml.parse("<feed><entry id=\"1\"><title>Hi</title></entry></feed>")
+//   print(doc.find("entry/title").text())          // Hi
+//   print(doc.child("entry").attr("id"))           // 1
+//
+//   let s = XmlNode.element("urlset").setAttr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9")
+//   s.add(XmlNode.element("url").add(XmlNode.element("loc").addText("https://example.com/")))
+//   print(s.toString())
+//
+// A document with a DTD (<!DOCTYPE ...>) is refused: DTDs are how XML entity
+// attacks (XXE, "billion laughs") get in, and nothing else here needs them.
+// The five predefined entities and &#...; character references are understood.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/strbuf.grav"
+import "../collections/array.grav"
+import "encoding.grav"
+
+namespace std.data {
+
+    // An element (with a name, attributes and children) or a piece of text.
+    class XmlNode {
+        // "element" or "text".
+        public kind: string
+        // An element's name as written, prefix included ("soap:Body").
+        public name: string = ""
+        // A text node's text (entities decoded).
+        public value: string = ""
+        public attrNames: Array<string> = new Array<string>()
+        public attrValues: Array<string> = new Array<string>()
+        public childNodes: Array<XmlNode> = new Array<XmlNode>()
+        constructor(kind: string) { self.kind = kind; }
+
+        static fn element(name: string) -> XmlNode { let n = new XmlNode("element"); n.name = name; return n; }
+        static fn textNode(text: string) -> XmlNode { let n = new XmlNode("text"); n.value = text; return n; }
+
+        fn isElement() -> bool { return self.kind == "element"; }
+        // The name without its namespace prefix ("Body" for "soap:Body").
+        fn localName() -> string { let c = Str.indexOf(self.name, ":"); return c >= 0 ? self.name[c + 1..] : self.name; }
+        // An attribute's value, or `fallback`.
+        fn attr(name: string, fallback: string = "") -> string {
+            for (i in 0..self.attrNames.size()) { if (self.attrNames[i] == name) { return self.attrValues[i]; } }
+            return fallback;
+        }
+        fn hasAttr(name: string) -> bool { return self.attrNames.contains(name); }
+        // Sets an attribute (replacing one of the same name).
+        fn setAttr(name: string, value: string) -> XmlNode {
+            for (i in 0..self.attrNames.size()) { if (self.attrNames[i] == name) { self.attrValues[i] = value; return self; } }
+            self.attrNames.push(name);
+            self.attrValues.push(value);
+            return self;
+        }
+        fn add(child: XmlNode) -> XmlNode { self.childNodes.push(child); return self; }
+        fn addText(text: string) -> XmlNode { self.childNodes.push(XmlNode.textNode(text)); return self; }
+        // The child elements (with this name, matching the name or local name; all with "").
+        fn children(name: string = "") -> Array<XmlNode> {
+            let out = new Array<XmlNode>();
+            for (c in self.childNodes) { if (c.isElement() && (name == "" || c.name == name || c.localName() == name)) { out.push(c); } }
+            return out;
+        }
+        // The first child element with this name, or null.
+        fn child(name: string) -> XmlNode {
+            for (c in self.childNodes) { if (c.isElement() && (c.name == name || c.localName() == name)) { return c; } }
+            return null;
+        }
+        // All the text inside (descendants' too), joined.
+        fn text() -> string {
+            if (!self.isElement()) { return self.value; }
+            let out = new StringBuilder();
+            self.collectText(out);
+            return out.toString();
+        }
+        private fn collectText(out: StringBuilder) {
+            for (c in self.childNodes) { if (c.isElement()) { c.collectText(out); } else { out.append(c.value); } }
+        }
+        // The first element at a path of child names ("entry/title", "*" for any), or null.
+        fn find(path: string) -> XmlNode {
+            let all = self.findAll(path);
+            return all.isEmpty() ? null : all[0];
+        }
+        // Every element at a path of child names.
+        fn findAll(path: string) -> Array<XmlNode> {
+            let level = new Array<XmlNode>();
+            level.push(self);
+            for (step in Str.split(path, "/")) {
+                if (step == "") { continue; }
+                let next = new Array<XmlNode>();
+                for (n in level) { for (c in n.children(step == "*" ? "" : step)) { next.push(c); } }
+                level = next;
+            }
+            return level;
+        }
+        // The node as XML (with `indent`, each element on its own line).
+        fn toString(indent: bool = false) -> string {
+            let out = new StringBuilder();
+            self.write(out, indent, 0);
+            return out.toString();
+        }
+        private fn write(out: StringBuilder, indent: bool, depth: int) {
+            if (!self.isElement()) { out.append(Xml.escape(self.value)); return; }
+            if (indent && depth > 0) { out.append("\n").append(Str.repeat("  ", depth)); }
+            out.append("<").append(self.name);
+            for (i in 0..self.attrNames.size()) {
+                out.append(" ").append(self.attrNames[i]).append("=\"").append(Xml.escapeAttr(self.attrValues[i])).append("\"");
+            }
+            if (self.childNodes.isEmpty()) { out.append("/>"); return; }
+            out.append(">");
+            let onlyText = true;
+            for (c in self.childNodes) { if (c.isElement()) { onlyText = false; } }
+            for (c in self.childNodes) { c.write(out, indent && !onlyText, depth + 1); }
+            if (indent && !onlyText) { out.append("\n").append(Str.repeat("  ", depth)); }
+            out.append("</").append(self.name).append(">");
+        }
+    }
+
+    class Xml {
+        // The document's root element; ValueError (with the line) when it is not well-formed.
+        static fn parse(text: string) -> XmlNode { return new XmlParser(text).document(); }
+        // Text with &, < and > escaped (for element content).
+        static fn escape(s: string) -> string {
+            if (Str.indexOfAny(s, "&<>") < 0) { return s; }
+            return Str.replace(Str.replace(Str.replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;");
+        }
+        // Text escaped for an attribute value in double quotes.
+        static fn escapeAttr(s: string) -> string {
+            if (Str.indexOfAny(s, "&<>\"\n\t") < 0) { return s; }
+            return Str.replace(Str.replace(Str.replace(Xml.escape(s), "\"", "&quot;"), "\n", "&#10;"), "\t", "&#9;");
+        }
+    }
+
+    class XmlParser {
+        private s: string
+        private n: int
+        private i: int = 0
+        private line: int = 1
+        constructor(text: string) { self.s = text; self.n = text.length; }
+
+        fn document() -> XmlNode {
+            // a byte-order mark, the declaration, comments and processing instructions
+            if (self.startsWith("\u{feff}")) { self.i += 3; }
+            self.misc();
+            if (self.startsWith("<!DOCTYPE")) { self.fail("documents with a DTD (<!DOCTYPE>) are not accepted"); }
+            if (self.i >= self.n || self.s[self.i] != 60) { self.fail("expected the root element"); }
+            let root = self.element();
+            self.misc();
+            if (self.i < self.n) { self.fail("text after the root element"); }
+            return root;
+        }
+        private fn fail(msg: string) { throw new ValueError("XML line " + str(self.line) + ": " + msg); }
+        private fn startsWith(t: string) -> bool {
+            if (self.i + t.length > self.n) { return false; }
+            for (k in 0..t.length) { if (self.s[self.i + k] != t[k]) { return false; } }
+            return true;
+        }
+        private fn advance(k: int) { for (j in 0..k) { if (self.s[self.i] == 10) { self.line += 1; } self.i += 1; } }
+        private fn skipTo(t: string) {
+            while (self.i < self.n && !self.startsWith(t)) { self.advance(1); }
+            if (self.i >= self.n) { self.fail("expected '" + t + "'"); }
+            self.advance(t.length);
+        }
+        private fn skipSpace() {
+            while (self.i < self.n) {
+                let c = self.s[self.i];
+                if (c == 32 || c == 9 || c == 13 || c == 10) { self.advance(1); } else { break; }
+            }
+        }
+        // Space, comments and processing instructions between top-level parts.
+        private fn misc() {
+            while (true) {
+                self.skipSpace();
+                if (self.startsWith("<?")) { self.skipTo("?>"); }
+                else if (self.startsWith("<!--")) { self.skipTo("-->"); }
+                else { break; }
+            }
+        }
+        private fn name() -> string {
+            let start = self.i;
+            while (self.i < self.n) {
+                let c = self.s[self.i];
+                let ok = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 95 || c == 45 || c == 46 || c == 58 || c >= 128;
+                if (!ok) { break; }
+                self.i += 1;
+            }
+            if (self.i == start) { self.fail("expected a name"); }
+            return self.s[start..self.i];
+        }
+        private fn element() -> XmlNode {
+            self.advance(1);                                         // <
+            let el = XmlNode.element(self.name());
+            while (true) {
+                self.skipSpace();
+                if (self.i >= self.n) { self.fail("unterminated tag <" + el.name + ">"); }
+                if (self.startsWith("/>")) { self.advance(2); return el; }
+                if (self.s[self.i] == 62) { self.advance(1); break; } // >
+                let an = self.name();
+                self.skipSpace();
+                if (self.i >= self.n || self.s[self.i] != 61) { self.fail("expected '=' after attribute " + an); }
+                self.advance(1);
+                self.skipSpace();
+                let q = self.i < self.n ? self.s[self.i] : 0;
+                if (q != 34 && q != 39) { self.fail("attribute values are quoted"); }
+                self.advance(1);
+                let start = self.i;
+                while (self.i < self.n && self.s[self.i] != q) {
+                    if (self.s[self.i] == 60) { self.fail("'<' in an attribute value"); }
+                    self.advance(1);
+                }
+                if (self.i >= self.n) { self.fail("unterminated attribute value"); }
+                if (el.hasAttr(an)) { self.fail("attribute " + an + " given twice"); }
+                el.setAttr(an, self.decode(self.s[start..self.i]));
+                self.advance(1);
+            }
+            // content
+            while (true) {
+                if (self.i >= self.n) { self.fail("<" + el.name + "> is never closed"); }
+                if (self.startsWith("</")) {
+                    self.advance(2);
+                    let closing = self.name();
+                    if (closing != el.name) { self.fail("</" + closing + "> closes <" + el.name + ">"); }
+                    self.skipSpace();
+                    if (self.i >= self.n || self.s[self.i] != 62) { self.fail("expected '>'"); }
+                    self.advance(1);
+                    return el;
+                }
+                if (self.startsWith("<!--")) { self.skipTo("-->"); continue; }
+                if (self.startsWith("<![CDATA[")) {
+                    self.advance(9);
+                    let start = self.i;
+                    while (self.i < self.n && !self.startsWith("]]>")) { self.advance(1); }
+                    if (self.i >= self.n) { self.fail("unterminated CDATA"); }
+                    el.childNodes.push(XmlNode.textNode(self.s[start..self.i]));
+                    self.advance(3);
+                    continue;
+                }
+                if (self.startsWith("<?")) { self.skipTo("?>"); continue; }
+                if (self.startsWith("<!")) { self.fail("declarations are not accepted inside elements"); }
+                if (self.s[self.i] == 60) { el.childNodes.push(self.element()); continue; }
+                let start = self.i;
+                while (self.i < self.n && self.s[self.i] != 60) { self.advance(1); }
+                el.childNodes.push(XmlNode.textNode(self.decode(self.s[start..self.i])));
+            }
+            return el;
+        }
+        // Entities and character references decoded.
+        private fn decode(raw: string) -> string {
+            if (Str.indexOf(raw, "&") < 0) { return raw; }
+            let out = new StringBuilder();
+            let k = 0;
+            let len = raw.length;
+            while (k < len) {
+                let amp = Str.indexFrom(raw, "&", k);
+                if (amp < 0) { out.append(raw[k..]); break; }
+                out.append(raw[k..amp]);
+                let semi = Str.indexFrom(raw, ";", amp);
+                if (semi < 0) { self.fail("unterminated entity"); }
+                let ent = raw[amp + 1..semi];
+                if (ent == "lt") { out.append("<"); }
+                else if (ent == "gt") { out.append(">"); }
+                else if (ent == "amp") { out.append("&"); }
+                else if (ent == "quot") { out.append("\""); }
+                else if (ent == "apos") { out.append("'"); }
+                else if (Str.startsWith(ent, "#")) {
+                    let hex = Str.startsWith(ent, "#x") || Str.startsWith(ent, "#X");
+                    let digits = hex ? ent[2..] : ent[1..];
+                    let cp = 0;
+                    for (b in digits as binary) {
+                        let d = b >= 48 && b <= 57 ? b - 48 : (hex && b >= 97 && b <= 102 ? b - 87 : (hex && b >= 65 && b <= 70 ? b - 55 : -1));
+                        if (d < 0) { self.fail("bad character reference &" + ent + ";"); }
+                        cp = cp * (hex ? 16 : 10) + d;
+                        if (cp > 0x10FFFF) { self.fail("bad character reference &" + ent + ";"); }
+                    }
+                    if (digits == "" || cp == 0 || (cp >= 0xD800 && cp <= 0xDFFF)) { self.fail("bad character reference &" + ent + ";"); }
+                    out.append(Utf8.fromCodePoint(cp));
+                }
+                else { self.fail("unknown entity &" + ent + "; (DTD entities are not accepted)"); }
+                k = semi + 1;
+            }
+            return out.toString();
+        }
+    }
+}
