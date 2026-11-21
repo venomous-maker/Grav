@@ -1,0 +1,241 @@
+// lib/data/jwt.grav — JSON Web Tokens (RFC 7519): signing and verifying with
+// HMAC (HS256/384/512), RSA (RS256/384/512), ECDSA (ES256/384/512) and Ed25519
+// (EdDSA), and key sets (JWKS) as identity providers publish them.
+//
+//   let key = JwtKey.hmac(Bytes.fromString("a secret of at least 32 bytes!!!"))
+//   let claims = Json.object()
+//   claims.set("sub", "42")
+//   claims.set("exp", Time.now() + 3600)
+//   let token = Jwt.sign(claims, key)
+//   print(Jwt.verify(token, key).getString("sub", ""))       // 42
+//
+// Verifying checks the signature with the key's own algorithm (a token whose
+// header names another, such as "none" or HS256 against an RSA key, is
+// refused), then exp and nbf (with leeway) and, when set, iss and aud.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "../sys/time.grav"
+import "bytes.grav"
+import "encoding.grav"
+import "json.grav"
+import "crypto.grav"
+
+namespace std.data {
+
+    // A token was malformed, its signature did not check, or a claim refused it.
+    class JwtException extends Exception {
+        constructor(msg: string) { super(msg); }
+        fn kind() -> string { return "JwtException"; }
+    }
+
+    // A key and the one algorithm it signs and verifies with.
+    class JwtKey {
+        // "HS256", "RS256", "ES256", "EdDSA", ...
+        public alg: string
+        // The key id ("" for none): written in the header, and how a key set finds the key.
+        public kid: string = ""
+        public secret: Bytes = null
+        public key: CryptoKey = null
+        private constructor(alg: string) { self.alg = alg; }
+        // A shared secret (at least as long as the hash: 32 bytes for HS256).
+        static fn hmac(secret: Bytes, alg: string = "HS256") -> JwtKey {
+            if (alg != "HS256" && alg != "HS384" && alg != "HS512") { throw new ValueError("an HMAC key's algorithm is HS256, HS384 or HS512"); }
+            if (secret.size() < JwtKey.hashBytes(alg)) { throw new ValueError("an ${alg} secret needs at least ${JwtKey.hashBytes(alg)} bytes"); }
+            let k = new JwtKey(alg);
+            k.secret = secret;
+            return k;
+        }
+        // An RSA, ECDSA or Ed25519 key (private to sign, public to verify). The
+        // algorithm follows from it (RS256, ES256/384/512 by curve, EdDSA) unless given.
+        static fn of(key: CryptoKey, alg: string = "") -> JwtKey {
+            let kind = key.kind();
+            let a = alg;
+            if (a == "") {
+                if (kind == "rsa") { a = "RS256"; }
+                else if (kind == "ed25519") { a = "EdDSA"; }
+                else { let b = key.bits(); a = b <= 256 ? "ES256" : (b <= 384 ? "ES384" : "ES512"); }
+            }
+            let ok = (kind == "rsa" && (a == "RS256" || a == "RS384" || a == "RS512")) || (kind == "ed25519" && a == "EdDSA") ||
+                     (kind == "ec" && (a == "ES256" || a == "ES384" || a == "ES512"));
+            if (!ok) { throw new ValueError("a ${kind} key cannot use ${a}"); }
+            let k = new JwtKey(a);
+            k.key = key;
+            return k;
+        }
+        // A public key from a JWK (its "alg" and "kid" kept when present).
+        static fn fromJwk(jwk: JsonValue) -> JwtKey {
+            let k = JwtKey.of(CryptoKey.fromJwk(jwk), jwk.getString("alg", ""));
+            k.kid = jwk.getString("kid", "");
+            return k;
+        }
+        fn withKid(kid: string) -> JwtKey { self.kid = kid; return self; }
+        // The public key as a JWK with its alg, kid and use ("sig").
+        fn toJwk() -> JsonValue {
+            if (self.key == null) { throw new StateError("an HMAC secret is not published"); }
+            let o = self.key.toJwk();
+            o.set("alg", self.alg);
+            o.set("use", "sig");
+            if (self.kid != "") { o.set("kid", self.kid); }
+            return o;
+        }
+        static fn hashBytes(alg: string) -> int { return Str.endsWith(alg, "384") ? 48 : (Str.endsWith(alg, "512") ? 64 : 32); }
+        fn hashName() -> string { return Str.endsWith(self.alg, "384") ? "sha384" : (Str.endsWith(self.alg, "512") ? "sha512" : "sha256"); }
+    }
+
+    // A set of keys (JWKS), as served at an issuer's jwks_uri.
+    class Jwks {
+        public keys: Array<JwtKey> = new Array<JwtKey>()
+        constructor() {}
+        // The keys of a JWKS document ({"keys": [...]}); ones that cannot be read are skipped.
+        static fn parse(text: string) -> Jwks {
+            let set = new Jwks();
+            let doc = Json.tryParse(text);
+            if (doc == null || !doc.has("keys")) { throw new ValueError("not a JWKS document"); }
+            for (j in doc.get("keys").asArray()) {
+                if (j.getString("use", "sig") != "sig") { continue; }
+                try { set.keys.push(JwtKey.fromJwk(j)); } catch (e: ValueError) {} catch (e: StateError) {}
+            }
+            return set;
+        }
+        fn add(k: JwtKey) -> Jwks { self.keys.push(k); return self; }
+        // The key with this id (or, without an id, the only key); null when none fits.
+        fn find(kid: string) -> JwtKey {
+            for (k in self.keys) { if (k.kid == kid) { return k; } }
+            if (kid == "" && self.keys.size() == 1) { return self.keys[0]; }
+            return null;
+        }
+        fn toJson() -> JsonValue {
+            let a = Json.array();
+            for (k in self.keys) { if (k.key != null) { a.push(k.toJwk()); } }
+            let o = Json.object();
+            o.set("keys", a);
+            return o;
+        }
+    }
+
+    // What verification also requires.
+    class JwtOptions {
+        // Seconds of clock difference forgiven for exp and nbf.
+        public leewaySeconds: long = 60
+        // When set, the iss claim must be this.
+        public issuer: string = ""
+        // When set, the aud claim (a string or an array) must include this.
+        public audience: string = ""
+        // Whether a token without exp is refused.
+        public requireExpiry: bool = true
+        constructor() {}
+    }
+
+    // A token's parts, read without checking anything (Jwt.decode).
+    class JwtParts {
+        public header: JsonValue
+        public claims: JsonValue
+        public signed: string
+        public signature: Bytes
+        constructor(header: JsonValue, claims: JsonValue, signed: string, signature: Bytes) {
+            self.header = header; self.claims = claims; self.signed = signed; self.signature = signature;
+        }
+    }
+
+    class Jwt {
+        // `claims` signed with `key`: header.payload.signature.
+        static fn sign(claims: JsonValue, key: JwtKey) -> string {
+            let h = Json.object();
+            h.set("alg", key.alg);
+            h.set("typ", "JWT");
+            if (key.kid != "") { h.set("kid", key.kid); }
+            let signed = Base64.encodeUrl(h.toJson()) + "." + Base64.encodeUrl(claims.toJson());
+            return signed + "." + Base64.encodeBytesUrl(Jwt.signature(signed, key));
+        }
+        // The header and claims, unchecked (to see which key a token names; never trust them).
+        static fn decode(token: string) -> JwtParts {
+            let parts = Str.split(token, ".");
+            if (parts.size() != 3) { throw new JwtException("a JWT has three parts"); }
+            try {
+                let header = Json.parse(Base64.decode(parts[0]));
+                let claims = Json.parse(Base64.decode(parts[1]));
+                if (!header.isObject() || !claims.isObject()) { throw new JwtException("a JWT's header and claims are JSON objects"); }
+                return new JwtParts(header, claims, parts[0] + "." + parts[1], Base64.decodeBytes(parts[2]));
+            } catch (e: ValueError) {
+                throw new JwtException("a JWT's parts are Base64 JSON");
+            }
+        }
+        // The claims of a token signed by `key`; JwtException when anything is wrong.
+        static fn verify(token: string, key: JwtKey, options: JwtOptions = null) -> JsonValue {
+            let p = Jwt.decode(token);
+            return Jwt.check(p, key, options == null ? new JwtOptions() : options);
+        }
+        // The claims of a token signed by one of `keys` (picked by the header's kid).
+        static fn verifyWith(token: string, keys: Jwks, options: JwtOptions = null) -> JsonValue {
+            let p = Jwt.decode(token);
+            let key = keys.find(p.header.getString("kid", ""));
+            if (key == null) { throw new JwtException("no key for this token's kid"); }
+            return Jwt.check(p, key, options == null ? new JwtOptions() : options);
+        }
+
+        private static fn check(p: JwtParts, key: JwtKey, o: JwtOptions) -> JsonValue {
+            // (the key decides the algorithm: "none", or HS256 against a public key, never passes)
+            if (p.header.getString("alg", "") != key.alg) { throw new JwtException("the token's algorithm is not the key's"); }
+            if (!Jwt.verifies(p.signed, p.signature, key)) { throw new JwtException("the signature does not match"); }
+            let now = Time.now();
+            let c = p.claims;
+            if (c.has("exp")) {
+                if (now > Jwt.number(c, "exp") + o.leewaySeconds) { throw new JwtException("the token has expired"); }
+            } else if (o.requireExpiry) {
+                throw new JwtException("the token has no expiry");
+            }
+            if (c.has("nbf") && now + o.leewaySeconds < Jwt.number(c, "nbf")) { throw new JwtException("the token is not valid yet"); }
+            if (o.issuer != "" && c.getString("iss", "") != o.issuer) { throw new JwtException("the token is from another issuer"); }
+            if (o.audience != "") {
+                let aud = c.get("aud");
+                let ok = false;
+                if (aud != null && aud.isString()) { ok = aud.asString() == o.audience; }
+                else if (aud != null && aud.isArray()) { for (a in aud.asArray()) { if (a.isString() && a.asString() == o.audience) { ok = true; } } }
+                if (!ok) { throw new JwtException("the token is for another audience"); }
+            }
+            return c;
+        }
+        private static fn number(c: JsonValue, name: string) -> long {
+            let v = c.get(name);
+            if (v == null || !v.isNumber()) { throw new JwtException("the ${name} claim is not a number"); }
+            return v.asLong();
+        }
+        private static fn signature(signed: string, key: JwtKey) -> Bytes {
+            let data = Bytes.fromString(signed);
+            if (key.secret != null) { return Crypto.hmac(key.hashName(), key.secret, data); }
+            if (!key.key.isPrivate()) { throw new StateError("signing needs a private key"); }
+            let sig = key.key.sign(data, key.hashName());
+            if (Str.startsWith(key.alg, "ES")) { return Jwt.derToRaw(sig, Jwt.coordinateSize(key.alg)); }
+            return sig;
+        }
+        private static fn verifies(signed: string, sig: Bytes, key: JwtKey) -> bool {
+            let data = Bytes.fromString(signed);
+            if (key.secret != null) { return Crypto.equals(Crypto.hmac(key.hashName(), key.secret, data), sig); }
+            if (Str.startsWith(key.alg, "ES")) {
+                let size = Jwt.coordinateSize(key.alg);
+                if (sig.size() != size * 2) { return false; }
+                return key.key.verify(data, Jwt.rawToDer(sig, size), key.hashName());
+            }
+            return key.key.verify(data, sig, key.hashName());
+        }
+        private static fn coordinateSize(alg: string) -> int { return alg == "ES384" ? 48 : (alg == "ES512" ? 66 : 32); }
+        // ECDSA signatures: JWS writes r || s, OpenSSL DER.
+        private static fn derToRaw(der: Bytes, size: int) -> Bytes {
+            let p = der.rawData();
+            let n = der.size();
+            let out = new Bytes(size * 2);
+            let ok = %{ grav_cr_der_to_raw(p, (size_t)n, size, out->data) %} as bool;
+            if (!ok) { throw new StateError("malformed ECDSA signature"); }
+            %{ out->len = size * 2; %};
+            return out;
+        }
+        private static fn rawToDer(raw: Bytes, size: int) -> Bytes {
+            let p = raw.rawData();
+            let out = new Bytes(size * 2 + 9);
+            let n = %{ grav_cr_raw_to_der(p, size, out->data) %} as int;
+            %{ out->len = n; %};
+            return out;
+        }
+    }
+}
