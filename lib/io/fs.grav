@@ -252,6 +252,61 @@ namespace std.io {
         static fn find(path: string, pattern: string) -> Array<string> {
             return Dir.walk(path).filter(fn(p) => Path.matches(Path.basename(p), pattern));
         }
+        // The paths matching a glob pattern, sorted: `*` any text within one name,
+        // `?` one character, `[abc]` one of, and `**` any number of directories
+        // ("src/**/*.grav", "logs/*.log", "/etc/*.conf"). As in a shell, `*` and
+        // `?` do not match a leading "." (write ".*" for hidden files), and links
+        // to directories are not followed.
+        static fn glob(pattern: string) -> Array<string> {
+            let out = new Array<string>();
+            let absolute = Str.startsWith(pattern, "/");
+            let segs = new Array<string>();
+            for (s in Str.split(pattern, "/")) { if (s != "" && s != ".") { segs.push(s); } }
+            // the literal directories in front
+            let base = absolute ? "/" : ".";
+            let i = 0;
+            while (i < segs.size() - 1 && !Dir.isGlob(segs[i])) {
+                base = base == "." ? segs[i] : (base == "/" ? "/" + segs[i] : base + "/" + segs[i]);
+                i += 1;
+            }
+            Dir.globInto(base, segs, i, out);
+            out.sortBy(fn(a, b) => Str.compare(a, b));
+            // ("a/**/b" can reach a path two ways)
+            let unique = new Array<string>();
+            for (p in out) { if (unique.isEmpty() || unique[unique.size() - 1] != p) { unique.push(p); } }
+            return unique;
+        }
+        private static fn isGlob(seg: string) -> bool {
+            return Str.contains(seg, "*") || Str.contains(seg, "?") || Str.contains(seg, "[");
+        }
+        private static fn globJoin(dir: string, name: string) -> string {
+            return dir == "." ? name : (dir == "/" ? "/" + name : dir + "/" + name);
+        }
+        private static fn globInto(dir: string, segs: Array<string>, i: int, out: Array<string>) {
+            if (i >= segs.size()) { out.push(dir); return; }
+            let seg = segs[i];
+            let last = i == segs.size() - 1;
+            if (seg == "**") {
+                Dir.globInto(dir, segs, i + 1, out);                       // no directory at all
+                for (name in Dir.list(dir)) {
+                    let p = Dir.globJoin(dir, name);
+                    if (!Str.startsWith(name, ".") && Dir.exists(p) && !Dir.isLink(p)) { Dir.globInto(p, segs, i, out); }
+                }
+                return;
+            }
+            if (!Dir.isGlob(seg)) {
+                let p = Dir.globJoin(dir, seg);
+                if (last ? (Dir.isFile(p) || Dir.exists(p)) : Dir.exists(p)) { Dir.globInto(p, segs, i + 1, out); }
+                return;
+            }
+            let hidden = Str.startsWith(seg, ".");
+            for (name in Dir.list(dir)) {
+                if (Str.startsWith(name, ".") && !hidden) { continue; }
+                if (!Path.matches(name, seg)) { continue; }
+                let p = Dir.globJoin(dir, name);
+                if (last || Dir.exists(p)) { Dir.globInto(p, segs, i + 1, out); }
+            }
+        }
         // Removes a directory and everything in it (like rm -r); whether it worked.
         // Symbolic links are removed, not followed.
         static fn removeAll(path: string) -> bool {
