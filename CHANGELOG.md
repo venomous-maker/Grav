@@ -12,6 +12,41 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Standard library
+
+- **Crypto** (`std/data`, through the system's OpenSSL): SHA-1/256/384/512 and
+  HMAC, secure random bytes, constant-time comparison, AES-GCM, RSA/ECDSA/
+  Ed25519 keys (generate, sign, verify, PEM, JWK) and scrypt password hashes.
+- **JWT**: HS, RS, ES and EdDSA tokens and key sets (JWKS); the key decides
+  the algorithm, so `none` and algorithm confusion are refused. Interoperates
+  with PyJWT both ways.
+- **TOML** (matches Python's tomllib), **ZIP** (CRC-checked, size-limited,
+  safe extraction), **XML** (DTDs refused), **MimeType** and **Semver** (npm
+  ranges).
+- `OS.loadAverage()`, `memoryTotal()`, `memoryAvailable()`, `uptime()`.
+- `Process.onSignal` and `onShutdown`: handlers run as ordinary code; a second
+  SIGINT or SIGTERM ends the program at once.
+- `Dir.glob` with `**`, and `FileWatcher` (created, modified, deleted).
+- `ThreadLocal<T>` (about 30 ns a get, no lock at any thread count) and
+  `ConcurrentMap<K, V>` (16 shards); `AtomicLong`, `AtomicBool`.
+- `DateTime.isoUtc`, `isoLocal`, `formatUtc`, `ofUtc`, `httpDate`,
+  `parseHttpDate`.
+- `Str.indexOfAny`, `lastIndexOfAny`; `Str.charAt` makes one call, not two;
+  `Base64.encodeBytesUrl`.
+
+### Language and tools
+
+- `grav bench` and `bench "name" { ... }` blocks: timed in sized batches
+  (median, fastest, runs per second); `grav test` skips them.
+- A `binary` value indexes as bytes (`b[i]`, checked), as a string does.
+- Lint `slow-char-at`: `s[i]` for `Str.charAt(s, i)`.
+- Editors: the VS Code extension 1.17.0 and JetBrains plugin 0.11.0 know `bench`.
+
+### Fixes
+
+- `Thread.sleepMs`, `Async.sleepMs` and `Process.sleepMs` no longer end early
+  when a signal arrives.
+
 ## 1.11.0 (2026-11-21)
 
 - `grav check` and the build warn about unused imports: an import nothing in
