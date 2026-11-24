@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.12.0 (2026-11-24)
+
 ### Standard library
 
 - **Crypto** (`std/data`, through the system's OpenSSL): SHA-1/256/384/512 and
