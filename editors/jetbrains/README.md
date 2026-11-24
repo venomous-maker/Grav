@@ -45,7 +45,7 @@ provisions Gradle automatically).
 ```bash
 cd editors/jetbrains
 gradle wrapper            # once, if you don't already have ./gradlew
-./gradlew buildPlugin     # -> build/distributions/grav-jetbrains-0.10.0.zip
+./gradlew buildPlugin     # -> build/distributions/grav-jetbrains-0.11.0.zip
 # offline, against an installed CLion instead of downloading one:
 ./gradlew buildPlugin -PlocalIde=$HOME/.local/share/JetBrains/Toolbox/apps/clion
 ./gradlew runIde          # or: launch a sandbox IDE with the plugin loaded
