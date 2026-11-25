@@ -321,3 +321,16 @@ test "hash maps of every layout keep keys, values and counts right" {
     items.clear()
     assertEq(MapItem.live, 0)
 }
+
+test "Str.indexOf from a position, Str.split with a limit" {
+    let s = "a=b;c=d;e=f"
+    assertEq(Str.indexOf(s, ";", 0), 3)
+    assertEq(Str.indexOf(s, ";", 4), 7)
+    assertEq(Str.indexOf(s, ";", 8), -1)
+    assertEq(Str.indexOf(s, "a", -5), 0)
+    assertEq(Str.indexOf(s, "a", 100), -1)
+    assertEq(str(Str.split("k=v=w", "=", 2)), "[\"k\", \"v=w\"]")
+    assertEq(str(Str.split("k=v=w", "=", 1)), "[\"k=v=w\"]")
+    assertEq(str(Str.split("k=v=w", "=", 0)), "[\"k\", \"v\", \"w\"]")
+    assertEq(str(Str.split("a\tb\tc\td", "\t", 3)), "[\"a\", \"b\", \"c\\td\"]")
+}

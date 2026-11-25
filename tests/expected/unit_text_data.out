@@ -1,4 +1,4 @@
-running 18 tests
+running 19 tests
   ok    regex: find, groups, replace, split
   ok    regex: one Regex shared by threads keeps each one's matches apart
   ok    Str: splitting, cases, wrapping, distance
@@ -17,4 +17,5 @@ running 18 tests
   ok    hash maps: equal strings find each other, removals keep probes intact
   ok    JSON: repeated record keys, escaped keys and prefixes parse exactly
   ok    hash maps of every layout keep keys, values and counts right
-result: 18 passed, 0 failed
+  ok    Str.indexOf from a position, Str.split with a limit
+result: 19 passed, 0 failed
