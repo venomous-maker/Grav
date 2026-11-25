@@ -173,6 +173,8 @@ namespace std.data {
             return self.len == other.len && %{ (self->len == 0 || memcmp(self->data, other->data, (size_t)self->len) == 0) %} as bool;
         }
 
+        // (Mem.sizeOf) the buffer
+        private fn __bytesExtra() -> long { return %{ grav_mem_block(self->data) %} as long; }
         // For C helpers in other modules: the raw buffer.
         public fn rawData() -> byte* { return self.data; }
         // Appends n bytes from raw memory.

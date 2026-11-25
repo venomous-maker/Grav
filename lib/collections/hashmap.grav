@@ -273,6 +273,16 @@ namespace std.collections {
             self.count = 0;
         }
         // As text: {"a": 1, "b": 2} (strings in quotes).
+        // (Mem.sizeOf) the slot buffers, and the strings in used slots
+        private fn __bytesExtra() -> long {
+            let n = %{ grav_mem_block(self->ks) + grav_mem_block(self->vs) + grav_mem_block(self->used) + grav_mem_block(self->hs) %} as long
+            let kst = %{ GRAV_HM_KST(self) %} as int
+            let vst = %{ GRAV_HM_VST(self) %} as int
+            for (i in 0..self.cap) {
+                if (self.used[i] != 0) { n += __memOf(self.ks[i * kst]) + __memOf(self.vs[i * vst]) }
+            }
+            return n
+        }
         public fn toString() -> string {
             let ks = self.keys()
             let out = new StringBuilder()

@@ -218,6 +218,12 @@ namespace std.collections {
             out.append("]")
             return out.toString()
         }
+        // (Mem.sizeOf) the element buffer, and the strings it holds
+        private fn __bytesExtra() -> long {
+            let n = %{ grav_mem_block(self->data) %} as long
+            for (i in 0..self.len) { n += __memOf(self.data[i]) }
+            return n
+        }
         // A new array with the same elements (same as copy()).
         public fn toArray() -> Array<T> { return self.copy(); }
         // Elements [start, end) as a new array (bounds are clamped).

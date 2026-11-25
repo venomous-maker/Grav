@@ -108,6 +108,8 @@ namespace std.text {
         public fn isEmpty() -> bool { return self.len == 0; }
         // Empties the builder (keeping its buffer).
         public fn clear() { self.len = 0; if (self.buf != null) { self.buf[0] = 0; } }
+        // (Mem.sizeOf) the buffer
+        private fn __bytesExtra() -> long { return %{ grav_mem_block(self->buf) %} as long; }
         // A fresh copy of the contents (the builder stays usable).
         public fn toString() -> string { return %{ grav_sb_dup(self->buf, self->len) %} as string; }
     }
