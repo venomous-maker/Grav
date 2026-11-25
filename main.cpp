@@ -31,6 +31,7 @@
 #include "driver/format.h"
 #include "driver/packages.h"
 #include "driver/self_update.h"
+#include "driver/lintfix.h"
 #include "lexer/lexer.h"
 #include "lexer/preprocess.h"
 #include "parser/parser.h"
@@ -267,6 +268,7 @@ int usage(const char *prog) {
         "       " << prog << " test <file.grav> [--filter text]   run the file's test blocks\n"
         "       " << prog << " new <name> | add <repo>[@version] | install | update | remove <name> | packages\n"
         "       " << prog << " check [--json] [--types] [file.grav]  type-check only (JSON diagnostics, binding types, for editors)\n"
+        "       " << prog << " lint [--fix] [file.grav]  the warnings and lints; --fix applies their fixes to your own files\n"
         "       " << prog << " fmt [--check] [paths]           format source files (fmt - : stdin to stdout)\n"
         "       " << prog << " env [--json]                    where the standard library and packages are\n"
         "       " << prog << " self-update [--check]           update grav (installed by install.sh)\n"
@@ -347,6 +349,7 @@ int main(int argc, char **argv) {
     // Subcommands: `grav run f.grav`, `grav build f.grav`, `grav test f.grav`.
     int first = 1;
     bool checkOnly = false;
+    bool lintMode = false, lintFix = false;   // `grav lint [--fix]`
     JsonReport jsonReport; // prints the --json diagnostics on every exit path
     if (argc > 1 && std::string(argv[1]) == "fmt") {
         std::vector<std::string> args(argv + 2, argv + argc);
@@ -385,6 +388,7 @@ int main(int argc, char **argv) {
         else if (sub == "test") { testMode = true; runAfter = true; emit = EmitMode::Bin; first = 2; }
         else if (sub == "bench") { testMode = true; benchMode = true; runAfter = true; emit = EmitMode::Bin; first = 2; }
         else if (sub == "check") { checkOnly = true; first = 2; }
+        else if (sub == "lint") { checkOnly = true; lintMode = true; first = 2; }
     }
 
     for (int i = first; i < argc; ++i) {
@@ -448,6 +452,8 @@ int main(int argc, char **argv) {
             race = true;
         } else if (arg == "--sanitize") {
             sanitize = true;
+        } else if (arg == "--fix" && lintMode) {
+            lintFix = true;
         } else if (arg == "-Werror") {
             werror = true;
         } else if (arg == "-v" || arg == "--verbose") {
@@ -663,6 +669,16 @@ int main(int argc, char **argv) {
                 std::string name = open == std::string::npos ? "" : m.substr(open + 2, close - open - 2);
                 const std::string &text = sourceLine(loc);
                 if (text.find("allow(lints)") != std::string::npos || (!name.empty() && text.find("allow(" + name + ")") != std::string::npos)) continue;
+                if (name == "empty-catch") {
+                    // (a comment beside it, on its line or the next, says why it is empty)
+                    // (the next line counts only when the block does not close on the catch's own)
+                    std::string rest = w.col() >= 1 && w.col() <= (int)text.size() ? text.substr(w.col() - 1) : text;
+                    size_t open = rest.find('{');
+                    bool closed = open != std::string::npos && rest.find('}', open) != std::string::npos;
+                    SrcLoc next = loc;
+                    next.line += 1;
+                    if (rest.find("//") != std::string::npos || (!closed && sourceLine(next).find("//") != std::string::npos)) continue;
+                }
                 warnings.push_back(w);
             }
             for (const auto &u : gLoader->unusedImports())
@@ -671,6 +687,69 @@ int main(int argc, char **argv) {
                         warnings.emplace_back("warning", static_cast<int>(i) + 1, u.col, u.message);
                         break;
                     }
+        }
+        // `grav lint --fix`: apply the fixes, then look again (in a fresh run), until
+        // none is left; a round that stops the program compiling is undone.
+        if (lintMode) {
+            const char *roundEnv = std::getenv("GRAV_LINT_ROUND");
+            const char *backupEnv = std::getenv("GRAV_LINT_BACKUP");
+            int round = roundEnv ? std::atoi(roundEnv) : 0;
+            std::string backup = backupEnv ? backupEnv : "";
+            if (errors.empty() && lintFix && gLoader) {
+                std::vector<grav::LintEdit> edits;
+                for (const auto &w : warnings) {
+                    if (w.line() < 1 || w.line() > (int)srcMap.size()) continue;
+                    const SrcLoc &at = srcMap[w.line() - 1];
+                    if (!gLoader->isOwnFile(at.file)) continue;
+                    const std::string &m = w.message();
+                    size_t open = m.rfind(" ["), close = m.find(']', open == std::string::npos ? 0 : open);
+                    std::string name = open == std::string::npos ? "unused-import" : m.substr(open + 2, close - open - 2);
+                    grav::LintEdit e;
+                    e.file = at.file;
+                    e.lint = name;
+                    if (w.hasFix()) {
+                        const auto &f = w.fix();
+                        if (f.line < 1 || f.endLine < 1 || f.line > (int)srcMap.size() || f.endLine > (int)srcMap.size()) continue;
+                        const SrcLoc &a = srcMap[f.line - 1], &b = srcMap[f.endLine - 1];
+                        if (a.file != b.file || !gLoader->isOwnFile(a.file)) continue;
+                        e.file = a.file; e.line = a.line; e.col = f.col; e.endLine = b.line; e.endCol = f.endCol; e.text = f.text;
+                    } else if (m.rfind("unused import ", 0) == 0) {
+                        e.line = at.line; e.deleteLine = true;
+                    } else continue;
+                    edits.push_back(e);
+                }
+                if (!edits.empty() && round < 5) {
+                    if (backup.empty()) backup = (fs::temp_directory_path() / ("grav-lint-" + std::to_string(getpid()))).string();
+                    std::vector<std::string> report;
+                    int n = grav::applyLintEdits(edits, backup, report);
+                    for (const auto &r : report) std::cerr << "fixed " << r << "\n";
+                    if (n > 0) {
+                        // the next round, in a child: if the fixed files no longer
+                        // compile (an error stops it anywhere), this round puts them back
+                        std::string next = std::to_string(round + 1);
+                        setenv("GRAV_LINT_ROUND", next.c_str(), 1);
+                        setenv("GRAV_LINT_BACKUP", backup.c_str(), 1);
+                        std::cout.flush();
+                        std::cerr.flush();
+                        pid_t child = fork();
+                        if (child == 0) {
+                            execvp(argv[0], argv);
+                            _exit(127);
+                        }
+                        int status = 0;
+                        if (child < 0 || waitpid(child, &status, 0) < 0) status = 1 << 8;
+                        int code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+                        if (code != 0 && round == 0) {
+                            int put = grav::restoreLintBackups(backup);
+                            std::cerr << "gravc: the fixes stopped the program compiling; " << put
+                                      << " file(s) put back as they were\n";
+                        }
+                        if (round == 0) fs::remove_all(backup);
+                        return code;
+                    }
+                }
+            }
+            if (!backup.empty() && round == 0) fs::remove_all(backup);
         }
         for (const auto &w : warnings) printDiag(w, srcMap);
 

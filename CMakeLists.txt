@@ -22,6 +22,7 @@ add_executable(gravc
         src/driver/format.cpp
         src/driver/format_layout.cpp
         src/driver/self_update.cpp
+        src/driver/lintfix.cpp
         src/common/types.cpp
         src/ast/ast.cpp
         src/lexer/token.cpp
