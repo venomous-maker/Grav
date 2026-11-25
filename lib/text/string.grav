@@ -200,7 +200,10 @@ namespace std.text {
         // ── searching ──────────────────────────────────────────────────────────
         // The byte index of the first occurrence of `sub`, or -1.
         static fn indexOf(s: string, sub: string) -> int { return %{ grav_str_indexof(s, sub, 0) %} as int; }
-        // The byte index of the first occurrence of `sub` at or after `from`, or -1.
+        // The byte index of the first occurrence of `sub` at or after `from`, or -1
+        // (no copy made: for scanning a string piece by piece).
+        static fn indexOf(s: string, sub: string, from: int) -> int { return %{ grav_str_indexof(s, sub, from) %} as int; }
+        // The same as indexOf(s, sub, from).
         static fn indexFrom(s: string, sub: string, from: int) -> int { return %{ grav_str_indexof(s, sub, from) %} as int; }
         // The byte index of the last occurrence of `sub`, or -1.
         static fn lastIndexOf(s: string, sub: string) -> int { return %{ grav_str_lastindexof(s, sub) %} as int; }
@@ -285,6 +288,9 @@ namespace std.text {
             if (delim.length == 0) { let one = new Array<string>(); one.push(s); return one; }
             return Str.pieces(s, delim, 0);
         }
+        // At most `limit` parts, the last keeping the rest (0 or less: no limit):
+        // split("k=v=w", "=", 2) == ["k", "v=w"]. The same as splitN.
+        static fn split(s: string, delim: string, limit: int) -> Array<string> { return Str.splitN(s, delim, limit); }
         // Lines of text (handles \n and \r\n; no trailing empty line for a final newline).
         static fn lines(s: string) -> Array<string> { return Str.pieces(s, "", 2); }
         // Whitespace-separated words (no empty entries).
