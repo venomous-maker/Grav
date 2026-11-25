@@ -1,0 +1,129 @@
+// lib/core/mem.grav — how much memory a value uses, at run time. (sizeof(x) is
+// the size of the variable itself, fixed when compiling: 8 for any object,
+// which a variable holds by reference.)
+//
+//   let numbers = new Array<long>()
+//   ...
+//   print(Mem.describe(numbers))      // Array<long>: 1000000 items, 8.0 MB itself, 8.0 MB with what it holds (1 object)
+//   Mem.sizeOf(numbers)               // the array and its buffer
+//   Mem.deepSizeOf(order)             // the order, its lines, their strings, ... each counted once
+//
+// Sizes are what the memory allocator handed out (so a little more than asked
+// for), plus the strings held. Literal strings ("hello" in the source) are not
+// counted: no object owns them. Numbers and booleans live inside whatever holds
+// them.
+import "exception.grav"
+import "reflect.grav"
+import "../text/string.grav"
+
+namespace std.core {
+
+    // What Mem.describe found.
+    class MemInfo {
+        // The value's type ("Array<long>", "app.Order", "string", "long", "null").
+        public type: string = ""
+        // The elements of an array, map or set; -1 for anything else.
+        public items: long = -1
+        // The value itself: an object's memory and the buffers and strings it owns.
+        public bytes: long = 0
+        // With everything it refers to, each object and string counted once.
+        public deepBytes: long = 0
+        // The objects counted in deepBytes.
+        public objects: long = 0
+        constructor() {}
+        fn toString() -> string {
+            let what = self.items >= 0 ? "${self.items} items, " : "";
+            return self.type + ": " + what + Mem.human(self.bytes) + " itself, " + Mem.human(self.deepBytes) +
+                   " with what it holds (${self.objects} object" + (self.objects == 1 ? "" : "s") + ")";
+        }
+    }
+
+    class Mem {
+        // The memory `x` itself uses: an object's allocation plus the buffers and
+        // strings it owns (not the other objects it refers to); a string's bytes;
+        // 8 for a number or boolean.
+        static fn sizeOf(x: any) -> long {
+            if (x == null) { return 0; }
+            if (x is string) { return Mem.stringBytes(x as string); }
+            if (%{ x.tag == GRAV_ANY_OBJ %} as bool) { return %{ grav_mem_obj(x.v.p) %} as long; }
+            return 8;
+        }
+        // The memory `x` and everything it refers to use, each object and string
+        // counted once (shared or cyclic parts included).
+        static fn deepSizeOf(x: any) -> long {
+            let objects: long = 0;
+            return Mem.deep(x, objects);
+        }
+        static fn describe(x: any) -> MemInfo {
+            let m = new MemInfo();
+            m.type = Mem.typeOf(x);
+            m.bytes = Mem.sizeOf(x);
+            let objects: long = 0;
+            m.deepBytes = %{ x.tag == GRAV_ANY_OBJ ? grav_mem_deep(x.v.p, 0, &objects) : (x.tag == GRAV_ANY_STR ? grav_mem_deep(0, x.v.s, &objects) : 0) %} as long;
+            if (!(%{ x.tag == GRAV_ANY_OBJ || x.tag == GRAV_ANY_STR %} as bool)) { m.deepBytes = m.bytes; }
+            m.objects = objects;
+            if (%{ x.tag == GRAV_ANY_OBJ %} as bool) {
+                let items = ClassInfo.listItems(x);
+                if (items != null) { m.items = items.size() as long; }
+                else {
+                    let entries = ClassInfo.mapEntries(x);
+                    if (entries != null) { m.items = entries.size() as long; }
+                }
+            }
+            return m;
+        }
+        private static fn deep(x: any, objects: long) -> long {
+            if (x == null) { return 0; }
+            if (%{ x.tag == GRAV_ANY_OBJ %} as bool) { return %{ grav_mem_deep(x.v.p, 0, &objects) %} as long; }
+            if (x is string) { return %{ grav_mem_deep(0, x.v.s, &objects) %} as long; }
+            return 8;
+        }
+        // A string's allocation (0 for a literal).
+        static fn stringBytes(s: string) -> long { return %{ grav_mem_str(s) %} as long; }
+        private static fn typeOf(x: any) -> string {
+            if (x == null) { return "null"; }
+            if (x is string) { return "string"; }
+            if (x is bool) { return "bool"; }
+            if (x is long) { return "long"; }
+            if (x is int) { return "int"; }
+            if (x is double) { return "double"; }
+            let t = typename(x);
+            return Mem.readable(t);
+        }
+        // "std.collections.Array$long" -> "Array<long>"
+        static fn readable(t: string) -> string {
+            let s = t;
+            for (prefix in ["std.collections.", "std.data.", "std.text.", "std.core.", "std.concurrency.", "std.io.", "std.sys.", "std.net."]) {
+                if (s.length > prefix.length && s[..prefix.length] == prefix) { s = s[prefix.length..]; break; }
+            }
+            let d = Str.indexOf(s, "$");
+            if (d > 0) {
+                let args = new Array<string>();
+                for (a in Str.split(s[d + 1..], "$")) { args.push(Mem.scalar(a)); }
+                s = s[..d] + "<" + Str.join(args, ", ") + ">";
+            }
+            return s;
+        }
+        // The C-level names in a type's mangled name, as Grav writes them.
+        private static fn scalar(a: string) -> string {
+            if (a == "i64") { return "long"; }
+            if (a == "i32") { return "int"; }
+            if (a == "i16") { return "short"; }
+            if (a == "i8") { return "byte"; }
+            if (a == "f64") { return "double"; }
+            if (a == "f32") { return "float"; }
+            if (a == "str") { return "string"; }
+            return a;
+        }
+        // Bytes as text: "512 B", "1.5 KB", "8.0 MB", "1.2 GB".
+        static fn human(n: long) -> string {
+            if (n < 1024) { return "${n} B"; }
+            let units = ["KB", "MB", "GB", "TB"];
+            let v = (n as double) / 1024.0;
+            let u = 0;
+            while (v >= 1024.0 && u < 3) { v = v / 1024.0; u += 1; }
+            let tenths = (v * 10.0 + 0.5) as long;
+            return "${tenths / 10}.${tenths % 10} " + units[u];
+        }
+    }
+}
