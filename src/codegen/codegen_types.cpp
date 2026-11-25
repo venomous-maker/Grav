@@ -887,8 +887,8 @@ std::string CodeGen::rfConvert(const TypeRef &k, const std::string &dst, const s
     // An interface: an object whose class implements it (its table found by the marker), or null.
     if (!own && k.isNamed() && reg_->isInterface(k.name)) {
         const std::string mk = "&" + mangle(k.name) + "__iface";
-        return "{ const void* it_ = v.tag == GRAV_ANY_OBJ ? grav_itab_find(v.v.p, " + mk + ") : 0; " +
-               "if (v.tag != GRAV_ANY_NULL && !it_) " + fail + " " + dst + ".obj = it_ ? v.v.p : 0; " + dst + ".itab = it_; }";
+        return "{ const void* tab_ = v.tag == GRAV_ANY_OBJ ? grav_itab_find(v.v.p, " + mk + ") : 0; " +
+               "if (v.tag != GRAV_ANY_NULL && !tab_) " + fail + " " + dst + ".obj = tab_ ? v.v.p : 0; " + dst + ".itab = tab_; }";
     }
     return "";
 }
