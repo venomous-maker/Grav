@@ -334,3 +334,20 @@ test "Str.indexOf from a position, Str.split with a limit" {
     assertEq(str(Str.split("k=v=w", "=", 0)), "[\"k\", \"v\", \"w\"]")
     assertEq(str(Str.split("a\tb\tc\td", "\t", 3)), "[\"a\", \"b\", \"c\\td\"]")
 }
+
+test "collections as text in time proportional to their size" {
+    let big = new Array<long>()
+    for (i in 0..200000) { big.push(i as long) }
+    let t0 = Time.monotonicMs()
+    let s = str(big)
+    let m = new HashMap<string, int>()
+    for (i in 0..50000) { m.put("k${i}", i) }
+    let ms = str(m)
+    let joined = big.join(",")
+    assert(Time.monotonicMs() - t0 < 3000)                            // (quadratic, this took minutes)
+    assert(Str.startsWith(s, "[0, 1, 2") && Str.endsWith(s, "199999]"))
+    assert(Str.contains(ms, "\"k49999\": 49999"))
+    assertEq(joined.length, s.length - 2 - 199999)
+    assertEq(str([1, 2]), "[1, 2]")
+    assertEq(str(new HashSet<int>()), "{}")
+}
