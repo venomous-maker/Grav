@@ -638,13 +638,14 @@ void CodeGen::emitTypeInfos() {
             itabs = mangle(fq) + "__itabs";
             vtables_ += "static const GravItab " + itabs + "[" + std::to_string(nitabs) + "];\n";
         }
+        std::string memBytes = emitMemBytes(fq);
         std::string meta = emitReflection(fq);
         if (meta != "0") reflectedTypes += "&" + mangle(fq) + "_typeinfo, ";
         vtables_ += "static const GravTypeInfo " + mangle(fq) +
                     "_typeinfo = { \"" + fq + "\", " + base + ", " + extra + ", " +
                     std::to_string(nextra) + ", " + drop + ", " + strHook + ", " + eqHook + ", " +
                     mangle(fq) + "__arc_fields, " + visit + ", " + itabs + ", " + std::to_string(nitabs) + ", " +
-                    meta + " };\n";
+                    meta + ", " + memBytes + " };\n";
     };
     for (const auto &declPtr : program_->decls) {
         if (auto *c = as<const ClassDecl>(declPtr.get())) emit(c->fqName);

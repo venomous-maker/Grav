@@ -149,6 +149,7 @@ typedef struct GravTypeInfo {
     const struct GravItab* itabs;               /* every interface the class implements */
     int nitabs;
     const struct GravClassMeta* meta;           /* reflection (fields, methods, decorators), or 0 */
+    long long (*bytes)(void*);                  /* the memory the object owns (Mem.sizeOf), or 0: its block */
 } GravTypeInfo;
 /* An interface a class implements: the interface's marker and the class's table for it. */
 typedef struct GravItab { const char* iface; const void* tbl; } GravItab;
@@ -654,7 +655,7 @@ static inline void grav_pool_drain(size_t mark) {
    released, so ordinary reference counting frees them. It runs only while this is
    the only thread touching objects; with other threads or async tasks running,
    candidates are not even recorded. */
-static void (*grav_gc_cb)(void*) = 0;
+static __thread void (*grav_gc_cb)(void*) = 0;   /* (per thread: Mem walks with it too) */
 static void** grav_gc_stack = 0;
 static size_t grav_gc_sn = 0, grav_gc_scap = 0;
 static void grav_gc_push(void* o) {
@@ -1202,6 +1203,95 @@ static inline GravAny grav_any_autorelease(GravAny a) {
     else if (a.tag == GRAV_ANY_FN) grav_autorelease(a.v.fn.env);
     else if (a.tag == GRAV_ANY_STR) grav_str_autorelease(a.v.s);
     return a;
+}
+/* ── memory sizes (std's Mem) ─────────────────────────────────────────────────
+   An object's size is its allocation as the C library made it, plus the
+   counted strings its fields hold, plus what its class owns besides (a
+   container's buffers: its __bytesExtra method). A deep size walks what the
+   object refers to (through the cycle collector's visit functions), counting
+   each object and string once. Literal strings are not counted: no object owns
+   them. */
+#if defined(__APPLE__)
+extern size_t malloc_size(const void*);
+#define GRAV_MEM_USABLE(p) malloc_size(p)
+#else
+extern size_t malloc_usable_size(void*);
+#define GRAV_MEM_USABLE(p) malloc_usable_size((void*)(p))
+#endif
+static GRAV_UNUSED long long grav_mem_block(const void* p) { return p ? (long long)GRAV_MEM_USABLE(p) : 0; }
+/* What a deep walk has counted already (open addressing; 0 when not walking). */
+static __thread const void** grav_mem_seen = 0;
+static __thread size_t grav_mem_seen_cap = 0, grav_mem_seen_n = 0;
+static int grav_mem_mark(const void* p) {
+    if (!grav_mem_seen) return 1;
+    if ((grav_mem_seen_n + 1) * 2 > grav_mem_seen_cap) {
+        size_t nc = grav_mem_seen_cap ? grav_mem_seen_cap * 2 : 1024;
+        const void** ns = (const void**)calloc(nc, sizeof(void*));
+        if (!ns) abort();
+        for (size_t i = 0; i < grav_mem_seen_cap; i++) {
+            const void* q = grav_mem_seen[i];
+            if (!q) continue;
+            size_t h = ((uintptr_t)q >> 4) * 11400714819323198485ull & (nc - 1);
+            while (ns[h]) h = (h + 1) & (nc - 1);
+            ns[h] = q;
+        }
+        free((void*)grav_mem_seen); grav_mem_seen = ns; grav_mem_seen_cap = nc;
+    }
+    size_t h = ((uintptr_t)p >> 4) * 11400714819323198485ull & (grav_mem_seen_cap - 1);
+    while (grav_mem_seen[h]) { if (grav_mem_seen[h] == p) return 0; h = (h + 1) & (grav_mem_seen_cap - 1); }
+    grav_mem_seen[h] = p; grav_mem_seen_n++;
+    return 1;
+}
+/* A counted string's allocation (its size class), or 0 for a literal or one counted already. */
+static GRAV_UNUSED long long grav_mem_str(const char* s) {
+    if (!s || !grav_sbase || s < grav_sbase + sizeof(GravStrHdr) || s >= grav_slimit) return 0;
+    if (!grav_mem_mark(s)) return 0;
+    size_t need = strlen(s) + 1 + sizeof(GravStrHdr);
+    int cls = 0;
+    while (cls < GRAV_SCLASSES && grav_ssize[cls] < need) cls++;
+    return cls < GRAV_SCLASSES ? (long long)grav_ssize[cls] : (long long)need;
+}
+static GRAV_UNUSED long long grav_mem_any(GravAny a) { return a.tag == GRAV_ANY_STR ? grav_mem_str(a.v.s) : 0; }
+static long long grav_mem_obj(void* o) {
+    const GravTypeInfo* t = ((struct GravObject*)o)->__type;
+    return t && t->bytes ? t->bytes(o) : grav_mem_block(o);
+}
+static __thread void** grav_mem_stack = 0;
+static __thread size_t grav_mem_sn = 0, grav_mem_scap = 0;
+static void grav_mem_child(void* c) {
+    if (!c || !grav_mem_mark(c)) return;
+    if (grav_mem_sn == grav_mem_scap) {
+        grav_mem_scap = grav_mem_scap ? grav_mem_scap * 2 : 256;
+        grav_mem_stack = (void**)realloc(grav_mem_stack, grav_mem_scap * sizeof(void*));
+        if (!grav_mem_stack) abort();
+    }
+    grav_mem_stack[grav_mem_sn++] = c;
+}
+/* Everything reachable from `root` (an object, or 0 for a lone string `s`): bytes,
+   and the objects in *objects. */
+static GRAV_UNUSED long long grav_mem_deep(void* root, const char* s, long long* objects) {
+    grav_mem_seen_n = 0; grav_mem_seen_cap = 1024;
+    grav_mem_seen = (const void**)calloc(grav_mem_seen_cap, sizeof(void*));
+    if (!grav_mem_seen) abort();
+    long long total = 0, n = 0;
+    if (s) total += grav_mem_str(s);
+    grav_mem_sn = 0;
+    if (root) grav_mem_child(root);
+    while (grav_mem_sn > 0) {
+        void* o = grav_mem_stack[--grav_mem_sn];
+        n++;
+        total += grav_mem_obj(o);
+        const GravTypeInfo* t = ((struct GravObject*)o)->__type;
+        if (t && t->visit && !(((struct GravObject*)o)->__rc & GRAV_RC_DEAD)) {
+            void (*prev)(void*) = grav_gc_cb;
+            grav_gc_cb = grav_mem_child;
+            t->visit(o);
+            grav_gc_cb = prev;
+        }
+    }
+    free((void*)grav_mem_seen); grav_mem_seen = 0; grav_mem_seen_cap = grav_mem_seen_n = 0;
+    *objects = n;
+    return total;
 }
 static GRAV_UNUSED void grav_gc_visit_any(GravAny a) {
     if (a.tag == GRAV_ANY_OBJ) grav_gc_visit(a.v.p);

@@ -182,6 +182,7 @@ private:
     bool gcRelevant(const TypeRef &t) const;
     std::string visitOf(const TypeRef &t, const std::string &c) const;
     std::string emitVisitFields(const std::string &classFq); // returns the hook name, or "0"
+    std::string emitMemBytes(const std::string &classFq);    // Mem.sizeOf's hook
     RefKind refKind(const TypeRef &t) const;
     std::string retainOf(const TypeRef &t, const std::string &c) const;
     std::string releaseOf(const TypeRef &t, const std::string &c) const;   // a statement

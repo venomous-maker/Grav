@@ -174,6 +174,25 @@ std::string CodeGen::emitVisitFields(const std::string &classFq) {
     return fn;
 }
 
+// The memory an object owns, for Mem.sizeOf: its allocation, the strings its
+// fields hold, and what its class reports besides (__bytesExtra: a container's
+// buffers).
+std::string CodeGen::emitMemBytes(const std::string &classFq) {
+    std::string body;
+    for (const auto &f : collectFields(classFq)) {
+        RefKind k = refKind(f.type);
+        if (k == RefKind::Str) body += "    n += grav_mem_str(self->" + memberCName(f.name) + ");\n";
+        else if (k == RefKind::Any) body += "    n += grav_mem_any(self->" + memberCName(f.name) + ");\n";
+    }
+    std::string impl = reg_->findMethodImpl(classFq, "__bytesExtra");
+    if (!impl.empty()) body += "    n += " + methodCName(impl, "__bytesExtra") + "((" + structName(impl) + "*)self);\n";
+    std::string S = structName(classFq);
+    std::string fn = mangle(classFq) + "__mem_bytes";
+    vtables_ += "static long long " + fn + "(void* o) {\n    " + S + "* self = (" + S + "*)o; (void)self;\n" +
+                "    long long n = grav_mem_block(o);\n" + body + "    return n;\n}\n";
+    return fn;
+}
+
 std::string CodeGen::retainOf(const TypeRef &t, const std::string &c) const {
     switch (refKind(t)) {
         case RefKind::Obj: return "((" + cTy(t) + ")grav_retain((void*)(" + c + ")))";
