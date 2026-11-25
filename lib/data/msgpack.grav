@@ -1,0 +1,271 @@
+// lib/data/msgpack.grav — MessagePack (msgpack.org): the same data as JSON in a
+// compact binary form, faster to write and read, for caches, queues and RPC.
+//
+//   let bytes = MsgPack.encode(Json.parse("{\"id\": 7, \"tags\": [\"a\"]}"))
+//   let back = MsgPack.decode(bytes)                    // a JsonValue again
+//   MsgPack.encodeAny(order)                            // any value (objects through JsonMap)
+//
+// Integers take the smallest form that holds them, floats float64 (float32 is
+// read too), strings str, arrays and maps as such. Reading, a bin becomes
+// Base64 text and an ext {"ext": type, "data": Base64}; map keys that are not
+// strings become their text. Malformed input is a ValueError.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "bytes.grav"
+import "encoding.grav"
+import "json.grav"
+import "json_map.grav"
+
+namespace std.data {
+
+    %{
+    #include <string.h>
+    #include <stdint.h>
+    #include <stdlib.h>
+    static long long grav_mp_dbits(double d) { long long b; memcpy(&b, &d, 8); return b; }
+    static double grav_mp_bitsd(long long b) { double d; memcpy(&d, &b, 8); return d; }
+    static double grav_mp_f32(unsigned int b) { float f; memcpy(&f, &b, 4); return (double)f; }
+
+    /* ── writing, straight from a JsonValue's storage ── */
+    typedef struct { unsigned char* p; size_t n, cap; } GravMpOut;
+    static void grav_mp_room(GravMpOut* o, size_t k) {
+        if (o->n + k <= o->cap) return;
+        size_t c = o->cap ? o->cap * 2 : 256;
+        while (c < o->n + k) c *= 2;
+        o->p = (unsigned char*)realloc(o->p, c); if (!o->p) abort();
+        o->cap = c;
+    }
+    static void grav_mp_byte(GravMpOut* o, int b) { grav_mp_room(o, 1); o->p[o->n++] = (unsigned char)b; }
+    static void grav_mp_be(GravMpOut* o, uint64_t v, int n) {
+        grav_mp_room(o, (size_t)n);
+        for (int i = n - 1; i >= 0; i--) { o->p[o->n + (size_t)i] = (unsigned char)(v & 255); v >>= 8; }
+        o->n += (size_t)n;
+    }
+    static void grav_mp_int(GravMpOut* o, long long v) {
+        if (v >= 0) {
+            if (v < 128) grav_mp_byte(o, (int)v);
+            else if (v < 256) { grav_mp_byte(o, 0xcc); grav_mp_be(o, (uint64_t)v, 1); }
+            else if (v < 65536) { grav_mp_byte(o, 0xcd); grav_mp_be(o, (uint64_t)v, 2); }
+            else if (v < 4294967296LL) { grav_mp_byte(o, 0xce); grav_mp_be(o, (uint64_t)v, 4); }
+            else { grav_mp_byte(o, 0xcf); grav_mp_be(o, (uint64_t)v, 8); }
+        } else {
+            if (v >= -32) grav_mp_byte(o, (int)(v & 255));
+            else if (v >= -128) { grav_mp_byte(o, 0xd0); grav_mp_be(o, (uint64_t)v, 1); }
+            else if (v >= -32768) { grav_mp_byte(o, 0xd1); grav_mp_be(o, (uint64_t)v, 2); }
+            else if (v >= -2147483648LL) { grav_mp_byte(o, 0xd2); grav_mp_be(o, (uint64_t)v, 4); }
+            else { grav_mp_byte(o, 0xd3); grav_mp_be(o, (uint64_t)v, 8); }
+        }
+    }
+    static void grav_mp_str(GravMpOut* o, const char* s) {
+        size_t n = strlen(s);
+        if (n < 32) grav_mp_byte(o, 0xa0 | (int)n);
+        else if (n < 256) { grav_mp_byte(o, 0xd9); grav_mp_be(o, n, 1); }
+        else if (n < 65536) { grav_mp_byte(o, 0xda); grav_mp_be(o, n, 2); }
+        else { grav_mp_byte(o, 0xdb); grav_mp_be(o, n, 4); }
+        grav_mp_room(o, n); memcpy(o->p + o->n, s, n); o->n += n;
+    }
+    static void grav_mp_head(GravMpOut* o, long long n, int fix, int b16, int b32) {
+        if (n < 16) grav_mp_byte(o, fix | (int)n);
+        else if (n < 65536) { grav_mp_byte(o, b16); grav_mp_be(o, (uint64_t)n, 2); }
+        else { grav_mp_byte(o, b32); grav_mp_be(o, (uint64_t)n, 4); }
+    }
+    static void grav_mp_scalar(GravMpOut* o, int kind, int flag, long long bits, const char* s) {
+        if (kind == GRAV_JNULL) grav_mp_byte(o, 0xc0);
+        else if (kind == GRAV_JBOOL) grav_mp_byte(o, flag ? 0xc3 : 0xc2);
+        else if (kind == GRAV_JNUM) { if (flag) grav_mp_int(o, bits); else { grav_mp_byte(o, 0xcb); grav_mp_be(o, (uint64_t)bits, 8); } }
+        else if (kind == GRAV_JSTR) grav_mp_str(o, s ? s : "");
+    }
+    static void grav_mp_value(GravMpOut* o, std__data__JsonValue* v, int depth) {
+        if (depth > 512) { grav_mp_byte(o, 0xc0); return; }
+        int k = (int)v->k;
+        if (k < GRAV_JARR) { grav_mp_scalar(o, k, v->flag, v->bits, v->s); return; }
+        int obj = k == GRAV_JOBJ;
+        grav_mp_head(o, v->count, obj ? 0x80 : 0x90, obj ? 0xde : 0xdc, obj ? 0xdf : 0xdd);
+        for (int j = 0; j < v->count; j++) {
+            if (obj) grav_mp_str(o, *grav_jkey(v->buf, v->cap, j));
+            GravJsonSlot* sl = grav_jslot(v->buf, j);
+            if (sl->kind >= GRAV_JARR) grav_mp_value(o, (std__data__JsonValue*)sl->u.o, depth + 1);
+            else grav_mp_scalar(o, sl->kind, sl->flag, sl->u.i, sl->kind == GRAV_JSTR ? sl->u.s : 0);
+        }
+    }
+
+    /* ── reading: scalars straight into a container's slots ── */
+    typedef struct { const unsigned char* p; long long n, pos; const char* err; } GravMpIn;
+    static uint64_t grav_mp_rd(GravMpIn* r, int n) {
+        if (r->pos + n > r->n) { r->err = "the data ends too soon"; return 0; }
+        uint64_t v = 0;
+        for (int i = 0; i < n; i++) v = (v << 8) | r->p[r->pos + i];
+        r->pos += n;
+        return v;
+    }
+    static long long grav_mp_sx(uint64_t v, int n) { return n >= 8 ? (long long)v : ((v >> (n * 8 - 1)) & 1) ? (long long)(v - ((uint64_t)1 << (n * 8))) : (long long)v; }
+    static const char* grav_mp_b64(const unsigned char* p, long long n) { return grav_b64_encode(p, n, 0); }
+    /* Reads one value's head. A scalar goes in *sl (strings owned); for an array or
+       map returns 1 (map) or 2 (array) with its length in *len; an ext becomes a
+       string marker handled by the caller (3, with its type in *len); -1 on error. */
+    static int grav_mp_item(GravMpIn* r, GravJsonSlot* sl, long long* len) {
+        sl->kind = GRAV_JNULL; sl->flag = 0; sl->u.i = 0;
+        if (r->pos >= r->n) { r->err = "the data ends too soon"; return -1; }
+        int c = r->p[r->pos++];
+        long long sn = -1; int bin = 0;
+        if (c < 0x80) { sl->kind = GRAV_JNUM; sl->flag = 1; sl->u.i = c; return 0; }
+        if (c >= 0xe0) { sl->kind = GRAV_JNUM; sl->flag = 1; sl->u.i = c - 256; return 0; }
+        if (c >= 0xa0 && c <= 0xbf) sn = c & 31;
+        else if (c >= 0x90 && c <= 0x9f) { *len = c & 15; return 2; }
+        else if (c >= 0x80 && c <= 0x8f) { *len = c & 15; return 1; }
+        else switch (c) {
+            case 0xc0: return 0;
+            case 0xc2: case 0xc3: sl->kind = GRAV_JBOOL; sl->flag = c == 0xc3; return 0;
+            case 0xcc: case 0xcd: case 0xce: { int w = 1 << (c - 0xcc); sl->kind = GRAV_JNUM; sl->flag = 1; sl->u.i = (long long)grav_mp_rd(r, w); return r->err ? -1 : 0; }
+            case 0xcf: { uint64_t v = grav_mp_rd(r, 8); sl->kind = GRAV_JNUM; if ((long long)v < 0) { sl->flag = 0; sl->u.d = (double)v; } else { sl->flag = 1; sl->u.i = (long long)v; } return r->err ? -1 : 0; }
+            case 0xd0: case 0xd1: case 0xd2: case 0xd3: { int w = 1 << (c - 0xd0); sl->kind = GRAV_JNUM; sl->flag = 1; sl->u.i = grav_mp_sx(grav_mp_rd(r, w), w); return r->err ? -1 : 0; }
+            case 0xca: { uint64_t v = grav_mp_rd(r, 4); sl->kind = GRAV_JNUM; sl->u.d = grav_mp_f32((unsigned int)v); return r->err ? -1 : 0; }
+            case 0xcb: { uint64_t v = grav_mp_rd(r, 8); sl->kind = GRAV_JNUM; sl->u.i = (long long)v; return r->err ? -1 : 0; }
+            case 0xd9: sn = (long long)grav_mp_rd(r, 1); break;
+            case 0xda: sn = (long long)grav_mp_rd(r, 2); break;
+            case 0xdb: sn = (long long)grav_mp_rd(r, 4); break;
+            case 0xc4: sn = (long long)grav_mp_rd(r, 1); bin = 1; break;
+            case 0xc5: sn = (long long)grav_mp_rd(r, 2); bin = 1; break;
+            case 0xc6: sn = (long long)grav_mp_rd(r, 4); bin = 1; break;
+            case 0xdc: *len = (long long)grav_mp_rd(r, 2); return r->err ? -1 : 2;
+            case 0xdd: *len = (long long)grav_mp_rd(r, 4); return r->err ? -1 : 2;
+            case 0xde: *len = (long long)grav_mp_rd(r, 2); return r->err ? -1 : 1;
+            case 0xdf: *len = (long long)grav_mp_rd(r, 4); return r->err ? -1 : 1;
+            case 0xd4: case 0xd5: case 0xd6: case 0xd7: case 0xd8: *len = 1LL << (c - 0xd4); return 3;
+            case 0xc7: *len = (long long)grav_mp_rd(r, 1); return r->err ? -1 : 3;
+            case 0xc8: *len = (long long)grav_mp_rd(r, 2); return r->err ? -1 : 3;
+            case 0xc9: *len = (long long)grav_mp_rd(r, 4); return r->err ? -1 : 3;
+            default: r->err = "0xc1 is never used"; return -1;
+        }
+        if (r->err) return -1;
+        if (sn < 0 || r->pos + sn > r->n) { r->err = "the data ends too soon"; return -1; }
+        const char* t;
+        if (bin) t = grav_mp_b64(r->p + r->pos, sn);
+        else { char* x = grav_str_new((size_t)sn); memcpy(x, r->p + r->pos, (size_t)sn); x[sn] = 0; t = x; }
+        r->pos += sn;
+        sl->kind = GRAV_JSTR; sl->u.s = t;
+        return 0;
+    }
+    /* Fills container `count` members (pairs for a map) of the value being read,
+       from member *done on: 0 when all are in; 1 when member *slot is a nested
+       container (kind *nk: 1 map, 2 array, 3 ext; length *nlen), left to the
+       caller; -1 on error. */
+    static int grav_mp_fill(GravMpIn* r, unsigned char** buf, int* cap, int* count, int isObj, long long total,
+                            long long* done, int* slot, int* nk, long long* nlen) {
+        while (*done < total) {
+            const char* key = 0;
+            if (isObj) {
+                GravJsonSlot ks; long long kl = 0;
+                int kk = grav_mp_item(r, &ks, &kl);
+                if (kk < 0) return -1;
+                if (kk != 0) { r->err = "a map key that is not a plain value"; return -1; }
+                if (ks.kind == GRAV_JSTR) key = ks.u.s;
+                else {
+                    char tmp[64];
+                    if (ks.kind == GRAV_JNUM && ks.flag) snprintf(tmp, sizeof tmp, "%lld", ks.u.i);
+                    else if (ks.kind == GRAV_JBOOL) snprintf(tmp, sizeof tmp, "%s", ks.flag ? "true" : "false");
+                    else if (ks.kind == GRAV_JNUM) snprintf(tmp, sizeof tmp, "%.17g", ks.u.d);
+                    else tmp[0] = 0;
+                    key = grav_strdup(tmp);
+                }
+            }
+            int j = -1;
+            if (isObj && *count <= 8) j = grav_jfind(*buf, *cap, *count, key);
+            if (j >= 0) { grav_jslot_drop(grav_jslot(*buf, j)); grav_str_release(key); }
+            else {
+                *buf = grav_jgrow(*buf, cap, *count, *count + 1, isObj);
+                j = *count;
+                if (isObj) *grav_jkey(*buf, *cap, j) = key;
+                (*count)++;
+            }
+            GravJsonSlot* sl = grav_jslot(*buf, j);
+            long long len = 0;
+            int k = grav_mp_item(r, sl, &len);
+            (*done)++;
+            if (k < 0) return -1;
+            if (k > 0) { *slot = j; *nk = k; *nlen = len; return 1; }
+        }
+        return 0;
+    }
+    %}
+
+    class MsgPack {
+        // The MessagePack bytes of a JSON value.
+        static fn encode(v: JsonValue) -> Bytes {
+            let out = new Bytes();
+            %{ GravMpOut grav_o = {0, 0, 0}; grav_mp_value(&grav_o, v, 0);
+               free(out->data); out->data = grav_o.p; out->len = (int)grav_o.n; out->cap = (int)grav_o.cap; %};
+            return out;
+        }
+        // The MessagePack bytes of any value (objects as JsonMap writes them).
+        static fn encodeAny(x: any) -> Bytes { return MsgPack.encode(JsonMap.anyJson(x)); }
+        // The value MessagePack bytes hold (all of them: trailing bytes are an error).
+        static fn decode(b: Bytes) -> JsonValue {
+            let r = new MsgPackReader(b);
+            let v = r.document();
+            free(r);
+            return v;
+        }
+
+    }
+
+    // Reads MessagePack bytes (the scalars in C, straight into the containers).
+    class MsgPackReader {
+        private r: byte*
+        private src: Bytes
+        constructor(b: Bytes) {
+            self.src = b;
+            let p = b.rawData();
+            let n = b.size();
+            self.r = %{ ({ GravMpIn* grav_r = (GravMpIn*)calloc(1, sizeof(GravMpIn)); if (!grav_r) abort(); grav_r->p = p; grav_r->n = n; (unsigned char*)grav_r; }) %} as byte*;
+        }
+        destructor() { %{ free(self->r); self->r = 0; %}; }
+        private fn fail() {
+            let why = %{ ((GravMpIn*)self->r)->err ? grav_strdup(((GravMpIn*)self->r)->err) : grav_strdup("bad data") %} as string;
+            let at = %{ ((GravMpIn*)self->r)->pos %} as long;
+            throw new ValueError("MessagePack: " + why + " at byte ${at}");
+        }
+        fn document() -> JsonValue {
+            // (a top-level value: one slot of a holder array)
+            let holder = new JsonValue(JsonKind.Array);
+            self.fill(holder, false, 1, 0);
+            let left = %{ ((GravMpIn*)self->r)->n - ((GravMpIn*)self->r)->pos %} as long;
+            if (left != 0) { throw new ValueError("MessagePack: ${left} bytes after the value"); }
+            return holder.at(0);
+        }
+        private fn fill(out: JsonValue, isObj: bool, total: long, depth: int) {
+            if (depth > 512) { throw new ValueError("MessagePack: nesting is too deep"); }
+            let done: long = 0;
+            while (true) {
+                let slot = 0;
+                let nk = 0;
+                let nlen: long = 0;
+                let rc = %{ grav_mp_fill((GravMpIn*)self->r, &out->buf, &out->cap, &out->count, isObj, total, &done, &slot, &nk, &nlen) %} as int;
+                if (rc < 0) { self.fail(); }
+                if (rc == 0) { break; }
+                let child: JsonValue = null;
+                if (nk == 3) {
+                    child = self.ext(nlen);
+                } else {
+                    let left = %{ ((GravMpIn*)self->r)->n - ((GravMpIn*)self->r)->pos %} as long;
+                    if (nlen > left) { throw new ValueError("MessagePack: a container claims more items than there are bytes"); }
+                    child = new JsonValue(nk == 1 ? JsonKind.Object : JsonKind.Array);
+                    self.fill(child, nk == 1, nlen, depth + 1);
+                    if (nk == 1) { %{ if (child->count > 8) grav_json_dedupe(child->buf, child->cap, &child->count); %}; }
+                }
+                %{ GravJsonSlot* grav_sl = grav_jslot(out->buf, slot); grav_sl->u.o = grav_retain((void*)child); grav_sl->kind = (int)child->k; %};
+            }
+        }
+        private fn ext(n: long) -> JsonValue {
+            let t = %{ ({ GravMpIn* grav_r = (GravMpIn*)self->r; long long grav_t = 0;
+                          if (grav_r->pos + 1 + n > grav_r->n) grav_r->err = "the data ends too soon";
+                          else { grav_t = (signed char)grav_r->p[grav_r->pos]; grav_r->pos += 1; } grav_t; }) %} as long;
+            if (%{ ((GravMpIn*)self->r)->err != 0 %} as bool) { self.fail(); }
+            let at = %{ ((GravMpIn*)self->r)->pos %} as long;
+            let data = self.src.slice(at as int, (at + n) as int);
+            %{ ((GravMpIn*)self->r)->pos += n; %};
+            return Json.object().set("ext", t).set("data", Base64.encodeBytes(data));
+        }
+    }
+}

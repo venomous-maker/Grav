@@ -92,6 +92,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [json](data/json.md) | `Json` and `JsonValue`: parsing, building, writing JSON |
 | [json_map](data/json_map.md) | `JsonMap`: JSON read straight into objects and written back |
 | [json_schema](data/json_schema.md) | `JsonSchema`: checking JSON against a schema, and a schema from a class |
+| [msgpack](data/msgpack.md) | `MsgPack`: MessagePack read into and written from `JsonValue` |
 | [otp](data/otp.md) | `Totp` and `Hotp`: two-factor one-time passwords |
 | [tar](data/tar.md) | `TarWriter` and `TarReader`: tar archives, streamed (with gzip: `.tar.gz`) |
 | [bytes](data/bytes.md) | `Bytes`: a buffer of raw bytes |
