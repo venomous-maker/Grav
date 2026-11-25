@@ -89,6 +89,21 @@ tools/release.sh 1.8.0 --dry-run          # check and test, change nothing
 6. asks, then pushes `main` and the tag and creates the GitHub release with
    `gh`.
 
+## Releasing packages that depend on each other
+
+When a package changes, every package that depends on it moves to the new tag
+in its `grav.toml` and gets a release of its own, and so on up the chain. List
+them dependencies first, one `<package> <X.Y.Z>` per line, and run:
+
+```sh
+tools/release-chain.sh plan.txt --base ~/code     # each package at ~/code/<package>
+```
+
+For each package it reinstalls the dependencies from their tags, so `grav.lock`
+records the commits the releases before it just pushed. It commits the lock and
+runs `release.sh`. It stops at the first failure, and `--from <package>` picks up
+there.
+
 ## After a compiler release
 
 `install.sh` installs the newest release tag, and `grav self-update` moves to
