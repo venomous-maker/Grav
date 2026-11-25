@@ -1,0 +1,122 @@
+// otp.grav — one-time passwords: HOTP (RFC 4226, counter-based) and TOTP
+// (RFC 6238, time-based: what Google Authenticator, 1Password and Authy show).
+//
+//   let secret = Totp.generateSecret()                 // Base32, to store and show once
+//   let totp = new Totp(secret)                        // 6 digits, 30 s, SHA-1 (the apps' default)
+//   print(totp.uri("Acme", "ada@acme.test"))           // otpauth://… for a QR code
+//   let step = totp.verify(code, lastStep)             // the matched step, or -1
+//
+// Codes are compared in constant time. Needs OpenSSL's libcrypto (as Crypto does).
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "../sys/time.grav"
+import "bytes.grav"
+import "encoding.grav"
+import "hash.grav"
+import "crypto.grav"
+
+namespace std.data {
+
+    // Counter-based one-time passwords (RFC 4226).
+    class Hotp {
+        // The code for `counter` under `key` ("sha1", "sha256" or "sha512"; 6 to 10 digits).
+        static fn code(key: Bytes, counter: long, digits: int = 6, algorithm: string = "sha1") -> string {
+            if (digits < 6 || digits > 10) { throw new ValueError("an OTP has 6 to 10 digits, not ${digits}"); }
+            let msg = new Bytes(8);
+            for (k in 0..8) { msg.appendByte(((counter >> ((7 - k) * 8)) & 255) as int); }
+            let h = Crypto.hmac(algorithm, key, msg);
+            let off = h.get(h.size() - 1) & 15;
+            let bin: long = (((h.get(off) & 127) as long) << 24) | ((h.get(off + 1) as long) << 16) | ((h.get(off + 2) as long) << 8) | (h.get(off + 3) as long);
+            let mod: long = 1;
+            for (i in 0..digits) { mod *= 10; }
+            let text = str(bin % mod);
+            while (text.length < digits) { text = "0" + text; }
+            return text;
+        }
+        // The counter in [counter, counter + lookAhead] whose code is `code`, or -1
+        // (the server then stores the counter after it).
+        static fn verify(key: Bytes, code: string, counter: long, lookAhead: int = 0, digits: int = 6, algorithm: string = "sha1") -> long {
+            let c = Otp.clean(code, digits);
+            if (c == "") { return -1; }
+            let found: long = -1;
+            for (i in 0..=lookAhead) {
+                // (every candidate is computed: the time taken does not tell which matched)
+                if (Hash.equals(Hotp.code(key, counter + i, digits, algorithm), c) && found < 0) { found = counter + i; }
+            }
+            return found;
+        }
+    }
+
+    // Time-based one-time passwords (RFC 6238) for one secret.
+    class Totp {
+        public key: Bytes
+        public digits: int
+        // Seconds per step.
+        public period: long
+        // "sha1" (what the apps assume), "sha256" or "sha512".
+        public algorithm: string
+        // `secret` in Base32, as authenticator apps take it.
+        constructor(secret: string, digits: int = 6, period: long = 30, algorithm: string = "sha1") {
+            self.key = Base32.decode(secret);
+            self.digits = digits;
+            self.period = period;
+            self.algorithm = algorithm;
+            if (period <= 0) { throw new ValueError("a TOTP period is at least one second"); }
+        }
+        // A new random secret (`bytes` long: 20 is 160 bits, as RFC 4226 advises), in Base32.
+        static fn generateSecret(bytes: int = 20) -> string { return Base32.encode(Crypto.randomBytes(bytes)); }
+        // The step a unix time falls in.
+        fn stepAt(unixSeconds: long) -> long { return unixSeconds / self.period; }
+        // The code for a step.
+        fn codeAtStep(step: long) -> string { return Hotp.code(self.key, step, self.digits, self.algorithm); }
+        // The code at a unix time.
+        fn codeAt(unixSeconds: long) -> string { return self.codeAtStep(self.stepAt(unixSeconds)); }
+        // The code right now.
+        fn now() -> string { return self.codeAt(Time.now()); }
+        // Seconds until the current code changes.
+        fn secondsLeft() -> long { return self.period - Time.now() % self.period; }
+        // The step `code` belongs to, within `window` steps either side of now (a
+        // clock a little off still works) and after `lastStep` (store it: a code
+        // is then good once); -1 when it fits none.
+        fn verify(code: string, lastStep: long = -1, window: int = 1) -> long { return self.verifyAt(code, Time.now(), lastStep, window); }
+        // verify at a given unix time.
+        fn verifyAt(code: string, unixSeconds: long, lastStep: long = -1, window: int = 1) -> long {
+            let c = Otp.clean(code, self.digits);
+            if (c == "") { return -1; }
+            let now = self.stepAt(unixSeconds);
+            let found: long = -1;
+            for (d in -window..=window) {
+                let step = now + d;
+                if (step <= lastStep || step < 0) { continue; }
+                if (Hash.equals(self.codeAtStep(step), c) && found < 0) { found = step; }
+            }
+            return found;
+        }
+        // The otpauth:// address an authenticator app reads from a QR code.
+        fn uri(issuer: string, account: string) -> string {
+            let label = Otp.escape(issuer) + ":" + Otp.escape(account);
+            return "otpauth://totp/" + label + "?secret=" + Base32.encode(self.key) + "&issuer=" + Otp.escape(issuer) +
+                   "&algorithm=" + Str.upper(self.algorithm) + "&digits=${self.digits}&period=${self.period}";
+        }
+    }
+
+    class Otp {
+        // `code` without spaces, or "" when it is not `digits` digits.
+        static fn clean(code: string, digits: int) -> string {
+            let c = Str.replace(Str.trim(code), " ", "");
+            return c.length == digits && Str.isDigits(c) ? c : "";
+        }
+        // Percent-encoding for an otpauth label or parameter.
+        static fn escape(s: string) -> string {
+            let out = new StringBuilder();
+            let hex = "0123456789ABCDEF";
+            for (c in s as binary) {
+                let keep = (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 45 || c == 46 || c == 95 || c == 126;
+                if (keep) { out.appendChar(c as int); }
+                else { out.append("%"); out.appendChar(hex[(c >> 4) & 15] as int); out.appendChar(hex[c & 15] as int); }
+            }
+            return out.toString();
+        }
+    }
+}
