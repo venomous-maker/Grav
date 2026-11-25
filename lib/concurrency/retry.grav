@@ -1,0 +1,92 @@
+// lib/concurrency/retry.grav — trying again after a failure, waiting longer
+// each time (exponential backoff with full jitter), within a deadline.
+//
+//   let body = new Retry(5, 100, 5000)                  // 5 tries, 100 ms doubling up to 5 s
+//       .deadline(20000)                                 // and 20 s in all
+//       .when(fn(e: Exception) -> bool { return e is IOError })
+//       .call::<string>(fn(attempt: int) -> string { return fetch(url) })
+//
+// With jitter (the default) each wait is random between 0 and the doubled
+// delay, so many clients failing at once do not all come back at once.
+// delayFor(n) gives the wait alone, for code that schedules instead of sleeping
+// (a queue's next attempt).
+import "../core/exception.grav"
+import "../core/random.grav"
+import "../sys/time.grav"
+import "thread.grav"
+
+namespace std.concurrency {
+
+    class Retry {
+        // Tries in all (the first included).
+        public attempts: int
+        // The first wait, and the longest one (milliseconds).
+        public baseMs: long
+        public maxMs: long
+        // Total time allowed (0: none): no wait is begun that would end past it.
+        public deadlineMs: long = 0
+        public jitter: bool = true
+        // Which failures to try again after (null: every Exception).
+        public retryIf: fn(Exception) -> bool = null
+        // Told before each wait: the attempt that failed, its error, the wait.
+        public onRetry: fn(int, Exception, long) = null
+
+        constructor(attempts: int = 3, baseMs: long = 100, maxMs: long = 10000) {
+            if (attempts < 1) { throw new ValueError("Retry needs at least one attempt"); }
+            self.attempts = attempts;
+            self.baseMs = baseMs < 0 ? 0 : baseMs;
+            self.maxMs = maxMs < self.baseMs ? self.baseMs : maxMs;
+        }
+        fn deadline(ms: long) -> Retry { self.deadlineMs = ms; return self; }
+        fn when(f: fn(Exception) -> bool) -> Retry { self.retryIf = f; return self; }
+        fn notify(f: fn(int, Exception, long)) -> Retry { self.onRetry = f; return self; }
+        // Waits of exactly the doubled delay (tests, or a server's own schedule).
+        fn noJitter() -> Retry { self.jitter = false; return self; }
+
+        // The wait after `failures` failed attempts (1 for the first): the base
+        // doubled per failure, at most maxMs; with jitter, random up to that.
+        fn delayFor(failures: int) -> long {
+            let d = self.baseMs;
+            let n = failures < 1 ? 1 : failures;
+            for (i in 1..n) {
+                d *= 2;
+                if (d >= self.maxMs) { d = self.maxMs; break; }
+            }
+            if (d > self.maxMs) { d = self.maxMs; }
+            return self.jitter && d > 0 ? Random.nextLong(0, d) : d;
+        }
+
+        // Runs `work` (given the attempt number, from 1) until it returns; the
+        // last failure is thrown when no attempt or time is left, or when
+        // retryIf says not to try again.
+        fn call<T>(work: fn(int) -> T) -> T {
+            let start = Time.monotonicMs();
+            let n = 0;
+            while (true) {
+                n += 1;
+                try {
+                    return work(n);
+                } catch (e: Exception) {
+                    let d = self.after(n, e, start);
+                    if (d < 0) { throw e; }
+                    if (d > 0) { Thread.sleepMs(d as int); }
+                }
+            }
+        }
+        // call for work that returns nothing.
+        fn run(work: fn(int)) {
+            self.call::<bool>(fn(attempt: int) -> bool { work(attempt); return true; });
+        }
+        // The wait before trying again after failure `n`, or -1 to give up.
+        private fn after(n: int, e: Exception, start: long) -> long {
+            if (n >= self.attempts) { return -1; }
+            let ok = self.retryIf;
+            if (ok != null && !ok(e)) { return -1; }
+            let d = self.delayFor(n);
+            if (self.deadlineMs > 0 && Time.monotonicMs() - start + d > self.deadlineMs) { return -1; }
+            let tell = self.onRetry;
+            if (tell != null) { tell(n, e, d); }
+            return d;
+        }
+    }
+}
