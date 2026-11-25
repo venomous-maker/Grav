@@ -1,0 +1,91 @@
+// YAML read into JsonValue and written back: block and flow collections,
+// scalars and their types, quoting, block scalars, anchors and merges,
+// documents, errors.
+import "std"
+
+test "block collections, compact forms, typed scalars" {
+    let v = Yaml.parse("# a config\nname: grav\nversion: 1.12\nport: 8080\ndebug: false\nnothing: ~\nempty:\n" +
+        "hex: 0x1F\noct: 0o17\nneg: -42\nexp: 1e3\nhosts:\n  - a.test\n  - b.test\nnested:\n  deep:\n    key: value   # comment\n" +
+        "list:\n- x\n- y\nservers:\n  - name: one\n    port: 1\n  - name: two\n    tags: [a, b]\n")
+    assertEq(v.getString("name", ""), "grav")
+    assertEq(v.get("version").asFloat(), 1.12)
+    assertEq(v.getLong("port", 0), 8080 as long)
+    assertEq(v.get("debug").asBool(), false)
+    assert(v.get("nothing").isNull() && v.has("empty") && v.get("empty").isNull())
+    assertEq(v.getLong("hex", 0), 31 as long)
+    assertEq(v.getLong("oct", 0), 15 as long)
+    assertEq(v.getLong("neg", 0), -42 as long)
+    assertEq(v.get("exp").asFloat(), 1000.0)
+    assertEq(v.get("hosts").at(1).asString(), "b.test")
+    assertEq(v.path("nested.deep.key").asString(), "value")
+    assertEq(v.get("list").size(), 2)
+    assertEq(v.get("servers").at(0).getLong("port", 0), 1 as long)
+    assertEq(v.get("servers").at(1).get("tags").at(1).asString(), "b")
+}
+
+test "quoting, multi-line scalars, block scalars" {
+    let v = Yaml.parse("single: 'it''s'\ndouble: \"tab\\tnew\\nline \\u00e9 \\x41\"\nnum: \"123\"\nyes: 'true'\n" +
+        "plain: this is\n  folded over\n  lines\nurl: http://x.test:80/a#b\ncolon: a:b\n" +
+        "lit: |\n  line one\n    indented\n  line three\nfold: >\n  folded\n  text\n\n  new para\n" +
+        "strip: |-\n  no break\nkeep: |+\n  breaks\n\nafter: 1\n")
+    assertEq(v.getString("single", ""), "it's")
+    assertEq(v.getString("double", ""), "tab\tnew\nline é A")
+    assertEq(v.getString("num", ""), "123")
+    assertEq(v.getString("yes", ""), "true")
+    assertEq(v.getString("plain", ""), "this is folded over lines")
+    assertEq(v.getString("url", ""), "http://x.test:80/a#b")
+    assertEq(v.getString("colon", ""), "a:b")
+    assertEq(v.getString("lit", ""), "line one\n  indented\nline three\n")
+    assertEq(v.getString("fold", ""), "folded text\nnew para\n")
+    assertEq(v.getString("strip", ""), "no break")
+    assertEq(v.getString("keep", ""), "breaks\n\n")
+    assertEq(v.getLong("after", 0), 1 as long)
+    let notes = Yaml.parse("- Rename names, e.g.\n  - `max` -> `maximum`\n- next\n")
+    assertEq(notes.at(0).asString(), "Rename names, e.g. - `max` -> `maximum`")
+    assertEq(notes.at(1).asString(), "next")
+}
+
+test "flow collections, anchors, aliases, merges, tags" {
+    let v = Yaml.parse("flow: {a: 1, b: [x, 'y z', {c: null}], d: }\nlist: [1, 2.5, true, ~, \"s\"]\n" +
+        "base: &base\n  host: localhost\n  port: 5432\ndev:\n  <<: *base\n  port: 6543\nref: *base\n" +
+        "str: !!str 42\nint: !!int \"7\"\nmulti: [a,\n  b]\n")
+    assertEq(v.get("flow").getLong("a", 0), 1 as long)
+    assertEq(v.get("flow").get("b").at(1).asString(), "y z")
+    assert(v.get("flow").get("b").at(2).get("c").isNull())
+    assert(v.get("flow").get("d").isNull())
+    assertEq(v.get("list").toJson(), "[1,2.5,true,null,\"s\"]")
+    assertEq(v.get("dev").getString("host", ""), "localhost")
+    assertEq(v.get("dev").getLong("port", 0), 6543 as long)
+    assertEq(v.get("ref").getLong("port", 0), 5432 as long)
+    assertEq(v.getString("str", ""), "42")
+    assertEq(v.getLong("int", 0), 7 as long)
+    assertEq(v.get("multi").size(), 2)
+}
+
+test "documents, a top-level list or scalar, and errors" {
+    let docs = Yaml.parseAll("---\na: 1\n---\n- x\n- y\n...\n--- just text\n")
+    assertEq(docs.size(), 3)
+    assertEq(docs[0].getLong("a", 0), 1 as long)
+    assertEq(docs[1].at(1).asString(), "y")
+    assertEq(docs[2].asString(), "just text")
+    assert(Yaml.parse("").isNull())
+    for (pair in [["a: 1\n  b: 2\n", "line 2"], ["a: [1, 2\n", "not closed"], ["a: *nope\n", "no anchor called 'nope'"],
+                  ["a: \"open\n", "not closed"], ["- a\nb: c\n", "line 2"]]) {
+        let msg = ""
+        try { Yaml.parse(pair[0]) } catch (e: ValueError) { msg = e.message() }
+        assert(Str.contains(msg, pair[1]), pair[0] + " -> " + msg)
+    }
+}
+
+test "written back: block style, quoting only when needed, and read again the same" {
+    let v = Json.parse("{\"name\":\"grav\",\"n\":3,\"f\":1.5,\"on\":true,\"none\":null,\"looks\":\"true\",\"num\":\"42\",\"colon\":\"a: b\"," +
+        "\"empty\":\"\",\"text\":\"one\\ntwo\\n\",\"list\":[1,{\"k\":\"v\",\"k2\":[\"a\"]},[2,3]],\"obj\":{\"inner\":{\"x\":1}},\"e\":{},\"ea\":[]}")
+    let y = Yaml.stringify(v)
+    assertEq(y, "name: grav\nn: 3\nf: 1.5\n\"on\": true\nnone: null\nlooks: \"true\"\nnum: \"42\"\ncolon: \"a: b\"\nempty: \"\"\n" +
+                "text: |\n  one\n  two\nlist:\n- 1\n- k: v\n  k2:\n  - a\n-\n  - 2\n  - 3\nobj:\n  inner:\n    x: 1\ne: {}\nea: []\n")
+    assertEq(Yaml.parse(y).toJson(), v.toJson())
+    // what a YAML 1.1 reader would take for something else is quoted too
+    let old = Json.parse("{\"a\":\"yes\",\"b\":\"Off\",\"c\":\"2024-01-31\",\"d\":\"0777\",\"e\":\"1_000\",\"f\":\"12:30\",\"g\":\"v1.2\"}")
+    assertEq(Yaml.stringify(old), "a: \"yes\"\nb: \"Off\"\nc: \"2024-01-31\"\nd: \"0777\"\ne: \"1_000\"\nf: \"12:30\"\ng: v1.2\n")
+    assertEq(Yaml.parse(Yaml.stringify(old)).toJson(), old.toJson())
+}
