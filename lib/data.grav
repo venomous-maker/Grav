@@ -1,5 +1,5 @@
 // lib/data.grav — `import "std/data"`: Json/JsonValue, Bytes, Base64/Hex/Utf8, Hash, Uuid, Csv, Compress,
-// Crypto/AesGcm/CryptoKey/PasswordHash, Jwt.
+// Crypto/AesGcm/CryptoKey/PasswordHash, Jwt, JsonMap (JSON into objects and back).
 import "data/json.grav"
 import "data/bytes.grav"
 import "data/encoding.grav"
@@ -13,3 +13,4 @@ import "data/zip.grav"
 import "data/mime.grav"
 import "data/semver.grav"
 import "data/xml.grav"
+import "data/json_map.grav"

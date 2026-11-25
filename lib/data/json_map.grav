@@ -1,0 +1,307 @@
+// json_map.grav — JSON straight into objects and back, by reflection.
+//
+//   @JsonSnakeCase class Order {
+//       public id: long = 0
+//       public customerName: string = ""          // "customer_name"
+//       @JsonName("total_cents") public total: long = 0
+//       public lines: Array<Line> = new Array<Line>()
+//       public meta: HashMap<string, string> = new HashMap<string, string>()
+//       @JsonIgnore public cached: string = ""
+//       constructor() {}
+//   }
+//   let order = JsonMap.read::<Order>(text)             // or JsonMap.into(value, reflect(Order))
+//   let text = JsonMap.write(order)                      // or JsonMap.from(order) -> JsonValue
+//
+// A class needs a constructor without arguments. Its public fields are mapped
+// (private ones and @JsonIgnore ones are not): numbers, bools, strings, `T?`,
+// JsonValue, any, other such classes, Array<T> and HashMap<string, T> of any of
+// these. A key missing from the JSON leaves the field's default; null sets a
+// nullable or object field to null and leaves others alone; a value of the
+// wrong kind is a ValueError naming the field. Each class's mapping is worked
+// out once and kept.
+import "../core/exception.grav"
+import "../core/reflect.grav"
+import "../text/string.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../concurrency/async.grav"
+import "json.grav"
+
+namespace std.data {
+
+    // How one type is read and written. kind: 0 string, 1 int, 2 long, 3 float
+    // (double), 4 bool, 5 JsonValue, 6 any, 7 an object of `cls`, 8 Array<item>,
+    // 9 HashMap<string, item>; -1 not mapped.
+    class JsonType {
+        public kind: int = -1
+        public nullable: bool = false
+        public cls: ClassInfo = null
+        public item: JsonType = null
+        public written: string = ""
+        constructor() {}
+    }
+
+    class JsonField {
+        public field: FieldInfo
+        public key: string
+        public type: JsonType
+        constructor(field: FieldInfo, key: string, type: JsonType) { self.field = field; self.key = key; self.type = type; }
+    }
+
+    class JsonPlan {
+        public cls: ClassInfo
+        public fields: Array<JsonField> = new Array<JsonField>()
+        constructor(cls: ClassInfo) { self.cls = cls; }
+    }
+
+    class JsonMap {
+        private static plans: HashMap<string, JsonPlan> = new HashMap<string, JsonPlan>()
+        private static lock: Mutex = new Mutex()
+
+        // ── entry points ──────────────────────────────────────────────────────
+        // JSON text as a new T (ValueError when it is not valid, or does not fit).
+        static fn read<T>(text: string) -> T { return JsonMap.into(Json.parse(text), reflect(T)) as T; }
+        // A parsed value as a new object of `cls`.
+        static fn into(value: JsonValue, cls: ClassInfo) -> any {
+            if (!value.isObject()) { throw new ValueError("JSON for " + cls.name + " must be an object, not " + str(value.kind())); }
+            return JsonMap.fill(cls.create(), value, JsonMap.plan(cls), "");
+        }
+        // Sets `obj`'s fields from `value` (an object); fields with no key keep their values.
+        static fn update(obj: any, value: JsonValue) -> any {
+            let cls = ClassInfo.of(obj);
+            if (cls == null) { throw new ValueError("not an object: " + typename(obj)); }
+            if (!value.isObject()) { throw new ValueError("JSON for " + cls.name + " must be an object"); }
+            return JsonMap.fill(obj, value, JsonMap.plan(cls), "");
+        }
+        // `obj` as compact JSON text.
+        static fn write(obj: any) -> string { return JsonMap.from(obj).toJson(); }
+        // `obj` as a JSON object.
+        static fn from(obj: any) -> JsonValue {
+            let cls = ClassInfo.of(obj);
+            if (cls == null) { throw new ValueError("not an object: " + typename(obj)); }
+            let out = Json.object();
+            for (f in JsonMap.plan(cls).fields) { JsonMap.put(out, f.key, f.field.get(obj), f.type); }
+            return out;
+        }
+        // Objects of `cls` from a JSON array.
+        static fn intoList(value: JsonValue, cls: ClassInfo) -> Array<any> {
+            if (!value.isArray()) { throw new ValueError("JSON for a list of " + cls.name + " must be an array"); }
+            let out = new Array<any>();
+            for (i in 0..value.size()) { out.push(JsonMap.into(value.at(i), cls)); }
+            return out;
+        }
+
+        // ── the mapping of a class ────────────────────────────────────────────
+        static fn plan(cls: ClassInfo) -> JsonPlan {
+            JsonMap.lock.lock();
+            let p = JsonMap.plans.getOr(cls.name, null);
+            JsonMap.lock.unlock();
+            if (p != null) { return p; }
+            p = new JsonPlan(cls);
+            let snake = cls.has("JsonSnakeCase");
+            for (f in cls.fields()) {
+                if (f.isPrivate() || f.has("JsonIgnore") || !f.canGet() || !f.canSet()) { continue; }
+                let t = JsonMap.typeOf(f.typeName, f.declaringClass);
+                if (f.isNullable()) { t.nullable = true; }
+                if (t.kind < 0) { continue; }
+                let named = f.decorator("JsonName");
+                let key = named != null && named.text(0) != "" ? named.text(0) : (snake ? JsonMap.snake(f.name) : f.name);
+                p.fields.push(new JsonField(f, key, t));
+            }
+            JsonMap.lock.lock();
+            JsonMap.plans.put(cls.name, p);
+            JsonMap.lock.unlock();
+            return p;
+        }
+        // "customerName" -> "customer_name"
+        static fn snake(name: string) -> string {
+            let sb = new StringBuilder();
+            for (i in 0..name.length) {
+                let c = Str.charAt(name, i);
+                if (c >= 65 && c <= 90) {
+                    if (i > 0) { sb.append("_"); }
+                    sb.append(Str.fromChar(c + 32));
+                } else { sb.append(Str.fromChar(c)); }
+            }
+            return sb.toString();
+        }
+        private static fn classNamed(name: string) -> ClassInfo {
+            let c = ClassInfo.forName(name);
+            if (c == null) { throw new ValueError("no class " + name + " to read JSON into"); }
+            return c;
+        }
+        // A type as written ("Array<User>", "int?") -> how to map it; `owner`
+        // is the declaring class, whose namespace qualifies a bare class name.
+        static fn typeOf(written: string, owner: string) -> JsonType {
+            let t = new JsonType();
+            let w = Str.trim(written);
+            if (Str.endsWith(w, "?")) { t.nullable = true; w = Str.trim(w[..w.length - 1]); }
+            t.written = w;
+            if (w == "string") { t.kind = 0; }
+            else if (w == "int") { t.kind = 1; }
+            else if (w == "long") { t.kind = 2; }
+            else if (w == "double" || w == "float") { t.kind = 3; }
+            else if (w == "bool") { t.kind = 4; }
+            else if (w == "JsonValue" || w == "std.data.JsonValue") { t.kind = 5; }
+            else if (w == "any") { t.kind = 6; }
+            else if (Str.startsWith(w, "Array<") && Str.endsWith(w, ">")) {
+                t.item = JsonMap.typeOf(w[6..w.length - 1], owner);
+                t.kind = t.item.kind < 0 ? -1 : 8;
+            } else if (Str.startsWith(w, "HashMap<") && Str.endsWith(w, ">")) {
+                let inner = w[8..w.length - 1];
+                let comma = Str.indexOf(inner, ",");
+                if (comma > 0 && Str.trim(inner[..comma]) == "string") {
+                    t.item = JsonMap.typeOf(inner[comma + 1..], owner);
+                    t.kind = t.item.kind < 0 ? -1 : 9;
+                }
+            } else if (!Str.contains(w, "<")) {
+                let c = ClassInfo.forName(w);
+                let dot = Str.lastIndexOf(owner, ".");
+                if (c == null && dot > 0) { c = ClassInfo.forName(owner[..dot + 1] + w); }
+                if (c != null && c.canCreate()) { t.kind = 7; t.cls = c; }
+            }
+            return t;
+        }
+
+        // ── reading ───────────────────────────────────────────────────────────
+        private static fn fill(obj: any, value: JsonValue, p: JsonPlan, path: string) -> any {
+            for (f in p.fields) {
+                // (scalars through the typed getters: no JsonValue made for them)
+                let kd = value.kindOf(f.key);
+                if (kd < 0) { continue; }
+                if (kd == 0) {
+                    if (f.type.nullable || f.type.kind >= 5) { f.field.set(obj, null); }
+                    continue;
+                }
+                let tk = f.type.kind;
+                let where = path + f.key;
+                if (tk == 0 && kd == 3) { f.field.set(obj, value.getString(f.key, "") as any); }
+                else if (tk == 2 && kd == 6) { f.field.set(obj, value.getLong(f.key, 0) as any); }
+                else if (tk == 1 && kd == 6) { f.field.set(obj, value.getInt(f.key, 0) as any); }
+                else if (tk == 3 && (kd == 2 || kd == 6)) { f.field.set(obj, value.getFloat(f.key, 0.0) as any); }
+                else if (tk == 4 && kd == 1) { f.field.set(obj, value.getBool(f.key, false) as any); }
+                else { f.field.set(obj, JsonMap.value(value.get(f.key), f.type, where)); }
+            }
+            return obj;
+        }
+        // A JSON value as `t` (boxed for FieldInfo.set).
+        private static fn value(v: JsonValue, t: JsonType, where: string) -> any {
+            switch (t.kind) {
+                case 0: { JsonMap.need(v.isString(), where, "a string", v); return v.asString() as any; }
+                case 1: { JsonMap.need(v.isInteger(), where, "a whole number", v); return v.asInt() as any; }
+                case 2: { JsonMap.need(v.isInteger(), where, "a whole number", v); return v.asLong() as any; }
+                case 3: { JsonMap.need(v.isNumber(), where, "a number", v); return v.asFloat() as any; }
+                case 4: { JsonMap.need(v.isBool(), where, "true or false", v); return v.asBool() as any; }
+                case 5: { return v as any; }
+                case 6: { return JsonMap.natural(v); }
+                case 7: {
+                    JsonMap.need(v.isObject(), where, "an object", v);
+                    return JsonMap.fill(t.cls.create(), v, JsonMap.plan(t.cls), where + ".");
+                }
+                case 8: {
+                    JsonMap.need(v.isArray(), where, "an array", v);
+                    let out = new Array<any>();
+                    for (i in 0..v.size()) {
+                        let item = v.at(i);
+                        out.push(item.isNull() ? null : JsonMap.value(item, t.item, where + "[${i}]"));
+                    }
+                    return out as any;
+                }
+                case 9: {
+                    JsonMap.need(v.isObject(), where, "an object", v);
+                    let out = new HashMap<string, any>();
+                    for (k in v.keys()) {
+                        let item = v.get(k);
+                        out.put(k, item.isNull() ? null : JsonMap.value(item, t.item, where + "." + k));
+                    }
+                    return out as any;
+                }
+            }
+            return null;
+        }
+        private static fn need(ok: bool, where: string, what: string, v: JsonValue) {
+            if (!ok) { throw new ValueError("JSON field '" + where + "' must be " + what + ", not " + v.toJson()); }
+        }
+        // A JSON value as plain Grav values: null, bool, long, double, string, Array<any>, HashMap<string, any>.
+        static fn natural(v: JsonValue) -> any {
+            if (v.isNull()) { return null; }
+            if (v.isBool()) { return v.asBool() as any; }
+            if (v.isInteger()) { return v.asLong() as any; }
+            if (v.isNumber()) { return v.asFloat() as any; }
+            if (v.isString()) { return v.asString() as any; }
+            if (v.isArray()) {
+                let out = new Array<any>();
+                for (i in 0..v.size()) { out.push(JsonMap.natural(v.at(i))); }
+                return out as any;
+            }
+            let m = new HashMap<string, any>();
+            for (k in v.keys()) { m.put(k, JsonMap.natural(v.get(k))); }
+            return m as any;
+        }
+
+        // ── writing ───────────────────────────────────────────────────────────
+        // (scalars through the typed setters: no JsonValue made for them)
+        private static fn put(out: JsonValue, key: string, x: any, t: JsonType) {
+            if (x != null) {
+                switch (t.kind) {
+                    case 0: { out.set(key, x as string); return; }
+                    case 1: { out.set(key, (x as int) as long); return; }
+                    case 2: { out.set(key, x as long); return; }
+                    case 3: { out.set(key, x as double); return; }
+                    case 4: { out.set(key, x as bool); return; }
+                }
+            }
+            out.set(key, JsonMap.json(x, t));
+        }
+        // A value of type `t` as JSON.
+        static fn json(x: any, t: JsonType) -> JsonValue {
+            if (x == null) { return Json.nil(); }
+            switch (t.kind) {
+                case 0: { return Json.of(x as string); }
+                case 1: { return Json.of((x as int) as long); }
+                case 2: { return Json.of(x as long); }
+                case 3: { return Json.of(x as double); }
+                case 4: { return Json.of(x as bool); }
+                case 5: { return x as JsonValue; }
+                case 6: { return JsonMap.anyJson(x); }
+                case 7: { return JsonMap.from(x); }
+                case 8: {
+                    let a = Json.array();
+                    let items = ClassInfo.listItems(x);
+                    if (items != null) { for (i in items) { a.push(JsonMap.json(i, t.item)); } }
+                    return a;
+                }
+                case 9: {
+                    let o = Json.object();
+                    let m = ClassInfo.mapEntries(x);
+                    if (m != null) { for ((k, i) in m) { o.set(k, JsonMap.json(i, t.item)); } }
+                    return o;
+                }
+            }
+            return Json.nil();
+        }
+        // Any value as JSON, by what it holds.
+        static fn anyJson(x: any) -> JsonValue {
+            if (x == null) { return Json.nil(); }
+            if (x is string) { return Json.of(x as string); }
+            if (x is long) { return Json.of(x as long); }
+            if (x is int) { return Json.of((x as int) as long); }
+            if (x is double) { return Json.of(x as double); }
+            if (x is bool) { return Json.of(x as bool); }
+            if (x is JsonValue) { return x as JsonValue; }
+            let items = ClassInfo.listItems(x);
+            if (items != null) {
+                let a = Json.array();
+                for (i in items) { a.push(JsonMap.anyJson(i)); }
+                return a;
+            }
+            let m = ClassInfo.mapEntries(x);
+            if (m != null) {
+                let o = Json.object();
+                for ((k, i) in m) { o.set(k, JsonMap.anyJson(i)); }
+                return o;
+            }
+            return JsonMap.from(x);
+        }
+    }
+}
