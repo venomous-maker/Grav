@@ -1,0 +1,665 @@
+// lib/data/json_schema.grav — JSON Schema: checking a value against a schema
+// (the Draft 2020-12 keywords APIs use, and OpenAPI 3.0's nullable), and making
+// a schema from a class (the fields JsonMap reads).
+//
+//   let schema = JsonSchema.compile(Json.parse(text))
+//   for (e in schema.validate(body)) { print("${e.path}: ${e.message}") }   // "/items/0/qty: must be at least 1"
+//   let s = JsonSchema.forClass(reflect(Order))                           // {"type":"object",...}
+//
+// Checked: type, enum, const; minimum, maximum, exclusiveMinimum,
+// exclusiveMaximum, multipleOf; minLength, maxLength, pattern, format (email,
+// uri, date, date-time, time, uuid, ipv4, ipv6, hostname); properties,
+// required, additionalProperties, patternProperties, propertyNames,
+// minProperties, maxProperties, dependentRequired; items, prefixItems,
+// minItems, maxItems, uniqueItems, contains; allOf, anyOf, oneOf, not,
+// if/then/else; $ref to "#", "#/$defs/…" or any "#/…" pointer in the same
+// document; nullable. Other keywords (title, description, examples, …) are
+// left alone. Patterns are ECMAScript-style (\d, \w and \s are understood).
+import "../core/exception.grav"
+import "../core/reflect.grav"
+import "../core/math.grav"
+import "../text/convert.grav"
+import "../text/strbuf.grav"
+import "../text/string.grav"
+import "../text/regex.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "json.grav"
+import "encoding.grav"
+import "hash.grav"
+import "json_map.grav"
+
+namespace std.data {
+
+    // One way a value does not fit: where (a JSON Pointer, "" for the whole
+    // value), why, and the keyword that said so.
+    class JsonSchemaError {
+        public path: string
+        public message: string
+        public keyword: string
+        constructor(path: string, message: string, keyword: string) { self.path = path; self.message = message; self.keyword = keyword; }
+        fn toString() -> string { return (self.path == "" ? "(value)" : self.path) + ": " + self.message; }
+    }
+
+    // A schema compiled for checking: each keyword read once into a field.
+    class SchemaNode {
+        public raw: JsonValue
+        // -1 an object schema, 0 the schema false, 1 the schema true.
+        public fixed: int = -1
+        public ref: string = ""
+        public refNode: SchemaNode = null
+        public types: int = 0                 // bits: 1 string, 2 integer, 4 number, 8 boolean, 16 object, 32 array, 64 null
+        public typeRaw: JsonValue = null
+        public nullable: bool = false
+        public constV: JsonValue = null
+        public enumV: JsonValue = null
+        public num: bool = false
+        public hasMin: bool = false
+        public min: double = 0.0
+        public hasMax: bool = false
+        public max: double = 0.0
+        public hasExMin: bool = false
+        public exMin: double = 0.0
+        public hasExMax: bool = false
+        public exMax: double = 0.0
+        public exMinFlag: bool = false
+        public exMaxFlag: bool = false
+        public multipleOf: double = 0.0
+        public str: bool = false
+        public minLen: long = -1
+        public maxLen: long = -1
+        public pattern: Regex = null
+        public patternText: string = ""
+        public format: string = ""
+        public obj: bool = false
+        public required: Array<string> = null
+        public props: HashMap<string, SchemaNode> = null
+        public patternProps: Array<Regex> = null
+        public patternNodes: Array<SchemaNode> = null
+        public additional: SchemaNode = null
+        public names: SchemaNode = null
+        public minProps: long = -1
+        public maxProps: long = -1
+        public dependent: HashMap<string, Array<string>> = null
+        public arr: bool = false
+        public prefix: Array<SchemaNode> = null
+        public items: SchemaNode = null
+        public minItems: long = -1
+        public maxItems: long = -1
+        public unique: bool = false
+        public contains: SchemaNode = null
+        public minContains: long = 1
+        public maxContains: long = -1
+        public allOf: Array<SchemaNode> = null
+        public anyOf: Array<SchemaNode> = null
+        public oneOf: Array<SchemaNode> = null
+        public notN: SchemaNode = null
+        public ifN: SchemaNode = null
+        public thenN: SchemaNode = null
+        public elseN: SchemaNode = null
+        constructor(raw: JsonValue) { self.raw = raw; }
+    }
+
+    class JsonSchema {
+        public root: JsonValue
+        // At most this many errors are collected.
+        public maxErrors: int = 100
+        private top: SchemaNode
+        private refs: HashMap<string, SchemaNode> = new HashMap<string, SchemaNode>()
+        private regexes: HashMap<string, Regex> = new HashMap<string, Regex>()
+
+        constructor(root: JsonValue) {
+            self.root = root;
+            self.top = self.node(root);
+        }
+        // A schema to check values with (true and false are schemas too).
+        static fn compile(schema: JsonValue) -> JsonSchema {
+            if (!schema.isObject() && !schema.isBool()) { throw new ValueError("a JSON Schema is an object or a boolean"); }
+            return new JsonSchema(schema);
+        }
+        // compile, from JSON text.
+        static fn parse(text: string) -> JsonSchema { return JsonSchema.compile(Json.parse(text)); }
+
+        // Every way `value` does not fit (empty when it fits).
+        fn validate(value: JsonValue) -> Array<JsonSchemaError> {
+            let out = new Array<JsonSchemaError>();
+            self.check(self.top, value, "", out, 0);
+            return out;
+        }
+        fn isValid(value: JsonValue) -> bool {
+            let out = new Array<JsonSchemaError>();
+            self.check(self.top, value, "", out, 0);
+            return out.isEmpty();
+        }
+
+        // ── compiling ─────────────────────────────────────────────────────────
+        private fn node(s: JsonValue) -> SchemaNode {
+            let n = new SchemaNode(s);
+            if (s.isBool()) { n.fixed = s.asBool() ? 1 : 0; return n; }
+            if (!s.isObject()) { n.fixed = 1; return n; }
+            self.fill(n, s);
+            return n;
+        }
+        private fn nodes(a: JsonValue) -> Array<SchemaNode> {
+            let out = new Array<SchemaNode>();
+            if (a.isArray()) { for (i in 0..a.size()) { out.push(self.node(a.at(i))); } }
+            return out;
+        }
+        private fn opt(s: JsonValue, key: string) -> SchemaNode {
+            let k = s.kindOf(key);
+            return k == 1 || k == 5 ? self.node(s.get(key)) : null;
+        }
+        private fn number(s: JsonValue, key: string) -> bool { let k = s.kindOf(key); return k == 2 || k == 6; }
+        private fn fill(n: SchemaNode, s: JsonValue) {
+            if (s.kindOf("$ref") == 3) { n.ref = s.getString("$ref", ""); }
+            if (s.has("type")) {
+                n.typeRaw = s.get("type");
+                let t = n.typeRaw;
+                if (t.isString()) { n.types = JsonSchema.typeBit(t.asString()); }
+                else if (t.isArray()) { for (i in 0..t.size()) { n.types = n.types | JsonSchema.typeBit(t.at(i).asString()); } }
+            }
+            n.nullable = s.kindOf("nullable") == 1 && s.getBool("nullable", false);
+            if (s.has("const")) { n.constV = s.get("const"); }
+            if (s.kindOf("enum") == 4) { n.enumV = s.get("enum"); }
+            if (self.number(s, "minimum")) { n.hasMin = true; n.min = s.getFloat("minimum", 0.0); n.num = true; }
+            if (self.number(s, "maximum")) { n.hasMax = true; n.max = s.getFloat("maximum", 0.0); n.num = true; }
+            if (self.number(s, "exclusiveMinimum")) { n.hasExMin = true; n.exMin = s.getFloat("exclusiveMinimum", 0.0); n.num = true; }
+            if (self.number(s, "exclusiveMaximum")) { n.hasExMax = true; n.exMax = s.getFloat("exclusiveMaximum", 0.0); n.num = true; }
+            n.exMinFlag = s.kindOf("exclusiveMinimum") == 1 && s.getBool("exclusiveMinimum", false);
+            n.exMaxFlag = s.kindOf("exclusiveMaximum") == 1 && s.getBool("exclusiveMaximum", false);
+            if (self.number(s, "multipleOf")) { n.multipleOf = s.getFloat("multipleOf", 0.0); n.num = true; }
+            if (self.number(s, "minLength")) { n.minLen = s.getLong("minLength", 0); n.str = true; }
+            if (self.number(s, "maxLength")) { n.maxLen = s.getLong("maxLength", 0); n.str = true; }
+            if (s.kindOf("pattern") == 3) { n.patternText = s.getString("pattern", ""); n.pattern = self.regex(n.patternText); n.str = true; }
+            if (s.kindOf("format") == 3) { n.format = s.getString("format", ""); n.str = true; }
+            if (s.kindOf("required") == 4) {
+                n.required = new Array<string>();
+                let r = s.get("required");
+                for (i in 0..r.size()) { n.required.push(r.at(i).asString()); }
+                n.obj = true;
+            }
+            if (s.kindOf("properties") == 5) {
+                n.props = new HashMap<string, SchemaNode>();
+                let p = s.get("properties");
+                for (k in p.keys()) { n.props.put(k, self.node(p.get(k))); }
+                n.obj = true;
+            }
+            if (s.kindOf("patternProperties") == 5) {
+                n.patternProps = new Array<Regex>();
+                n.patternNodes = new Array<SchemaNode>();
+                let p = s.get("patternProperties");
+                for (k in p.keys()) {
+                    let re = self.regex(k);
+                    if (re != null) { n.patternProps.push(re); n.patternNodes.push(self.node(p.get(k))); }
+                }
+                n.obj = true;
+            }
+            n.additional = self.opt(s, "additionalProperties");
+            n.names = self.opt(s, "propertyNames");
+            if (self.number(s, "minProperties")) { n.minProps = s.getLong("minProperties", 0); }
+            if (self.number(s, "maxProperties")) { n.maxProps = s.getLong("maxProperties", 0); }
+            if (s.kindOf("dependentRequired") == 5) {
+                n.dependent = new HashMap<string, Array<string>>();
+                let d = s.get("dependentRequired");
+                for (k in d.keys()) {
+                    let need = new Array<string>();
+                    let a = d.get(k);
+                    for (i in 0..a.size()) { need.push(a.at(i).asString()); }
+                    n.dependent.put(k, need);
+                }
+            }
+            if (n.additional != null || n.names != null || n.minProps >= 0 || n.maxProps >= 0 || n.dependent != null) { n.obj = true; }
+            if (s.kindOf("prefixItems") == 4) { n.prefix = self.nodes(s.get("prefixItems")); }
+            if (s.kindOf("items") == 4) { n.prefix = self.nodes(s.get("items")); }       // (older drafts)
+            else { n.items = self.opt(s, "items"); }
+            if (self.number(s, "minItems")) { n.minItems = s.getLong("minItems", 0); }
+            if (self.number(s, "maxItems")) { n.maxItems = s.getLong("maxItems", 0); }
+            n.unique = s.kindOf("uniqueItems") == 1 && s.getBool("uniqueItems", false);
+            n.contains = self.opt(s, "contains");
+            if (self.number(s, "minContains")) { n.minContains = s.getLong("minContains", 1); }
+            if (self.number(s, "maxContains")) { n.maxContains = s.getLong("maxContains", 0); }
+            n.arr = n.prefix != null || n.items != null || n.minItems >= 0 || n.maxItems >= 0 || n.unique || n.contains != null;
+            if (s.kindOf("allOf") == 4) { n.allOf = self.nodes(s.get("allOf")); }
+            if (s.kindOf("anyOf") == 4) { n.anyOf = self.nodes(s.get("anyOf")); }
+            if (s.kindOf("oneOf") == 4) { n.oneOf = self.nodes(s.get("oneOf")); }
+            n.notN = self.opt(s, "not");
+            n.ifN = self.opt(s, "if");
+            n.thenN = self.opt(s, "then");
+            n.elseN = self.opt(s, "else");
+        }
+        // The node a $ref names, compiled once (a schema may refer to itself).
+        private fn target(n: SchemaNode) -> SchemaNode {
+            if (n.refNode != null) { return n.refNode; }
+            let hit = self.refs.getOr(n.ref, null);
+            if (hit == null) {
+                let raw = self.resolve(n.ref);
+                if (raw == null) { return null; }
+                if (raw.isObject() && raw.size() > 0) {
+                    hit = new SchemaNode(raw);
+                    self.refs.put(n.ref, hit);                                      // (before filling: it may refer to itself)
+                    self.fill(hit, raw);
+                } else {
+                    hit = self.node(raw);
+                    self.refs.put(n.ref, hit);
+                }
+            }
+            n.refNode = hit;
+            return hit;
+        }
+        static fn typeBit(t: string) -> int {
+            if (t == "string") { return 1; }
+            if (t == "integer") { return 2; }
+            if (t == "number") { return 4; }
+            if (t == "boolean") { return 8; }
+            if (t == "object") { return 16; }
+            if (t == "array") { return 32; }
+            if (t == "null") { return 64; }
+            return 127;
+        }
+
+        // ── checking ──────────────────────────────────────────────────────────
+        private fn add(out: Array<JsonSchemaError>, path: string, msg: string, kw: string) {
+            if (out.size() < self.maxErrors) { out.push(new JsonSchemaError(path, msg, kw)); }
+        }
+        private fn check(n: SchemaNode, v: JsonValue, path: string, out: Array<JsonSchemaError>, depth: int) {
+            if (depth > 64) { self.add(out, path, "the schema refers to itself too deeply", "$ref"); return; }
+            if (n.fixed == 0) { self.add(out, path, "no value is allowed here", "false"); return; }
+            if (n.fixed == 1) { return; }
+            if (n.ref != "") {
+                let t = self.target(n);
+                if (t == null) { self.add(out, path, "the schema's $ref '" + n.ref + "' points nowhere", "$ref"); }
+                else { self.check(t, v, path, out, depth + 1); }
+            }
+            if (n.nullable && v.isNull()) { return; }
+            if (n.types != 0 && (n.types & JsonSchema.bitOf(v)) == 0) {
+                self.add(out, path, "must be " + JsonSchema.typeWords(n.typeRaw) + ", not " + JsonSchema.kindWord(v), "type");
+                return;
+            }
+            if (n.constV != null && !(n.constV == v)) { self.add(out, path, "must be " + n.constV.toJson(), "const"); }
+            if (n.enumV != null) {
+                let hit = false;
+                for (i in 0..n.enumV.size()) { if (n.enumV.at(i) == v) { hit = true; break; } }
+                if (!hit) { self.add(out, path, "must be one of " + n.enumV.toJson(), "enum"); }
+            }
+            if (n.num && v.isNumber()) { self.numbers(n, v, path, out); }
+            else if (n.str && v.isString()) { self.strings(n, v, path, out); }
+            else if (n.obj && v.isObject()) { self.objects(n, v, path, out, depth); }
+            else if (n.arr && v.isArray()) { self.arrays(n, v, path, out, depth); }
+            if (n.allOf != null || n.anyOf != null || n.oneOf != null || n.notN != null || n.ifN != null) { self.combinators(n, v, path, out, depth); }
+        }
+        // The type bits a value has (an integral number is both integer and number).
+        private static fn bitOf(v: JsonValue) -> int {
+            if (v.isString()) { return 1; }
+            if (v.isNumber()) { return v.isInteger() || v.asFloat() == Math.floor(v.asFloat()) ? 6 : 4; }
+            if (v.isBool()) { return 8; }
+            if (v.isObject()) { return 16; }
+            if (v.isArray()) { return 32; }
+            return 64;
+        }
+        static fn isType(t: string, v: JsonValue) -> bool { return (JsonSchema.typeBit(t) & JsonSchema.bitOf(v)) != 0; }
+        private static fn typeWords(t: JsonValue) -> string {
+            if (t.isString()) { return JsonSchema.article(t.asString()); }
+            let parts = new Array<string>();
+            for (i in 0..t.size()) { parts.push(JsonSchema.article(t.at(i).asString())); }
+            return Str.join(parts, " or ");
+        }
+        private static fn article(t: string) -> string {
+            if (t == "null") { return "null"; }
+            return (t == "integer" || t == "object" || t == "array" ? "an " : "a ") + t;
+        }
+        static fn kindWord(v: JsonValue) -> string {
+            if (v.isNull()) { return "null"; }
+            if (v.isBool()) { return "a boolean"; }
+            if (v.isInteger()) { return "an integer"; }
+            if (v.isNumber()) { return "a number"; }
+            if (v.isString()) { return "a string"; }
+            if (v.isArray()) { return "an array"; }
+            return "an object";
+        }
+        private fn word(d: double, key: string, n: SchemaNode) -> string { return n.raw.get(key).toJson(); }
+        private fn numbers(n: SchemaNode, v: JsonValue, path: string, out: Array<JsonSchemaError>) {
+            let x = v.asFloat();
+            if (n.hasMin && x < n.min) { self.add(out, path, "must be at least " + self.word(n.min, "minimum", n), "minimum"); }
+            if (n.hasMax && x > n.max) { self.add(out, path, "must be at most " + self.word(n.max, "maximum", n), "maximum"); }
+            if (n.hasExMin && x <= n.exMin) { self.add(out, path, "must be more than " + self.word(n.exMin, "exclusiveMinimum", n), "exclusiveMinimum"); }
+            if (n.hasExMax && x >= n.exMax) { self.add(out, path, "must be less than " + self.word(n.exMax, "exclusiveMaximum", n), "exclusiveMaximum"); }
+            // (OpenAPI 3.0: exclusiveMinimum: true alongside minimum)
+            if (n.exMinFlag && n.hasMin && x <= n.min) { self.add(out, path, "must be more than " + self.word(n.min, "minimum", n), "exclusiveMinimum"); }
+            if (n.exMaxFlag && n.hasMax && x >= n.max) { self.add(out, path, "must be less than " + self.word(n.max, "maximum", n), "exclusiveMaximum"); }
+            if (n.multipleOf > 0) {
+                let q = x / n.multipleOf;
+                if (Math.abs(q - Math.round(q)) > 1e-9) { self.add(out, path, "must be a multiple of " + n.raw.get("multipleOf").toJson(), "multipleOf"); }
+            }
+        }
+        private fn strings(n: SchemaNode, v: JsonValue, path: string, out: Array<JsonSchemaError>) {
+            let text = v.asString();
+            if (n.minLen >= 0 || n.maxLen >= 0) {
+                let len = Utf8.count(text);
+                if (n.minLen >= 0 && len < n.minLen) { self.add(out, path, "must be at least ${n.minLen} characters", "minLength"); }
+                if (n.maxLen >= 0 && len > n.maxLen) { self.add(out, path, "must be at most ${n.maxLen} characters", "maxLength"); }
+            }
+            if (n.pattern != null && !n.pattern.test(text)) { self.add(out, path, "must match " + n.patternText, "pattern"); }
+            if (n.format != "" && !JsonFormats.check(n.format, text)) { self.add(out, path, "must be a valid " + n.format, "format"); }
+        }
+        private fn objects(n: SchemaNode, v: JsonValue, path: string, out: Array<JsonSchemaError>, depth: int) {
+            if (n.required != null) {
+                for (k in n.required) { if (!v.has(k)) { self.add(out, path + "/" + JsonSchema.escape(k), "is required", "required"); } }
+            }
+            let count = v.size();
+            if (n.minProps >= 0 && count < n.minProps) { self.add(out, path, "must have at least ${n.minProps} properties", "minProperties"); }
+            if (n.maxProps >= 0 && count > n.maxProps) { self.add(out, path, "must have at most ${n.maxProps} properties", "maxProperties"); }
+            if (n.props == null && n.patternProps == null && n.additional == null && n.names == null && n.dependent == null) { return; }
+            for (k in v.keys()) {
+                let at = path + "/" + JsonSchema.escape(k);
+                let matched = false;
+                if (n.props != null) {
+                    let p = n.props.getOr(k, null);
+                    if (p != null) { matched = true; self.check(p, v.get(k), at, out, depth + 1); }
+                }
+                if (n.patternProps != null) {
+                    for (i in 0..n.patternProps.size()) {
+                        if (n.patternProps[i].test(k)) { matched = true; self.check(n.patternNodes[i], v.get(k), at, out, depth + 1); }
+                    }
+                }
+                if (!matched && n.additional != null) {
+                    if (n.additional.fixed == 0) { self.add(out, at, "is not allowed", "additionalProperties"); }
+                    else { self.check(n.additional, v.get(k), at, out, depth + 1); }
+                }
+                if (n.names != null) { self.check(n.names, Json.of(k), at, out, depth + 1); }
+                if (n.dependent != null) {
+                    let need = n.dependent.getOr(k, null);
+                    if (need != null) {
+                        for (d in need) { if (!v.has(d)) { self.add(out, path + "/" + JsonSchema.escape(d), "is required when " + k + " is given", "dependentRequired"); } }
+                    }
+                }
+            }
+        }
+        private fn arrays(n: SchemaNode, v: JsonValue, path: string, out: Array<JsonSchemaError>, depth: int) {
+            let count = v.size();
+            if (n.minItems >= 0 && count < n.minItems) { self.add(out, path, "must have at least ${n.minItems} items", "minItems"); }
+            if (n.maxItems >= 0 && count > n.maxItems) { self.add(out, path, "must have at most ${n.maxItems} items", "maxItems"); }
+            let first = 0;
+            if (n.prefix != null) {
+                for (i in 0..(count < n.prefix.size() ? count : n.prefix.size())) { self.check(n.prefix[i], v.at(i), path + "/${i}", out, depth + 1); }
+                first = n.prefix.size();
+            }
+            if (n.items != null) { for (i in first..count) { self.check(n.items, v.at(i), path + "/${i}", out, depth + 1); } }
+            if (n.unique) {
+                for (i in 0..count) {
+                    for (j in (i + 1)..count) {
+                        if (v.at(i) == v.at(j)) { self.add(out, path + "/${j}", "repeats item ${i}", "uniqueItems"); break; }
+                    }
+                }
+            }
+            if (n.contains != null) {
+                let hits = 0;
+                for (i in 0..count) { if (self.fits(n.contains, v.at(i), depth)) { hits += 1; } }
+                if (hits < n.minContains) { self.add(out, path, "must contain an item that fits " + n.contains.raw.toJson(), "contains"); }
+                if (n.maxContains >= 0 && hits > n.maxContains) { self.add(out, path, "contains too many such items", "maxContains"); }
+            }
+        }
+        private fn combinators(n: SchemaNode, v: JsonValue, path: string, out: Array<JsonSchemaError>, depth: int) {
+            if (n.allOf != null) { for (x in n.allOf) { self.check(x, v, path, out, depth + 1); } }
+            if (n.anyOf != null) {
+                let ok = false;
+                for (x in n.anyOf) { if (self.fits(x, v, depth)) { ok = true; break; } }
+                if (!ok) { self.add(out, path, "fits none of the allowed shapes (anyOf)", "anyOf"); }
+            }
+            if (n.oneOf != null) {
+                let hits = 0;
+                for (x in n.oneOf) { if (self.fits(x, v, depth)) { hits += 1; } }
+                if (hits != 1) { self.add(out, path, hits == 0 ? "fits none of the allowed shapes (oneOf)" : "fits more than one of the shapes (oneOf)", "oneOf"); }
+            }
+            if (n.notN != null && self.fits(n.notN, v, depth)) { self.add(out, path, "must not fit " + n.notN.raw.toJson(), "not"); }
+            if (n.ifN != null) {
+                if (self.fits(n.ifN, v, depth)) { if (n.thenN != null) { self.check(n.thenN, v, path, out, depth + 1); } }
+                else if (n.elseN != null) { self.check(n.elseN, v, path, out, depth + 1); }
+            }
+        }
+        private fn fits(n: SchemaNode, v: JsonValue, depth: int) -> bool {
+            let tmp = new Array<JsonSchemaError>();
+            self.check(n, v, "", tmp, depth + 1);
+            return tmp.isEmpty();
+        }
+        // A "#/…" pointer in this schema, or null.
+        private fn resolve(ref: string) -> JsonValue {
+            if (ref == "#" || ref == "") { return self.root; }
+            if (!Str.startsWith(ref, "#/")) { return null; }
+            let cur = self.root;
+            for (part in Str.split(ref[2..], "/")) {
+                let key = Str.replace(Str.replace(JsonSchema.unpercent(part), "~1", "/"), "~0", "~");
+                if (cur.isArray()) { cur = cur.at(Format.toLongOr(key, -1) as int); }
+                else if (cur.isObject() && cur.has(key)) { cur = cur.get(key); }
+                else { return null; }
+            }
+            return cur;
+        }
+        private fn regex(pattern: string) -> Regex {
+            let hit = self.regexes.getOr(pattern, null);
+            if (hit != null) { return hit; }
+            let re: Regex = null;
+            try { re = new Regex(JsonSchema.posix(pattern)); } catch (e: ValueError) { re = null; }
+            if (re != null && self.regexes.size() < 1000) { self.regexes.put(pattern, re); }
+            return re;
+        }
+        // ECMAScript's \d, \w, \s (and \D, \W, \S) in POSIX terms.
+        static fn posix(p: string) -> string {
+            let out = new StringBuilder();
+            let inClass = false;
+            let i = 0;
+            while (i < p.length) {
+                let c = Str.charAt(p, i);
+                if (c == 92 && i + 1 < p.length) {
+                    let d = Str.charAt(p, i + 1);
+                    let body = d == 100 ? "0-9" : (d == 119 ? "A-Za-z0-9_" : (d == 115 ? "[:space:]" : ""));
+                    let neg = d == 68 || d == 87 || d == 83;
+                    if (neg) { body = d == 68 ? "0-9" : (d == 87 ? "A-Za-z0-9_" : "[:space:]"); }
+                    if (body != "") {
+                        if (inClass && !neg) { out.append(body); } else { out.append(neg ? "[^" + body + "]" : "[" + body + "]"); }
+                        i += 2;
+                        continue;
+                    }
+                    out.appendChar(c);
+                    out.appendChar(d);
+                    i += 2;
+                    continue;
+                }
+                if (c == 91 && !inClass) { inClass = true; }
+                else if (c == 93 && inClass) { inClass = false; }
+                out.appendChar(c);
+                i += 1;
+            }
+            return out.toString();
+        }
+        // %XX escapes decoded (a $ref is a URI fragment).
+        static fn unpercent(s: string) -> string {
+            if (!Str.contains(s, "%")) { return s; }
+            let out = new StringBuilder();
+            let i = 0;
+            while (i < s.length) {
+                let c = Str.charAt(s, i);
+                if (c == 37 && i + 2 < s.length) {
+                    let hi = JsonSchema.hexDigit(Str.charAt(s, i + 1));
+                    let lo = JsonSchema.hexDigit(Str.charAt(s, i + 2));
+                    if (hi >= 0 && lo >= 0) { out.appendChar(hi * 16 + lo); i += 3; continue; }
+                }
+                out.appendChar(c);
+                i += 1;
+            }
+            return out.toString();
+        }
+        private static fn hexDigit(d: int) -> int {
+            return d >= 48 && d <= 57 ? d - 48 : (d >= 97 && d <= 102 ? d - 87 : (d >= 65 && d <= 70 ? d - 55 : -1));
+        }
+        // A key as a JSON Pointer part.
+        static fn escape(k: string) -> string { return Str.replace(Str.replace(k, "~", "~0"), "/", "~1"); }
+
+        // ── a schema from a class ─────────────────────────────────────────────
+        // The schema of what JsonMap reads into `cls`: its mapped fields as
+        // properties, those whose type is not `T?` required, nested classes in
+        // $defs. @Schema(...) on a field adds to its property: minimum, maximum,
+        // minLength, maxLength, pattern, format, description, example, … as
+        // named (min and max are minimum and maximum).
+        static fn forClass(cls: ClassInfo) -> JsonValue {
+            let defs = Json.object();
+            let s = JsonSchema.objectSchema(cls, defs);
+            if (defs.size() > 0) { s.set("$defs", defs); }
+            return s;
+        }
+        private static fn objectSchema(cls: ClassInfo, defs: JsonValue) -> JsonValue {
+            let s = Json.object().set("type", "object");
+            let props = Json.object();
+            let req = Json.array();
+            for (f in JsonMap.plan(cls).fields) {
+                let p = JsonSchema.typeSchema(f.type, defs);
+                let deco = f.field.decorator("Schema");
+                if (deco != null) {
+                    for (i in 0..deco.args.size()) {
+                        let k = deco.keys[i];
+                        if (k == "") { continue; }
+                        let name = k == "min" ? "minimum" : (k == "max" ? "maximum" : k);
+                        p.set(name, JsonMap.anyJson(deco.args[i]));
+                    }
+                }
+                props.set(f.key, p);
+                if (!f.type.nullable) { req.push(f.key); }
+            }
+            s.set("properties", props);
+            if (req.size() > 0) { s.set("required", req); }
+            return s;
+        }
+        private static fn typeSchema(t: JsonType, defs: JsonValue) -> JsonValue {
+            let s = Json.object();
+            switch (t.kind) {
+                case 0: { s.set("type", "string"); }
+                case 1: { s.set("type", "integer"); s.set("format", "int32"); }
+                case 2: { s.set("type", "integer"); s.set("format", "int64"); }
+                case 3: { s.set("type", "number"); }
+                case 4: { s.set("type", "boolean"); }
+                case 7: {
+                    let name = t.cls.simpleName();
+                    if (!defs.has(name)) {
+                        defs.set(name, Json.object());                                 // (a class that holds itself)
+                        defs.set(name, JsonSchema.objectSchema(t.cls, defs));
+                    }
+                    s.set("$ref", "#/$defs/" + name);
+                }
+                case 8: { s.set("type", "array"); s.set("items", JsonSchema.typeSchema(t.item, defs)); }
+                case 9: { s.set("type", "object"); s.set("additionalProperties", JsonSchema.typeSchema(t.item, defs)); }
+            }
+            if (t.nullable) {
+                if (s.has("$ref")) { return Json.object().set("anyOf", Json.array().push(s).push(Json.object().set("type", "null"))); }
+                if (s.has("type")) { s.set("type", Json.array().push(s.getString("type", "")).push("null")); }
+            }
+            return s;
+        }
+    }
+
+    // The format keyword's checks.
+    class JsonFormats {
+        static fn check(format: string, s: string) -> bool {
+            if (format == "email") { return JsonFormats.email(s); }
+            if (format == "uri" || format == "url") { return JsonFormats.uri(s); }
+            if (format == "date") { return JsonFormats.date(s); }
+            if (format == "time") { return JsonFormats.time(s); }
+            if (format == "date-time") {
+                let t = Str.indexOfAny(s, "Tt ");
+                return t == 10 && JsonFormats.date(s[..10]) && JsonFormats.time(s[11..]);
+            }
+            if (format == "uuid") { return Uuid.isValid(s); }
+            if (format == "ipv4") { return JsonFormats.ipv4(s); }
+            if (format == "ipv6") { return JsonFormats.ipv6(s); }
+            if (format == "hostname") { return JsonFormats.hostname(s); }
+            return true;                                                          // (unknown formats are notes)
+        }
+        static fn email(s: string) -> bool {
+            let at = Str.lastIndexOf(s, "@");
+            if (at < 1 || at == s.length - 1 || Str.indexOfAny(s, " \t\r\n") >= 0) { return false; }
+            let host = s[at + 1..];
+            return Str.contains(host, ".") && JsonFormats.hostname(host) && !Str.contains(s[..at], "@");
+        }
+        static fn uri(s: string) -> bool {
+            let c = Str.indexOf(s, ":");
+            if (c < 1 || Str.indexOfAny(s, " \t\r\n<>\"") >= 0) { return false; }
+            let scheme = s[..c];
+            let first = Str.charAt(scheme, 0);
+            if (!((first >= 65 && first <= 90) || (first >= 97 && first <= 122))) { return false; }
+            for (i in 0..scheme.length) {
+                let d = Str.charAt(scheme, i);
+                if (!((d >= 65 && d <= 90) || (d >= 97 && d <= 122) || (d >= 48 && d <= 57) || d == 43 || d == 45 || d == 46)) { return false; }
+            }
+            return true;
+        }
+        static fn date(s: string) -> bool {
+            if (s.length != 10 || Str.charAt(s, 4) != 45 || Str.charAt(s, 7) != 45) { return false; }
+            let y = Format.toLongOr(s[..4], -1);
+            let m = Format.toLongOr(s[5..7], -1);
+            let d = Format.toLongOr(s[8..], -1);
+            if (y < 0 || m < 1 || m > 12 || d < 1) { return false; }
+            let days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            let max = days[(m - 1) as int] as long;
+            if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) { max = 29; }
+            return d <= max;
+        }
+        // hh:mm:ss[.frac] with Z or ±hh:mm
+        static fn time(s: string) -> bool {
+            if (s.length < 9 || Str.charAt(s, 2) != 58 || Str.charAt(s, 5) != 58) { return false; }
+            let h = Format.toLongOr(s[..2], -1);
+            let m = Format.toLongOr(s[3..5], -1);
+            let sec = Format.toLongOr(s[6..8], -1);
+            if (h < 0 || h > 23 || m < 0 || m > 59 || sec < 0 || sec > 60) { return false; }
+            let i = 8;
+            if (Str.charAt(s, i) == 46) {
+                i += 1;
+                let start = i;
+                while (i < s.length && Str.charAt(s, i) >= 48 && Str.charAt(s, i) <= 57) { i += 1; }
+                if (i == start) { return false; }
+            }
+            let rest = s[i..];
+            if (rest == "Z" || rest == "z") { return true; }
+            if (rest.length != 6 || (Str.charAt(rest, 0) != 43 && Str.charAt(rest, 0) != 45) || Str.charAt(rest, 3) != 58) { return false; }
+            let oh = Format.toLongOr(rest[1..3], -1);
+            let om = Format.toLongOr(rest[4..], -1);
+            return oh >= 0 && oh <= 23 && om >= 0 && om <= 59;
+        }
+        static fn ipv4(s: string) -> bool {
+            let parts = Str.split(s, ".");
+            if (parts.size() != 4) { return false; }
+            for (p in parts) {
+                if (p == "" || p.length > 3 || !Str.isDigits(p) || (p.length > 1 && Str.startsWith(p, "0"))) { return false; }
+                if (Format.toLong(p) > 255) { return false; }
+            }
+            return true;
+        }
+        static fn ipv6(s: string) -> bool {
+            if (s.length < 2 || Str.indexOfAny(s, "%/ ") >= 0) { return false; }
+            let doubles = Str.count(s, "::");
+            if (doubles > 1) { return false; }
+            let groups = Str.split(s, ":");
+            let count = 0;
+            for (i in 0..groups.size()) {
+                let g = groups[i];
+                if (g == "") { continue; }
+                if (i == groups.size() - 1 && Str.contains(g, ".")) { if (!JsonFormats.ipv4(g)) { return false; } count += 2; continue; }
+                if (g.length > 4) { return false; }
+                for (j in 0..g.length) {
+                    let c = Str.charAt(g, j);
+                    if (!((c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70))) { return false; }
+                }
+                count += 1;
+            }
+            return doubles == 1 ? count < 8 : count == 8;
+        }
+        static fn hostname(s: string) -> bool {
+            if (s == "" || s.length > 253) { return false; }
+            for (label in Str.split(Str.endsWith(s, ".") ? s[..s.length - 1] : s, ".")) {
+                if (label == "" || label.length > 63 || Str.startsWith(label, "-") || Str.endsWith(label, "-")) { return false; }
+                for (j in 0..label.length) {
+                    let c = Str.charAt(label, j);
+                    if (!((c >= 48 && c <= 57) || (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 45)) { return false; }
+                }
+            }
+            return true;
+        }
+    }
+}
