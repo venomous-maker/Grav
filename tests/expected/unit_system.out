@@ -1,6 +1,7 @@
-running 4 tests
+running 5 tests
   ok    load, memory and uptime
   ok    glob
   ok    a file watcher's looks
   ok    a signal runs its handler
-result: 4 passed, 0 failed
+  ok    Process.executable: this program's absolute path
+result: 5 passed, 0 failed

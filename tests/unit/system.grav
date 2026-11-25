@@ -70,3 +70,10 @@ test "a signal runs its handler" {
     while (hits.get() < 22 && waited < 3000) { Thread.sleepMs(20); waited += 20 }
     assertEq(hits.get(), 22)
 }
+
+test "Process.executable: this program's absolute path" {
+    let exe = Process.executable()
+    assert(Str.startsWith(exe, "/"), exe)
+    assert(new File(exe).exists())
+    assert(Str.endsWith(exe, Path.basename(argv(0))) || argv(0) == "")
+}
