@@ -635,6 +635,15 @@ namespace std.data {
         fn operator[](i: int) -> JsonValue { return self.at(i); }
         // Whether an object has member `key`.
         public fn has(key: string) -> bool { return self.find(key) >= 0; }
+        // The kind of member `key` without making a value for it: -1 when there is
+        // none, else JsonKind's number (0 null, 1 bool, 2 number, 3 string, 4 array,
+        // 5 object), with 6 for a number holding an integer.
+        public fn kindOf(key: string) -> int {
+            let j = self.find(key);
+            if (j < 0) { return -1; }
+            let kd = self.slotKind(j);
+            return kd == 2 && %{ grav_jslot(self->buf, j)->flag != 0 %} as bool ? 6 : kd;
+        }
         // An array's elements, or an object's member values, one at a time:
         // `for (item in json["items"])`.
         public fn iterator() -> JsonItems { return new JsonItems(self); }
