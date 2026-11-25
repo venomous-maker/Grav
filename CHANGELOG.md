@@ -12,6 +12,46 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+### Tools
+
+- **`grav lint --fix`** applies the lints' meaning-preserving fixes to your own
+  files, round by round, and undoes a round that breaks the build.
+- New lints: **unused-private** (members), **unused-parameter** (protocol hooks
+  such as `compareTo` and `hashCode` excepted) and **empty-catch** (a comment in
+  the block says it is meant).
+
+### Standard library
+
+- **Data:** `JsonMap` (JSON straight into objects and back), `JsonSchema`
+  (compiled schemas, and a schema from a class), `Yaml` (YAML 1.2), `MsgPack`,
+  `Base32`, `Hotp` and `Totp`, `Uuid.v7` and `Ulid`, streamed `GzipWriter`/
+  `GzipReader` and `TarWriter`/`TarReader`.
+- **Text:** `Markdown` (to HTML, with a safe mode for users' text, and to plain
+  text), `Unicode` normalization (NFC, NFD, NFKC, NFKD), and `Str.indexOf(s, sub,
+  from)` and `Str.split(s, delim, limit)` overloads.
+- **Concurrency:** `LruCache` (bounded, thread-safe, with expiry), `Retry`
+  (exponential backoff with full jitter and a deadline), and the rate limits
+  `TokenBucket`, `TokenBuckets` and `SlidingWindow`.
+- **System:** `Cron` expressions (next, previous, due), `Process.executable()`.
+- **Network:** `Http2Client` (HTTP/2 over TLS, many requests at once on one
+  connection), and TLS ALPN (`Tls.connect` with protocols, `Tls.offer`,
+  `Tls.protocol`).
+- **Collections:** `BloomFilter`.
+- **Memory:** `Mem.sizeOf`, `deepSizeOf` and `describe`: what a value uses at run
+  time, following what it refers to.
+
+### Faster
+
+- The JSON parser reads members straight into storage (about 3x faster);
+  `Str.splitN` runs in one pass (about 4x); `toString` and `join` on collections
+  are linear (they were quadratic).
+
+### Fixed
+
+- JSON strings with a raw control character are an error, as JSON requires.
+- `LruCache` entries put with their own time to live expire in a cache that has
+  none.
+
 ## 1.12.0 (2026-11-24)
 
 ### Standard library
