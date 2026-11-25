@@ -113,10 +113,10 @@ test "Retry: tries again with growing waits, gives up, filters" {
     let tries = 0
     try {
         new Retry(5, 0).when(fn(e: Exception) -> bool { return e is IOError }).run(fn(a: int) { tries += 1; throw new ValueError("bad input") })
-    } catch (e: ValueError) {}
+    } catch (e: ValueError) {}   // (the throw is the point: nothing to handle)
     assertEq(tries, 1)                                                     // not an IOError: not tried again
     let started = Time.monotonicMs()
-    try { new Retry(100, 40, 40).noJitter().deadline(100).run(fn(a: int) { throw new IOError("x") }) } catch (e: IOError) {}
+    try { new Retry(100, 40, 40).noJitter().deadline(100).run(fn(a: int) { throw new IOError("x") }) } catch (e: IOError) {}   // (the throw is the point: nothing to handle)
     assert(Time.monotonicMs() - started < 2000)                              // (100 tries would take 4 s)
     let j = new Retry(3, 100, 100)
     for (i in 0..50) { let d = j.delayFor(2); assert(d >= 0 && d <= 100) }

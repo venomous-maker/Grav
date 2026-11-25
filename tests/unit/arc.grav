@@ -124,8 +124,8 @@ class Oops extends Exception {
 
 test "thrown exceptions are freed once handled" {
     for (i in 0..100) {
-        try { throw new Oops("boom") } catch (e: Oops) {}
-        try { try { throw new Oops("inner") } catch (e: Oops) { throw e } } catch (e: Oops) {}
+        try { throw new Oops("boom") } catch (e: Oops) {}   // (the throw is the point: nothing to handle)
+        try { try { throw new Oops("inner") } catch (e: Oops) { throw e } } catch (e: Oops) {}   // (the throw is the point: nothing to handle)
     }
     assertEq(Live.count, 0)
 }
@@ -133,7 +133,7 @@ test "thrown exceptions are freed once handled" {
 test "finally keeps the pending exception" {
     let seen = ""
     try {
-        try { throw new Oops("first") } finally { try { throw new Oops("second") } catch (x: Oops) {} }
+        try { throw new Oops("first") } finally { try { throw new Oops("second") } catch (x: Oops) {} }   // (the throw is the point: nothing to handle)
     } catch (e: Oops) { seen = e.message() }
     assertEq(seen, "first")
     assertEq(Live.count, 0)
@@ -211,7 +211,7 @@ test "an exception frees the locals of every frame it leaves" {
     let base = Live.count
     let depth = unwindDepth()
     for (i in 0..50) {
-        try { descend(6) } catch (e: Oops) {}
+        try { descend(6) } catch (e: Oops) {}   // (the throw is the point: nothing to handle)
     }
     assertEq(Live.count, base)
     assertEq(unwindDepth(), depth)
@@ -223,7 +223,7 @@ test "loop variables and early exits keep unwinding balanced" {
     for (i in 0..6) { items.push(new Tracked(i)) }
     let depth = unwindDepth()             // items itself is registered
     for (round in 0..20) {
-        try { scan(items, 4) } catch (e: Oops) {}
+        try { scan(items, 4) } catch (e: Oops) {}   // (the throw is the point: nothing to handle)
         assertEq(scan(items, 99), 1 + 3 + 5 - 3)
         for (it in items) {
             let probe = new Tracked(it.n)
@@ -241,7 +241,7 @@ test "loop variables and early exits keep unwinding balanced" {
 test "a constructor that throws frees its half-built object" {
     let base = Live.count
     for (i in 0..10) {
-        try { let h = new HalfBuilt(true); print(h.part.n) } catch (e: Oops) {}
+        try { let h = new HalfBuilt(true); print(h.part.n) } catch (e: Oops) {}   // (the throw is the point: nothing to handle)
     }
     assertEq(Live.count, base)
     assertEq(HalfBuilt.destroyed, 0)      // the destructor of an unbuilt object never runs
@@ -257,7 +257,7 @@ test "finally and rethrow free the frames they leave" {
             let outer = new Tracked(1)
             try { descend(3) } finally { let during = new Tracked(2); assertEq(during.n, 2) }
             print(outer.n)
-        } catch (e: Oops) {}
+        } catch (e: Oops) {}   // (the throw is the point: nothing to handle)
     }
     if (true) {
         let failure = Panic.recover(fn() { let held = new Tracked(7); descend(held.n - 5) })
@@ -294,9 +294,9 @@ test "faults free the locals of the frames they leave" {
     let base = Live.count
     let depth = unwindDepth()
     for (i in 0..20) {
-        try { pick(9) } catch (e: IndexError) {}
-        try { share(10, 0) } catch (e: ArithmeticError) {}
-        try { viaClosure(3) } catch (e: IndexError) {}
+        try { pick(9) } catch (e: IndexError) {}   // (the throw is the point: nothing to handle)
+        try { share(10, 0) } catch (e: ArithmeticError) {}   // (the throw is the point: nothing to handle)
+        try { viaClosure(3) } catch (e: IndexError) {}   // (the throw is the point: nothing to handle)
     }
     assertEq(pick(1), 2 + 1 + 6)
     assertEq(Live.count, base)

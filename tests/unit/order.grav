@@ -23,7 +23,7 @@ class Square implements Shape {
 }
 class Made { static count: int = 0 }
 fn made(n: int) -> Square { Made.count += 1; return n == 0 ? null : new Square(n) }
-class Failure extends Exception { constructor(m: string, code: int) { super(m) } }
+class Failure extends Exception { constructor(m: string, code: int) { super(m) } }   // allow(unused-parameter)
 struct Point { x: int  y: int }
 
 test "operators and calls" {
@@ -72,7 +72,7 @@ test "conditions, switch, throw and for-in" {
     assertEq(taken(), "abab")
     switch (diff(at("a", 1), at("b", 2))) { case -1: n = 1 default: n = 2 }
     assertEq(taken(), "ab")
-    try { throw new Failure("x", diff(at("a", 1), at("b", 2))) } catch (e: Failure) {}
+    try { throw new Failure("x", diff(at("a", 1), at("b", 2))) } catch (e: Failure) {}   // (the throw is the point: nothing to handle)
     assertEq(taken(), "ab")
     for (x in pair(at("a", 1), at("b", 2))) { n += x }
     assertEq(taken(), "ab")
