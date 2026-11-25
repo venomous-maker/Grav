@@ -36,6 +36,10 @@ true
 - `execOutput(cmd)` returns only the output.
 - `args()` is the command line as an `Array<string>`; `sleepMs`, `exit` and `pid`
   do what their names say.
+- `executable()` is the running program's absolute path (from `/proc/self/exe` on
+  Linux, the loader on macOS), whatever directory it was started from: to start
+  more copies of itself as workers with [Command](command.md), or to find files
+  installed beside it.
 
 ## Shutting down cleanly
 
@@ -99,6 +103,7 @@ The result of Process.run: the exit code and everything the command printed.
 - `static fn execOutput(cmd: string) -> string` — Runs a shell command and captures its standard output.
 - `static fn run(cmd: string) -> ProcessResult` — Runs a shell command, capturing its output and exit status.
 - `static fn pid() -> int` — This process's id.
+- `static fn executable() -> string` — The running program's absolute path ("/home/ada/app/server"): to start more copies of itself (workers), or find files installed beside it.
 - `static fn args() -> Array<string>` — The program's command-line arguments (without the program name).
 - `static fn sleepMs(ms: int)` — Pauses for `ms` milliseconds.
 - `static fn exit(code: int)` — Ends the program with an exit status.
