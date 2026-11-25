@@ -1,4 +1,5 @@
-// lib/data/compress.grav — gzip, zlib and raw deflate compression, using the
+// lib/data/compress.grav — gzip, zlib and raw deflate compression (whole, or
+// streamed with GzipWriter and GzipReader), using the
 // system's zlib.
 //
 //   let packed = Compress.gzip(Bytes.fromString(Str.repeat("hello ", 1000)))
@@ -146,6 +147,117 @@ namespace std.data {
         *outCap = (long long)cap;
         return out;
     }
+
+    /* ── streams: gzip written or read a piece at a time ──────────────────── */
+    typedef struct {
+        GravZStream z; int inflating, level, wbits, ended, pendingReset;
+        FILE* f; unsigned char* in; size_t inCap, inLen, inPos;
+    } GravZS;
+    static int grav_zs_init(GravZS* s) {
+        memset(&s->z, 0, sizeof s->z);
+        return s->inflating ? grav_z.inflateInit2_(&s->z, s->wbits, grav_z.zlibVersion(), (int)sizeof s->z) == GRAV_Z_OK
+                            : grav_z.deflateInit2_(&s->z, s->level, 8, s->wbits, 8, 0, grav_z.zlibVersion(), (int)sizeof s->z) == GRAV_Z_OK;
+    }
+    static GravZS* grav_zs_new(int inflating, int level, int wbits) {
+        GravZS* s = (GravZS*)calloc(1, sizeof(GravZS));
+        if (!s) abort();
+        s->inflating = inflating; s->level = level; s->wbits = wbits;
+        if (!grav_zs_init(s)) { free(s); return 0; }
+        return s;
+    }
+    static void grav_zs_free(GravZS* s) {
+        if (!s) return;
+        if (s->inflating) grav_z.inflateEnd(&s->z); else grav_z.deflateEnd(&s->z);
+        if (s->f) fclose(s->f);
+        free(s->in); free(s);
+    }
+    /* Compresses n more bytes (and ends the stream when `fin`): the output made,
+       malloc'd (0 when none), its length in *outLen. */
+    static unsigned char* grav_zs_deflate(GravZS* s, const unsigned char* p, long long n, int fin, long long* outLen, long long* outCap, const char** err) {
+        size_t cap = (size_t)(n / 2) + 1024, made = 0;
+        unsigned char* out = (unsigned char*)malloc(cap);
+        if (!out) abort();
+        long long left = n;
+        const unsigned char* at = p;
+        int rc = GRAV_Z_OK;
+        for (;;) {
+            if (s->z.avail_in == 0 && left > 0) {
+                unsigned int chunk = left > (1 << 30) ? (1u << 30) : (unsigned int)left;
+                s->z.next_in = at; s->z.avail_in = chunk; at += chunk; left -= chunk;
+            }
+            if (made == cap) { cap *= 2; out = (unsigned char*)realloc(out, cap); if (!out) abort(); }
+            s->z.next_out = out + made;
+            s->z.avail_out = (unsigned int)(cap - made > (1u << 30) ? (1u << 30) : cap - made);
+            unsigned int before = s->z.avail_out;
+            rc = grav_z.deflate(&s->z, fin && left == 0 ? GRAV_Z_FINISH : 0);
+            made += before - s->z.avail_out;
+            if (rc != GRAV_Z_OK && rc != GRAV_Z_STREAM_END && rc != GRAV_Z_BUF_ERROR) { free(out); *err = "compression failed"; return 0; }
+            if (fin) { if (rc == GRAV_Z_STREAM_END) break; continue; }
+            if (s->z.avail_in == 0 && left == 0 && s->z.avail_out != 0) break;
+        }
+        s->z.next_in = 0;
+        if (made == 0) { free(out); out = 0; cap = 0; }
+        *outLen = (long long)made; *outCap = (long long)cap;
+        return out;
+    }
+    /* More compressed input, kept until inflated. */
+    static void grav_zs_feed(GravZS* s, const unsigned char* p, long long n) {
+        if (s->inPos > 0) { memmove(s->in, s->in + s->inPos, s->inLen - s->inPos); s->inLen -= s->inPos; s->inPos = 0; }
+        if (s->inLen + (size_t)n > s->inCap) {
+            size_t c = s->inCap < 65536 ? 65536 : s->inCap;
+            while (c < s->inLen + (size_t)n) c *= 2;
+            s->in = (unsigned char*)realloc(s->in, c); if (!s->in) abort();
+            s->inCap = c;
+        }
+        memcpy(s->in + s->inLen, p, (size_t)n); s->inLen += (size_t)n;
+    }
+    /* Reads up to 64 KB of the stream's file into its input; how many (0 at the end). */
+    static long long grav_zs_feed_file(GravZS* s) {
+        unsigned char buf[65536];
+        size_t n = fread(buf, 1, sizeof buf, s->f);
+        if (n > 0) grav_zs_feed(s, buf, (long long)n);
+        return (long long)n;
+    }
+    /* Inflates into out (up to max): bytes made (> 0); 0 when more input is
+       needed; -1 at the end (after the last gzip member); -3 on bad data (*err).
+       Members written one after another (as `cat a.gz b.gz` makes) read as one. */
+    static long long grav_zs_inflate(GravZS* s, unsigned char* out, long long max, int sourceDone, const char** err) {
+        for (;;) {
+            if (s->ended) return -1;
+            size_t have = s->inLen - s->inPos;
+            if (s->pendingReset) {
+                if (have >= 2) {
+                    if (s->in[s->inPos] == 0x1f && s->in[s->inPos + 1] == 0x8b) {
+                        grav_z.inflateEnd(&s->z);
+                        if (!grav_zs_init(s)) { *err = "cannot start decompressing"; return -3; }
+                        s->pendingReset = 0;
+                    } else { s->ended = 1; return -1; }
+                } else if (sourceDone) { s->ended = 1; return -1; }
+                else return 0;
+                have = s->inLen - s->inPos;
+            }
+            s->z.next_in = s->in + s->inPos; s->z.avail_in = (unsigned int)have;
+            s->z.next_out = out; s->z.avail_out = (unsigned int)max;
+            int rc = grav_z.inflate(&s->z, 0);
+            s->inPos = (size_t)(s->z.next_in - s->in);
+            long long made = max - (long long)s->z.avail_out;
+            if (rc == GRAV_Z_STREAM_END) {
+                s->pendingReset = 1;
+                if (made > 0) return made;
+                continue;
+            }
+            if (rc == GRAV_Z_OK || rc == GRAV_Z_BUF_ERROR) {
+                if (made > 0) return made;
+                if (s->inPos == s->inLen) {
+                    if (sourceDone) { *err = "the compressed data ends too soon"; return -3; }
+                    return 0;
+                }
+                continue;
+            }
+            *err = rc == GRAV_Z_NEED_DICT ? "the data needs a preset dictionary" : "the data is not valid gzip data";
+            return -3;
+        }
+    }
     %}
 
     // gzip, zlib and raw deflate compression.
@@ -222,6 +334,144 @@ namespace std.data {
                            err = (unsigned char*)grav_e; grav_b != 0; }) %} as bool;
             if (!ok) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
             return out;
+        }
+    }
+
+    // gzip written a piece at a time: each write hands the compressed output
+    // made so far to the sink (or the file), so nothing needs to fit in memory.
+    //
+    //   let gz = GzipWriter.toFile("backup.tar.gz")
+    //   gz.write(chunk); ...; gz.finish()                     // finish() writes the end
+    class GzipWriter {
+        private zs: byte*
+        private sink: fn(Bytes) = null
+        private finished: bool = false
+        // Bytes given to write, and compressed bytes handed on.
+        public bytesIn: long = 0
+        public bytesOut: long = 0
+        // Compressed output goes to `sink`, in pieces, as it is made.
+        constructor(sink: fn(Bytes), level: int = 6) {
+            self.sink = sink;
+            self.zs = GzipWriter.open(level);
+        }
+        // Compressed output to the file at `path` (replaced); IOError when it cannot be opened.
+        static fn toFile(path: string, level: int = 6) -> GzipWriter {
+            let w = new GzipWriter(null, level);
+            let ok = %{ ({ FILE* grav_f = fopen(path, "wb"); ((GravZS*)w->zs)->f = grav_f; grav_f != 0; }) %} as bool;
+            if (!ok) { throw new IOError("cannot write '" + path + "'"); }
+            return w;
+        }
+        private static fn open(level: int) -> byte* {
+            if (!Compress.available()) { throw new StateError("compression needs zlib (libz), which could not be loaded"); }
+            if (level < 0 || level > 9) { throw new ValueError("compression level must be 0..9, not ${level}"); }
+            let zs = %{ (unsigned char*)grav_zs_new(0, level, 31) %} as byte*;
+            if (zs == null) { throw new StateError("cannot start compressing"); }
+            return zs;
+        }
+        destructor() { %{ grav_zs_free((GravZS*)self->zs); self->zs = 0; %}; }
+        fn write(data: Bytes) -> GzipWriter { self.push(data, false); return self; }
+        fn writeString(text: string) -> GzipWriter { self.push(Bytes.fromString(text), false); return self; }
+        // Ends the stream (writing its trailer) and closes the file; once.
+        fn finish() {
+            if (self.finished) { return; }
+            self.push(new Bytes(), true);
+            self.finished = true;
+            %{ GravZS* grav_s = (GravZS*)self->zs; if (grav_s->f) { fclose(grav_s->f); grav_s->f = 0; } %};
+        }
+        private fn push(data: Bytes, fin: bool) {
+            if (self.finished) { throw new StateError("GzipWriter: already finished"); }
+            let p = data.rawData();
+            let n = data.size();
+            self.bytesIn += n;
+            let out = new Bytes();
+            let err = %{ (const char*)0 %} as byte*;
+            let ok = %{ ({ long long grav_n = 0, grav_c = 0; const char* grav_e = 0;
+                           unsigned char* grav_b = grav_zs_deflate((GravZS*)self->zs, p, n, fin, &grav_n, &grav_c, &grav_e);
+                           if (grav_b) { free(out->data); out->data = grav_b; out->len = (int)grav_n; out->cap = (int)grav_c; }
+                           err = (unsigned char*)grav_e; grav_e == 0; }) %} as bool;
+            if (!ok) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
+            if (out.size() == 0) { return; }
+            self.bytesOut += out.size();
+            let toFile = %{ ((GravZS*)self->zs)->f != 0 %} as bool;
+            if (toFile) {
+                let q = out.rawData();
+                let m = out.size();
+                let wrote = %{ (long long)fwrite(q, 1, (size_t)m, ((GravZS*)self->zs)->f) %} as long;
+                if (wrote != m) { throw new IOError("GzipWriter: the file could not be written"); }
+                return;
+            }
+            let sink = self.sink;
+            sink(out);
+        }
+    }
+
+    // gzip read a piece at a time: compressed input comes from the source (or
+    // the file) as needed, and read() gives up to `max` bytes of the original.
+    // Members written one after another read as one stream.
+    //
+    //   let gz = GzipReader.fromFile("backup.tar.gz")
+    //   while (true) { let part = gz.read(65536); if (part.isEmpty()) { break }; ... }
+    class GzipReader {
+        private zs: byte*
+        private source: fn(int) -> Bytes = null
+        private sourceDone: bool = false
+        // Compressed input is asked of `source` (up to the number of bytes given;
+        // an empty result means there is no more).
+        constructor(source: fn(int) -> Bytes) {
+            self.source = source;
+            if (!Compress.available()) { throw new StateError("compression needs zlib (libz), which could not be loaded"); }
+            self.zs = %{ (unsigned char*)grav_zs_new(1, 0, 47) %} as byte*;
+            if (self.zs == null) { throw new StateError("cannot start decompressing"); }
+        }
+        // Reads the gzip file at `path`; IOError when it cannot be opened.
+        static fn fromFile(path: string) -> GzipReader {
+            let r = new GzipReader(null);
+            let ok = %{ ({ FILE* grav_f = fopen(path, "rb"); ((GravZS*)r->zs)->f = grav_f; grav_f != 0; }) %} as bool;
+            if (!ok) { throw new IOError("cannot read '" + path + "'"); }
+            return r;
+        }
+        destructor() { %{ grav_zs_free((GravZS*)self->zs); self->zs = 0; %}; }
+        // Up to `max` bytes of the original; empty at the end. ValueError on bad data.
+        fn read(max: int = 65536) -> Bytes {
+            let out = new Bytes(max);
+            while (true) {
+                let done = self.sourceDone;
+                let err = %{ (const char*)0 %} as byte*;
+                let n = %{ ({ const char* grav_e = 0; long long grav_r = grav_zs_inflate((GravZS*)self->zs, out->data, max, done, &grav_e);
+                              err = (unsigned char*)grav_e; grav_r; }) %} as long;
+                if (n > 0) {
+                    %{ out->len = (int)n; %};
+                    return out;
+                }
+                if (n == -1) { return out; }
+                if (n == -3) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
+                self.more();
+            }
+            return out;
+        }
+        // Everything left, at once.
+        fn readAll() -> Bytes {
+            let all = new Bytes();
+            while (true) {
+                let part = self.read(65536);
+                if (part.isEmpty()) { break; }
+                all.append(part);
+            }
+            return all;
+        }
+        private fn more() {
+            let fromFile = %{ ((GravZS*)self->zs)->f != 0 %} as bool;
+            if (fromFile) {
+                let n = %{ grav_zs_feed_file((GravZS*)self->zs) %} as long;
+                if (n == 0) { self.sourceDone = true; }
+                return;
+            }
+            let src = self.source;
+            let b = src(65536);
+            if (b.isEmpty()) { self.sourceDone = true; return; }
+            let p = b.rawData();
+            let n = b.size();
+            %{ grav_zs_feed((GravZS*)self->zs, p, n); %};
         }
     }
 }
