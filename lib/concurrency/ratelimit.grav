@@ -1,0 +1,242 @@
+// lib/concurrency/ratelimit.grav — rate limits in memory, thread-safe:
+// TokenBucket (one limit: bursts up to a capacity, refilled steadily),
+// TokenBuckets (one per key) and SlidingWindow (at most n per window per key,
+// counted over a sliding window). The keyed ones keep at most `maxKeys` keys,
+// forgetting the least recently used.
+//
+//   let api = new SlidingWindow(100, 60000)               // 100 a minute per client
+//   if (!api.hit(clientIp)) { return tooMany(api.retryAfterMs(clientIp)) }
+//
+//   let bucket = new TokenBucket(20, 5)                   // bursts of 20, 5 a second after
+//   if (bucket.tryTake()) { send() }
+import "../core/exception.grav"
+import "../core/math.grav"
+import "../sys/time.grav"
+import "async.grav"
+import "thread.grav"
+import "shared.grav"
+
+namespace std.concurrency {
+
+    // One token bucket's state (times in nanoseconds, monotonic).
+    class BucketState {
+        public tokens: double
+        public at: long
+        constructor(tokens: double, at: long) { self.tokens = tokens; self.at = at; }
+        // Adds what accrued since `at`, up to `capacity`.
+        fn refill(capacity: double, perSecond: double, now: long) {
+            if (now > self.at) {
+                self.tokens = self.tokens + ((now - self.at) as double) * perSecond / 1000000000.0;
+                if (self.tokens > capacity) { self.tokens = capacity; }
+                self.at = now;
+            }
+        }
+        // Milliseconds until `n` tokens are there (0: now; -1: never, n > capacity).
+        fn waitMs(n: double, capacity: double, perSecond: double) -> long {
+            if (n > capacity) { return -1; }
+            if (self.tokens >= n) { return 0; }
+            if (perSecond <= 0) { return -1; }
+            return Math.ceil((n - self.tokens) / perSecond * 1000.0) as long;
+        }
+    }
+
+    // A token bucket: up to `capacity` tokens, refilled at `perSecond`; each
+    // action takes one (or n). Starts full.
+    class TokenBucket {
+        public capacity: double
+        public perSecond: double
+        private state: BucketState
+        private lock: Mutex = new Mutex()
+        constructor(capacity: double, perSecond: double) {
+            if (capacity <= 0) { throw new ValueError("a TokenBucket holds more than 0 tokens"); }
+            self.capacity = capacity;
+            self.perSecond = perSecond;
+            self.state = new BucketState(capacity, Time.monotonicNs());
+        }
+        // Takes `n` tokens if they are there; whether it did.
+        fn tryTake(n: double = 1.0) -> bool {
+            self.lock.lock();
+            self.state.refill(self.capacity, self.perSecond, Time.monotonicNs());
+            let ok = self.state.tokens >= n;
+            if (ok) { self.state.tokens = self.state.tokens - n; }
+            self.lock.unlock();
+            return ok;
+        }
+        // Waits for `n` tokens and takes them (ValueError when n is more than the capacity).
+        fn take(n: double = 1.0) {
+            while (true) {
+                self.lock.lock();
+                self.state.refill(self.capacity, self.perSecond, Time.monotonicNs());
+                let wait = self.state.waitMs(n, self.capacity, self.perSecond);
+                if (wait == 0) { self.state.tokens = self.state.tokens - n; }
+                self.lock.unlock();
+                if (wait == 0) { return; }
+                if (wait < 0) { throw new ValueError("cannot take ${n} tokens from a bucket of ${self.capacity}"); }
+                Thread.sleepMs(wait as int);
+            }
+        }
+        // The tokens there now.
+        fn available() -> double {
+            self.lock.lock();
+            self.state.refill(self.capacity, self.perSecond, Time.monotonicNs());
+            let t = self.state.tokens;
+            self.lock.unlock();
+            return t;
+        }
+        // Milliseconds until `n` tokens are there (0: now; -1: never).
+        fn waitMs(n: double = 1.0) -> long {
+            self.lock.lock();
+            self.state.refill(self.capacity, self.perSecond, Time.monotonicNs());
+            let w = self.state.waitMs(n, self.capacity, self.perSecond);
+            self.lock.unlock();
+            return w;
+        }
+    }
+
+    // A token bucket per key (a client, a user, an IP address).
+    class TokenBuckets {
+        public capacity: double
+        public perSecond: double
+        private shards: Array<LruShard<string, BucketState>> = new Array<LruShard<string, BucketState>>()
+        private locks: Array<Mutex> = new Array<Mutex>()
+        constructor(capacity: double, perSecond: double, maxKeys: int = 100000) {
+            if (capacity <= 0) { throw new ValueError("a token bucket holds more than 0 tokens"); }
+            self.capacity = capacity;
+            self.perSecond = perSecond;
+            for (i in 0..16) { self.shards.push(new LruShard<string, BucketState>((maxKeys + 15) / 16)); self.locks.push(new Mutex()); }
+        }
+        private fn shard(key: string) -> int { let h = hashOf(key); return ((h ^ (h >> 17)) & 15) as int; }
+        // (under the shard's lock) the key's bucket, refilled to now
+        private fn bucket(s: int, key: string, now: long) -> BucketState {
+            let sh = self.shards[s];
+            let b = sh.getOr(key, 0, null);
+            if (b == null) {
+                b = new BucketState(self.capacity, now);
+                sh.put(key, b, 0);
+            }
+            b.refill(self.capacity, self.perSecond, now);
+            return b;
+        }
+        // Takes `n` of the key's tokens if they are there; whether it did.
+        fn tryTake(key: string, n: double = 1.0) -> bool {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let b = self.bucket(s, key, Time.monotonicNs());
+            let ok = b.tokens >= n;
+            if (ok) { b.tokens = b.tokens - n; }
+            self.locks[s].unlock();
+            return ok;
+        }
+        fn available(key: string) -> double {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let t = self.bucket(s, key, Time.monotonicNs()).tokens;
+            self.locks[s].unlock();
+            return t;
+        }
+        // Milliseconds until the key has `n` tokens (0: now; -1: never).
+        fn waitMs(key: string, n: double = 1.0) -> long {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let w = self.bucket(s, key, Time.monotonicNs()).waitMs(n, self.capacity, self.perSecond);
+            self.locks[s].unlock();
+            return w;
+        }
+        // Forgets a key (its bucket is full again).
+        fn reset(key: string) { let s = self.shard(key); self.locks[s].lock(); self.shards[s].remove(key); self.locks[s].unlock(); }
+    }
+
+    // One key's counts for SlidingWindow: the current fixed window and the one before.
+    class WindowCount {
+        public start: long
+        public current: long = 0
+        public previous: long = 0
+        constructor(start: long) { self.start = start; }
+    }
+
+    // At most `limit` hits per `windowMs` per key, over a sliding window: the
+    // previous fixed window counts in proportion to how much of it the sliding
+    // window still covers (two numbers per key, not a log of every hit).
+    class SlidingWindow {
+        public limit: long
+        public windowMs: long
+        private shards: Array<LruShard<string, WindowCount>> = new Array<LruShard<string, WindowCount>>()
+        private locks: Array<Mutex> = new Array<Mutex>()
+        constructor(limit: long, windowMs: long, maxKeys: int = 100000) {
+            if (limit < 1 || windowMs < 1) { throw new ValueError("a SlidingWindow needs a limit and a window of at least 1"); }
+            self.limit = limit;
+            self.windowMs = windowMs;
+            for (i in 0..16) { self.shards.push(new LruShard<string, WindowCount>((maxKeys + 15) / 16)); self.locks.push(new Mutex()); }
+        }
+        private fn shard(key: string) -> int { let h = hashOf(key); return ((h ^ (h >> 17)) & 15) as int; }
+        // (under the shard's lock) the key's counts, moved on to the window holding `now`
+        private fn counts(s: int, key: string, now: long) -> WindowCount {
+            let sh = self.shards[s];
+            let start = now - now % self.windowMs;
+            let c = sh.getOr(key, 0, null);
+            if (c == null) {
+                c = new WindowCount(start);
+                sh.put(key, c, 0);
+                return c;
+            }
+            if (start != c.start) {
+                c.previous = start - c.start == self.windowMs ? c.current : 0 as long;
+                c.current = 0;
+                c.start = start;
+            }
+            return c;
+        }
+        private fn used(c: WindowCount, now: long) -> double {
+            let into = ((now - c.start) as double) / (self.windowMs as double);
+            return (c.previous as double) * (1.0 - into) + (c.current as double);
+        }
+        // Counts `n` hits for `key` if they fit; whether they did.
+        fn hit(key: string, n: long = 1) -> bool {
+            let s = self.shard(key);
+            let now = Time.monotonicMs();
+            self.locks[s].lock();
+            let c = self.counts(s, key, now);
+            let ok = self.used(c, now) + n as double <= self.limit as double;
+            if (ok) { c.current += n; }
+            self.locks[s].unlock();
+            return ok;
+        }
+        // Hits the key has left in the sliding window now.
+        fn remaining(key: string) -> long {
+            let s = self.shard(key);
+            let now = Time.monotonicMs();
+            self.locks[s].lock();
+            let left = self.limit as double - self.used(self.counts(s, key, now), now);
+            self.locks[s].unlock();
+            return left <= 0 ? 0 as long : Math.floor(left) as long;
+        }
+        // Milliseconds until one more hit fits (0: now).
+        fn retryAfterMs(key: string) -> long {
+            let s = self.shard(key);
+            let now = Time.monotonicMs();
+            self.locks[s].lock();
+            let c = self.counts(s, key, now);
+            let wait: long = 0;
+            if (self.used(c, now) + 1.0 > self.limit as double) { wait = self.earliest(c, now) - now; }
+            self.locks[s].unlock();
+            return wait;
+        }
+        // The first moment one more hit fits: later in this fixed window (as the
+        // previous window's share falls), or partway into the next one (where
+        // this window's count becomes the previous one's).
+        private fn earliest(c: WindowCount, now: long) -> long {
+            let w = self.windowMs as double;
+            let room = (self.limit - c.current - 1) as double;
+            if (room >= 0 && c.previous > 0) {
+                let at = c.start + (Math.ceil((1.0 - room / (c.previous as double)) * w) as long);
+                if (at < c.start + self.windowMs) { return at > now ? at : now + 1; }
+            }
+            let next = c.start + self.windowMs;
+            if (c.current == 0) { return next; }
+            let into = 1.0 - ((self.limit - 1) as double) / (c.current as double);
+            let at = next + (into > 0 ? (Math.ceil(into * w) as long) : 0 as long);
+            return at > now ? at : now + 1;
+        }
+        fn reset(key: string) { let s = self.shard(key); self.locks[s].lock(); self.shards[s].remove(key); self.locks[s].unlock(); }
+    }
+}
