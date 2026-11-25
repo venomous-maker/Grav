@@ -19,6 +19,9 @@ namespace std.data {
     #include <stdio.h>
     #include <fcntl.h>
     #include <unistd.h>
+    #include <time.h>
+    #include <pthread.h>
+    #include <sys/random.h>
 
     static const char* grav_hash_hex(const unsigned char* d, int n) {
         static const char* x = "0123456789abcdef";
@@ -262,21 +265,123 @@ namespace std.data {
         if (fd >= 0) { while (got < n) { ssize_t r = read(fd, buf + got, n - got); if (r <= 0) break; got += (size_t)r; } close(fd); }
         for (; got < n; got++) buf[got] = (unsigned char)(rand() & 0xFF);   /* never happens on Linux */
     }
+    /* Random bytes for identifiers, from a per-thread buffer that getentropy()
+       fills 256 bytes at a time (one system call, not an open/read/close per id).
+       Bytes handed out are wiped; a forked child drops what it inherited. */
+    static __thread unsigned char grav_h_rbuf[256];
+    static __thread int grav_h_rpos = 256;
+    static __thread pid_t grav_h_rpid = 0;
+    static void grav_h_fast_random(unsigned char* out, size_t n) {
+        pid_t me = getpid();
+        if (me != grav_h_rpid) { grav_h_rpid = me; grav_h_rpos = 256; }
+        while (n) {
+            if (grav_h_rpos == 256) {
+                if (getentropy(grav_h_rbuf, 256) != 0) grav_h_os_random(grav_h_rbuf, 256);
+                grav_h_rpos = 0;
+            }
+            size_t k = (size_t)(256 - grav_h_rpos);
+            if (k > n) k = n;
+            memcpy(out, grav_h_rbuf + grav_h_rpos, k);
+            memset(grav_h_rbuf + grav_h_rpos, 0, k);
+            grav_h_rpos += (int)k; out += k; n -= k;
+        }
+    }
+    static uint64_t grav_h_now_ms(void) {
+        struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+        return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+    }
+    static const char* grav_h_uuid_text(const unsigned char* b) {
+        static const char hx[] = "0123456789abcdef";
+        char* r = grav_str_new(36);
+        int o = 0;
+        for (int i = 0; i < 16; i++) {
+            if (i == 4 || i == 6 || i == 8 || i == 10) r[o++] = '-';
+            r[o++] = hx[b[i] >> 4]; r[o++] = hx[b[i] & 15];
+        }
+        r[36] = 0;
+        return r;
+    }
+    /* UUID version 7 (RFC 9562): 48 bits of unix milliseconds, then a 12-bit
+       counter (method 1) so ids made in the same millisecond still sort in the
+       order made, then 62 random bits. The time and counter move together
+       through one atomic word: never backwards, even if the clock is. */
+    static uint64_t grav_h_v7_state = 0;
+    static const char* grav_h_uuid7(void) {
+        unsigned char r[10], b[16];
+        grav_h_fast_random(r, 10);
+        uint64_t ms = grav_h_now_ms(), old = __atomic_load_n(&grav_h_v7_state, __ATOMIC_ACQUIRE), nw;
+        do {
+            nw = (old >> 12) >= ms ? old + 1 : (ms << 12) | (uint64_t)(((r[0] << 4) | (r[1] >> 4)) & 0x7FF);   /* (a random start in the lower half) */
+        } while (!__atomic_compare_exchange_n(&grav_h_v7_state, &old, nw, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+        uint64_t t = nw >> 12; unsigned seq = (unsigned)(nw & 0xFFF);
+        for (int i = 0; i < 6; i++) b[i] = (unsigned char)(t >> (40 - 8 * i));
+        b[6] = (unsigned char)(0x70 | (seq >> 8)); b[7] = (unsigned char)(seq & 0xFF);
+        b[8] = (unsigned char)(0x80 | (r[2] & 0x3F));
+        memcpy(b + 9, r + 3, 7);
+        return grav_h_uuid_text(b);
+    }
+    /* ULID: 48 bits of unix milliseconds and 80 random bits, in Crockford's
+       Base32 (26 characters, sorting as text in time order). Within one
+       millisecond the random part counts up by one (monotonic ULIDs). */
+    static pthread_mutex_t grav_h_ulid_lock = PTHREAD_MUTEX_INITIALIZER;
+    static uint64_t grav_h_ulid_ms = 0;
+    static unsigned char grav_h_ulid_rand[10];
+    static const char* grav_h_ulid(void) {
+        static const char a[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        unsigned char b[16], fresh[10];
+        grav_h_fast_random(fresh, 10);
+        uint64_t ms = grav_h_now_ms();
+        pthread_mutex_lock(&grav_h_ulid_lock);
+        if (ms <= grav_h_ulid_ms) {
+            ms = grav_h_ulid_ms;
+            int i = 9;
+            while (i >= 0 && ++grav_h_ulid_rand[i] == 0) i--;
+            if (i < 0) { ms = ++grav_h_ulid_ms; memcpy(grav_h_ulid_rand, fresh, 10); }   /* (2^80 in one ms: move on a ms) */
+        } else {
+            grav_h_ulid_ms = ms;
+            memcpy(grav_h_ulid_rand, fresh, 10);
+        }
+        for (int i = 0; i < 6; i++) b[i] = (unsigned char)(ms >> (40 - 8 * i));
+        memcpy(b + 6, grav_h_ulid_rand, 10);
+        pthread_mutex_unlock(&grav_h_ulid_lock);
+        char* r = grav_str_new(26);
+        /* 128 bits as 26 five-bit groups, the first holding the top 3 bits */
+        for (int c = 0; c < 26; c++) {
+            int bit = c == 0 ? 0 : 3 + (c - 1) * 5, width = c == 0 ? 3 : 5, v = 0;
+            for (int k = 0; k < width; k++) { int p = bit + k; v = (v << 1) | ((b[p >> 3] >> (7 - (p & 7))) & 1); }
+            r[c] = a[v];
+        }
+        r[26] = 0;
+        return r;
+    }
+    /* The milliseconds in a ULID (first 10 characters), or -1 when it is not one. */
+    static long long grav_h_ulid_ms_of(const char* s) {
+        if (strlen(s) != 26) return -1;
+        uint64_t v = 0;
+        for (int i = 0; i < 26; i++) {
+            int c = (unsigned char)s[i], d;
+            if (c >= 'a' && c <= 'z') c -= 32;
+            if (c == 'O') c = '0'; else if (c == 'I' || c == 'L') c = '1';
+            const char* q = strchr("0123456789ABCDEFGHJKMNPQRSTVWXYZ", c);
+            if (!q || !c) return -1;
+            d = (int)(q - "0123456789ABCDEFGHJKMNPQRSTVWXYZ");
+            if (i == 0 && d > 7) return -1;
+            if (i < 10) v = (v << 5) | (uint64_t)d;
+        }
+        return (long long)v;
+    }
     static const char* grav_h_uuid4(void) {
         unsigned char b[16];
-        grav_h_os_random(b, 16);
+        grav_h_fast_random(b, 16);
         b[6] = (b[6] & 0x0F) | 0x40;      /* version 4 */
         b[8] = (b[8] & 0x3F) | 0x80;      /* RFC 4122 variant */
-        char* r = grav_str_new(36);
-        snprintf(r, 37, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-                 b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]);
-        return r;
+        return grav_h_uuid_text(b);
     }
     static const char* grav_h_random_token(int n) {
         unsigned char b[256];
         if (n > 256) n = 256;
         if (n < 0) n = 0;
-        grav_h_os_random(b, (size_t)n);
+        grav_h_fast_random(b, (size_t)n);
         return grav_hash_hex(b, n);
     }
     %}
@@ -337,6 +442,22 @@ namespace std.data {
         // A random (version 4) UUID such as "3f2b9c1e-8d4a-4f6b-9a2e-7c1d5e8f0a3b",
         // from the operating system's random source.
         static fn v4() -> string { return %{ grav_h_uuid4() %} as string }
+        // A time-ordered (version 7) UUID: unix milliseconds first, so ids made
+        // later sort later (as text or bytes), and new rows land at the end of an
+        // index. Ids made in the same millisecond keep their order too.
+        static fn v7() -> string { return %{ grav_h_uuid7() %} as string }
+        // The unix milliseconds in a version 7 UUID, or -1 for any other.
+        static fn timestampMs(s: string) -> long {
+            if (!Uuid.isValid(s) || s[14] != '7') { return -1 }
+            let hex = s[0..8] + s[9..13]
+            let v: long = 0
+            for (i in 0..12) {
+                let c = hex[i] as int
+                let d = c >= 97 ? c - 87 : (c >= 65 ? c - 55 : c - 48)
+                v = v * 16 + d
+            }
+            return v
+        }
         // The all-zero UUID.
         static fn nil() -> string { return "00000000-0000-0000-0000-000000000000" }
         // Whether `s` has the form xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (hex digits, any case).
@@ -352,5 +473,17 @@ namespace std.data {
             }
             return true
         }
+    }
+
+    // ULIDs: 26-character ids (Crockford Base32) that sort in the order made,
+    // "01JDQ8Z5J8A3T6V0K1R2M4N7PX": 48 bits of unix milliseconds, then 80 random
+    // bits (counting up within one millisecond).
+    class Ulid {
+        // A new ULID.
+        static fn generate() -> string { return %{ grav_h_ulid() %} as string }
+        // The unix milliseconds in a ULID, or -1 when `s` is not one.
+        static fn timestampMs(s: string) -> long { return %{ grav_h_ulid_ms_of(s) %} as long }
+        // Whether `s` is a ULID (either case; O, I and L read as 0, 1 and 1).
+        static fn isValid(s: string) -> bool { return Ulid.timestampMs(s) >= 0 }
     }
 }
