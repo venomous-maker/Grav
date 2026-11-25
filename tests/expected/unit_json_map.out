@@ -1,0 +1,6 @@
+running 4 tests
+  ok    read: fields by name, snake case and JsonName; nested lists, maps, objects
+  ok    write: the same keys back, and a round trip
+  ok    missing keys keep defaults; update changes only what is given
+  ok    a value of the wrong kind names the field
+result: 4 passed, 0 failed

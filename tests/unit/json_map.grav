@@ -1,0 +1,85 @@
+// JsonMap: JSON into objects and back (names, snake case, nested objects,
+// lists and maps, nullable fields, defaults for missing keys, errors).
+import "std"
+
+class Line {
+    public sku: string = ""
+    public qty: int = 0
+    public price: double = 0.0
+    constructor() {}
+}
+
+@JsonSnakeCase class Order {
+    public id: long = 0
+    public customerName: string = ""
+    @JsonName("total_cents") public total: long = 0
+    public paid: bool = false
+    public note: string? = null
+    public lines: Array<Line> = new Array<Line>()
+    public tags: Array<string> = new Array<string>()
+    public meta: HashMap<string, string> = new HashMap<string, string>()
+    public shipTo: Line = null
+    public extra: JsonValue = null
+    public anything: any = null
+    @JsonIgnore public cached: string = "keep"
+    private secret: string = "hidden"
+    constructor() {}
+}
+
+test "read: fields by name, snake case and JsonName; nested lists, maps, objects" {
+    let o = JsonMap.read::<Order>("{\"id\":7,\"customer_name\":\"Ada\",\"total_cents\":1250,\"paid\":true,\"note\":null," +
+        "\"lines\":[{\"sku\":\"A1\",\"qty\":2,\"price\":3.5},{\"sku\":\"B2\",\"qty\":1,\"price\":5}],\"tags\":[\"x\",\"y\"]," +
+        "\"meta\":{\"source\":\"web\"},\"ship_to\":{\"sku\":\"addr\"},\"extra\":{\"k\":[1]},\"anything\":[1,\"two\",{\"three\":3}],\"cached\":\"no\",\"secret\":\"no\"}")
+    assertEq(o.id, 7 as long)
+    assertEq(o.customerName, "Ada")
+    assertEq(o.total, 1250 as long)
+    assert(o.paid)
+    assertEq(o.note, null)
+    assertEq(o.lines.size(), 2)
+    assertEq(o.lines[0].qty, 2)
+    assertEq(o.lines[1].price, 5.0)
+    assertEq(str(o.tags), "[\"x\", \"y\"]")
+    assertEq(o.meta.get("source"), "web")
+    assertEq(o.shipTo.sku, "addr")
+    assertEq(o.extra.toJson(), "{\"k\":[1]}")
+    assertEq(((o.anything as Array<any>)[2] as HashMap<string, any>).get("three") as long, 3 as long)
+    assertEq(o.cached, "keep")
+}
+
+test "write: the same keys back, and a round trip" {
+    let o = new Order()
+    o.id = 3
+    o.customerName = "Bob"
+    o.note = "fragile"
+    let l = new Line()
+    l.sku = "Z"
+    l.qty = 4
+    o.lines.push(l)
+    o.tags.push("t")
+    o.meta.put("a", "b")
+    let text = JsonMap.write(o)
+    assertEq(text, "{\"id\":3,\"customer_name\":\"Bob\",\"total_cents\":0,\"paid\":false,\"note\":\"fragile\",\"lines\":[{\"sku\":\"Z\",\"qty\":4,\"price\":0}]," +
+                   "\"tags\":[\"t\"],\"meta\":{\"a\":\"b\"},\"ship_to\":null,\"extra\":null,\"anything\":null}")
+    let back = JsonMap.read::<Order>(text)
+    assertEq(JsonMap.write(back), text)
+}
+
+test "missing keys keep defaults; update changes only what is given" {
+    let o = JsonMap.read::<Order>("{\"id\":1}")
+    assertEq(o.customerName, "")
+    assertEq(o.lines.size(), 0)
+    JsonMap.update(o, Json.parse("{\"paid\":true}"))
+    assert(o.paid)
+    assertEq(o.id, 1 as long)
+    let list = JsonMap.intoList(Json.parse("[{\"sku\":\"a\"},{\"sku\":\"b\"}]"), reflect(Line))
+    assertEq((list[1] as Line).sku, "b")
+}
+
+test "a value of the wrong kind names the field" {
+    for (pair in [["{\"id\":\"seven\"}", "'id' must be a whole number"], ["{\"lines\":[{\"qty\":1.5}]}", "'lines[0].qty' must be a whole number"],
+                  ["{\"tags\":\"x\"}", "'tags' must be an array"], ["[1]", "must be an object"]]) {
+        let msg = ""
+        try { JsonMap.read::<Order>(pair[0]) } catch (e: ValueError) { msg = e.message() }
+        assert(Str.contains(msg, pair[1]), pair[0] + " -> " + msg)
+    }
+}
