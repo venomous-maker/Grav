@@ -75,6 +75,12 @@ test "LruCache: expiry, and a sharded cache under threads" {
     Thread.sleepMs(80)
     assertEq(c.getOr(1, "gone"), "gone")
     assertEq(c.getOr(2, ""), "two")
+    let own = new LruCache<string, int>(10)                               // no time to live of its own...
+    own.putFor("brief", 1, 40)                                             // ...but this entry has one
+    own.put("lasting", 2)
+    Thread.sleepMs(70)
+    assertEq(own.getOr("brief", 0), 0)
+    assertEq(own.getOr("lasting", 0), 2)
     let big = new LruCache<long, long>(2048)
     let wg = new WaitGroup()
     for (w in 0..4) {
