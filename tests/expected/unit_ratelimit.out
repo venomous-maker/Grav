@@ -1,0 +1,5 @@
+running 3 tests
+  ok    TokenBucket: a burst, then the refill rate
+  ok    TokenBuckets: each key its own; threads take no more than there is
+  ok    SlidingWindow: the limit per window, sliding, per key
+result: 3 passed, 0 failed

@@ -1,0 +1,60 @@
+// TokenBucket, TokenBuckets and SlidingWindow: bursts, refills, per key,
+// the sliding count, waits, threads.
+import "std"
+
+test "TokenBucket: a burst, then the refill rate" {
+    let b = new TokenBucket(5, 100)                                   // 5 at once, 100 a second
+    let taken = 0
+    for (i in 0..10) { if (b.tryTake()) { taken += 1 } }
+    assertEq(taken, 5)
+    let w = b.waitMs()
+    assert(w >= 0 && w <= 10, "wait ${w}")
+    Thread.sleepMs(30)
+    assert(b.tryTake())
+    assertEq(b.waitMs(6), -1 as long)                                 // more than it holds
+    let start = Time.monotonicMs()
+    b.take(3)
+    assert(Time.monotonicMs() - start < 200)
+    let msg = ""
+    try { b.take(10) } catch (e: ValueError) { msg = e.message() }
+    assert(Str.contains(msg, "cannot take"))
+}
+
+test "TokenBuckets: each key its own; threads take no more than there is" {
+    let bs = new TokenBuckets(3, 0.001)
+    assert(bs.tryTake("a") && bs.tryTake("a") && bs.tryTake("a"))
+    assert(!bs.tryTake("a"))
+    assert(bs.tryTake("b"))
+    bs.reset("a")
+    assert(bs.tryTake("a"))
+    let shared = new TokenBuckets(1000, 0.001)
+    let got = new AtomicLong(0)
+    let wg = new WaitGroup()
+    for (t in 0..4) {
+        wg.add(1)
+        Thread.spawn(fn() { for (i in 0..500) { if (shared.tryTake("k")) { got.increment() } }; wg.done() })
+    }
+    wg.wait()
+    assertEq(got.get(), 1000 as long)
+    let small = new TokenBuckets(1, 1, 32)                             // at most 32 keys kept
+    for (i in 0..1000) { small.tryTake("key${i}") }
+    assert(small.available("key999") < 1.0)
+}
+
+test "SlidingWindow: the limit per window, sliding, per key" {
+    let w = new SlidingWindow(3, 200)
+    assert(w.hit("ip") && w.hit("ip") && w.hit("ip"))
+    assert(!w.hit("ip"))
+    assertEq(w.remaining("ip"), 0 as long)
+    assert(w.hit("other"))
+    let wait = w.retryAfterMs("ip")
+    assert(wait > 0 && wait <= 400, "wait ${wait}")
+    Thread.sleepMs((wait + 5) as int)
+    assert(w.hit("ip"))                                               // room again as the window slid
+    let big = new SlidingWindow(10, 60000)
+    assert(big.hit("x", 7))
+    assert(!big.hit("x", 4))
+    assert(big.hit("x", 3))
+    w.reset("ip")
+    assertEq(w.remaining("ip"), 3 as long)
+}
