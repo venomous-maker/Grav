@@ -19,6 +19,14 @@ public:
     const std::string &stage() const { return stage_; }
     const std::string &message() const { return message_; }
 
+    // A warning's mechanical fix (`grav lint --fix`): replace the source from
+    // (line, col) to just before (endLine, endCol) with `text`. Lines are the
+    // combined program's, as line() is.
+    struct Fix { int line = 0, col = 0, endLine = 0, endCol = 0; std::string text; };
+    void setFix(Fix f) { fix_ = std::move(f); hasFix_ = true; }
+    bool hasFix() const { return hasFix_; }
+    const Fix &fix() const { return fix_; }
+
 private:
     static std::string format(const std::string &stage, int line, int col,
                               const std::string &message) {
@@ -31,6 +39,8 @@ private:
     int line_;
     int col_;
     std::string message_;
+    Fix fix_;
+    bool hasFix_ = false;
 };
 
 } // namespace grav

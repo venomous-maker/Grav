@@ -171,6 +171,15 @@ struct Linter {
         if (!help.empty()) m += std::string(1, kLintHelp) + "help: " + help;
         out.emplace_back("warning", line, col, m);
     }
+    // warn, with the fix `grav lint --fix` makes: `text` in place of the source
+    // from `from`'s first byte to `to`'s last (nothing when either span is unknown).
+    void warnFix(int line, int col, const std::string &name, const std::string &msg, const std::string &help,
+                 const Expr *from, const Expr *to, const std::string &text) {
+        size_t before = out.size();
+        warn(line, col, name, msg, help);
+        if (out.size() == before || text.empty() || !from || !to || from->sline == 0 || to->eline == 0) return;
+        out.back().setFix({from->sline, from->scol, to->eline, to->ecol, text});
+    }
 
     // ── expressions ─────────────────────────────────────────────────────────
     void expr(Expr &e) {
@@ -188,8 +197,9 @@ struct Linter {
             if (conv && conv->line == a->line && conv->col == a->col) literal = true;
             if (a->operand && !literal && !as<CBlockExpr>(a->operand.get()) && sameType(a->operand->type, a->target) &&
                 sameType(a->target, a->type))
-                warn(a->line, a->col, "redundant-cast", "this value is already " + std::string(typeWord(a->target)) +
-                     " of that type: the cast does nothing", show(a->operand.get()).empty() ? "remove `as ...`" : "write " + tick(show(a->operand.get())));
+                warnFix(a->line, a->col, "redundant-cast", "this value is already " + std::string(typeWord(a->target)) +
+                     " of that type: the cast does nothing", show(a->operand.get()).empty() ? "remove `as ...`" : "write " + tick(show(a->operand.get())),
+                     a, a, show(a->operand.get()));
         } else if (auto *c = as<CallExpr>(&e)) {
             auto *callee = as<NameExpr>(c->callee.get());
             // (a string's `${x}` is lowered to `str(x)` at the string's quote: only a written
@@ -197,14 +207,15 @@ struct Linter {
             if (callee && callee->name == "str" && c->kind == CallKind::Builtin && c->args.size() == 1 &&
                 callee->line == c->line && callee->col < c->col &&
                 c->args[0]->type.kind == TypeRef::Kind::String && !c->args[0]->type.isNullable())
-                warn(c->line, c->col, "redundant-str", "this is already a string: `str(...)` does nothing",
-                     show(c->args[0].get()).empty() ? "" : "write " + tick(show(c->args[0].get())));
+                warnFix(c->line, c->col, "redundant-str", "this is already a string: `str(...)` does nothing",
+                     show(c->args[0].get()).empty() ? "" : "write " + tick(show(c->args[0].get())), c, c, show(c->args[0].get()));
             // Str.charAt(s, i): a call (and reference counting) per byte; s[i] is none
             if (c->kind == CallKind::StaticMethod && c->methodName.rfind("charAt", 0) == 0 && c->args.size() == 2 &&
                 (c->ownerClass == "std.text.Str" || c->ownerClass == "Str")) {
                 std::string s = show(c->args[0].get()), i = show(c->args[1].get());
-                warn(c->line, c->col, "slow-char-at", "`Str.charAt` makes a call for each byte",
-                     s.empty() || i.empty() ? "index the string: `s[i]`" : "write " + tick(s + "[" + i + "]"));
+                warnFix(c->line, c->col, "slow-char-at", "`Str.charAt` makes a call for each byte",
+                     s.empty() || i.empty() ? "index the string: `s[i]`" : "write " + tick(s + "[" + i + "]"), c, c,
+                     s.empty() || i.empty() ? "" : s + "[" + i + "]");
             }
         } else if (auto *l = as<LambdaExpr>(&e)) {
             if (!l->isMatch) block(l->body);
@@ -223,8 +234,8 @@ struct Linter {
             if (!as<BoolLiteralExpr>(other) && other->type.kind == TypeRef::Kind::Bool && !other->type.isNullable()) {
                 bool positive = (b.op == BinaryOp::Eq) == lit;
                 std::string fix = positive ? show(other) : negate(other);
-                warn(b.line, b.col, "bool-comparison", std::string("comparing with `") + (lit ? "true" : "false") +
-                     "` is redundant", fix.empty() ? "" : "write " + tick(fix));
+                warnFix(b.line, b.col, "bool-comparison", std::string("comparing with `") + (lit ? "true" : "false") +
+                     "` is redundant", fix.empty() ? "" : "write " + tick(fix), &b, &b, fix);
                 return;
             }
         }
@@ -233,16 +244,17 @@ struct Linter {
             std::string recv = sizeCallReceiver(l);
             if (!recv.empty()) {
                 bool empty = b.op == BinaryOp::Eq;
-                warn(b.line, b.col, "len-zero", "comparing the size with zero: say what you mean",
-                     "write " + tick((empty ? "" : "!") + recv + ".isEmpty()"));
+                warnFix(b.line, b.col, "len-zero", "comparing the size with zero: say what you mean",
+                     "write " + tick((empty ? "" : "!") + recv + ".isEmpty()"), &b, &b, (empty ? "" : "!") + recv + ".isEmpty()");
                 return;
             }
             auto *m = as<MemberExpr>(l);
             if (m && m->member == "length" && m->object && m->object->type.kind == TypeRef::Kind::String && eq) {
                 std::string o = show(m->object.get());
                 if (!o.empty()) {
-                    warn(b.line, b.col, "len-zero", "comparing the length with zero: compare with the empty string",
-                         "write " + tick(o + (b.op == BinaryOp::Eq ? " == " : " != ") + "\"\""));
+                    warnFix(b.line, b.col, "len-zero", "comparing the length with zero: compare with the empty string",
+                         "write " + tick(o + (b.op == BinaryOp::Eq ? " == " : " != ") + "\"\""), &b, &b,
+                         o + (b.op == BinaryOp::Eq ? " == " : " != ") + "\"\"");
                     return;
                 }
             }
@@ -266,13 +278,14 @@ struct Linter {
         if (u.op != UnaryOp::Not || !u.operand || hidden(&u)) return;
         if (auto *inner = as<UnaryExpr>(u.operand.get()); inner && inner->op == UnaryOp::Not) {
             std::string s = show(inner->operand.get());
-            warn(u.line, u.col, "double-negation", "two `!`s cancel out", s.empty() ? "remove them both" : "write " + tick(s));
+            warnFix(u.line, u.col, "double-negation", "two `!`s cancel out", s.empty() ? "remove them both" : "write " + tick(s), &u, &u, s);
             return;
         }
         if (auto *b = as<BinaryExpr>(u.operand.get()); b && b->overloadMethod.empty() && !opposite(b->op).empty()) {
             std::string l = show(b->left.get()), r = show(b->right.get());
-            warn(u.line, u.col, "negated-comparison", "a negated comparison reads better as its opposite",
-                 l.empty() || r.empty() ? "use `" + opposite(b->op) + "`" : "write " + tick(l + " " + opposite(b->op) + " " + r));
+            warnFix(u.line, u.col, "negated-comparison", "a negated comparison reads better as its opposite",
+                 l.empty() || r.empty() ? "use `" + opposite(b->op) + "`" : "write " + tick(l + " " + opposite(b->op) + " " + r), &u, &u,
+                 l.empty() || r.empty() ? "" : l + " " + opposite(b->op) + " " + r);
         }
     }
 
@@ -284,9 +297,9 @@ struct Linter {
                 warn(t.line, t.col, "identical-branches", "both branches of this `?:` are the same", "use the value without the condition");
             return;
         }
-        if (a == b) { warn(t.line, t.col, "identical-branches", "both branches of this `?:` are the same", "write " + tick(a ? "true" : "false")); return; }
+        if (a == b) { warnFix(t.line, t.col, "identical-branches", "both branches of this `?:` are the same", "write " + tick(a ? "true" : "false"), &t, &t, a ? "true" : "false"); return; }
         std::string fix = a ? show(t.cond.get()) : negate(t.cond.get());
-        warn(t.line, t.col, "needless-bool", "this `?:` gives back its own condition", fix.empty() ? "use the condition itself" : "write " + tick(fix));
+        warnFix(t.line, t.col, "needless-bool", "this `?:` gives back its own condition", fix.empty() ? "use the condition itself" : "write " + tick(fix), &t, &t, fix);
     }
 
     // ── statements ──────────────────────────────────────────────────────────
@@ -346,9 +359,10 @@ struct Linter {
         if (b && ops.count(b->op) && b->overloadMethod.empty() && !b->stringConcat && a.target->type.isNumeric() &&
             same(a.target.get(), b->left.get())) {
             std::string t = show(a.target.get()), r = show(b->right.get());
-            warn(a.line, a.col, "assign-op", "this can use a compound assignment",
+            warnFix(a.line, a.col, "assign-op", "this can use a compound assignment",
                  t.empty() || r.empty() ? std::string("use `") + binaryOpSymbol(b->op) + "=`"
-                                        : "write " + tick(t + " " + binaryOpSymbol(b->op) + "= " + r));
+                                        : "write " + tick(t + " " + binaryOpSymbol(b->op) + "= " + r),
+                 a.target.get(), a.value.get(), t.empty() || r.empty() ? "" : t + " " + binaryOpSymbol(b->op) + "= " + r);
         }
     }
 
