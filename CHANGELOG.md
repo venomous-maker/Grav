@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.13.0 (2026-11-25)
+
 ### Tools
 
 - **`grav lint --fix`** applies the lints' meaning-preserving fixes to your own
