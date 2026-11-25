@@ -1,0 +1,6 @@
+running 4 tests
+  ok    repeated keys: the last value, at the first key's place
+  ok    keys: escaped, shared across records, empty
+  ok    values: nesting, numbers, literals, whitespace
+  ok    errors say where
+result: 4 passed, 0 failed

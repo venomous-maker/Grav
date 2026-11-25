@@ -1,0 +1,67 @@
+// The JSON parser's edges: repeated keys (small and large objects), escaped
+// keys, keys shared by the records of an array, nesting, numbers, errors with
+// their position, and reading a large parsed object by key.
+import "std"
+
+test "repeated keys: the last value, at the first key's place" {
+    let small = Json.parse("{\"a\":1,\"b\":2,\"a\":3}")
+    assertEq(small.size(), 2)
+    assertEq(small.getLong("a", 0), 3 as long)
+    assertEq(small.toJson(), "{\"a\":3,\"b\":2}")
+    let sb = new StringBuilder()
+    sb.append("{")
+    for (i in 0..20) { sb.append("\"k${i}\":${i},") }
+    sb.append("\"k3\":\"again\",\"k19\":null}")
+    let big = Json.parse(sb.toString())
+    assertEq(big.size(), 20)
+    assertEq(big.getString("k3", ""), "again")
+    assert(big.get("k19").isNull())
+    assertEq(big.keys()[3], "k3")
+    assertEq(big.getLong("k18", 0), 18 as long)
+    big.set("k20", 20 as long)                                         // still writable, indexed
+    assertEq(big.getLong("k20", 0), 20 as long)
+    assertEq(big.size(), 21)
+}
+
+test "keys: escaped, shared across records, empty" {
+    let v = Json.parse("[{\"a\\\"b\":1,\"\\u00e9\":2,\"\":3},{\"a\\\"b\":4,\"\\u00e9\":5,\"\":6},{\"x\":7}]")
+    assertEq(v.at(1).getLong("a\"b", 0), 4 as long)
+    assertEq(v.at(1).getLong("é", 0), 5 as long)
+    assertEq(v.at(1).getLong("", 0), 6 as long)
+    assertEq(v.at(2).getLong("x", 0), 7 as long)
+    let recs = Json.parse("[{\"id\":1,\"name\":\"a\"},{\"id\":2,\"name\":\"b\"},{\"name\":\"c\",\"id\":3}]")
+    assertEq(recs.at(2).getLong("id", 0), 3 as long)
+    assertEq(recs.at(1).getString("name", ""), "b")
+}
+
+test "values: nesting, numbers, literals, whitespace" {
+    let v = Json.parse(" { \"n\" : [ 1 , -2.5 , 1e3 , 12345678901234567890 , 0 ] ,\n \"o\" : { \"t\" : true , \"f\" : false , \"z\" : null , \"e\" : { } , \"a\" : [ ] } } ")
+    let n = v.get("n")
+    assertEq(n.at(0).asLong(), 1 as long)
+    assertEq(n.at(1).asFloat(), -2.5)
+    assertEq(n.at(2).asFloat(), 1000.0)
+    assert(!n.at(3).isInteger())
+    assertEq(v.get("o").get("t").asBool(), true)
+    assertEq(v.get("o").get("e").size(), 0)
+    assertEq(v.get("o").get("a").size(), 0)
+    assertEq(Json.parse("[[[[1]]]]").at(0).at(0).at(0).at(0).asLong(), 1 as long)
+    assertEq(Json.parse("\"just text\"").asString(), "just text")
+    assertEq(Json.parse("42").asLong(), 42 as long)
+}
+
+test "errors say where" {
+    for (pair in [["{\"a\" 1}", "expected ':' after an object key"], ["[1 2]", "expected ',' or ']' in an array"],
+                          ["{\"a\":1,}", "expected a string key in an object"], ["{\"a\":tru}", "unexpected character"],
+                          ["[1,", "unexpected end of input"], ["{\n  \"a\": \"x\n\"}", "control character"], ["{1:2}", "expected a string key"],
+                          ["[1] x", "unexpected text after"], ["{\"a\":-}", "bad number"]]) {
+        let text = pair[0]
+        let want = pair[1]
+        let msg = ""
+        try { Json.parse(text) } catch (e: ValueError) { msg = e.message() }
+        assert(Str.contains(msg, want), text + " -> " + msg)
+    }
+    let msg = ""
+    try { Json.parse("{\n  \"a\": [1, 2,, 3]\n}") } catch (e: ValueError) { msg = e.message() }
+    assert(Str.contains(msg, "line 2, column 14"), msg)
+    assertEq(Json.tryParse("{"), null)
+}
