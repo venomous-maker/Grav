@@ -1,0 +1,333 @@
+// lib/data/tar.grav — tar archives (POSIX ustar, with PAX headers for long
+// names and files over 8 GB), written and read a piece at a time.
+//
+//   let gz = GzipWriter.toFile("backup.tar.gz")
+//   let tar = new TarWriter(fn(b: Bytes) { gz.write(b) })
+//   tar.addString("README.txt", "hello")
+//   tar.beginFile("dump.sql", size); tar.writeData(part); ...   // a big file in pieces
+//   tar.finish(); gz.finish()
+//
+//   let src = GzipReader.fromFile("backup.tar.gz")
+//   let r = new TarReader(fn(n: int) -> Bytes { return src.read(n) })
+//   while (true) { let e = r.next(); if (e == null) { break }; print(e.name); let data = r.readAll() }
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "../collections/array.grav"
+import "../sys/time.grav"
+import "bytes.grav"
+
+namespace std.data {
+
+    %{
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    /* A ustar header for `name` into h (512 bytes): 0, or 1 when the name does
+       not fit (even split into prefix and name), 2 when the size does not fit
+       in 11 octal digits (the caller writes a PAX header first and passes a
+       shorter name or 0 for the size). */
+    static int grav_tar_fill(unsigned char* h, const char* name, long long mode, long long size, long long mtime, char type, const char* link) {
+        memset(h, 0, 512);
+        size_t n = strlen(name);
+        int r = 0;
+        if (n <= 100) memcpy(h, name, n);
+        else {
+            /* prefix (up to 155) / name (up to 100), split at a slash */
+            const char* cut = 0;
+            for (const char* q = name + n - 1; q > name; q--) {
+                if (*q == '/' && (size_t)(q - name) <= 155 && strlen(q + 1) <= 100 && q[1]) { cut = q; break; }
+            }
+            if (cut) { memcpy(h + 345, name, (size_t)(cut - name)); memcpy(h, cut + 1, strlen(cut + 1)); }
+            else { memcpy(h, name, 100); r = 1; }
+        }
+        if (size >= 077777777777LL + 1) { size = 0; if (!r) r = 2; }
+        snprintf((char*)h + 100, 8, "%07llo", mode & 07777);
+        snprintf((char*)h + 108, 8, "%07o", 0);
+        snprintf((char*)h + 116, 8, "%07o", 0);
+        snprintf((char*)h + 124, 12, "%011llo", size);
+        snprintf((char*)h + 136, 12, "%011llo", mtime < 0 ? 0 : mtime);
+        h[156] = (unsigned char)type;
+        if (link) { size_t l = strlen(link); memcpy(h + 157, link, l > 100 ? 100 : l); }
+        memcpy(h + 257, "ustar", 6); memcpy(h + 263, "00", 2);
+        memset(h + 148, ' ', 8);
+        unsigned int sum = 0;
+        for (int i = 0; i < 512; i++) sum += h[i];
+        snprintf((char*)h + 148, 8, "%06o", sum);
+        h[155] = ' ';
+        return r;
+    }
+    /* One PAX record, "<len> key=value\n" (len counting itself). */
+    static const char* grav_tar_pax(const char* key, const char* value) {
+        size_t body = strlen(key) + strlen(value) + 3, len = body + 1;
+        for (;;) { char d[24]; size_t total = body + (size_t)snprintf(d, sizeof d, "%zu", len); if (total == len) break; len = total; }
+        char* r = grav_str_new(len);
+        snprintf(r, len + 1, "%zu %s=%s\n", len, key, value);
+        return r;
+    }
+    /* Octal field at h+at (width w), or -1 when it is not one. Also takes the
+       GNU base-256 form (high bit set) for big sizes. */
+    static long long grav_tar_octal(const unsigned char* h, int at, int w) {
+        if (h[at] & 0x80) { long long v = h[at] & 0x7f; for (int i = 1; i < w; i++) v = (v << 8) | h[at + i]; return v; }
+        long long v = 0; int any = 0;
+        for (int i = 0; i < w; i++) {
+            unsigned char c = h[at + i];
+            if (c == 0 || c == ' ') { if (any) break; continue; }
+            if (c < '0' || c > '7') return -1;
+            v = v * 8 + (c - '0'); any = 1;
+        }
+        return v;
+    }
+    /* Whether a 512-byte block is all zeros (the end of an archive). */
+    static int grav_tar_zero(const unsigned char* h) { for (int i = 0; i < 512; i++) if (h[i]) return 0; return 1; }
+    /* Whether the header's checksum is right. */
+    static int grav_tar_sum_ok(const unsigned char* h) {
+        long long want = grav_tar_octal(h, 148, 8);
+        unsigned int sum = 0;
+        for (int i = 0; i < 512; i++) sum += (i >= 148 && i < 156) ? ' ' : h[i];
+        return want == (long long)sum;
+    }
+    /* A NUL-terminated field (or all w bytes) as text. */
+    static const char* grav_tar_text(const unsigned char* h, int at, int w) {
+        int n = 0; while (n < w && h[at + n]) n++;
+        char* r = grav_str_new((size_t)n); memcpy(r, h + at, (size_t)n); r[n] = 0; return r;
+    }
+    %}
+
+    // Writes a tar archive to a sink, a piece at a time.
+    class TarWriter {
+        private sink: fn(Bytes)
+        // The entry being written with beginFile: bytes still owed, and its padding.
+        private owed: long = 0
+        private pad: int = 0
+        private finished: bool = false
+        // Bytes handed to the sink so far.
+        public written: long = 0
+        constructor(sink: fn(Bytes)) { self.sink = sink; }
+
+        // A file with these contents.
+        fn addFile(name: string, data: Bytes, mode: int = 420, mtime: long = -1) -> TarWriter {
+            self.beginFile(name, data.size() as long, mode, mtime);
+            if (!data.isEmpty()) { self.writeData(data); }
+            return self;
+        }
+        fn addString(name: string, text: string, mode: int = 420, mtime: long = -1) -> TarWriter {
+            return self.addFile(name, Bytes.fromString(text), mode, mtime);
+        }
+        // A directory entry ("logs/").
+        fn addDir(name: string, mode: int = 493, mtime: long = -1) -> TarWriter {
+            self.header(Str.endsWith(name, "/") ? name : name + "/", 0, mode, mtime, 53, "");
+            return self;
+        }
+        // A symbolic link to `target`.
+        fn addSymlink(name: string, target: string, mtime: long = -1) -> TarWriter {
+            self.header(name, 0, 511, mtime, 50, target);
+            return self;
+        }
+        // Starts a file of exactly `size` bytes, given next with writeData (in
+        // any number of pieces): for contents too big to hold at once.
+        fn beginFile(name: string, size: long, mode: int = 420, mtime: long = -1) -> TarWriter {
+            if (size < 0) { throw new ValueError("a tar entry's size cannot be negative"); }
+            self.header(name, size, mode, mtime, 48, "");
+            self.owed = size;
+            self.pad = ((512 - size % 512) % 512) as int;
+            return self;
+        }
+        // The next piece of the file begun with beginFile.
+        fn writeData(data: Bytes) -> TarWriter {
+            if (data.size() as long > self.owed) {
+                throw new StateError("TarWriter: ${data.size()} bytes given, ${self.owed} owed to the entry");
+            }
+            self.emit(data);
+            self.owed -= data.size();
+            if (self.owed == 0 && self.pad > 0) { self.emit(TarWriter.zeros(self.pad)); self.pad = 0; }
+            return self;
+        }
+        // Ends the archive (two empty blocks); once.
+        fn finish() {
+            if (self.finished) { return; }
+            self.ready();
+            self.emit(TarWriter.zeros(1024));
+            self.finished = true;
+        }
+        private fn ready() {
+            if (self.finished) { throw new StateError("TarWriter: already finished"); }
+            if (self.owed > 0) { throw new StateError("TarWriter: the last entry is ${self.owed} bytes short"); }
+        }
+        private fn header(name: string, size: long, mode: int, mtime: long, type: int, link: string) {
+            self.ready();
+            if (name == "") { throw new ValueError("a tar entry needs a name"); }
+            let when = mtime < 0 ? Time.now() : mtime;
+            let h = TarWriter.zeros(512);
+            let fit = %{ grav_tar_fill(h->data, name, mode, size, when, (char)type, link[0] ? link : 0) %} as int;
+            let pax = "";
+            if (fit == 1 || Str.length(link) > 100) { pax = pax + %{ grav_tar_pax("path", name) %} as string; }
+            if (Str.length(link) > 100) { pax = pax + %{ grav_tar_pax("linkpath", link) %} as string; }
+            if (size > 8589934591) {
+                let digits = str(size);
+                pax = pax + %{ grav_tar_pax("size", digits) %} as string;
+            }
+            if (pax != "") {
+                let body = Bytes.fromString(pax);
+                let ph = TarWriter.zeros(512);
+                let stub = "PaxHeader/" + Str.replace(name, "/", "_");
+                if (stub.length > 99) { stub = stub[..99]; }
+                let bn = body.size() as long;
+                %{ grav_tar_fill(ph->data, stub, 0644, bn, when, 'x', 0); %};
+                self.emit(ph);
+                self.emit(body);
+                let p = ((512 - body.size() % 512) % 512) as int;
+                if (p > 0) { self.emit(TarWriter.zeros(p)); }
+            }
+            self.emit(h);
+        }
+        // `n` zero bytes.
+        static fn zeros(n: int) -> Bytes {
+            let b = new Bytes(n);
+            %{ memset(b->data, 0, (size_t)n); b->len = n; %};
+            return b;
+        }
+        private fn emit(b: Bytes) {
+            self.written += b.size();
+            let sink = self.sink;
+            sink(b);
+        }
+    }
+
+    // One entry of a tar archive.
+    class TarEntry {
+        public name: string = ""
+        public size: long = 0
+        public mode: int = 0
+        // Unix seconds.
+        public mtime: long = 0
+        // "file", "dir", "symlink", "link" (hard) or "other".
+        public type: string = "file"
+        public linkName: string = ""
+        constructor() {}
+        fn isFile() -> bool { return self.type == "file"; }
+        fn isDir() -> bool { return self.type == "dir"; }
+    }
+
+    // Reads a tar archive from a source, a piece at a time: next() moves to the
+    // next entry (skipping what was not read of the last), read() gives its data.
+    class TarReader {
+        private source: fn(int) -> Bytes
+        private buf: Bytes = new Bytes()
+        private pos: int = 0
+        private done: bool = false
+        // The current entry's bytes not yet read, and its padding.
+        private left: long = 0
+        private pad: int = 0
+        private ended: bool = false
+        // Compressed or not, the archive comes from `source` (up to the number of
+        // bytes given; an empty result means there is no more).
+        constructor(source: fn(int) -> Bytes) { self.source = source; }
+
+        // At least `n` bytes buffered (fewer only at the end of the input).
+        private fn want(n: int) {
+            if (self.buf.size() - self.pos >= n) { return; }
+            if (self.pos > 0) {
+                self.buf = self.buf.slice(self.pos, self.buf.size());
+                self.pos = 0;
+            }
+            while (!self.done && self.buf.size() < n) {
+                let src = self.source;
+                let more = src(n - self.buf.size() > 65536 ? n - self.buf.size() : 65536);
+                if (more.isEmpty()) { self.done = true; } else { self.buf.append(more); }
+            }
+        }
+        private fn take(n: int) -> Bytes {
+            self.want(n);
+            let k = n < self.buf.size() - self.pos ? n : self.buf.size() - self.pos;
+            let out = self.buf.slice(self.pos, self.pos + k);
+            self.pos += k;
+            return out;
+        }
+        private fn skip(n: long) {
+            let rest = n;
+            while (rest > 0) {
+                let part = self.take(rest > 65536 ? 65536 : rest as int);
+                if (part.isEmpty()) { throw new ValueError("the tar archive ends inside an entry"); }
+                rest -= part.size();
+            }
+        }
+
+        // The next entry, or null at the end of the archive. ValueError when it
+        // is not a tar archive.
+        fn next() -> TarEntry {
+            if (self.ended) { return null; }
+            self.skip(self.left + self.pad);
+            self.left = 0;
+            self.pad = 0;
+            let paxPath = "";
+            let paxLink = "";
+            let paxSize: long = -1;
+            let longName = "";
+            while (true) {
+                let h = self.take(512);
+                if (h.size() < 512) {
+                    if (h.isEmpty()) { self.ended = true; return null; }
+                    throw new ValueError("the tar archive ends inside a header");
+                }
+                let hp = h.rawData();
+                if (%{ grav_tar_zero(hp) %} as bool) { self.ended = true; return null; }
+                if (!(%{ grav_tar_sum_ok(hp) %} as bool)) { throw new ValueError("not a tar archive (a header's checksum is wrong)"); }
+                let size = %{ grav_tar_octal(hp, 124, 12) %} as long;
+                let type = %{ (int)hp[156] %} as int;
+                if (type == 120 || type == 103 || type == 76 || type == 75) {      // x, g (PAX); L, K (GNU long names)
+                    let body = self.take(size as int).toString();
+                    self.skip((512 - size % 512) % 512);
+                    if (type == 120) {
+                        for (rec in Str.split(body, "\n")) {
+                            let sp = Str.indexOf(rec, " ");
+                            if (sp < 0) { continue; }
+                            let kv = rec[sp + 1..];
+                            let eq = Str.indexOf(kv, "=");
+                            if (eq < 0) { continue; }
+                            let k = kv[..eq];
+                            let v = kv[eq + 1..];
+                            if (k == "path") { paxPath = v; } else if (k == "linkpath") { paxLink = v; } else if (k == "size") { paxSize = Format.toLongOr(v, -1); }
+                        }
+                    } else if (type == 76) { longName = body; }
+                    continue;
+                }
+                let e = new TarEntry();
+                let name = %{ grav_tar_text(hp, 0, 100) %} as string;
+                let prefix = %{ grav_tar_text(hp, 345, 155) %} as string;
+                let magic = %{ grav_tar_text(hp, 257, 5) %} as string;
+                if (magic == "ustar" && prefix != "") { name = prefix + "/" + name; }
+                e.name = paxPath != "" ? paxPath : (longName != "" ? longName : name);
+                e.size = paxSize >= 0 ? paxSize : size;
+                e.mode = %{ (int)grav_tar_octal(hp, 100, 8) %} as int;
+                e.mtime = %{ grav_tar_octal(hp, 136, 12) %} as long;
+                e.linkName = paxLink != "" ? paxLink : %{ grav_tar_text(hp, 157, 100) %} as string;
+                e.type = type == 48 || type == 0 || type == 55 ? "file" : (type == 53 ? "dir" : (type == 50 ? "symlink" : (type == 49 ? "link" : "other")));
+                if (e.type == "file" && Str.endsWith(e.name, "/")) { e.type = "dir"; }
+                let dataSize = e.type == "file" || e.type == "other" ? e.size : 0 as long;
+                self.left = dataSize;
+                self.pad = ((512 - dataSize % 512) % 512) as int;
+                return e;
+            }
+            return null;
+        }
+        // Up to `max` bytes of the current entry's data; empty when it is all read.
+        fn read(max: int = 65536) -> Bytes {
+            if (self.left == 0) { return new Bytes(); }
+            let part = self.take(self.left < max ? self.left as int : max);
+            if (part.isEmpty()) { throw new ValueError("the tar archive ends inside an entry"); }
+            self.left -= part.size();
+            return part;
+        }
+        // The rest of the current entry's data at once.
+        fn readAll() -> Bytes {
+            let all = new Bytes();
+            while (true) {
+                let p = self.read(65536);
+                if (p.isEmpty()) { break; }
+                all.append(p);
+            }
+            return all;
+        }
+    }
+}
