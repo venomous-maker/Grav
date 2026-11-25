@@ -1,16 +1,22 @@
 // lib/concurrency/shared.grav — state shared between threads without one big
 // lock: ThreadLocal<T> (each thread its own value, no locking to read or
 // write it) and ConcurrentMap<K, V> (a map split into shards, each with its
-// own lock, so threads working on different keys seldom wait for each other).
+// own lock, so threads working on different keys seldom wait for each other)
+// and LruCache<K, V> (a bounded cache that forgets the least recently used
+// entry first, optionally after a time to live).
 //
 //   let buffers = new ThreadLocal<StringBuilder>(fn() -> StringBuilder { return new StringBuilder() })
 //   buffers.get().append("only this thread's")
 //
 //   let hits = new ConcurrentMap<string, long>()
 //   hits.merge("/home", 1, fn(a: long, b: long) -> long { return a + b })
+//
+//   let tokens = new LruCache<long, Token>(10000, 60000)     // 10,000 entries, 60 s each
+//   tokens.put(id, t); let hit = tokens.getOr(id, null)
 import "../core/exception.grav"
 import "../collections/array.grav"
 import "../collections/hashmap.grav"
+import "../sys/time.grav"
 import "async.grav"
 
 namespace std.concurrency {
@@ -174,5 +180,247 @@ namespace std.concurrency {
             return out;
         }
         fn clear() { for (i in 0..16) { self.locks[i].lock(); self.maps[i].clear(); self.locks[i].unlock(); } }
+    }
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    /* An LruCache shard's bookkeeping: entry i's neighbours in recency order
+       (most recent first) and its expiry, in arrays that grow by doubling. */
+    typedef struct { int* prev; int* next; long long* exp; int cap, head, tail; } GravLru;
+    static GravLru* grav_lru_new(void) {
+        GravLru* l = (GravLru*)calloc(1, sizeof(GravLru));
+        if (!l) abort();
+        l->head = l->tail = -1;
+        return l;
+    }
+    static void grav_lru_free(GravLru* l) { if (l) { free(l->prev); free(l->next); free(l->exp); free(l); } }
+    static void grav_lru_ensure(GravLru* l, int n) {
+        if (n <= l->cap) return;
+        int c = l->cap < 16 ? 16 : l->cap * 2;
+        while (c < n) c *= 2;
+        l->prev = (int*)realloc(l->prev, sizeof(int) * (size_t)c);
+        l->next = (int*)realloc(l->next, sizeof(int) * (size_t)c);
+        l->exp = (long long*)realloc(l->exp, sizeof(long long) * (size_t)c);
+        if (!l->prev || !l->next || !l->exp) abort();
+        l->cap = c;
+    }
+    static void grav_lru_unlink(GravLru* l, int i) {
+        int p = l->prev[i], n = l->next[i];
+        if (p >= 0) l->next[p] = n; else l->head = n;
+        if (n >= 0) l->prev[n] = p; else l->tail = p;
+    }
+    static void grav_lru_front(GravLru* l, int i) {
+        l->prev[i] = -1; l->next[i] = l->head;
+        if (l->head >= 0) l->prev[l->head] = i;
+        l->head = i;
+        if (l->tail < 0) l->tail = i;
+    }
+    static void grav_lru_touch(GravLru* l, int i) { if (l->head != i) { grav_lru_unlink(l, i); grav_lru_front(l, i); } }
+    /* Entry `last` moves into place i (i was unlinked already). */
+    static void grav_lru_move(GravLru* l, int last, int i) {
+        int p = l->prev[last], n = l->next[last];
+        l->prev[i] = p; l->next[i] = n; l->exp[i] = l->exp[last];
+        if (p >= 0) l->next[p] = i; else l->head = i;
+        if (n >= 0) l->prev[n] = i; else l->tail = i;
+    }
+    %}
+
+    // One shard of an LruCache: keys and values in parallel arrays, kept dense
+    // (a removed entry's place is taken by the last one, so nothing removed
+    // stays referenced); the recency links and expiry times in C (GravLru). Not
+    // thread-safe on its own: LruCache holds its lock.
+    class LruShard<K, V> {
+        private index: HashMap<K, int> = new HashMap<K, int>()
+        private ks: Array<K> = new Array<K>()
+        private vs: Array<V> = new Array<V>()
+        private lru: byte*
+        public capacity: int
+        public hits: long = 0
+        public misses: long = 0
+        public evictions: long = 0
+        constructor(capacity: int) { self.capacity = capacity; self.lru = %{ (unsigned char*)grav_lru_new() %} as byte*; }
+        destructor() { %{ grav_lru_free((GravLru*)self->lru); self->lru = 0; %}; }
+        fn size() -> int { return self.ks.size(); }
+        // The entry's place, or -1 (expired ones are dropped; `now` 0: no times kept).
+        fn find(key: K, now: long) -> int {
+            let i = self.index.getOr(key, -1);
+            if (i < 0) { return -1; }
+            if (now > 0 && %{ ({ long long grav_e = ((GravLru*)self->lru)->exp[i]; grav_e > 0 && grav_e <= now; }) %} as bool) { self.removeAt(i); return -1; }
+            return i;
+        }
+        fn valueAt(i: int) -> V { %{ grav_lru_touch((GravLru*)self->lru, i); %}; return self.vs[i]; }
+        // The value for `key` (now the most recent), or `fallback`; counts the hit or miss.
+        fn getOr(key: K, now: long, fallback: V) -> V {
+            let i = self.index.getOr(key, -1);
+            if (i >= 0 && now > 0 && %{ ({ long long grav_e = ((GravLru*)self->lru)->exp[i]; grav_e > 0 && grav_e <= now; }) %} as bool) {
+                self.removeAt(i);
+                i = -1;
+            }
+            if (i < 0) { self.misses += 1; return fallback; }
+            self.hits += 1;
+            %{ grav_lru_touch((GravLru*)self->lru, i); %};
+            return self.vs[i];
+        }
+        fn put(key: K, value: V, expiresAt: long) {
+            let i = self.index.getOr(key, -1);
+            if (i >= 0) {
+                self.vs.set(i, value);
+                %{ ((GravLru*)self->lru)->exp[i] = expiresAt; grav_lru_touch((GravLru*)self->lru, i); %};
+                return;
+            }
+            if (self.ks.size() >= self.capacity) {
+                let t = %{ ((GravLru*)self->lru)->tail %} as int;
+                if (t >= 0) { self.removeAt(t); self.evictions += 1; }
+            }
+            let n = self.ks.size();
+            self.ks.push(key);
+            self.vs.push(value);
+            %{ GravLru* grav_l = (GravLru*)self->lru; grav_lru_ensure(grav_l, n + 1); grav_l->exp[n] = expiresAt; grav_lru_front(grav_l, n); %};
+            self.index.put(key, n);
+        }
+        fn remove(key: K) -> bool {
+            let i = self.index.getOr(key, -1);
+            if (i < 0) { return false; }
+            self.removeAt(i);
+            return true;
+        }
+        private fn removeAt(i: int) {
+            %{ grav_lru_unlink((GravLru*)self->lru, i); %};
+            self.index.remove(self.ks[i]);
+            let last = self.ks.size() - 1;
+            if (i != last) {
+                // (the last entry moves into i's place)
+                self.ks.set(i, self.ks[last]);
+                self.vs.set(i, self.vs[last]);
+                %{ grav_lru_move((GravLru*)self->lru, last, i); %};
+                self.index.put(self.ks[i], i);
+            }
+            self.ks.pop();
+            self.vs.pop();
+        }
+        fn clear() {
+            self.index.clear();
+            self.ks.clear();
+            self.vs.clear();
+            %{ ((GravLru*)self->lru)->head = ((GravLru*)self->lru)->tail = -1; %};
+        }
+        fn keys(out: Array<K>) {
+            let i = %{ ((GravLru*)self->lru)->head %} as int;
+            while (i >= 0) {
+                out.push(self.ks[i]);
+                i = %{ ((GravLru*)self->lru)->next[i] %} as int;
+            }
+        }
+    }
+
+    // A cache of at most `capacity` entries that forgets the least recently used
+    // one first; with `ttlMs`, entries also expire that many milliseconds after
+    // they were put. Thread-safe: a large cache (1024 entries or more) is split
+    // into 16 shards, each with its own lock and an equal share of the room, so
+    // threads seldom wait for each other (the order forgotten is then per shard).
+    class LruCache<K, V> {
+        private shards: Array<LruShard<K, V>> = new Array<LruShard<K, V>>()
+        private locks: Array<Mutex> = new Array<Mutex>()
+        private mask: int
+        public capacity: int
+        public ttlMs: long
+        constructor(capacity: int, ttlMs: long = 0) {
+            if (capacity < 1) { throw new ValueError("an LruCache holds at least one entry"); }
+            self.capacity = capacity;
+            self.ttlMs = ttlMs;
+            let n = capacity >= 1024 ? 16 : 1;
+            self.mask = n - 1;
+            for (i in 0..n) { self.shards.push(new LruShard<K, V>((capacity + n - 1) / n)); self.locks.push(new Mutex()); }
+        }
+        private fn shard(key: K) -> int {
+            if (self.mask == 0) { return 0; }
+            let h = hashOf(key);
+            return ((h ^ (h >> 17)) & self.mask) as int;
+        }
+        private fn now() -> long { return self.ttlMs > 0 ? Time.monotonicMs() : 0; }
+        // The value for `key` (now the most recently used), or `fallback`.
+        fn getOr(key: K, fallback: V) -> V {
+            let s = self.shard(key);
+            let now = self.now();
+            self.locks[s].lock();
+            let v = self.shards[s].getOr(key, now, fallback);
+            self.locks[s].unlock();
+            return v;
+        }
+        // Whether `key` is cached (and not expired); does not count as a use.
+        fn containsKey(key: K) -> bool {
+            let s = self.shard(key);
+            let now = self.now();
+            self.locks[s].lock();
+            let has = self.shards[s].find(key, now) >= 0;
+            self.locks[s].unlock();
+            return has;
+        }
+        fn put(key: K, value: V) { self.putFor(key, value, self.ttlMs); }
+        // Puts with its own time to live (0: none).
+        fn putFor(key: K, value: V, ttlMs: long) {
+            let s = self.shard(key);
+            let exp = ttlMs > 0 ? Time.monotonicMs() + ttlMs : 0 as long;
+            self.locks[s].lock();
+            self.shards[s].put(key, value, exp);
+            self.locks[s].unlock();
+        }
+        // The value for `key`, made by `make` when missing or expired (under the
+        // key's lock: `make` must not use this cache).
+        fn getOrPut(key: K, make: fn(K) -> V) -> V {
+            let s = self.shard(key);
+            let now = self.now();
+            self.locks[s].lock();
+            try {
+                let sh = self.shards[s];
+                let i = sh.find(key, now);
+                if (i >= 0) {
+                    sh.hits += 1;
+                    return sh.valueAt(i);
+                }
+                sh.misses += 1;
+                let v = make(key);
+                sh.put(key, v, self.ttlMs > 0 ? Time.monotonicMs() + self.ttlMs : 0 as long);
+                return v;
+            } finally {
+                self.locks[s].unlock();
+            }
+        }
+        // Removes `key`; whether it was there.
+        fn remove(key: K) -> bool {
+            let s = self.shard(key);
+            self.locks[s].lock();
+            let had = self.shards[s].remove(key);
+            self.locks[s].unlock();
+            return had;
+        }
+        fn size() -> int {
+            let n = 0;
+            for (i in 0..self.shards.size()) { self.locks[i].lock(); n += self.shards[i].size(); self.locks[i].unlock(); }
+            return n;
+        }
+        fn isEmpty() -> bool { return self.size() == 0; }
+        fn clear() { for (i in 0..self.shards.size()) { self.locks[i].lock(); self.shards[i].clear(); self.locks[i].unlock(); } }
+        // The keys, most recently used first (per shard).
+        fn keys() -> Array<K> {
+            let out = new Array<K>();
+            for (i in 0..self.shards.size()) { self.locks[i].lock(); self.shards[i].keys(out); self.locks[i].unlock(); }
+            return out;
+        }
+        // Lookups that found an entry, ones that did not, and entries forgotten for room.
+        fn hits() -> long { return self.sum(0); }
+        fn misses() -> long { return self.sum(1); }
+        fn evictions() -> long { return self.sum(2); }
+        private fn sum(which: int) -> long {
+            let n: long = 0;
+            for (i in 0..self.shards.size()) {
+                self.locks[i].lock();
+                let sh = self.shards[i];
+                n += which == 0 ? sh.hits : (which == 1 ? sh.misses : sh.evictions);
+                self.locks[i].unlock();
+            }
+            return n;
+        }
     }
 }
