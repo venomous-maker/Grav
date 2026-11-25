@@ -1,0 +1,6 @@
+running 4 tests
+  ok    gzip in pieces: what Compress reads, and back
+  ok    gzip: files, and members one after another
+  ok    tar: entries written and read back, long names, a big entry in pieces
+  ok    tar.gz: a tar written through gzip to a file, read back the same way
+result: 4 passed, 0 failed

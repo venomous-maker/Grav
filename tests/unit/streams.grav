@@ -1,0 +1,136 @@
+// Streaming gzip (GzipWriter/GzipReader) and tar (TarWriter/TarReader):
+// round trips in pieces, files, members one after another, long names, a big
+// entry written in pieces, and tar.gz through both.
+import "std"
+
+fn sample(n: int) -> Bytes {
+    let b = new Bytes(n)
+    let x: long = 12345
+    for (i in 0..n) {
+        x = (x * 1103515245 + 12345) % 2147483648
+        b.appendByte(i % 7 == 0 ? (x % 256) as int : 97 + i % 13)
+    }
+    return b
+}
+
+test "gzip in pieces: what Compress reads, and back" {
+    let data = sample(300000)
+    let out = new Bytes()
+    let gz = new GzipWriter(fn(b: Bytes) { out.append(b) })
+    let at = 0
+    while (at < data.size()) {
+        let end = at + 7777 < data.size() ? at + 7777 : data.size()
+        gz.write(data.slice(at, end))
+        at = end
+    }
+    gz.finish()
+    assertEq(gz.bytesIn, 300000 as long)
+    assertEq(gz.bytesOut, out.size() as long)
+    assertEq(Compress.gunzip(out).toHex(), data.toHex())
+    let pos = 0
+    let r = new GzipReader(fn(n: int) -> Bytes {
+        let k = n < 1000 ? n : 1000                                    // a source giving little at a time
+        let end = pos + k < out.size() ? pos + k : out.size()
+        let part = out.slice(pos, end)
+        pos = end
+        return part
+    })
+    assertEq(r.readAll().toHex(), data.toHex())
+}
+
+test "gzip: files, and members one after another" {
+    let path = Dir.temp() + "/streams_" + str(Process.pid()) + ".gz"
+    let w = GzipWriter.toFile(path)
+    w.writeString("hello, ")
+    w.writeString("world")
+    w.finish()
+    assertEq(GzipReader.fromFile(path).readAll().toString(), "hello, world")
+    let two = Compress.gzip(Bytes.fromString("first,"))
+    two.append(Compress.gzip(Bytes.fromString("second")))
+    let given = false
+    let r = new GzipReader(fn(n: int) -> Bytes { if (given) { return new Bytes() }; given = true; return two })
+    assertEq(r.readAll().toString(), "first,second")
+    let msg = ""
+    let half = Compress.gzip(sample(5000)).slice(0, 100)
+    let gave = false
+    try {
+        new GzipReader(fn(n: int) -> Bytes { if (gave) { return new Bytes() }; gave = true; return half }).readAll()
+    } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg, "the compressed data ends too soon")
+    new File(path).delete()
+}
+
+test "tar: entries written and read back, long names, a big entry in pieces" {
+    let out = new Bytes()
+    let tar = new TarWriter(fn(b: Bytes) { out.append(b) })
+    tar.addString("a.txt", "alpha", 420, 1700000000)
+    tar.addDir("logs")
+    let deep = "dir/" + Str.repeat("x", 120) + "/file.txt"                 // fits as prefix + name
+    let long = Str.repeat("y", 300) + ".txt"                                // needs a PAX header
+    tar.addString(deep, "deep")
+    tar.addString(long, "long")
+    tar.addSymlink("latest", "a.txt")
+    let big = sample(100003)
+    tar.beginFile("big.bin", big.size() as long)
+    tar.writeData(big.slice(0, 50000)).writeData(big.slice(50000, big.size()))
+    tar.addFile("empty", new Bytes())
+    tar.finish()
+    assertEq(out.size() % 512, 0)
+    let pos = 0
+    let r = new TarReader(fn(n: int) -> Bytes {
+        let end = pos + n < out.size() ? pos + n : out.size()
+        let part = out.slice(pos, end)
+        pos = end
+        return part
+    })
+    let e = r.next()
+    assertEq(e.name, "a.txt")
+    assertEq(e.mtime, 1700000000 as long)
+    assertEq(e.mode, 420)
+    assertEq(r.readAll().toString(), "alpha")
+    e = r.next()
+    assert(e.isDir())
+    assertEq(e.name, "logs/")
+    e = r.next()
+    assertEq(e.name, deep)
+    assertEq(r.readAll().toString(), "deep")
+    e = r.next()
+    assertEq(e.name, long)
+    // (not read: next() skips it)
+    e = r.next()
+    assertEq(e.type, "symlink")
+    assertEq(e.linkName, "a.txt")
+    e = r.next()
+    assertEq(e.name, "big.bin")
+    assertEq(e.size, 100003 as long)
+    let got = new Bytes()
+    while (true) { let p = r.read(4096); if (p.isEmpty()) { break }; got.append(p) }
+    assertEq(got.toHex(), big.toHex())
+    e = r.next()
+    assertEq(e.name, "empty")
+    assertEq(r.readAll().size(), 0)
+    assertEq(r.next(), null)
+    let msg = ""
+    try { tar.addString("late", "x") } catch (e: StateError) { msg = e.message() }
+    assertEq(msg, "TarWriter: already finished")
+}
+
+test "tar.gz: a tar written through gzip to a file, read back the same way" {
+    let path = Dir.temp() + "/streams_" + str(Process.pid()) + ".tar.gz"
+    let gz = GzipWriter.toFile(path)
+    let tar = new TarWriter(fn(b: Bytes) { gz.write(b) })
+    for (i in 0..50) { tar.addString("files/f${i}.txt", Str.repeat("line ${i}\n", 100)) }
+    tar.finish()
+    gz.finish()
+    let src = GzipReader.fromFile(path)
+    let r = new TarReader(fn(n: int) -> Bytes { return src.read(n) })
+    let count = 0
+    while (true) {
+        let e = r.next()
+        if (e == null) { break }
+        assertEq(r.readAll().toString(), Str.repeat("line ${count}\n", 100))
+        count += 1
+    }
+    assertEq(count, 50)
+    new File(path).delete()
+}
