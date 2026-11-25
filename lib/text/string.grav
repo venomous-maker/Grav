@@ -327,15 +327,17 @@ namespace std.text {
         // Split at `delim` into at most `limit` pieces (the last keeps the rest):
         // splitN("a=b=c", "=", 2) == ["a", "b=c"].
         static fn splitN(s: string, delim: string, limit: int) -> Array<string> {
+            if (limit <= 0) { return Str.split(s, delim); }
             let out = new Array<string>();
-            let start = 0;
-            while (delim.length > 0 && (limit <= 0 || out.size() < limit - 1)) {
-                let i = Str.indexFrom(s, delim, start);
-                if (i < 0) { break; }
-                out.push(s[start..i]);
-                start = i + delim.length;
+            let n = s.length;
+            let pos: long = 0;
+            let a: long = 0;
+            let b: long = 0;
+            // (one pass in C, as split; the last piece keeps the rest)
+            while (delim.length > 0 && out.size() < limit - 1 && %{ grav_str_next_piece(s, n, delim, 0, &pos, &a, &b) %} as bool) {
+                out.push(%{ grav_str_piece(s + a, (size_t)(b - a)) %} as string);
             }
-            out.push(s[start..]);
+            if (pos <= n) { out.push(%{ grav_str_piece(s + pos, (size_t)(n - pos)) %} as string); }
             return out;
         }
         // The text before the first `sep`, or all of `s` when it does not contain one.
