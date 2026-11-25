@@ -1,0 +1,239 @@
+// lib/sys/cron.grav — cron expressions: whether one is due at a time, and when
+// it is next (or was last) due, in local time or UTC.
+//
+//   let c = Cron.parse("*/15 9-17 * * MON-FRI")
+//   c.isDue(DateTime.now())
+//   c.next(DateTime.now())                          // the next quarter hour in working hours
+//   c.next(DateTime.now(), true)                    // ... reading the fields in UTC
+//
+// Five fields (minute hour day-of-month month day-of-week), or six with
+// seconds first. Each takes *, ?, numbers, names (JAN…DEC, SUN…SAT), lists
+// (1,15), ranges (9-17) and steps (*/5, 10-40/10). Day-of-month also takes L
+// (the last day) and LW (the last weekday); day-of-week takes 5L (the last
+// Friday) and 1#2 (the second Monday), and 0 or 7 for Sunday. When both day
+// fields are restricted, either matching is enough (as in Vixie cron).
+// Shorthands: @yearly @annually @monthly @weekly @daily @midnight @hourly.
+// The search runs in C over whole months, days and hours at a time.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "../collections/array.grav"
+import "datetime.grav"
+
+namespace std.sys {
+
+    %{
+    #include <time.h>
+    #include <string.h>
+    #include <stdint.h>
+    typedef struct {
+        uint64_t sec, min; uint32_t hour, dom; uint16_t mon; uint8_t dow, lastOf;
+        uint64_t nth;                 /* bit d*5 + (n-1): the n-th weekday d of the month */
+        int domAny, dowAny, lastDay, lastWeekday, hasSeconds;
+    } GravCron;
+    /* A Cron's fields into a GravCron (expanded where the class's struct is known). */
+    #define GRAV_CRON_FILL(c, s) do { (c).sec = (uint64_t)(s)->sec; (c).min = (uint64_t)(s)->min; (c).hour = (uint32_t)(s)->hour; \
+        (c).dom = (uint32_t)(s)->dom; (c).mon = (uint16_t)(s)->mon; (c).dow = (uint8_t)(s)->dow; (c).lastOf = (uint8_t)(s)->lastOf; \
+        (c).nth = (uint64_t)(s)->nth; (c).domAny = (s)->domAny; (c).dowAny = (s)->dowAny; (c).lastDay = (s)->lastDay; \
+        (c).lastWeekday = (s)->lastWeekday; (c).hasSeconds = (s)->hasSeconds; } while (0)
+    static void grav_cron_tm(long long t, int utc, struct tm* tm) { time_t x = (time_t)t; if (utc) gmtime_r(&x, tm); else localtime_r(&x, tm); }
+    static long long grav_cron_mk(struct tm* tm, int utc) { tm->tm_isdst = -1; return utc ? (long long)timegm(tm) : (long long)mktime(tm); }
+    static int grav_cron_dim(int y, int m) {
+        static const int d[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+        return m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0) ? 29 : d[m - 1];
+    }
+    static int grav_cron_day(const GravCron* c, const struct tm* tm) {
+        int y = tm->tm_year + 1900, m = tm->tm_mon + 1, d = tm->tm_mday, wd = tm->tm_wday, dim = grav_cron_dim(y, m);
+        int domOk = (int)((c->dom >> d) & 1u) || (c->lastDay && d == dim);
+        if (c->lastWeekday && !domOk) {
+            int last = dim, w = (wd + (dim - d)) % 7;              /* the weekday of the last day */
+            if (w == 6) last = dim - 1; else if (w == 0) last = dim - 2;
+            domOk = d == last;
+        }
+        int dowOk = (int)((c->dow >> wd) & 1u) || (((c->lastOf >> wd) & 1u) && d + 7 > dim)
+                    || (int)((c->nth >> (wd * 5 + (d - 1) / 7)) & 1u);
+        if (!c->domAny && !c->dowAny) return domOk || dowOk;
+        if (!c->domAny) return domOk;
+        if (!c->dowAny) return dowOk;
+        return 1;
+    }
+    static int grav_cron_due(const GravCron* c, long long t, int utc) {
+        struct tm tm; grav_cron_tm(t, utc, &tm);
+        return ((c->mon >> (tm.tm_mon + 1)) & 1u) && grav_cron_day(c, &tm) && ((c->hour >> tm.tm_hour) & 1u)
+               && ((c->min >> tm.tm_min) & 1u) && (!c->hasSeconds || ((c->sec >> (tm.tm_sec > 59 ? 59 : tm.tm_sec)) & 1u));
+    }
+    /* The first time after `from` (forward) or before it (backward) when due; -1 if none within years. */
+    static long long grav_cron_search(const GravCron* c, long long from, int utc, int forward) {
+        long long step = c->hasSeconds ? 1 : 60;
+        long long t = from - ((from % step) + step) % step;        /* to the second or the minute */
+        t = forward ? t + step : (t == from ? t - step : t);
+        if (!forward && t >= from) t -= step;
+        struct tm tm;
+        for (int guard = 0; guard < 500000; guard++) {
+            grav_cron_tm(t, utc, &tm);
+            if (!((c->mon >> (tm.tm_mon + 1)) & 1u)) {
+                if (forward) { tm.tm_mon += 1; tm.tm_mday = 1; tm.tm_hour = tm.tm_min = tm.tm_sec = 0; t = grav_cron_mk(&tm, utc); }
+                else { tm.tm_mday = 1; tm.tm_hour = tm.tm_min = tm.tm_sec = 0; t = grav_cron_mk(&tm, utc) - step; }
+                continue;
+            }
+            if (!grav_cron_day(c, &tm)) {
+                if (forward) { tm.tm_mday += 1; tm.tm_hour = tm.tm_min = tm.tm_sec = 0; t = grav_cron_mk(&tm, utc); }
+                else { tm.tm_hour = tm.tm_min = tm.tm_sec = 0; t = grav_cron_mk(&tm, utc) - step; }
+                continue;
+            }
+            if (!((c->hour >> tm.tm_hour) & 1u)) {
+                if (forward) { tm.tm_hour += 1; tm.tm_min = tm.tm_sec = 0; t = grav_cron_mk(&tm, utc); }
+                else { tm.tm_min = tm.tm_sec = 0; t = grav_cron_mk(&tm, utc) - step; }
+                continue;
+            }
+            if (!((c->min >> tm.tm_min) & 1u)) {
+                if (forward) { tm.tm_min += 1; tm.tm_sec = 0; t = grav_cron_mk(&tm, utc); }
+                else { tm.tm_sec = 0; t = grav_cron_mk(&tm, utc) - step; }
+                continue;
+            }
+            if (c->hasSeconds && !((c->sec >> (tm.tm_sec > 59 ? 59 : tm.tm_sec)) & 1u)) { t += forward ? 1 : -1; continue; }
+            return t;
+        }
+        return -1;
+    }
+    %}
+
+    class Cron {
+        public expression: string
+        public hasSeconds: bool = false
+        private sec: long = 0
+        private min: long = 0
+        private hour: long = 0
+        private dom: long = 0
+        private mon: long = 0
+        private dow: long = 0
+        private lastOf: long = 0
+        private nth: long = 0
+        private domAny: bool = false
+        private dowAny: bool = false
+        private lastDay: bool = false
+        private lastWeekday: bool = false
+
+        constructor(expression: string) { self.expression = expression; }
+
+        // The expression, or a ValueError saying what is wrong with it.
+        static fn parse(expression: string) -> Cron {
+            let e = Str.trim(expression);
+            let parts = new Array<string>();
+            for (p in Str.split(Cron.expand(Str.lower(e)), " ")) { if (p != "") { parts.push(p); } }
+            if (parts.size() != 5 && parts.size() != 6) { throw new ValueError("a cron expression has 5 or 6 fields: '" + expression + "'"); }
+            let c = new Cron(e);
+            let off = 0;
+            if (parts.size() == 6) { c.hasSeconds = true; c.sec = c.field(parts[0], 0, 59, "", expression); off = 1; }
+            else { c.sec = 1; }
+            c.min = c.field(parts[off], 0, 59, "", expression);
+            c.hour = c.field(parts[off + 1], 0, 23, "", expression);
+            c.dom = c.field(parts[off + 2], 1, 31, "dom", expression);
+            c.mon = c.field(parts[off + 3], 1, 12, "month", expression);
+            c.dow = c.field(parts[off + 4], 0, 7, "dow", expression);
+            if ((c.dow & 128) != 0) { c.dow = c.dow | 1; }                        // (7 is Sunday too)
+            c.dow = c.dow & 127;
+            return c;
+        }
+        static fn isValid(expression: string) -> bool { try { Cron.parse(expression); return true; } catch (e: ValueError) { return false; } }
+        private static fn expand(e: string) -> string {
+            if (e == "@yearly" || e == "@annually") { return "0 0 1 1 *"; }
+            if (e == "@monthly") { return "0 0 1 * *"; }
+            if (e == "@weekly") { return "0 0 * * 0"; }
+            if (e == "@daily" || e == "@midnight") { return "0 0 * * *"; }
+            if (e == "@hourly") { return "0 * * * *"; }
+            return e;
+        }
+        private static fn name(token: string, kind: string) -> int {
+            let t = Str.lower(token);
+            if (kind == "month") {
+                let months: Array<string> = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+                let i = months.indexOf(t);
+                if (i >= 0) { return i + 1; }
+            }
+            if (kind == "dow") {
+                let days: Array<string> = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+                let i = days.indexOf(t);
+                if (i >= 0) { return i; }
+            }
+            if (t == "" || !Str.isDigits(t) || t.length > 3) { return -1; }
+            return Format.toLong(t) as int;
+        }
+        // The values a field allows, as bits.
+        private fn field(text: string, lo: int, hi: int, kind: string, whole: string) -> long {
+            let bits: long = 0;
+            for (p in Str.split(text, ",")) {
+                if (p == "*" || p == "?") {
+                    if (kind == "dom") { self.domAny = true; }
+                    if (kind == "dow") { self.dowAny = true; }
+                    for (v in lo..=hi) { bits = bits | ((1 as long) << v); }
+                    continue;
+                }
+                if (kind == "dom" && (p == "l" || p == "lw")) { if (p == "l") { self.lastDay = true; } else { self.lastWeekday = true; } continue; }
+                if (kind == "dow" && Str.endsWith(p, "l") && p.length > 1) {
+                    let d = Cron.name(p[..p.length - 1], kind);
+                    if (d < 0 || d > 7) { Cron.bad(text, whole, "not a weekday"); }
+                    self.lastOf = self.lastOf | ((1 as long) << (d % 7));
+                    continue;
+                }
+                if (kind == "dow" && Str.contains(p, "#")) {
+                    let d = Cron.name(Str.before(p, "#"), kind);
+                    let n = Format.toLongOr(Str.after(p, "#"), 0) as int;
+                    if (d < 0 || d > 7 || n < 1 || n > 5) { Cron.bad(text, whole, "expected weekday#1-5"); }
+                    self.nth = self.nth | ((1 as long) << ((d % 7) * 5 + n - 1));
+                    continue;
+                }
+                let step = 1;
+                let range = p;
+                if (Str.contains(p, "/")) {
+                    step = Format.toLongOr(Str.after(p, "/"), 0) as int;
+                    range = Str.before(p, "/");
+                    if (step < 1) { Cron.bad(text, whole, "a step must be at least 1"); }
+                }
+                let a = lo;
+                let b = hi;
+                if (range != "*" && range != "?") {
+                    if (Str.contains(range, "-")) {
+                        a = Cron.name(Str.before(range, "-"), kind);
+                        b = Cron.name(Str.after(range, "-"), kind);
+                    } else {
+                        a = Cron.name(range, kind);
+                        b = Str.contains(p, "/") ? hi : a;
+                    }
+                }
+                if (a < lo || b > hi || a < 0 || b < 0) { Cron.bad(text, whole, "out of range ${lo}-${hi}"); }
+                if (a > b) { Cron.bad(text, whole, "a range must go up"); }
+                let v = a;
+                while (v <= b) { bits = bits | ((1 as long) << v); v += step; }
+            }
+            return bits;
+        }
+        private static fn bad(text: string, whole: string, why: string) { throw new ValueError("bad cron field '" + text + "' in '" + whole + "': " + why); }
+
+        // ── when ──────────────────────────────────────────────────────────────
+        // Whether it is due at `t` (to the minute; to the second with a seconds field).
+        fn isDue(t: DateTime, utc: bool = false) -> bool { return self.isDueUnix(t.unix(), utc); }
+        fn isDueUnix(unix: long, utc: bool = false) -> bool {
+            return %{ ({ GravCron grav_c; GRAV_CRON_FILL(grav_c, self); grav_cron_due(&grav_c, unix, utc); }) %} as bool;
+        }
+        // The first time after `from` when it is due (StateError if never).
+        fn next(from: DateTime, utc: bool = false) -> DateTime { return DateTime.fromUnix(self.find(from.unix(), utc, true)); }
+        // The last time before `from` when it was due.
+        fn previous(from: DateTime, utc: bool = false) -> DateTime { return DateTime.fromUnix(self.find(from.unix(), utc, false)); }
+        fn nextUnix(from: long, utc: bool = false) -> long { return self.find(from, utc, true); }
+        // The next `n` times after `from`.
+        fn nextTimes(from: DateTime, n: int, utc: bool = false) -> Array<DateTime> {
+            let out = new Array<DateTime>();
+            let t = from.unix();
+            for (i in 0..n) { t = self.find(t, utc, true); out.push(DateTime.fromUnix(t)); }
+            return out;
+        }
+        private fn find(from: long, utc: bool, forward: bool) -> long {
+            let t = %{ ({ GravCron grav_c; GRAV_CRON_FILL(grav_c, self); grav_cron_search(&grav_c, from, utc, forward); }) %} as long;
+            if (t < 0) { throw new StateError("'" + self.expression + "' is never due"); }
+            return t;
+        }
+        fn toString() -> string { return self.expression; }
+    }
+
+}
