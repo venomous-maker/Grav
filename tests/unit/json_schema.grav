@@ -1,0 +1,99 @@
+// JSON Schema: values checked against schemas (each keyword family, $ref,
+// combinators, formats, error paths), and a schema made from a class.
+import "std"
+
+fn errs(schema: string, value: string) -> string {
+    let out = new Array<string>()
+    for (e in JsonSchema.parse(schema).validate(Json.parse(value))) { out.push(e.toString()) }
+    return Str.join(out, "; ")
+}
+
+test "types, numbers, strings, formats" {
+    assertEq(errs("{\"type\":\"integer\",\"minimum\":1,\"maximum\":10}", "5"), "")
+    assertEq(errs("{\"type\":\"integer\"}", "2.0"), "")
+    assertEq(errs("{\"type\":\"integer\"}", "\"5\""), "(value): must be an integer, not a string")
+    assertEq(errs("{\"type\":[\"string\",\"null\"]}", "null"), "")
+    assertEq(errs("{\"minimum\":1,\"exclusiveMaximum\":10,\"multipleOf\":0.5}", "10"), "(value): must be less than 10")
+    assertEq(errs("{\"multipleOf\":0.1}", "0.3"), "")
+    assertEq(errs("{\"multipleOf\":3}", "7"), "(value): must be a multiple of 3")
+    assertEq(errs("{\"minLength\":2,\"maxLength\":3}", "\"é\""), "(value): must be at least 2 characters")
+    assertEq(errs("{\"pattern\":\"^\\\\d{3}-[\\\\w]+$\"}", "\"123-ab_c\""), "")
+    assertEq(errs("{\"pattern\":\"^\\\\d+$\"}", "\"12a\""), "(value): must match ^\\d+$")
+    for (ok in [["email", "ada@acme.test"], ["uri", "https://x.test/a?b"], ["date", "2024-02-29"], ["date-time", "2024-02-29T13:45:00.5+03:00"],
+                ["time", "23:59:60Z"], ["uuid", "3f2b9c1e-8d4a-4f6b-9a2e-7c1d5e8f0a3b"], ["ipv4", "192.168.0.1"], ["ipv6", "fe80::1"], ["ipv6", "::ffff:10.0.0.1"], ["hostname", "api.acme.test"]]) {
+        assertEq(errs("{\"format\":\"" + ok[0] + "\"}", "\"" + ok[1] + "\""), "", ok[0] + " " + ok[1])
+    }
+    for (bad in [["email", "ada@"], ["uri", "no scheme"], ["date", "2023-02-29"], ["date-time", "2024-01-01 25:00:00Z"], ["uuid", "nope"],
+                 ["ipv4", "256.1.1.1"], ["ipv4", "01.1.1.1"], ["ipv6", "1::2::3"], ["hostname", "-bad.test"]]) {
+        assert(errs("{\"format\":\"" + bad[0] + "\"}", "\"" + bad[1] + "\"") != "", bad[0] + " " + bad[1])
+    }
+    assertEq(errs("{\"format\":\"made-up\"}", "\"x\""), "")
+}
+
+test "objects and arrays, with paths" {
+    let s = "{\"type\":\"object\",\"required\":[\"id\",\"lines\"],\"additionalProperties\":false," +
+            "\"properties\":{\"id\":{\"type\":\"integer\"},\"note\":{\"type\":\"string\"},\"lines\":{\"type\":\"array\",\"minItems\":1," +
+            "\"items\":{\"type\":\"object\",\"required\":[\"qty\"],\"properties\":{\"qty\":{\"type\":\"integer\",\"minimum\":1}}}}}}"
+    assertEq(errs(s, "{\"id\":1,\"lines\":[{\"qty\":2}]}"), "")
+    assertEq(errs(s, "{\"lines\":[{\"qty\":0},{}],\"extra\":true}"),
+             "/id: is required; /lines/0/qty: must be at least 1; /lines/1/qty: is required; /extra: is not allowed")
+    assertEq(errs("{\"uniqueItems\":true}", "[1,{\"a\":1},2,{\"a\":1}]"), "/3: repeats item 1")
+    assertEq(errs("{\"prefixItems\":[{\"type\":\"string\"},{\"type\":\"integer\"}],\"items\":false}", "[\"a\",1,true]"), "/2: no value is allowed here")
+    assertEq(errs("{\"contains\":{\"type\":\"string\"}}", "[1,2]"), "(value): must contain an item that fits {\"type\":\"string\"}")
+    assertEq(errs("{\"patternProperties\":{\"^x-\":{\"type\":\"string\"}},\"additionalProperties\":{\"type\":\"integer\"}}", "{\"x-a\":\"s\",\"b\":1,\"c\":\"no\"}"),
+             "/c: must be an integer, not a string")
+    assertEq(errs("{\"dependentRequired\":{\"card\":[\"cvc\"]}}", "{\"card\":\"4242\"}"), "/cvc: is required when card is given")
+    assertEq(errs("{\"propertyNames\":{\"pattern\":\"^[a-z]+$\"}}", "{\"Bad\":1}"), "/Bad: must match ^[a-z]+$")
+    assertEq(errs("{\"properties\":{\"a/b\":{\"type\":\"string\"}}}", "{\"a/b\":1}"), "/a~1b: must be a string, not an integer")
+}
+
+test "combinators, $ref, const and enum, nullable, booleans" {
+    let s = "{\"$defs\":{\"pos\":{\"type\":\"integer\",\"minimum\":1},\"node\":{\"type\":\"object\",\"properties\":{\"next\":{\"anyOf\":[{\"$ref\":\"#/$defs/node\"},{\"type\":\"null\"}]}}}}," +
+            "\"properties\":{\"n\":{\"$ref\":\"#/$defs/pos\"},\"list\":{\"$ref\":\"#/$defs/node\"}}}"
+    assertEq(errs(s, "{\"n\":3,\"list\":{\"next\":{\"next\":null}}}"), "")
+    assertEq(errs(s, "{\"n\":0,\"list\":{\"next\":5}}"), "/n: must be at least 1; /list/next: fits none of the allowed shapes (anyOf)")
+    assertEq(errs("{\"oneOf\":[{\"type\":\"integer\"},{\"minimum\":0}]}", "5"), "(value): fits more than one of the shapes (oneOf)")
+    assertEq(errs("{\"allOf\":[{\"type\":\"string\"},{\"minLength\":3}]}", "\"ab\""), "(value): must be at least 3 characters")
+    assertEq(errs("{\"not\":{\"type\":\"null\"}}", "null"), "(value): must not fit {\"type\":\"null\"}")
+    assertEq(errs("{\"if\":{\"properties\":{\"kind\":{\"const\":\"card\"}}},\"then\":{\"required\":[\"number\"]},\"else\":{\"required\":[\"iban\"]}}", "{\"kind\":\"card\"}"),
+             "/number: is required")
+    assertEq(errs("{\"enum\":[\"a\",1,null]}", "\"b\""), "(value): must be one of [\"a\",1,null]")
+    assertEq(errs("{\"const\":{\"a\":[1]}}", "{\"a\":[1]}"), "")
+    assertEq(errs("{\"type\":\"string\",\"nullable\":true}", "null"), "")
+    assertEq(errs("true", "123"), "")
+    assertEq(errs("false", "123"), "(value): no value is allowed here")
+    assertEq(errs("{\"$ref\":\"#/$defs/missing\"}", "1"), "(value): the schema's $ref '#/$defs/missing' points nowhere")
+}
+
+class Line {
+    @Schema(min: 1, max: 99, description: "how many") public qty: int = 1
+    @Schema(pattern: "^[A-Z0-9]+$") public sku: string = ""
+    constructor() {}
+}
+@JsonSnakeCase class Order {
+    public id: long = 0
+    public customerName: string = ""
+    public note: string? = null
+    public lines: Array<Line> = new Array<Line>()
+    public tags: HashMap<string, string> = new HashMap<string, string>()
+    public parent: Order? = null
+    constructor() {}
+}
+
+test "a schema from a class, and checking with it" {
+    let s = JsonSchema.forClass(reflect(Order))
+    assertEq(s.toJson(), "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"customer_name\":{\"type\":\"string\"}," +
+        "\"note\":{\"type\":[\"string\",\"null\"]},\"lines\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Line\"}}," +
+        "\"tags\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},\"parent\":{\"anyOf\":[{\"$ref\":\"#/$defs/Order\"},{\"type\":\"null\"}]}}," +
+        "\"required\":[\"id\",\"customer_name\",\"lines\",\"tags\"],\"$defs\":{\"Line\":{\"type\":\"object\",\"properties\":{\"qty\":{\"type\":\"integer\",\"format\":\"int32\"," +
+        "\"minimum\":1,\"maximum\":99,\"description\":\"how many\"},\"sku\":{\"type\":\"string\",\"pattern\":\"^[A-Z0-9]+$\"}},\"required\":[\"qty\",\"sku\"]}," +
+        "\"Order\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"customer_name\":{\"type\":\"string\"},\"note\":{\"type\":[\"string\",\"null\"]}," +
+        "\"lines\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Line\"}},\"tags\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}}," +
+        "\"parent\":{\"anyOf\":[{\"$ref\":\"#/$defs/Order\"},{\"type\":\"null\"}]}},\"required\":[\"id\",\"customer_name\",\"lines\",\"tags\"]}}}")
+    let schema = JsonSchema.compile(s)
+    assert(schema.isValid(Json.parse("{\"id\":1,\"customer_name\":\"Ada\",\"lines\":[{\"qty\":2,\"sku\":\"A1\"}],\"tags\":{},\"parent\":null}")))
+    let e = schema.validate(Json.parse("{\"id\":1,\"customer_name\":\"Ada\",\"lines\":[{\"qty\":200,\"sku\":\"a1\"}],\"tags\":{}}"))
+    assertEq(e.size(), 2)
+    assertEq(e[0].toString(), "/lines/0/qty: must be at most 99")
+    assertEq(e[1].keyword, "pattern")
+}

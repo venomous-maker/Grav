@@ -1,0 +1,6 @@
+running 4 tests
+  ok    types, numbers, strings, formats
+  ok    objects and arrays, with paths
+  ok    combinators, $ref, const and enum, nullable, booleans
+  ok    a schema from a class, and checking with it
+result: 4 passed, 0 failed
