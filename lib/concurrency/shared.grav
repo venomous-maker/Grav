@@ -325,6 +325,8 @@ namespace std.concurrency {
         private mask: int
         public capacity: int
         public ttlMs: long
+        // Whether any entry has a time to live (putFor), so lookups read the clock.
+        private timed: AtomicBool = new AtomicBool(false)
         constructor(capacity: int, ttlMs: long = 0) {
             if (capacity < 1) { throw new ValueError("an LruCache holds at least one entry"); }
             self.capacity = capacity;
@@ -338,7 +340,7 @@ namespace std.concurrency {
             let h = hashOf(key);
             return ((h ^ (h >> 17)) & self.mask) as int;
         }
-        private fn now() -> long { return self.ttlMs > 0 ? Time.monotonicMs() : 0; }
+        private fn now() -> long { return self.ttlMs > 0 || self.timed.get() ? Time.monotonicMs() : 0; }
         // The value for `key` (now the most recently used), or `fallback`.
         fn getOr(key: K, fallback: V) -> V {
             let s = self.shard(key);
@@ -362,6 +364,7 @@ namespace std.concurrency {
         fn putFor(key: K, value: V, ttlMs: long) {
             let s = self.shard(key);
             let exp = ttlMs > 0 ? Time.monotonicMs() + ttlMs : 0 as long;
+            if (ttlMs > 0 && !self.timed.get()) { self.timed.set(true); }
             self.locks[s].lock();
             self.shards[s].put(key, value, exp);
             self.locks[s].unlock();
