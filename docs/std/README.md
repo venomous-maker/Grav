@@ -91,7 +91,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [otp](data/otp.md) | `Totp` and `Hotp`: two-factor one-time passwords |
 | [bytes](data/bytes.md) | `Bytes`: a buffer of raw bytes |
 | [encoding](data/encoding.md) | `Base64`, `Hex`, `Utf8` |
-| [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens) and `Uuid` |
+| [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens), `Uuid` (v4, v7) and `Ulid` |
 | [csv](data/csv.md) | `Csv`: reading and writing comma-separated values |
 | [compress](data/compress.md) | `Compress`: gzip, zlib and raw deflate (system zlib) |
 | [crypto](data/crypto.md) | `Crypto` (SHA-2 digests, HMAC, random bytes), `AesGcm`, `CryptoKey` (RSA, ECDSA, Ed25519: sign, verify, PEM, JWK), `PasswordHash` (scrypt) |
@@ -130,7 +130,8 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 |--------|----------|
 | [async](concurrency/async.md) | `Async`, `Mutex`, `AtomicInt`, `AtomicLong`, `AtomicBool`, `Channel<T>`, `awaitAll` |
 | [thread](concurrency/thread.md) | `Thread`, `WaitGroup`, `CountDownLatch`, `Semaphore`, `RWLock`, `Once` |
-| [shared](concurrency/shared.md) | `ThreadLocal<T>`, `ConcurrentMap<K, V>`: per-thread values and a sharded map |
+| [shared](concurrency/shared.md) | `ThreadLocal<T>`, `ConcurrentMap<K, V>`, `LruCache<K, V>`: per-thread values, a sharded map, a bounded cache |
+| [retry](concurrency/retry.md) | `Retry`: trying again with exponential backoff and jitter, within a deadline |
 | [generator](concurrency/generator.md) | `Generator<T>`: what a function that `yield`s becomes |
 
 ### net (import "std/net")
