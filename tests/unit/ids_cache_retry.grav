@@ -1,0 +1,117 @@
+// UUID v7 and ULIDs (time first, in order even within a millisecond),
+// LruCache (least recently used forgotten first, expiry, threads), and Retry.
+import "std"
+
+test "UUID v7: the form, the time, and order" {
+    let before = Time.nowMs()
+    let ids = new Array<string>()
+    for (i in 0..2000) { ids.push(Uuid.v7()) }
+    let after = Time.nowMs()
+    for (i in 0..ids.size()) {
+        let id = ids[i]
+        assert(Uuid.isValid(id))
+        assertEq(id[14], '7')
+        assert(id[19] == '8' || id[19] == '9' || id[19] == 'a' || id[19] == 'b')
+        if (i > 0) { assert(Str.compare(ids[i - 1], id) < 0, ids[i - 1] + " !< " + id) }
+    }
+    let t = Uuid.timestampMs(ids[0])
+    assert(t >= before && t <= after)
+    assertEq(Uuid.timestampMs(Uuid.v4()), -1 as long)
+    assert(Uuid.isValid(Uuid.v4()))
+}
+
+test "ULID: 26 characters, the time, order, and threads" {
+    let before = Time.nowMs()
+    let a = Ulid.generate()
+    assertEq(a.length, 26)
+    assert(Ulid.isValid(a))
+    assert(Ulid.isValid(Str.lower(a)))
+    let t = Ulid.timestampMs(a)
+    assert(t >= before && t <= Time.nowMs())
+    assertEq(Ulid.timestampMs("01ARZ3NDEKTSV4RRFFQ69G5FAV"), 1469922850259 as long)   // the spec's example
+    assert(!Ulid.isValid("01ARZ3NDEKTSV4RRFFQ69G5FA"))
+    assert(!Ulid.isValid("81ARZ3NDEKTSV4RRFFQ69G5FAV"))
+    let prev = a
+    for (i in 0..2000) {
+        let u = Ulid.generate()
+        assert(Str.compare(prev, u) < 0)
+        prev = u
+    }
+    let seen = new ConcurrentMap<string, bool>()
+    let wg = new WaitGroup()
+    for (w in 0..4) {
+        wg.add(1)
+        Thread.spawn(fn() { for (i in 0..2000) { seen.put(Ulid.generate(), true); seen.put(Uuid.v7(), true) }; wg.done() })
+    }
+    wg.wait()
+    assertEq(seen.size(), 16000)                                            // none repeated
+}
+
+test "LruCache: least recently used forgotten first; counts" {
+    let c = new LruCache<string, int>(3)
+    c.put("a", 1); c.put("b", 2); c.put("c", 3)
+    assertEq(c.getOr("a", 0), 1)                                           // a is now the most recent
+    c.put("d", 4)                                                          // b goes
+    assert(!c.containsKey("b"))
+    assertEq(str(c.keys()), "[\"d\", \"a\", \"c\"]")
+    c.put("c", 30)
+    assertEq(c.getOr("c", 0), 30)
+    assert(c.remove("a"))
+    assert(!c.remove("a"))
+    assertEq(c.size(), 2)
+    assertEq(c.getOrPut("e", fn(k: string) -> int { return 5 }), 5)
+    assertEq(c.getOrPut("e", fn(k: string) -> int { return 99 }), 5)
+    assertEq(c.evictions(), 1 as long)
+    assert(c.hits() >= 3 && c.misses() >= 1)
+    c.clear()
+    assert(c.isEmpty())
+}
+
+test "LruCache: expiry, and a sharded cache under threads" {
+    let c = new LruCache<long, string>(10, 50)
+    c.put(1, "one")
+    c.putFor(2, "two", 0)                                                  // never expires
+    assertEq(c.getOr(1, ""), "one")
+    Thread.sleepMs(80)
+    assertEq(c.getOr(1, "gone"), "gone")
+    assertEq(c.getOr(2, ""), "two")
+    let big = new LruCache<long, long>(2048)
+    let wg = new WaitGroup()
+    for (w in 0..4) {
+        wg.add(1)
+        let base = w * 100000
+        Thread.spawn(fn() { for (i in 0..5000) { big.put((base + i) as long, i as long); big.getOr((base + i / 2) as long, 0) }; wg.done() })
+    }
+    wg.wait()
+    assert(big.size() <= 2048)
+    assert(big.size() > 1500)
+}
+
+test "Retry: tries again with growing waits, gives up, filters" {
+    let calls = 0
+    let r = new Retry(4, 1, 8).noJitter()
+    assertEq(r.delayFor(1), 1 as long)
+    assertEq(r.delayFor(3), 4 as long)
+    assertEq(r.delayFor(10), 8 as long)
+    let waits = new Array<long>()
+    let got = r.notify(fn(n: int, e: Exception, d: long) { waits.push(d) }).call::<string>(fn(attempt: int) -> string {
+        calls += 1
+        if (attempt < 3) { throw new IOError("flaky") }
+        return "ok on ${attempt}"
+    })
+    assertEq(got, "ok on 3")
+    assertEq(str(waits), "[1, 2]")
+    let msg = ""
+    try { new Retry(2, 0).run(fn(a: int) { throw new IOError("down ${a}") }) } catch (e: IOError) { msg = e.message() }
+    assertEq(msg, "down 2")
+    let tries = 0
+    try {
+        new Retry(5, 0).when(fn(e: Exception) -> bool { return e is IOError }).run(fn(a: int) { tries += 1; throw new ValueError("bad input") })
+    } catch (e: ValueError) {}
+    assertEq(tries, 1)                                                     // not an IOError: not tried again
+    let started = Time.monotonicMs()
+    try { new Retry(100, 40, 40).noJitter().deadline(100).run(fn(a: int) { throw new IOError("x") }) } catch (e: IOError) {}
+    assert(Time.monotonicMs() - started < 2000)                              // (100 tries would take 4 s)
+    let j = new Retry(3, 100, 100)
+    for (i in 0..50) { let d = j.delayFor(2); assert(d >= 0 && d <= 100) }
+}

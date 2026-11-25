@@ -1,0 +1,7 @@
+running 5 tests
+  ok    UUID v7: the form, the time, and order
+  ok    ULID: 26 characters, the time, order, and threads
+  ok    LruCache: least recently used forgotten first; counts
+  ok    LruCache: expiry, and a sharded cache under threads
+  ok    Retry: tries again with growing waits, gives up, filters
+result: 5 passed, 0 failed
