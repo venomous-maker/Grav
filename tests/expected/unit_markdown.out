@@ -1,0 +1,4 @@
+running 2 tests
+  ok    blocks and inline
+  ok    safe: raw HTML escaped, script links dropped
+result: 2 passed, 0 failed

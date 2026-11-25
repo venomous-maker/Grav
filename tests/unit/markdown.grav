@@ -1,0 +1,30 @@
+// Markdown to HTML and text (std.text.Markdown), and the safe mode for text from users.
+import "std"
+
+test "blocks and inline" {
+    let html = Markdown.toHtml("# Title\n\nSome **bold** and *em*, `code` & <b>tags</b>.\n\n- a\n- b\n\n1. one\n\n> quote\n\n| A | B |\n|---|--:|\n| 1 | 2 |")
+    assert(Str.contains(html, "<h1>Title</h1>") && Str.contains(html, "<strong>bold</strong> and <em>em</em>, <code>code</code> &amp; <b>tags</b>."))
+    assert(Str.contains(html, "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n<ol>\n<li>one</li>\n</ol>"))
+    assert(Str.contains(html, "<blockquote>\n<p>quote</p>\n</blockquote>") && Str.contains(html, "<td style=\"text-align: right\">2</td>"))
+    assertEq(Markdown.toHtml("[a](https://x.io) ![i](/p.png) <https://y.io>"), "<p><a href=\"https://x.io\">a</a> <img src=\"/p.png\" alt=\"i\"> <a href=\"https://y.io\">https://y.io</a></p>")
+    assertEq(Markdown.toText("# Hi\n\nSee [docs](https://x.io) and **this**."), "Hi\n\nSee docs (https://x.io) and this.")
+    assertEq(Markdown.toHtml("```grav\nlet x = 1 < 2\n```"), "<pre><code class=\"language-grav\">let x = 1 &lt; 2</code></pre>")
+    assertEq(Markdown.inline("**a** _b_"), "<strong>a</strong> <em>b</em>")
+    assertEq(Markdown.inline("[Grav](https://x.io/wiki/Grav_(language)) and (this)"), "<a href=\"https://x.io/wiki/Grav_(language)\">Grav</a> and (this)")
+}
+
+test "safe: raw HTML escaped, script links dropped" {
+    let evil = "Hi <script>alert(1)</script> <img src=x onerror=alert(1)>\n\n[click](javascript:alert(1)) [ok](https://x.io) ![p](data:text/html,x) ![q](data:image/png;base64,AA)\n\n<div onclick=\"x()\">block</div>"
+    let trusted = Markdown.toHtml(evil)
+    assert(Str.contains(trusted, "<script>"))                           // (trusted text: as written)
+    let safe = Markdown.toHtml(evil, true)
+    assert(!Str.contains(safe, "<script"), safe)
+    assert(!Str.contains(safe, "<img src=x"), safe)
+    assert(!Str.contains(safe, "<div"), safe)
+    assert(Str.contains(safe, "&lt;script&gt;"))
+    assert(Str.contains(safe, "<a href=\"#\">click</a>"))
+    assert(Str.contains(safe, "<a href=\"https://x.io\">ok</a>"))
+    assert(Str.contains(safe, "<img src=\"#\" alt=\"p\">"))
+    assert(Str.contains(safe, "<img src=\"data:image/png;base64,AA\" alt=\"q\">"))
+    assertEq(Markdown.escape("<a href=\"x\">&"), "&lt;a href=&quot;x&quot;&gt;&amp;")                   // (attributes are always double-quoted)
+}

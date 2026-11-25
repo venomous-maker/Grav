@@ -1,0 +1,466 @@
+// lib/text/markdown.grav — Markdown to HTML (CommonMark's everyday parts and
+// GitHub's tables), and to plain text: for mail bodies, docs, comments.
+//
+//   Markdown.toHtml("# Hi\n\nThanks for **joining**. [Start here](https://x.io)")
+//   Markdown.toHtml(comment, true)               // safe: from users (raw HTML escaped, no javascript: links)
+//   Markdown.toText(source)                      // the same, readable as plain text
+//
+// Blocks: ATX (#) and setext headings, paragraphs, > quotes, - * + and 1.
+// lists (nested by indentation), ``` and ~~~ fenced code (and indented
+// code), --- rules, | tables |, and HTML blocks kept as they are. Inline:
+// **strong**, *em* and _em_, ~~strike~~, `code`, [links](url "title"),
+// ![images](src), <https://autolinks>, two trailing spaces or \ for a line
+// break, and \ escapes. Text is HTML-escaped; raw inline HTML tags pass
+// (escaped too in safe mode).
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "string.grav"
+import "strbuf.grav"
+import "convert.grav"
+
+namespace std.text {
+
+    class Markdown {
+        // HTML for Markdown `source`; `safe` for text from users (raw HTML escaped,
+        // links to javascript:, vbscript: and data: dropped).
+        static fn toHtml(source: string, safe: bool = false) -> string { return new MarkdownRenderer(safe).toHtml(source); }
+        // The same text, readable without markup (for a plain-text mail).
+        static fn toText(source: string) -> string { return new MarkdownRenderer(false).toText(source); }
+        // One line's inline markup as HTML.
+        static fn inline(text: string, safe: bool = false) -> string { return new MarkdownRenderer(safe).inline(text); }
+        // Text with & < > " ' escaped for HTML.
+        static fn escape(s: string) -> string { return MarkdownRenderer.escape(s); }
+    }
+
+    class MarkdownRenderer {
+        // Escape raw HTML and drop links to javascript:, data: and vbscript: (for text from users).
+        public safe: bool = false
+        constructor(safe: bool) { self.safe = safe; }
+        fn toHtml(source: string) -> string {
+            let lines = Str.split(Str.replace(Str.replace(source, "\r\n", "\n"), "\t", "    "), "\n");
+            let sb = new StringBuilder();
+            self.blocks(lines, 0, lines.size(), sb);
+            return Str.trimEnd(sb.toString());
+        }
+
+        // ── blocks ──────────────────────────────────────────────────────────────
+        private fn blocks(lines: Array<string>, from: int, to: int, sb: StringBuilder) {
+            let i = from;
+            while (i < to) {
+                let line = lines[i];
+                let t = Str.trim(line);
+                if (t == "") { i += 1; continue; }
+                // fenced code
+                if (Str.startsWith(t, "```") || Str.startsWith(t, "~~~")) {
+                    let fence = t[..3];
+                    let lang = Str.trim(t[3..]);
+                    let j = i + 1;
+                    let code = new Array<string>();
+                    while (j < to && !Str.startsWith(Str.trim(lines[j]), fence)) { code.push(lines[j]); j += 1; }
+                    sb.append(lang == "" ? "<pre><code>" : "<pre><code class=\"language-" + MarkdownRenderer.escape(lang) + "\">");
+                    sb.append(MarkdownRenderer.escape(Str.join(code, "\n"))).append("</code></pre>\n");
+                    i = j + 1;
+                    continue;
+                }
+                // indented code
+                if (Str.startsWith(line, "    ")) {
+                    let code = new Array<string>();
+                    while (i < to && (Str.startsWith(lines[i], "    ") || Str.trim(lines[i]) == "")) { code.push(lines[i].length >= 4 ? lines[i][4..] : ""); i += 1; }
+                    while (code.size() > 0 && Str.trim(code[code.size() - 1]) == "") { code.pop(); }
+                    sb.append("<pre><code>").append(MarkdownRenderer.escape(Str.join(code, "\n"))).append("</code></pre>\n");
+                    continue;
+                }
+                // ATX heading
+                if (Str.startsWith(t, "#")) {
+                    let level = 0;
+                    while (level < t.length && t[level] as int == 35) { level += 1; }
+                    if (level <= 6 && (level == t.length || t[level] as int == 32)) {
+                        let text = Str.trim(t[level..]);
+                        while (Str.endsWith(text, "#")) { text = Str.trimEnd(text[..text.length - 1]); }
+                        sb.append("<h${level}>").append(self.inline(text)).append("</h${level}>\n");
+                        i += 1;
+                        continue;
+                    }
+                }
+                // rule
+                if (self.isRule(t)) { sb.append("<hr>\n"); i += 1; continue; }
+                // quote
+                if (Str.startsWith(t, ">")) {
+                    let inner = new Array<string>();
+                    while (i < to && Str.startsWith(Str.trim(lines[i]), ">")) {
+                        let q = Str.trim(lines[i])[1..];
+                        inner.push(Str.startsWith(q, " ") ? q[1..] : q);
+                        i += 1;
+                    }
+                    sb.append("<blockquote>\n");
+                    self.blocks(inner, 0, inner.size(), sb);
+                    sb.append("</blockquote>\n");
+                    continue;
+                }
+                // list
+                if (self.listMarker(line) != "") { i = self.list(lines, i, to, sb); continue; }
+                // table
+                if (Str.contains(t, "|") && i + 1 < to && self.isTableRule(Str.trim(lines[i + 1]))) { i = self.table(lines, i, to, sb); continue; }
+                // HTML block
+                if (!self.safe && Str.startsWith(t, "<") && self.isBlockTag(t)) {
+                    while (i < to && Str.trim(lines[i]) != "") { sb.append(lines[i]).append("\n"); i += 1; }
+                    continue;
+                }
+                // paragraph (a setext heading when the next line is === or ---)
+                let para = new Array<string>();
+                while (i < to) {
+                    let l = lines[i];
+                    let lt = Str.trim(l);
+                    if (lt == "" || Str.startsWith(lt, "#") || Str.startsWith(lt, ">") || Str.startsWith(lt, "```") || Str.startsWith(lt, "~~~")
+                        || (para.size() > 0 && (self.listMarker(l) != "" || self.isRule(lt)))) { break; }
+                    if (para.size() > 0 && (self.isSetext(lt, "=") || self.isSetext(lt, "-"))) {
+                        let level = self.isSetext(lt, "=") ? 1 : 2;
+                        sb.append("<h${level}>").append(self.inline(Str.join(para, " "))).append("</h${level}>\n");
+                        para = new Array<string>();
+                        i += 1;
+                        break;
+                    }
+                    para.push(l);
+                    i += 1;
+                }
+                if (para.size() > 0) { sb.append("<p>").append(self.paragraph(para)).append("</p>\n"); }
+            }
+        }
+        private fn paragraph(lines: Array<string>) -> string {
+            let sb = new StringBuilder();
+            for (k, l in lines) {
+                let hard = Str.endsWith(l, "  ") || Str.endsWith(l, "\\");
+                let body = Str.trim(l);
+                if (Str.endsWith(body, "\\")) { body = body[..body.length - 1]; }
+                sb.append(self.inline(body));
+                if (k < lines.size() - 1) { sb.append(hard ? "<br>\n" : "\n"); }
+            }
+            return sb.toString();
+        }
+        private fn isRule(t: string) -> bool {
+            let c = t.length > 0 ? t[0] as int : 0;
+            if (c != 45 && c != 42 && c != 95) { return false; }
+            let n = 0;
+            for (k in 0..t.length) {
+                let x = t[k] as int;
+                if (x == c) { n += 1; } else if (x != 32) { return false; }
+            }
+            return n >= 3;
+        }
+        private fn isSetext(t: string, ch: string) -> bool {
+            if (t == "") { return false; }
+            for (k in 0..t.length) { if (t[k..k + 1] != ch) { return false; } }
+            return true;
+        }
+        private fn isBlockTag(t: string) -> bool {
+            let tags: Array<string> = ["<div", "<table", "<p", "<ul", "<ol", "<h1", "<h2", "<h3", "<h4", "<h5", "<h6", "<blockquote", "<pre", "<section", "<header", "<footer", "<hr", "<!--", "<center", "<img"];
+            for (x in tags) { if (Str.startsWith(Str.lower(t), x)) { return true; } }
+            return false;
+        }
+        // "-", "*", "+", or "1." / "1)" when the line starts a list item; "" otherwise.
+        private fn listMarker(line: string) -> string {
+            let t = Str.trimStart(line);
+            if (t.length >= 2 && (t[0] as int == 45 || t[0] as int == 42 || t[0] as int == 43) && t[1] as int == 32) { return self.isRule(Str.trim(t)) ? "" : t[..1]; }
+            let k = 0;
+            while (k < t.length && k < 9 && t[k] as int >= 48 && t[k] as int <= 57) { k += 1; }
+            if (k > 0 && k + 1 < t.length && (t[k] as int == 46 || t[k] as int == 41) && t[k + 1] as int == 32) { return t[..k + 1]; }
+            return "";
+        }
+        private fn indentOf(line: string) -> int { let n = 0; while (n < line.length && line[n] as int == 32) { n += 1; } return n; }
+        private fn list(lines: Array<string>, start: int, to: int, sb: StringBuilder) -> int {
+            let first = self.listMarker(lines[start]);
+            let ordered = Str.endsWith(first, ".") || Str.endsWith(first, ")");
+            let base = self.indentOf(lines[start]);
+            if (ordered) {
+                let n = Format.toLongOr(first[..first.length - 1], 1);
+                sb.append(n == 1 ? "<ol>\n" : "<ol start=\"${n}\">\n");
+            } else { sb.append("<ul>\n"); }
+            let i = start;
+            while (i < to) {
+                let line = lines[i];
+                if (Str.trim(line) == "") {
+                    // a blank line ends the list unless the next item (or a continuation) follows
+                    if (i + 1 < to && (self.listMarker(lines[i + 1]) != "" && self.indentOf(lines[i + 1]) >= base || self.indentOf(lines[i + 1]) > base)) { i += 1; continue; }
+                    break;
+                }
+                let marker = self.listMarker(line);
+                let indent = self.indentOf(line);
+                if (marker == "" || indent != base) {
+                    if (indent < base || marker == "") { break; }
+                }
+                // (a bullet after numbers, or numbers after bullets, starts a new list)
+                if (indent == base && (Str.endsWith(marker, ".") || Str.endsWith(marker, ")")) != ordered) { break; }
+                // one item: its first line, then lines indented past the marker
+                let text = Str.trimStart(line)[marker.length + 1..];
+                let body = new Array<string>();
+                body.push(text);
+                i += 1;
+                while (i < to) {
+                    let l = lines[i];
+                    if (Str.trim(l) == "") {
+                        if (i + 1 < to && self.indentOf(lines[i + 1]) > base) { body.push(""); i += 1; continue; }
+                        break;
+                    }
+                    if (self.indentOf(l) <= base && self.listMarker(l) != "") { break; }
+                    if (self.indentOf(l) <= base && self.listMarker(l) == "") {
+                        // (a lazy continuation of the item's paragraph)
+                        body.push(Str.trim(l));
+                        i += 1;
+                        continue;
+                    }
+                    let cut = self.indentOf(l) - (base + marker.length + 1);
+                    body.push(cut > 0 ? Str.repeat(" ", cut) + Str.trimStart(l) : Str.trimStart(l));
+                    i += 1;
+                }
+                // task list items: [ ] and [x]
+                let checkbox = "";
+                if (Str.startsWith(body[0], "[ ] ")) { checkbox = "<input type=\"checkbox\" disabled> "; body[0] = body[0][4..]; }
+                else if (Str.startsWith(Str.lower(body[0]), "[x] ")) { checkbox = "<input type=\"checkbox\" checked disabled> "; body[0] = body[0][4..]; }
+                let nested = false;
+                for (k in 1..body.size()) { if (self.listMarker(body[k]) != "" || Str.startsWith(Str.trim(body[k]), "```")) { nested = true; } }
+                if (!nested) {
+                    sb.append("<li>").append(checkbox).append(self.paragraph(self.nonBlank(body))).append("</li>\n");
+                } else {
+                    let firstPart = new Array<string>();
+                    let k = 0;
+                    while (k < body.size() && self.listMarker(body[k]) == "" && !Str.startsWith(Str.trim(body[k]), "```")) { if (body[k] != "") { firstPart.push(body[k]); } k += 1; }
+                    sb.append("<li>").append(checkbox).append(self.paragraph(firstPart)).append("\n");
+                    let rest = body.slice(k, body.size());
+                    self.blocks(rest, 0, rest.size(), sb);
+                    sb.append("</li>\n");
+                }
+            }
+            sb.append(ordered ? "</ol>\n" : "</ul>\n");
+            return i;
+        }
+        private fn nonBlank(a: Array<string>) -> Array<string> { let out = new Array<string>(); for (x in a) { if (Str.trim(x) != "") { out.push(x); } } return out; }
+        private fn isTableRule(t: string) -> bool {
+            if (!Str.contains(t, "-")) { return false; }
+            for (k in 0..t.length) { let c = t[k] as int; if (c != 124 && c != 45 && c != 58 && c != 32) { return false; } }
+            return true;
+        }
+        private fn cells(row: string) -> Array<string> {
+            let r = Str.trim(row);
+            if (Str.startsWith(r, "|")) { r = r[1..]; }
+            if (Str.endsWith(r, "|")) { r = r[..r.length - 1]; }
+            let out = new Array<string>();
+            for (c in Str.split(r, "|")) { out.push(Str.trim(c)); }
+            return out;
+        }
+        private fn table(lines: Array<string>, start: int, to: int, sb: StringBuilder) -> int {
+            let head = self.cells(lines[start]);
+            let aligns = new Array<string>();
+            for (c in self.cells(lines[start + 1])) {
+                let left = Str.startsWith(c, ":");
+                let right = Str.endsWith(c, ":");
+                aligns.push(left && right ? "center" : (right ? "right" : (left ? "left" : "")));
+            }
+            let attr = fn(k: int) -> string { return k < aligns.size() && aligns[k] != "" ? " style=\"text-align: " + aligns[k] + "\"" : ""; };
+            sb.append("<table>\n<thead>\n<tr>");
+            for (k, h in head) { sb.append("<th" + attr(k) + ">").append(self.inline(h)).append("</th>"); }
+            sb.append("</tr>\n</thead>\n<tbody>\n");
+            let i = start + 2;
+            while (i < to && Str.contains(lines[i], "|") && Str.trim(lines[i]) != "") {
+                sb.append("<tr>");
+                let cs = self.cells(lines[i]);
+                for (k in 0..head.size()) { sb.append("<td" + attr(k) + ">").append(self.inline(k < cs.size() ? cs[k] : "")).append("</td>"); }
+                sb.append("</tr>\n");
+                i += 1;
+            }
+            sb.append("</tbody>\n</table>\n");
+            return i;
+        }
+
+        // ── inline ──────────────────────────────────────────────────────────────
+        fn inline(text: string) -> string {
+            let sb = new StringBuilder();
+            let n = text.length;
+            let i = 0;
+            while (i < n) {
+                let c = text[i] as int;
+                // escapes
+                if (c == 92 && i + 1 < n && Str.contains("\\`*_{}[]()#+-.!|~<>", text[i + 1..i + 2])) { sb.append(MarkdownRenderer.escape(text[i + 1..i + 2])); i += 2; continue; }
+                // code span
+                if (c == 96) {
+                    let ticks = 0;
+                    while (i + ticks < n && text[i + ticks] as int == 96) { ticks += 1; }
+                    let fence = Str.repeat("`", ticks);
+                    let close = Str.indexFrom(text, fence, i + ticks);
+                    if (close > 0) {
+                        sb.append("<code>").append(MarkdownRenderer.escape(Str.trim(text[i + ticks..close]))).append("</code>");
+                        i = close + ticks;
+                        continue;
+                    }
+                }
+                // image / link
+                if (c == 33 && i + 1 < n && text[i + 1] as int == 91) {
+                    let end = self.linkEnd(text, i + 1);
+                    if (end > 0) {
+                        let l = self.linkAt(text, i + 1);
+                        sb.append("<img src=\"" + MarkdownRenderer.escape(self.url(l[1])) + "\" alt=\"" + MarkdownRenderer.escape(l[0]) + "\"" + (l[2] == "" ? "" : " title=\"" + MarkdownRenderer.escape(l[2]) + "\"") + ">");
+                        i = end;
+                        continue;
+                    }
+                }
+                if (c == 91) {
+                    let end = self.linkEnd(text, i);
+                    if (end > 0) {
+                        let l = self.linkAt(text, i);
+                        sb.append("<a href=\"" + MarkdownRenderer.escape(self.url(l[1])) + "\"" + (l[2] == "" ? "" : " title=\"" + MarkdownRenderer.escape(l[2]) + "\"") + ">").append(self.inline(l[0])).append("</a>");
+                        i = end;
+                        continue;
+                    }
+                }
+                // autolinks and raw tags
+                if (c == 60) {
+                    let close = Str.indexFrom(text, ">", i);
+                    if (close > i) {
+                        let inside = text[i + 1..close];
+                        if (Str.startsWith(inside, "http://") || Str.startsWith(inside, "https://") || Str.startsWith(inside, "mailto:")) {
+                            sb.append("<a href=\"" + MarkdownRenderer.escape(self.url(inside)) + "\">" + MarkdownRenderer.escape(Str.startsWith(inside, "mailto:") ? inside[7..] : inside) + "</a>");
+                            i = close + 1;
+                            continue;
+                        }
+                        if (Str.contains(inside, "@") && !Str.contains(inside, " ")) {
+                            sb.append("<a href=\"mailto:" + MarkdownRenderer.escape(inside) + "\">" + MarkdownRenderer.escape(inside) + "</a>");
+                            i = close + 1;
+                            continue;
+                        }
+                        let first = inside.length > 0 ? inside[0] as int : 0;
+                        if (!self.safe && ((first >= 97 && first <= 122) || (first >= 65 && first <= 90) || first == 47 || first == 33)) {
+                            sb.append(text[i..close + 1]);
+                            i = close + 1;
+                            continue;
+                        }
+                    }
+                }
+                // emphasis
+                if (c == 42 || c == 95 || c == 126) {
+                    let run = 0;
+                    while (i + run < n && text[i + run] as int == c && run < 3) { run += 1; }
+                    let marker = text[i..i + run];
+                    let close = Str.indexFrom(text, marker, i + run);
+                    // (an underscore inside a word is not emphasis)
+                    let wordy = c == 95 && i > 0 && self.isWordChar(text[i - 1] as int);
+                    if (close > i + run && !wordy && text[i + run] as int != 32 && (c != 126 || run == 2)) {
+                        let inner = self.inline(text[i + run..close]);
+                        if (c == 126) { sb.append("<del>").append(inner).append("</del>"); }
+                        else if (run == 1) { sb.append("<em>").append(inner).append("</em>"); }
+                        else if (run == 2) { sb.append("<strong>").append(inner).append("</strong>"); }
+                        else { sb.append("<strong><em>").append(inner).append("</em></strong>"); }
+                        i = close + run;
+                        continue;
+                    }
+                }
+                if (c == 38) { sb.append(self.isEntity(text, i) ? "&" : "&amp;"); i += 1; continue; }
+                if (c == 60) { sb.append("&lt;"); i += 1; continue; }
+                if (c == 62) { sb.append("&gt;"); i += 1; continue; }
+                if (c == 34) { sb.append("&quot;"); i += 1; continue; }
+                sb.appendChar(c);
+                i += 1;
+            }
+            return sb.toString();
+        }
+        private fn isWordChar(c: int) -> bool { return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122); }
+        private fn isEntity(text: string, at: int) -> bool {
+            let semi = Str.indexFrom(text, ";", at);
+            if (semi < 0 || semi - at > 10) { return false; }
+            let body = text[at + 1..semi];
+            return body != "" && (Str.isAlphanumeric(body) || (Str.startsWith(body, "#") && Str.isAlphanumeric(body[1..])));
+        }
+        // The index after a [text](url "title") starting at `at`, or -1.
+        private fn linkEnd(text: string, at: int) -> int {
+            let depth = 0;
+            let k = at;
+            while (k < text.length) {
+                let c = text[k] as int;
+                if (c == 92) { k += 2; continue; }
+                if (c == 91) { depth += 1; }
+                if (c == 93) { depth -= 1; if (depth == 0) { break; } }
+                k += 1;
+            }
+            if (k >= text.length || k + 1 >= text.length || text[k + 1] as int != 40) { return -1; }
+            // the address may hold balanced brackets ("wiki/Grav_(language)"), as CommonMark allows
+            let parens = 1;
+            let j = k + 2;
+            let quoted = false;
+            while (j < text.length) {
+                let c = text[j] as int;
+                if (c == 92) { j += 2; continue; }
+                if (c == 34) { quoted = !quoted; }
+                else if (!quoted && c == 40) { parens += 1; }
+                else if (!quoted && c == 41) { parens -= 1; if (parens == 0) { return j + 1; } }
+                j += 1;
+            }
+            return -1;
+        }
+        // [text, url, title] of the link starting at `at`.
+        private fn linkAt(text: string, at: int) -> Array<string> {
+            let end = self.linkEnd(text, at);
+            if (end < 0) { return new Array<string>(); }
+            let mid = Str.indexFrom(text, "](", at);
+            let label = text[at + 1..mid];
+            let target = Str.trim(text[mid + 2..end - 1]);
+            let title = "";
+            let q = Str.indexOf(target, " \"");
+            if (q > 0 && Str.endsWith(target, "\"")) { title = target[q + 2..target.length - 1]; target = target[..q]; }
+            if (Str.startsWith(target, "<") && Str.endsWith(target, ">")) { target = target[1..target.length - 1]; }
+            return [label, target, title];
+        }
+        // A link's address, or "#" in safe mode for one that would run script
+        // (javascript:, vbscript:, data: other than images).
+        private fn url(u: string) -> string {
+            if (!self.safe) { return u; }
+            let l = Str.lower(Str.replace(Str.replace(Str.trim(u), " ", ""), "\t", ""));
+            if (Str.startsWith(l, "javascript:") || Str.startsWith(l, "vbscript:") ||
+                (Str.startsWith(l, "data:") && !Str.startsWith(l, "data:image/"))) { return "#"; }
+            return u;
+        }
+        static fn escape(s: string) -> string {
+            if (!Str.contains(s, "&") && !Str.contains(s, "<") && !Str.contains(s, ">") && !Str.contains(s, "\"")) { return s; }
+            return Str.replace(Str.replace(Str.replace(Str.replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), "\"", "&quot;");
+        }
+
+        // ── plain text ──────────────────────────────────────────────────────────
+        // The source made readable without markup: links as "text (url)",
+        // emphasis and code marks dropped, headings and lists kept as lines.
+        fn toText(source: string) -> string {
+            let out = new Array<string>();
+            for (line in Str.split(Str.replace(source, "\r\n", "\n"), "\n")) {
+                let t = line;
+                let trimmed = Str.trim(t);
+                if (Str.startsWith(trimmed, "```") || Str.startsWith(trimmed, "~~~")) { continue; }
+                if (Str.startsWith(trimmed, "#")) { let k = 0; while (k < trimmed.length && trimmed[k] as int == 35) { k += 1; } t = Str.trim(trimmed[k..]); }
+                if (Str.startsWith(trimmed, "> ")) { t = trimmed[2..]; }
+                if (self.isTableRule(trimmed) && Str.contains(trimmed, "|")) { continue; }
+                if (Str.startsWith(trimmed, "|")) { t = Str.join(self.cells(trimmed), "  "); }
+                out.push(self.inlineText(t));
+            }
+            return Str.trim(Str.join(out, "\n"));
+        }
+        private fn inlineText(text: string) -> string {
+            let sb = new StringBuilder();
+            let i = 0;
+            while (i < text.length) {
+                let c = text[i] as int;
+                if (c == 91) {
+                    let end = self.linkEnd(text, i);
+                    if (end > 0) { let l = self.linkAt(text, i); sb.append(self.inlineText(l[0]) + " (" + l[1] + ")"); i = end; continue; }
+                }
+                if (c == 33 && i + 1 < text.length && text[i + 1] as int == 91) {
+                    let end = self.linkEnd(text, i + 1);
+                    if (end > 0) { let l = self.linkAt(text, i + 1); sb.append(l[0]); i = end; continue; }
+                }
+                if (c == 92 && i + 1 < text.length) { sb.append(text[i + 1..i + 2]); i += 2; continue; }
+                let inWord = c == 95 && i > 0 && i + 1 < text.length && self.isWordChar(text[i - 1] as int) && self.isWordChar(text[i + 1] as int);
+                if (c == 42 || c == 96 || (c == 95 && !inWord) || (c == 126 && i + 1 < text.length && text[i + 1] as int == 126)) {
+                    i += c == 126 ? 2 : 1;
+                    continue;
+                }
+                sb.appendChar(c);
+                i += 1;
+            }
+            return sb.toString();
+        }
+    }
+}

@@ -82,6 +82,8 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [strbuf](text/strbuf.md) | `StringBuilder`: building long strings efficiently |
 | [convert](text/convert.md) | `Format`: text to numbers and numbers to formatted text |
 | [regex](text/regex.md) | `Regex`: regular expressions: find, match, replace, split |
+| [markdown](text/markdown.md) | `Markdown`: Markdown to HTML (with a safe mode for users' text) and to plain text |
+| [unicode](text/unicode.md) | `Unicode`: normalization (NFC, NFD, NFKC, NFKD) and accents stripped |
 
 ### data
 
