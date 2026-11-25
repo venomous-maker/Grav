@@ -1,4 +1,4 @@
-running 10 tests
+running 11 tests
   ok    decorators and fields of a class hierarchy
   ok    reading and writing fields through any
   ok    ClassInfo.of, identity and classes without metadata
@@ -9,4 +9,5 @@ running 10 tests
   ok    a constructor whose parameters all have literal defaults takes no arguments by reflection
   ok    a list or map of any type takes an Array<any> or HashMap<string, any>, item by item
   ok    listItems and mapEntries read a list or map of any type as anys
-result: 10 passed, 0 failed
+  ok    lists and maps of an interface are set from anys
+result: 11 passed, 0 failed

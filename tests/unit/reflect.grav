@@ -218,6 +218,8 @@ test "a constructor whose parameters all have literal defaults takes no argument
     public counts: Array<int> = new Array<int>()
     public byName: HashMap<string, Contact> = new HashMap<string, Contact>()
     public rows: Array<Array<string>> = new Array<Array<string>>()
+    public sinks: HashMap<string, Sink> = new HashMap<string, Sink>()
+    public chain: Array<Sink> = new Array<Sink>()
     constructor() {}
     fn count(list: Array<Contact>) -> int { return list.size() }
 }
@@ -252,4 +254,18 @@ test "listItems and mapEntries read a list or map of any type as anys" {
     assertEq(ClassInfo.listItems(env.counts)[0] as int, 7)
     assertEq((ClassInfo.mapEntries(env.byName).get("ada") as Contact).email, "ada@x")
     assertEq(ClassInfo.listItems("text") == null && ClassInfo.mapEntries(env.to) == null, true)
+}
+
+test "lists and maps of an interface are set from anys" {
+    let env = new Envelope()
+    let info = reflect(Envelope)
+    let m = new HashMap<string, any>()
+    m.put("up", new Upper() as any)
+    info.field("sinks").set(env, m)
+    assertEq(env.sinks.get("up").write("hi"), "HI")
+    info.field("chain").set(env, [new Upper() as any, null])
+    assertEq(env.chain.size() == 2 && env.chain[0].write("a") == "A", true)
+    let msg = ""
+    try { info.field("chain").set(env, ["not a sink" as any]) } catch (e: ValueError) { msg = e.message() }
+    assertEq(msg != "", true)
 }
