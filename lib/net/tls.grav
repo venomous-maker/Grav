@@ -57,6 +57,8 @@ namespace std.net {
         int (*SSL_set1_host)(void*, const char*);
         void* (*SSL_get0_param)(void*);
         int (*SSL_connect)(void*);
+        int (*SSL_set_alpn_protos)(void*, const unsigned char*, unsigned int);
+        void (*SSL_get0_alpn_selected)(const void*, const unsigned char**, unsigned int*);
         int (*SSL_accept)(void*);
         int (*SSL_read)(void*, void*, int);
         int (*SSL_write)(void*, const void*, int);
@@ -170,6 +172,8 @@ namespace std.net {
         /* Only in OpenSSL 3: key generation in one call, and options as a function. */
         *(void**)(&grav_ssl.EVP_PKEY_Q_keygen) = dlsym(hc, "EVP_PKEY_Q_keygen");
         *(void**)(&grav_ssl.SSL_CTX_set_options) = dlsym(hs, "SSL_CTX_set_options");
+        *(void**)(&grav_ssl.SSL_set_alpn_protos) = dlsym(hs, "SSL_set_alpn_protos");          /* (ALPN: optional) */
+        *(void**)(&grav_ssl.SSL_get0_alpn_selected) = dlsym(hs, "SSL_get0_alpn_selected");
         if (missing) {
             snprintf(grav_ssl_why, sizeof grav_ssl_why, "the OpenSSL found is too old or incomplete (no %s)", first);
             return;
@@ -450,6 +454,9 @@ namespace std.net {
             grav_ssl.SSL_set_ex_data(ssl, 0, s);
             grav_tls_offer_session(ssl, ctx, s->tlsKey);
         }
+        s->alpn[0] = 0;
+        if (!server && s->alpnOfferLen > 0 && grav_ssl.SSL_set_alpn_protos)
+            grav_ssl.SSL_set_alpn_protos(ssl, s->alpnOffer, (unsigned int)s->alpnOfferLen);
         if (!server && host && host[0]) {
             if (grav_tls_is_ip(host)) grav_ssl.X509_VERIFY_PARAM_set1_ip_asc(grav_ssl.SSL_get0_param(ssl), host);
             else {
@@ -481,6 +488,11 @@ namespace std.net {
         }
         grav_tls_attach(s, ssl);
         s->tlsResumed = !server && grav_ssl.SSL_session_reused(ssl);
+        if (!server && grav_ssl.SSL_get0_alpn_selected) {
+            const unsigned char* chosen = 0; unsigned int cl = 0;
+            grav_ssl.SSL_get0_alpn_selected(ssl, &chosen, &cl);
+            if (chosen && cl > 0 && cl < sizeof s->alpn) { memcpy(s->alpn, chosen, cl); s->alpn[cl] = 0; }
+        }
         return 0;
     }
     /* One step of a server handshake that never waits for the client: 1 done, 0
@@ -659,7 +671,7 @@ namespace std.net {
         // Connects to host:port and completes a TLS handshake, verifying the server
         // against the system's trusted certificates. NetError when the certificate
         // is not accepted.
-        static fn connect(host: string, port: int) -> TcpStream { return Tls.connect(host, port, null, 30000); }
+        static fn connect(host: string, port: int) -> TcpStream { let none: TlsContext = null; return Tls.connect(host, port, none, 30000); }
         // Connects with the given client context (null: the system default) and
         // timeout for connecting and the handshake.
         static fn connect(host: string, port: int, ctx: TlsContext, timeoutMs: int) -> TcpStream {
@@ -672,6 +684,39 @@ namespace std.net {
                 throw e;
             }
             return conn;
+        }
+        // Connects offering application protocols by ALPN ("h2", "http/1.1"); the one
+        // the server chose is Tls.protocol(conn) ("" if it chose none).
+        static fn connect(host: string, port: int, protocols: Array<string>, timeoutMs: int = 30000, ctx: TlsContext = null) -> TcpStream {
+            let conn = TcpStream.connect(host, port, timeoutMs);
+            try {
+                conn.setTimeoutMs(timeoutMs > 0 ? timeoutMs : 0);
+                Tls.offer(conn, protocols);
+                Tls.startClient(conn, host, ctx);
+            } catch (e: Exception) {
+                conn.close();
+                throw e;
+            }
+            return conn;
+        }
+        // The protocols the next client handshake on `conn` offers (ALPN).
+        static fn offer(conn: TcpStream, protocols: Array<string>) {
+            let s = conn.handle();
+            %{ ((GravSock*)s)->alpnOfferLen = 0; %};
+            for (p in protocols) {
+                if (p.length == 0 || p.length > 40) { throw new ValueError("an ALPN protocol name is 1 to 40 bytes"); }
+                let ok = %{ ({ GravSock* grav_s = (GravSock*)s; int grav_n = (int)strlen(p);
+                               int grav_ok = grav_s->alpnOfferLen + 1 + grav_n <= (int)sizeof grav_s->alpnOffer;
+                               if (grav_ok) { grav_s->alpnOffer[grav_s->alpnOfferLen++] = (unsigned char)grav_n;
+                                              memcpy(grav_s->alpnOffer + grav_s->alpnOfferLen, p, (size_t)grav_n); grav_s->alpnOfferLen += grav_n; }
+                               grav_ok; }) %} as bool;
+                if (!ok) { throw new ValueError("too many ALPN protocols offered"); }
+            }
+        }
+        // The application protocol the TLS handshake settled on ("h2"; "" for none).
+        static fn protocol(conn: TcpStream) -> string {
+            let s = conn.handle();
+            return %{ grav_net_copy(((GravSock*)s)->alpn) %} as string;
         }
         // Starts TLS as a client on a connected stream (for protocols that switch
         // to TLS part way, like SMTP's STARTTLS). `host` is checked against the

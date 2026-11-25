@@ -62,6 +62,8 @@ namespace std.net {
         int tlsResumed;                                       /* the handshake resumed an earlier session */
         char tlsKey[300];                                     /* "host:port" for the client session cache */
         char err[256];                                        /* a TLS failure's reason, else "" */
+        unsigned char alpnOffer[64]; int alpnOfferLen;        /* the protocols a client handshake offers (ALPN) */
+        char alpn[32];                                        /* the one the server chose, else "" */
     } GravSock;
 
     static GravSock* grav_sock_new(int fd) {
