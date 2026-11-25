@@ -5,6 +5,7 @@
 //   flags.set(3); flags.set(64)
 //   print(flags.get(3))          // true
 
+import "../text/strbuf.grav"
 import "../core/exception.grav"
 import "array.grav"
 namespace std.collections {
@@ -84,12 +85,14 @@ namespace std.collections {
         // As text: {1, 2, 3} (strings in quotes).
         public fn toString() -> string {
             let xs = self.toArray()
-            let out = "{"
+            let out = new StringBuilder()
+            out.append("{")
             for (i in 0..xs.size()) {
-                if (i > 0) { out += ", " }
-                out += __repr(xs.get(i))
+                if (i > 0) { out.append(", ") }
+                out.append(__repr(xs.get(i)))
             }
-            return out + "}"
+            out.append("}")
+            return out.toString()
         }
         // The numbers of the bits that are on, in increasing order.
         public fn toArray() -> Array<int> {

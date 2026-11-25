@@ -12,6 +12,7 @@
 //   ages["ada"] = 36              // operator[]= is put
 //   print(ages["ada"])            // operator[] is get (zero value if missing)
 //   for (k in ages.keys()) { ... }
+import "../text/strbuf.grav"
 import "array.grav"
 import "tuple.grav"
 import "../core/iter.grav"
@@ -274,12 +275,16 @@ namespace std.collections {
         // As text: {"a": 1, "b": 2} (strings in quotes).
         public fn toString() -> string {
             let ks = self.keys()
-            let out = "{"
+            let out = new StringBuilder()
+            out.append("{")
             for (i in 0..ks.size()) {
-                if (i > 0) { out += ", " }
-                out += __repr(ks.get(i)) + ": " + __repr(self.get(ks.get(i)))
+                if (i > 0) { out.append(", ") }
+                out.append(__repr(ks.get(i)))
+                out.append(": ")
+                out.append(__repr(self.get(ks.get(i))))
             }
-            return out + "}"
+            out.append("}")
+            return out.toString()
         }
         // The keys, as a new array (in no particular order).
         public fn keys() -> Array<K> {

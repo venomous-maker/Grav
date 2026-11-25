@@ -13,6 +13,7 @@
 // `xs.mapTo(f)` maps into another element type and `xs.fold(init, f)` reduces into
 // any type (both infer their type parameter; `::<U>` can still be written).
 
+import "../text/strbuf.grav"
 import "../core/exception.grav"
 import "../core/timsort.grav"
 import "tuple.grav"
@@ -207,12 +208,15 @@ namespace std.collections {
         }
         // As text: [1, 2, 3] (strings in quotes).
         public fn toString() -> string {
-            let out = "["
+            // (one builder: `+=` on a string copied all the text so far for every element)
+            let out = new StringBuilder()
+            out.append("[")
             for (i in 0..self.len) {
-                if (i > 0) { out += ", " }
-                out += __repr(self.data[i])
+                if (i > 0) { out.append(", ") }
+                out.append(__repr(self.data[i]))
             }
-            return out + "]"
+            out.append("]")
+            return out.toString()
         }
         // A new array with the same elements (same as copy()).
         public fn toArray() -> Array<T> { return self.copy(); }
@@ -355,12 +359,12 @@ namespace std.collections {
         }
         // The elements as text joined by `sep`: [1, 2, 3].join(", ") == "1, 2, 3".
         public fn join(sep: string) -> string {
-            let out = "";
+            let out = new StringBuilder();
             for (i in 0..self.len) {
-                if (i > 0) { out += sep; }
-                out += str(self.data[i]);
+                if (i > 0) { out.append(sep); }
+                out.append(str(self.data[i]));
             }
-            return out;
+            return out.toString();
         }
         // The sum of f(x) over the elements.
         public fn sumBy(f: fn(T) -> float) -> float {

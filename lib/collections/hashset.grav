@@ -3,6 +3,7 @@
 //
 //   let seen = new HashSet<string>()
 //   if (seen.add(word)) { print("first time: ${word}") }
+import "../text/strbuf.grav"
 import "hashmap.grav"
 
 namespace std.collections {
@@ -35,12 +36,14 @@ namespace std.collections {
         // As text: {1, 2, 3} (strings in quotes).
         public fn toString() -> string {
             let xs = self.m.keys()
-            let out = "{"
+            let out = new StringBuilder()
+            out.append("{")
             for (i in 0..xs.size()) {
-                if (i > 0) { out += ", " }
-                out += __repr(xs.get(i))
+                if (i > 0) { out.append(", ") }
+                out.append(__repr(xs.get(i)))
             }
-            return out + "}"
+            out.append("}")
+            return out.toString()
         }
         // The elements as a new Array (in no particular order).
         public fn toArray() -> Array<T> { return self.m.keys(); }
