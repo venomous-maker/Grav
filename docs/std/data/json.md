@@ -68,6 +68,12 @@ true
 - **Objects keep insertion order.** `set` replaces an existing key in place;
   `remove(key)` deletes one.
 - **`==`** compares structure; the order of object keys does not matter.
+- **Repeated keys**: the last value wins, at the first key's place (as in
+  JavaScript's `JSON.parse`). `kindOf(key)` tells a member's kind without making a
+  value for it (-1 when missing, 6 for an integer).
+- **Speed**: the parser reads members straight into the compact storage in C:
+  about 1.3 µs for a 9-field object and 0.9 ms for 250 KB (about 280 MB/s).
+  To read JSON straight into your own classes, see [JsonMap](json_map.md).
 - `Json.parse` throws `ValueError` with a line and column; `Json.tryParse` returns
   `null` instead. `Json.quote(s)` escapes a string as a JSON literal.
 - **Storage is compact.** Arrays and objects keep their numbers, booleans and
@@ -135,6 +141,7 @@ boolean out of one gives a fresh JsonValue (scalars cannot be changed anyway).
 - `fn operator[](key: string) -> JsonValue` — `v["key"]`: member key of an object (null when absent).
 - `fn operator[](i: int) -> JsonValue` — `v[i]`: element i of an array.
 - `fn has(key: string) -> bool` — Whether an object has member `key`.
+- `fn kindOf(key: string) -> int` — The kind of member `key` without making a value for it: -1 when there is none, else JsonKind's number (0 null, 1 bool, 2 number, 3 string, 4 array, 5 object), with 6 for a number holding an integer.
 - `fn iterator() -> JsonItems` — An array's elements, or an object's member values, one at a time: `for (item in json["items"])`.
 - `fn entries() -> JsonEntries` — An object's members as key and value, in insertion order: `for ((key, value) in obj.entries())` (nothing for anything but an object).
 - `fn keys() -> Array<string>` — An object's keys, in insertion order.

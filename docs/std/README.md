@@ -87,6 +87,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | Module | Contents |
 |--------|----------|
 | [json](data/json.md) | `Json` and `JsonValue`: parsing, building, writing JSON |
+| [json_map](data/json_map.md) | `JsonMap`: JSON read straight into objects and written back |
 | [bytes](data/bytes.md) | `Bytes`: a buffer of raw bytes |
 | [encoding](data/encoding.md) | `Base64`, `Hex`, `Utf8` |
 | [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens) and `Uuid` |
