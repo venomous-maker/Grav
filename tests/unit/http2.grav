@@ -1,0 +1,88 @@
+// The HTTP/2 client against a scripted server: the preface and SETTINGS, a
+// header block split into HEADERS and CONTINUATION, Huffman-coded and
+// dynamic-table headers (bytes made by Python's hpack), padded DATA, PING, a
+// reset stream, and GOAWAY. (Checked against nginx and Python's h2 as well.)
+import "std"
+import "std/net"
+
+fn frame(type: int, flags: int, stream: int, payload: Bytes) -> Bytes {
+    let n = payload.size()
+    let f = new Bytes()
+    f.appendByte((n >> 16) & 255); f.appendByte((n >> 8) & 255); f.appendByte(n & 255)
+    f.appendByte(type); f.appendByte(flags)
+    f.appendByte(0); f.appendByte(0); f.appendByte(0); f.appendByte(stream)
+    f.append(payload)
+    return f
+}
+
+// Reads client frames until a HEADERS frame on `stream` (its END_STREAM seen); the PING answers it saw.
+fn awaitRequest(c: TcpStream, stream: int) -> int {
+    let pongs = 0
+    while (true) {
+        let h = c.readExactly(9)
+        let len = (h.get(0) << 16) | (h.get(1) << 8) | h.get(2)
+        if (len > 0) { c.skip(len) }
+        if (h.get(3) == 6 && (h.get(4) & 1) != 0) { pongs += 1 }
+        if (h.get(3) == 1 && h.get(8) == stream) { return pongs }
+    }
+    return pongs
+}
+
+test "headers in two frames, Huffman and indexed; padding; ping; reset; goaway" {
+    let listener = TcpListener.bind("127.0.0.1", 0)
+    let port = listener.port()
+    let pongs = new AtomicLong(0)
+    let server = Thread.spawn(fn() {
+        let c = listener.accept()
+        c.readExactly(24)                                                    // the preface
+        c.writeBytes(frame(4, 0, 0, new Bytes()))                            // our settings
+        c.writeBytes(frame(6, 0, 0, Bytes.fromHex("0102030405060708")))     // a PING to answer
+        pongs.add(awaitRequest(c, 1) as long)
+        // response 1: its header block split over HEADERS and CONTINUATION
+        let block = Bytes.fromHex("885f87497ca58ae819aa4088f2b4d614a935537f889cb450753c1eca246196d07abe941054d444a8200595040b8166e082a62d1bff")
+        c.writeBytes(frame(1, 0, 1, block.slice(0, 20)))
+        c.writeBytes(frame(9, 4, 1, block.slice(20, block.size())))
+        let padded = new Bytes()
+        padded.appendByte(3)
+        padded.append(Bytes.fromString("hello"))
+        padded.append(Bytes.fromHex("000000"))
+        c.writeBytes(frame(0, 9, 1, padded))                                 // PADDED, END_STREAM
+        // response 2: the same headers from the dynamic table (3 bytes)
+        pongs.add(awaitRequest(c, 3) as long)
+        c.writeBytes(frame(1, 5, 3, Bytes.fromHex("88c0bf")))               // END_HEADERS, END_STREAM: no body
+        // request 3: reset; request 4: the connection goes away
+        pongs.add(awaitRequest(c, 5) as long)
+        c.writeBytes(frame(3, 0, 5, Bytes.fromHex("00000008")))            // RST_STREAM CANCEL
+        pongs.add(awaitRequest(c, 7) as long)
+        c.writeBytes(frame(7, 0, 0, Bytes.fromHex("000000050000000b")))    // GOAWAY: last 5, ENHANCE_YOUR_CALM
+        c.close()
+    })
+    let h2 = Http2Client.open("http://127.0.0.1:${port}", null, 5000)
+    let r1 = h2.get("/one")
+    assertEq(r1.status, 200)
+    assertEq(r1.header("content-type"), "text/plain")
+    assertEq(r1.header("x-greeting"), "hello world")
+    assertEq(r1.header("Date"), "Mon, 21 Oct 2013 20:13:21 GMT")
+    assertEq(r1.text(), "hello")
+    let r2 = h2.get("/two")
+    assertEq(r2.header("x-greeting"), "hello world")
+    assertEq(r2.body.size(), 0)
+    let msg = ""
+    try { h2.get("/three") } catch (e: NetError) { msg = e.message() }
+    assertEq(msg, "HTTP/2 GET /three: the server reset the stream (CANCEL)")
+    msg = ""
+    try { h2.get("/four") } catch (e: NetError) { msg = e.message() }
+    assertEq(msg, "HTTP/2 GET /four: the server closed the connection (ENHANCE_YOUR_CALM)")
+    h2.close()
+    server.join()
+    listener.close()
+    assertEq(pongs.get(), 1 as long)                                       // the PING was answered
+}
+
+test "addresses, and a server that does not speak HTTP/2" {
+    let msg = ""
+    try { Http2Client.open("ftp://x") } catch (e: ValueError) { msg = e.message() }
+    assert(Str.contains(msg, "https:// or http://"))
+    assertEq(Http2Client.codeName(7), "REFUSED_STREAM")
+    assertEq(Http2Client.codeName(99), "error 99")
+}

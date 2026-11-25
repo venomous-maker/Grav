@@ -1,0 +1,628 @@
+// lib/net/http2.grav — an HTTP/2 client (RFC 9113): one connection, many
+// requests at once over it, headers compressed with HPACK (RFC 7541).
+//
+//   let h2 = Http2Client.open("https://example.com")       // TLS, agreeing on "h2" by ALPN
+//   let res = h2.get("/api/items")
+//   print("${res.status} ${res.header("content-type")} ${res.text()}")
+//   let all = h2.requestAll([Http2Request.get("/a"), Http2Request.get("/b")])   // multiplexed
+//   h2.close()
+//
+// "http://" speaks HTTP/2 in the clear with prior knowledge (h2c). Flow
+// control is kept both ways, PINGs are answered, a server's GOAWAY or
+// RST_STREAM fails what it covers with a NetError. A client is for one thread.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/strbuf.grav"
+import "../text/convert.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../data/bytes.grav"
+import "tcp.grav"
+import "tls.grav"
+
+namespace std.net {
+
+    %{
+    #include <stdint.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <pthread.h>
+    // HPACK-DATA BEGIN
+    /* HPACK (RFC 7541): the static table and the Huffman code (tools/gen-hpack.py). */
+    static const char* const grav_hp_static[61][2] = {
+        {":authority", ""},
+        {":method", "GET"},
+        {":method", "POST"},
+        {":path", "/"},
+        {":path", "/index.html"},
+        {":scheme", "http"},
+        {":scheme", "https"},
+        {":status", "200"},
+        {":status", "204"},
+        {":status", "206"},
+        {":status", "304"},
+        {":status", "400"},
+        {":status", "404"},
+        {":status", "500"},
+        {"accept-charset", ""},
+        {"accept-encoding", "gzip, deflate"},
+        {"accept-language", ""},
+        {"accept-ranges", ""},
+        {"accept", ""},
+        {"access-control-allow-origin", ""},
+        {"age", ""},
+        {"allow", ""},
+        {"authorization", ""},
+        {"cache-control", ""},
+        {"content-disposition", ""},
+        {"content-encoding", ""},
+        {"content-language", ""},
+        {"content-length", ""},
+        {"content-location", ""},
+        {"content-range", ""},
+        {"content-type", ""},
+        {"cookie", ""},
+        {"date", ""},
+        {"etag", ""},
+        {"expect", ""},
+        {"expires", ""},
+        {"from", ""},
+        {"host", ""},
+        {"if-match", ""},
+        {"if-modified-since", ""},
+        {"if-none-match", ""},
+        {"if-range", ""},
+        {"if-unmodified-since", ""},
+        {"last-modified", ""},
+        {"link", ""},
+        {"location", ""},
+        {"max-forwards", ""},
+        {"proxy-authenticate", ""},
+        {"proxy-authorization", ""},
+        {"range", ""},
+        {"referer", ""},
+        {"refresh", ""},
+        {"retry-after", ""},
+        {"server", ""},
+        {"set-cookie", ""},
+        {"strict-transport-security", ""},
+        {"transfer-encoding", ""},
+        {"user-agent", ""},
+        {"vary", ""},
+        {"via", ""},
+        {"www-authenticate", ""}
+    };
+    static const uint32_t grav_hp_codes[257] = {0x1ff8, 0x7fffd8, 0xfffffe2, 0xfffffe3, 0xfffffe4, 0xfffffe5, 0xfffffe6, 0xfffffe7, 0xfffffe8, 0xffffea, 0x3ffffffc, 0xfffffe9, 0xfffffea, 0x3ffffffd, 0xfffffeb, 0xfffffec, 0xfffffed, 0xfffffee, 0xfffffef, 0xffffff0, 0xffffff1, 0xffffff2, 0x3ffffffe, 0xffffff3, 0xffffff4, 0xffffff5, 0xffffff6, 0xffffff7, 0xffffff8, 0xffffff9, 0xffffffa, 0xffffffb, 0x14, 0x3f8, 0x3f9, 0xffa, 0x1ff9, 0x15, 0xf8, 0x7fa, 0x3fa, 0x3fb, 0xf9, 0x7fb, 0xfa, 0x16, 0x17, 0x18, 0x0, 0x1, 0x2, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x5c, 0xfb, 0x7ffc, 0x20, 0xffb, 0x3fc, 0x1ffa, 0x21, 0x5d, 0x5e, 0x5f, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0xfc, 0x73, 0xfd, 0x1ffb, 0x7fff0, 0x1ffc, 0x3ffc, 0x22, 0x7ffd, 0x3, 0x23, 0x4, 0x24, 0x5, 0x25, 0x26, 0x27, 0x6, 0x74, 0x75, 0x28, 0x29, 0x2a, 0x7, 0x2b, 0x76, 0x2c, 0x8, 0x9, 0x2d, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7ffe, 0x7fc, 0x3ffd, 0x1ffd, 0xffffffc, 0xfffe6, 0x3fffd2, 0xfffe7, 0xfffe8, 0x3fffd3, 0x3fffd4, 0x3fffd5, 0x7fffd9, 0x3fffd6, 0x7fffda, 0x7fffdb, 0x7fffdc, 0x7fffdd, 0x7fffde, 0xffffeb, 0x7fffdf, 0xffffec, 0xffffed, 0x3fffd7, 0x7fffe0, 0xffffee, 0x7fffe1, 0x7fffe2, 0x7fffe3, 0x7fffe4, 0x1fffdc, 0x3fffd8, 0x7fffe5, 0x3fffd9, 0x7fffe6, 0x7fffe7, 0xffffef, 0x3fffda, 0x1fffdd, 0xfffe9, 0x3fffdb, 0x3fffdc, 0x7fffe8, 0x7fffe9, 0x1fffde, 0x7fffea, 0x3fffdd, 0x3fffde, 0xfffff0, 0x1fffdf, 0x3fffdf, 0x7fffeb, 0x7fffec, 0x1fffe0, 0x1fffe1, 0x3fffe0, 0x1fffe2, 0x7fffed, 0x3fffe1, 0x7fffee, 0x7fffef, 0xfffea, 0x3fffe2, 0x3fffe3, 0x3fffe4, 0x7ffff0, 0x3fffe5, 0x3fffe6, 0x7ffff1, 0x3ffffe0, 0x3ffffe1, 0xfffeb, 0x7fff1, 0x3fffe7, 0x7ffff2, 0x3fffe8, 0x1ffffec, 0x3ffffe2, 0x3ffffe3, 0x3ffffe4, 0x7ffffde, 0x7ffffdf, 0x3ffffe5, 0xfffff1, 0x1ffffed, 0x7fff2, 0x1fffe3, 0x3ffffe6, 0x7ffffe0, 0x7ffffe1, 0x3ffffe7, 0x7ffffe2, 0xfffff2, 0x1fffe4, 0x1fffe5, 0x3ffffe8, 0x3ffffe9, 0xffffffd, 0x7ffffe3, 0x7ffffe4, 0x7ffffe5, 0xfffec, 0xfffff3, 0xfffed, 0x1fffe6, 0x3fffe9, 0x1fffe7, 0x1fffe8, 0x7ffff3, 0x3fffea, 0x3fffeb, 0x1ffffee, 0x1ffffef, 0xfffff4, 0xfffff5, 0x3ffffea, 0x7ffff4, 0x3ffffeb, 0x7ffffe6, 0x3ffffec, 0x3ffffed, 0x7ffffe7, 0x7ffffe8, 0x7ffffe9, 0x7ffffea, 0x7ffffeb, 0xffffffe, 0x7ffffec, 0x7ffffed, 0x7ffffee, 0x7ffffef, 0x7fffff0, 0x3ffffee, 0x3fffffff};
+    static const uint8_t grav_hp_lens[257] = {13, 23, 28, 28, 28, 28, 28, 28, 28, 24, 30, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 28, 6, 10, 10, 12, 13, 6, 8, 11, 10, 10, 8, 11, 8, 6, 6, 6, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 8, 15, 6, 12, 10, 13, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 8, 13, 19, 13, 14, 6, 15, 5, 6, 5, 6, 5, 6, 6, 6, 5, 7, 7, 6, 6, 6, 5, 6, 7, 6, 5, 5, 6, 7, 7, 7, 7, 7, 15, 11, 14, 13, 28, 20, 22, 20, 20, 22, 22, 22, 23, 22, 23, 23, 23, 23, 23, 24, 23, 24, 24, 22, 23, 24, 23, 23, 23, 23, 21, 22, 23, 22, 23, 23, 24, 22, 21, 20, 22, 22, 23, 23, 21, 23, 22, 22, 24, 21, 22, 23, 23, 21, 21, 22, 21, 23, 22, 23, 23, 20, 22, 22, 22, 23, 22, 22, 23, 26, 26, 20, 19, 22, 23, 22, 25, 26, 26, 26, 27, 27, 26, 24, 25, 19, 21, 26, 27, 27, 26, 27, 24, 21, 21, 26, 26, 28, 27, 27, 27, 20, 24, 20, 21, 22, 21, 21, 23, 22, 22, 25, 25, 24, 24, 26, 23, 26, 27, 26, 26, 27, 27, 27, 27, 27, 28, 27, 27, 27, 27, 27, 26, 30};
+    // HPACK-DATA END
+
+    /* The Huffman code as a tree, built once: node 0 is the root; sym >= 0 at a leaf. */
+    static int grav_hp_node[600][2];
+    static int grav_hp_leaf[600];
+    static int grav_hp_nodes = 1;
+    static pthread_once_t grav_hp_once = PTHREAD_ONCE_INIT;
+    static void grav_hp_build(void) {
+        memset(grav_hp_node, 0, sizeof grav_hp_node);
+        for (int i = 0; i < 600; i++) grav_hp_leaf[i] = -1;
+        for (int s = 0; s < 257; s++) {
+            int n = 0;
+            for (int b = grav_hp_lens[s] - 1; b >= 0; b--) {
+                int bit = (grav_hp_codes[s] >> b) & 1;
+                if (!grav_hp_node[n][bit]) grav_hp_node[n][bit] = grav_hp_nodes++;
+                n = grav_hp_node[n][bit];
+            }
+            grav_hp_leaf[n] = s;
+        }
+    }
+    /* Huffman-coded bytes as text (owned), or 0 when they are not valid (EOS, bad padding). */
+    static char* grav_hp_huffman(const unsigned char* p, size_t n) {
+        pthread_once(&grav_hp_once, grav_hp_build);
+        char* out = grav_str_new(n * 8 / 5 + 1);
+        size_t o = 0;
+        int node = 0, depth = 0, ones = 1;
+        for (size_t i = 0; i < n; i++) {
+            for (int b = 7; b >= 0; b--) {
+                int bit = (p[i] >> b) & 1;
+                node = grav_hp_node[node][bit];
+                depth++;
+                ones = ones && bit;
+                if (!node) { grav_str_release(out); return 0; }
+                if (grav_hp_leaf[node] >= 0) {
+                    if (grav_hp_leaf[node] == 256) { grav_str_release(out); return 0; }
+                    out[o++] = (char)grav_hp_leaf[node];
+                    node = 0; depth = 0; ones = 1;
+                }
+            }
+        }
+        if (depth > 7 || !ones) { grav_str_release(out); return 0; }   /* padding: at most 7 bits, all ones */
+        out[o] = 0;
+        return out;
+    }
+    /* The dynamic table: newest first. */
+    typedef struct { char** names; char** values; size_t n, cap, size, max; } GravHpTable;
+    static void grav_hp_evict(GravHpTable* t) {
+        while (t->n > 0 && t->size > t->max) {
+            t->n--;
+            t->size -= strlen(t->names[t->n]) + strlen(t->values[t->n]) + 32;
+            free(t->names[t->n]); free(t->values[t->n]);
+        }
+    }
+    static void grav_hp_add(GravHpTable* t, const char* name, const char* value) {
+        size_t sz = strlen(name) + strlen(value) + 32;
+        if (sz > t->max) { t->size += sz; grav_hp_evict(t); t->size = 0; for (size_t i = 0; i < t->n; i++) { free(t->names[i]); free(t->values[i]); } t->n = 0; return; }
+        if (t->n == t->cap) {
+            t->cap = t->cap ? t->cap * 2 : 16;
+            t->names = (char**)realloc(t->names, t->cap * sizeof(char*));
+            t->values = (char**)realloc(t->values, t->cap * sizeof(char*));
+            if (!t->names || !t->values) abort();
+        }
+        memmove(t->names + 1, t->names, t->n * sizeof(char*));
+        memmove(t->values + 1, t->values, t->n * sizeof(char*));
+        t->names[0] = strdup(name); t->values[0] = strdup(value);
+        t->n++; t->size += sz;
+        grav_hp_evict(t);
+    }
+    static void grav_hp_free(GravHpTable* t) {
+        for (size_t i = 0; i < t->n; i++) { free(t->names[i]); free(t->values[i]); }
+        free(t->names); free(t->values); free(t);
+    }
+    static int grav_hp_int(const unsigned char* p, size_t n, size_t* at, int prefix, uint64_t* out) {
+        if (*at >= n) return 0;
+        uint64_t max = (1u << prefix) - 1, v = p[(*at)++] & max;
+        if (v < max) { *out = v; return 1; }
+        int shift = 0;
+        while (*at < n) {
+            unsigned char b = p[(*at)++];
+            v += (uint64_t)(b & 0x7f) << shift;
+            if (!(b & 0x80)) { *out = v; return 1; }
+            shift += 7;
+            if (shift > 35) return 0;
+        }
+        return 0;
+    }
+    static char* grav_hp_string(const unsigned char* p, size_t n, size_t* at) {
+        if (*at >= n) return 0;
+        int huff = (p[*at] & 0x80) != 0;
+        uint64_t len;
+        if (!grav_hp_int(p, n, at, 7, &len) || len > n - *at) return 0;
+        char* s;
+        if (huff) {
+            char* h = grav_hp_huffman(p + *at, (size_t)len);
+            if (!h) return 0;
+            s = strdup(h); grav_str_release(h);
+        } else { s = (char*)malloc((size_t)len + 1); memcpy(s, p + *at, (size_t)len); s[len] = 0; }
+        *at += (size_t)len;
+        return s;
+    }
+    static int grav_hp_entry(GravHpTable* t, uint64_t idx, const char** name, const char** value) {
+        if (idx >= 1 && idx <= 61) { *name = grav_hp_static[idx - 1][0]; *value = grav_hp_static[idx - 1][1]; return 1; }
+        if (idx > 61 && idx - 62 < t->n) { *name = t->names[idx - 62]; *value = t->values[idx - 62]; return 1; }
+        return 0;
+    }
+    static void grav_hp_append(char** out, size_t* on, size_t* cap, const char* name, const char* value) {
+        size_t a = strlen(name), b = strlen(value);
+        if (*on + a + b + 3 > *cap) { *cap = (*on + a + b + 3) * 2; *out = (char*)realloc(*out, *cap); if (!*out) abort(); }
+        memcpy(*out + *on, name, a); *on += a; (*out)[(*on)++] = 1;
+        memcpy(*out + *on, value, b); *on += b; (*out)[(*on)++] = 2;
+    }
+    /* A header block as "name\1value\2..." (owned), or 0 with *err. */
+    static const char* grav_hp_decode(GravHpTable* t, const unsigned char* p, size_t n, const char** err) {
+        size_t at = 0, on = 0, cap = 256;
+        char* out = (char*)malloc(cap);
+        if (!out) abort();
+        while (at < n) {
+            unsigned char b = p[at];
+            const char *name = 0, *value = 0;
+            char *ownName = 0, *ownValue = 0;
+            uint64_t idx;
+            if (b & 0x80) {                                         /* indexed */
+                if (!grav_hp_int(p, n, &at, 7, &idx) || !grav_hp_entry(t, idx, &name, &value)) { *err = "a header index outside the tables"; free(out); return 0; }
+                grav_hp_append(&out, &on, &cap, name, value);
+                continue;
+            }
+            if ((b & 0xE0) == 0x20) {                               /* table size update */
+                if (!grav_hp_int(p, n, &at, 5, &idx) || idx > 65536) { *err = "a bad table size"; free(out); return 0; }
+                t->max = (size_t)idx; grav_hp_evict(t);
+                continue;
+            }
+            int incremental = (b & 0xC0) == 0x40;
+            int prefix = incremental ? 6 : 4;
+            if (!grav_hp_int(p, n, &at, prefix, &idx)) { *err = "a truncated header"; free(out); return 0; }
+            if (idx == 0) { ownName = grav_hp_string(p, n, &at); name = ownName; }
+            else if (!grav_hp_entry(t, idx, &name, &value)) { *err = "a header name index outside the tables"; free(out); return 0; }
+            ownValue = grav_hp_string(p, n, &at);
+            if (!name || !ownValue) { free(ownName); free(ownValue); *err = "a bad header string"; free(out); return 0; }
+            char* keepName = strdup(name);
+            grav_hp_append(&out, &on, &cap, keepName, ownValue);
+            if (incremental) grav_hp_add(t, keepName, ownValue);
+            free(keepName); free(ownName); free(ownValue);
+        }
+        char* r = grav_str_new(on);
+        memcpy(r, out, on); r[on] = 0;
+        free(out);
+        return r;
+    }
+    /* The static table's index for name and value (> 0), or for the name alone (< 0), or 0. */
+    static int grav_hp_find(const char* name, const char* value) {
+        int nameOnly = 0;
+        for (int i = 0; i < 61; i++) {
+            if (strcmp(grav_hp_static[i][0], name) == 0) {
+                if (strcmp(grav_hp_static[i][1], value) == 0) return i + 1;
+                if (!nameOnly) nameOnly = -(i + 1);
+            }
+        }
+        return nameOnly;
+    }
+    %}
+
+    // One request for an Http2Client.
+    class Http2Request {
+        public method: string
+        public path: string
+        public headers: HashMap<string, string>
+        public body: Bytes
+        constructor(method: string, path: string, headers: HashMap<string, string> = null, body: Bytes = null) {
+            self.method = method;
+            self.path = path;
+            self.headers = headers == null ? new HashMap<string, string>() : headers;
+            self.body = body;
+        }
+        static fn get(path: string) -> Http2Request { return new Http2Request("GET", path); }
+        static fn post(path: string, body: string, contentType: string = "application/json") -> Http2Request {
+            let h = new HashMap<string, string>();
+            h.put("content-type", contentType);
+            return new Http2Request("POST", path, h, Bytes.fromString(body));
+        }
+    }
+
+    // What the server answered.
+    class Http2Response {
+        public status: int = 0
+        // Header names in lower case (HTTP/2 sends them so); repeated ones joined by ", ".
+        public headers: HashMap<string, string> = new HashMap<string, string>()
+        public body: Bytes = new Bytes()
+        // The stream it came on.
+        public stream: int = 0
+        constructor() {}
+        fn header(name: string) -> string { return self.headers.getOr(Str.lower(name), ""); }
+        fn text() -> string { return self.body.toString(); }
+        fn ok() -> bool { return self.status >= 200 && self.status < 300; }
+    }
+
+    // A request in flight.
+    class Http2Stream {
+        public id: int
+        public req: Http2Request
+        public res: Http2Response = new Http2Response()
+        public done: bool = false
+        public error: string = ""
+        public sendWindow: long = 0
+        public sent: int = 0
+        public headerBlock: Bytes = new Bytes()
+        public gotHeaders: bool = false
+        constructor(id: int, req: Http2Request, window: long) { self.id = id; self.req = req; self.sendWindow = window; }
+    }
+
+    class Http2Client {
+        private conn: TcpStream
+        private authority: string
+        private scheme: string
+        private table: byte*
+        private nextId: int = 1
+        private streams: HashMap<int, Http2Stream> = new HashMap<int, Http2Stream>()
+        private connWindow: long = 65535
+        private peerWindow: long = 65535
+        private peerFrame: int = 16384
+        private peerStreams: int = 100
+        private goneAway: bool = false
+        private goAwayWhy: string = ""
+        private continuing: int = 0
+        // A User-Agent sent with each request ("" for none).
+        public userAgent: string = "grav-http2"
+
+        // Opens a connection to "https://host[:port]" (TLS, ALPN "h2") or
+        // "http://host[:port]" (cleartext, prior knowledge). `ctx` null: the
+        // system's trusted certificates.
+        static fn open(url: string, ctx: TlsContext = null, timeoutMs: int = 30000) -> Http2Client {
+            let tls = Str.startsWith(url, "https://");
+            if (!tls && !Str.startsWith(url, "http://")) { throw new ValueError("an HTTP/2 address starts with https:// or http://"); }
+            let rest = url[(tls ? 8 : 7)..];
+            let slash = Str.indexOf(rest, "/");
+            let hostPort = slash >= 0 ? rest[..slash] : rest;
+            let host = hostPort;
+            let port = tls ? 443 : 80;
+            let colon = Str.lastIndexOf(hostPort, ":");
+            if (colon > 0 && !Str.endsWith(hostPort, "]")) {
+                host = hostPort[..colon];
+                port = Format.toLong(hostPort[colon + 1..]) as int;
+            }
+            if (Str.startsWith(host, "[") && Str.endsWith(host, "]")) { host = host[1..host.length - 1]; }
+            return Http2Client.connect(host, port, tls, ctx, timeoutMs);
+        }
+        static fn connect(host: string, port: int, tls: bool = true, ctx: TlsContext = null, timeoutMs: int = 30000) -> Http2Client {
+            let conn: TcpStream = null;
+            if (tls) {
+                conn = Tls.connect(host, port, ["h2"], timeoutMs, ctx);
+                if (Tls.protocol(conn) != "h2") {
+                    conn.close();
+                    throw new NetError("the server at ${host}:${port} does not speak HTTP/2 (ALPN chose '" + Tls.protocol(conn) + "')");
+                }
+            } else {
+                conn = TcpStream.connect(host, port, timeoutMs);
+                conn.setTimeoutMs(timeoutMs);
+            }
+            let c = new Http2Client(conn, (tls && port == 443) || (!tls && port == 80) ? host : host + ":" + str(port), tls ? "https" : "http");
+            c.start();
+            return c;
+        }
+        constructor(conn: TcpStream, authority: string, scheme: string) {
+            self.conn = conn;
+            self.authority = authority;
+            self.scheme = scheme;
+            self.table = %{ ({ GravHpTable* grav_t = (GravHpTable*)calloc(1, sizeof(GravHpTable)); if (!grav_t) abort(); grav_t->max = 4096; (unsigned char*)grav_t; }) %} as byte*;
+        }
+        destructor() { %{ if (self->table) grav_hp_free((GravHpTable*)self->table); self->table = 0; %}; }
+
+        // ── frames ────────────────────────────────────────────────────────────
+        private fn frame(type: int, flags: int, stream: int, payload: Bytes) {
+            let n = payload == null ? 0 : payload.size();
+            let f = new Bytes(9 + n);
+            f.appendByte((n >> 16) & 255); f.appendByte((n >> 8) & 255); f.appendByte(n & 255);
+            f.appendByte(type); f.appendByte(flags);
+            f.appendByte((stream >> 24) & 127); f.appendByte((stream >> 16) & 255); f.appendByte((stream >> 8) & 255); f.appendByte(stream & 255);
+            if (n > 0) { f.append(payload); }
+            self.conn.writeBytes(f);
+        }
+        private static fn u32(v: long) -> Bytes {
+            let b = new Bytes(4);
+            b.appendByte(((v >> 24) & 255) as int); b.appendByte(((v >> 16) & 255) as int); b.appendByte(((v >> 8) & 255) as int); b.appendByte((v & 255) as int);
+            return b;
+        }
+        private fn start() {
+            self.conn.write("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+            // settings: no push (2 = 0), a 1 MB stream window (4)
+            let s = new Bytes(12);
+            s.appendByte(0); s.appendByte(2); s.append(Http2Client.u32(0));
+            s.appendByte(0); s.appendByte(4); s.append(Http2Client.u32(1048576));
+            self.frame(4, 0, 0, s);
+            // and a 16 MB connection window
+            self.frame(8, 0, 0, Http2Client.u32(16777216 - 65535));
+        }
+        // Reads and handles one frame.
+        private fn readFrame() {
+            let h = self.conn.readExactly(9);
+            if (h.size() < 9) { throw new NetError("HTTP/2: the server closed the connection"); }
+            let len = (h.get(0) << 16) | (h.get(1) << 8) | h.get(2);
+            let type = h.get(3);
+            let flags = h.get(4);
+            let id = ((h.get(5) & 127) << 24) | (h.get(6) << 16) | (h.get(7) << 8) | h.get(8);
+            let p = len > 0 ? self.conn.readExactly(len) : new Bytes();
+            if (p.size() < len) { throw new NetError("HTTP/2: the server closed the connection inside a frame"); }
+            if (self.continuing != 0 && type != 9) { throw new NetError("HTTP/2: a header block was interrupted"); }
+            if (type == 0) { self.onData(id, flags, p); }
+            else if (type == 1 || type == 9) { self.onHeaders(id, flags, p, type == 1); }
+            else if (type == 3) {
+                let st = self.streams.getOr(id, null);
+                let code = len >= 4 ? Http2Client.read32(p, 0) : 0 as long;
+                if (st != null) { st.error = "the server reset the stream (" + Http2Client.codeName(code) + ")"; st.done = true; }
+            } else if (type == 4) { self.onSettings(flags, p); }
+            else if (type == 6) { if ((flags & 1) == 0) { self.frame(6, 1, 0, p); } }
+            else if (type == 7) {
+                let last = (Http2Client.read32(p, 0) & 2147483647) as int;
+                let code = Http2Client.read32(p, 4);
+                self.goneAway = true;
+                self.goAwayWhy = "the server closed the connection (" + Http2Client.codeName(code) + ")";
+                for ((sid, st) in self.streams) { if (sid > last && !st.done) { st.error = self.goAwayWhy; st.done = true; } }
+            } else if (type == 8) {
+                let inc = Http2Client.read32(p, 0) & 2147483647;
+                if (id == 0) { self.connWindow += inc; }
+                else { let st = self.streams.getOr(id, null); if (st != null) { st.sendWindow += inc; } }
+            }
+            // (PRIORITY, PUSH_PROMISE (push is off) and unknown types are ignored)
+        }
+        private static fn read32(p: Bytes, at: int) -> long {
+            return ((p.get(at) as long) << 24) | ((p.get(at + 1) as long) << 16) | ((p.get(at + 2) as long) << 8) | (p.get(at + 3) as long);
+        }
+        static fn codeName(code: long) -> string {
+            let names = ["NO_ERROR", "PROTOCOL_ERROR", "INTERNAL_ERROR", "FLOW_CONTROL_ERROR", "SETTINGS_TIMEOUT", "STREAM_CLOSED", "FRAME_SIZE_ERROR",
+                         "REFUSED_STREAM", "CANCEL", "COMPRESSION_ERROR", "CONNECT_ERROR", "ENHANCE_YOUR_CALM", "INADEQUATE_SECURITY", "HTTP_1_1_REQUIRED"];
+            return code >= 0 && code < 14 ? names[code as int] : "error " + str(code);
+        }
+        private fn onSettings(flags: int, p: Bytes) {
+            if ((flags & 1) != 0) { return; }                                   // (our settings, acknowledged)
+            let i = 0;
+            while (i + 6 <= p.size()) {
+                let key = (p.get(i) << 8) | p.get(i + 1);
+                let v = Http2Client.read32(p, i + 2);
+                if (key == 1) { %{ ((GravHpTable*)self->table)->max = (size_t)v; grav_hp_evict((GravHpTable*)self->table); %}; }
+                if (key == 3) { self.peerStreams = v > 1000 ? 1000 : v as int; }
+                if (key == 4) {
+                    let delta = v - self.peerWindow;
+                    self.peerWindow = v;
+                    for ((_, st) in self.streams) { st.sendWindow += delta; }
+                }
+                if (key == 5) { self.peerFrame = v as int; }
+                i += 6;
+            }
+            self.frame(4, 1, 0, null);
+        }
+        private fn onHeaders(id: int, flags: int, p: Bytes, first: bool) {
+            let st = self.streams.getOr(id, null);
+            let from = 0;
+            let to = p.size();
+            if (first) {
+                if ((flags & 8) != 0) { let pad = p.get(0); from = 1; to -= pad; }          // PADDED
+                if ((flags & 32) != 0) { from += 5; }                                       // PRIORITY
+            }
+            if (st != null) { st.headerBlock.append(p.slice(from, to)); }
+            if ((flags & 4) == 0) {                                                       // more in CONTINUATION frames
+                self.continuing = id;
+                if (first && (flags & 1) != 0 && st != null) { st.done = true; }
+                return;
+            }
+            self.continuing = 0;
+            let block = st != null ? st.headerBlock : p.slice(from, to);
+            let raw = block.rawData();
+            let n = block.size();
+            let err = %{ (const char*)0 %} as byte*;
+            let text = %{ ({ const char* grav_e = 0; const char* grav_r = grav_hp_decode((GravHpTable*)self->table, raw, (size_t)n, &grav_e);
+                             err = (unsigned char*)grav_e; grav_r ? grav_r : grav_strdup(""); }) %} as string;
+            if (err != null) { throw new NetError("HTTP/2: " + %{ grav_strdup((const char*)err) %} as string); }
+            if (st == null) { return; }
+            st.headerBlock = new Bytes();
+            for (pair in Str.split(text, "\u{2}")) {
+                if (pair == "") { continue; }
+                let sep = Str.indexOf(pair, "\u{1}");
+                let name = pair[..sep];
+                let value = pair[sep + 1..];
+                if (name == ":status") { st.res.status = Format.toLongOr(value, 0) as int; continue; }
+                let had = st.res.headers.getOr(name, "");
+                st.res.headers.put(name, had == "" ? value : had + ", " + value);
+            }
+            // (1xx answers come before the real one)
+            if (st.res.status >= 100 && st.res.status < 200) { st.res.status = 0; st.res.headers = new HashMap<string, string>(); }
+            else { st.gotHeaders = true; }
+            if ((flags & 1) != 0 || (st.done && first)) { st.done = true; }
+        }
+        private fn onData(id: int, flags: int, p: Bytes) {
+            let st = self.streams.getOr(id, null);
+            let from = 0;
+            let to = p.size();
+            if ((flags & 8) != 0 && p.size() > 0) { from = 1; to -= p.get(0); }
+            if (st != null && to > from) { st.res.body.append(p.slice(from, to)); }
+            // what was read may be sent again: the windows open by as much
+            if (p.size() > 0) {
+                self.frame(8, 0, 0, Http2Client.u32(p.size() as long));
+                if ((flags & 1) == 0 && st != null) { self.frame(8, 0, id, Http2Client.u32(p.size() as long)); }
+            }
+            if ((flags & 1) != 0 && st != null) { st.done = true; }
+        }
+
+        // ── requests ──────────────────────────────────────────────────────────
+        private static fn hpInt(out: Bytes, v: long, prefix: int, first: int) {
+            let max: long = ((1 as long) << prefix) - 1;
+            if (v < max) { out.appendByte(first | (v as int)); return; }
+            out.appendByte(first | (max as int));
+            let rest = v - max;
+            while (rest >= 128) { out.appendByte(((rest & 127) | 128) as int); rest = rest >> 7; }
+            out.appendByte(rest as int);
+        }
+        private static fn hpString(out: Bytes, s: string) {
+            Http2Client.hpInt(out, s.length as long, 7, 0);
+            out.append(Bytes.fromString(s));
+        }
+        private static fn hpHeader(out: Bytes, name: string, value: string) {
+            let idx = %{ grav_hp_find(name, value) %} as int;
+            if (idx > 0) { Http2Client.hpInt(out, idx as long, 7, 128); return; }      // indexed
+            if (idx < 0) { Http2Client.hpInt(out, (-idx) as long, 4, 0); }            // literal, name from the table
+            else { out.appendByte(0); Http2Client.hpString(out, name); }               // literal name
+            Http2Client.hpString(out, value);
+        }
+        private fn open(req: Http2Request) -> Http2Stream {
+            if (self.goneAway) { throw new NetError("HTTP/2: " + self.goAwayWhy); }
+            let id = self.nextId;
+            self.nextId += 2;
+            let st = new Http2Stream(id, req, self.peerWindow);
+            self.streams.put(id, st);
+            let block = new Bytes(128);
+            Http2Client.hpHeader(block, ":method", req.method);
+            Http2Client.hpHeader(block, ":scheme", self.scheme);
+            Http2Client.hpHeader(block, ":authority", self.authority);
+            Http2Client.hpHeader(block, ":path", req.path == "" ? "/" : req.path);
+            if (self.userAgent != "" && !req.headers.containsKey("user-agent")) { Http2Client.hpHeader(block, "user-agent", self.userAgent); }
+            if (req.body != null && !req.headers.containsKey("content-length")) { Http2Client.hpHeader(block, "content-length", str(req.body.size())); }
+            for ((k, v) in req.headers) {
+                let name = Str.lower(k);
+                if (name == "connection" || name == "host" || name == "transfer-encoding" || name == "keep-alive" || name == "upgrade") { continue; }   // (not in HTTP/2)
+                Http2Client.hpHeader(block, name, v);
+            }
+            let noBody = req.body == null || req.body.isEmpty();
+            // HEADERS, then CONTINUATION frames when the block is larger than a frame
+            let at = 0;
+            let first = true;
+            while (first || at < block.size()) {
+                let end = at + self.peerFrame < block.size() ? at + self.peerFrame : block.size();
+                let last = end >= block.size();
+                let flags = (last ? 4 : 0) | (first && noBody ? 1 : 0);
+                self.frame(first ? 1 : 9, flags, id, block.slice(at, end));
+                at = end;
+                first = false;
+            }
+            if (noBody) { st.sent = 0; }
+            self.pump(st);
+            return st;
+        }
+        // Sends as much of the stream's body as the windows allow.
+        private fn pump(st: Http2Stream) {
+            let body = st.req.body;
+            if (body == null || body.isEmpty() || st.sent >= body.size()) { return; }
+            while (st.sent < body.size() && self.connWindow > 0 && st.sendWindow > 0) {
+                let room = self.peerFrame as long;
+                if (self.connWindow < room) { room = self.connWindow; }
+                if (st.sendWindow < room) { room = st.sendWindow; }
+                let end = st.sent + (room as int) < body.size() ? st.sent + (room as int) : body.size();
+                let chunk = body.slice(st.sent, end);
+                self.frame(0, end >= body.size() ? 1 : 0, st.id, chunk);
+                self.connWindow -= chunk.size();
+                st.sendWindow -= chunk.size();
+                st.sent = end;
+            }
+        }
+        private fn finish(st: Http2Stream) -> Http2Response {
+            self.streams.remove(st.id);
+            if (st.error != "") { throw new NetError("HTTP/2 " + st.req.method + " " + st.req.path + ": " + st.error); }
+            st.res.stream = st.id;
+            return st.res;
+        }
+
+        // Sends a request and waits for its answer.
+        fn request(req: Http2Request) -> Http2Response {
+            let st = self.open(req);
+            while (!st.done) {
+                self.readFrame();
+                self.pump(st);
+            }
+            return self.finish(st);
+        }
+        fn get(path: string, headers: HashMap<string, string> = null) -> Http2Response { return self.request(new Http2Request("GET", path, headers)); }
+        fn post(path: string, body: string, contentType: string = "application/json") -> Http2Response { return self.request(Http2Request.post(path, body, contentType)); }
+
+        // Sends every request at once (as many as the server allows in flight) on
+        // this one connection, and gives the answers in the requests' order.
+        fn requestAll(reqs: Array<Http2Request>) -> Array<Http2Response> {
+            let open = new Array<Http2Stream>();
+            let all = new Array<Http2Stream>();
+            let next = 0;
+            while (next < reqs.size() || !open.isEmpty()) {
+                while (next < reqs.size() && open.size() < self.peerStreams) {
+                    let st = self.open(reqs[next]);
+                    open.push(st);
+                    all.push(st);
+                    next += 1;
+                }
+                if (open.isEmpty()) { break; }
+                self.readFrame();
+                let still = new Array<Http2Stream>();
+                for (st in open) {
+                    self.pump(st);
+                    if (!st.done) { still.push(st); }
+                }
+                open = still;
+            }
+            let out = new Array<Http2Response>();
+            for (st in all) { out.push(self.finish(st)); }
+            return out;
+        }
+
+        // Ends the connection politely (GOAWAY), then closes it.
+        fn close() {
+            if (self.conn.isClosed()) { return; }
+            try {
+                let p = Http2Client.u32(0);
+                p.append(Http2Client.u32(0));
+                self.frame(7, 0, 0, p);
+            } catch (e: Exception) {}   // (closing anyway)
+            self.conn.close();
+        }
+    }
+}

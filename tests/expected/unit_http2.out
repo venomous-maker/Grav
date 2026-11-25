@@ -1,0 +1,4 @@
+running 2 tests
+  ok    headers in two frames, Huffman and indexed; padding; ping; reset; goaway
+  ok    addresses, and a server that does not speak HTTP/2
+result: 2 passed, 0 failed
