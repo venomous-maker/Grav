@@ -1,0 +1,19 @@
+// `grav lint --fix` on this file must give tests/expected/lintfix_messy.out (and change nothing more when run again).
+import "std"
+
+fn check(xs: Array<int>, s: string, ok: bool, n: long) -> bool {
+    if (xs.isEmpty()) { return false }
+    if (ok) { print("ok") }
+    let b = s[0]
+    let c = n
+    let total = 0
+    total += b
+    let flag = c != 3
+    let x = ok
+    let same = ok
+    print(s + " " + "${c} ${flag} ${x} ${same} ${total}")
+    return s == "" || !xs.isEmpty() && 1 + (!ok ? 1 : 2) > 0
+}
+
+fn main() { print(check([1], "hi", true, 3)) }
+fn prec(a: int, b: int, ok: bool) -> bool { return ok == (a != b) }

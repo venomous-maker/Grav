@@ -1,0 +1,32 @@
+// unused-private, unused-parameter and empty-catch, and what they leave alone.
+import "std"
+
+interface Shape { fn area(scale: double) -> double }
+
+class Circle implements Shape {
+    private r: double = 1.0
+    private unusedField: int = 0
+    private viaC: int = 3
+    private helperUsed: int = 0
+    constructor(r: double, label: string) { self.r = r }
+    fn area(scale: double) -> double { return 3.14 * self.r * self.r }    // (fixed by Shape: not reported)
+    private fn helper() -> int { return self.helperUsed }
+    private fn neverCalled() -> int { return 1 }
+    fn total(count: int, factor: int) -> int { return self.helper() + count + %{ self->viaC %} as int }
+}
+
+fn add(a: int, b: int, c: int) -> int { return a + b }
+fn ignore(_reason: string) -> int { return 0 }
+fn handler(x: int) -> int { return 1 }
+fn noop(x: int) {}
+
+fn main() {
+    let f = handler
+    print(f(1) + add(1, 2, 3) + ignore("x") + new Circle(2.0, "c").total(1, 2))
+    noop(1)
+    try { print("a") } catch (e: Exception) {}
+    try { print("b") } catch (e: Exception) {}   // nothing to do: printing cannot fail here
+    try { print("c") } catch (e: Exception) {
+        // fine as well
+    }
+}

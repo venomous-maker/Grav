@@ -107,6 +107,23 @@ run_fmt() {
     echo "FAIL (fmt)     $f: formatting the result again changes it"; res fail
   else echo "ok   $f (fmt)"; res pass; fi
 }
+# `grav lint --fix`: the fixed file is golden-checked, still compiles, and a second run changes nothing.
+run_lintfix() {
+  local f="$1" name; name="lintfix_$(basename "$f" .in)"; local gold="tests/expected/$name.out"
+  local work="$J/$name.grav"
+  cp "$f" "$work"
+  "$GRAV" lint --fix "$work" >"$J/$name.log" 2>&1
+  if [ $UPDATE = 1 ]; then cp "$work" "$gold"; echo "updated $gold"; res pass; return; fi
+  cp "$work" "$J/$name.again.grav"
+  "$GRAV" lint --fix "$J/$name.again.grav" >/dev/null 2>&1
+  if [ ! -f "$gold" ] || ! diff -q "$gold" "$work" >/dev/null; then
+    echo "FAIL (lint --fix) $f"; diff "$gold" "$work" 2>&1 | sed 's/^/    /' | head -30; sed 's/^/    /' "$J/$name.log" | tail -5; res fail
+  elif ! diff -q "$work" "$J/$name.again.grav" >/dev/null; then
+    echo "FAIL (lint --fix) $f: a second run changes it again"; res fail
+  elif ! "$GRAV" check "$work" >/dev/null 2>&1; then
+    echo "FAIL (lint --fix) $f: the fixed file does not compile"; res fail
+  else echo "ok   $f (lint --fix)"; res pass; fi
+}
 # Project test suites run with `grav test` from the project directory.
 run_project() {
   local p="$1" name; name="project_$(basename "$p")"; local gold="tests/expected/$name.out"
@@ -157,6 +174,7 @@ for f in tests/errors/*.grav; do spawn run_error "$f"; done
 for f in tests/warnings/*.grav; do spawn run_warn "$f"; done
 for f in tests/bench/*.grav; do spawn run_bench "$f"; done
 for f in tests/fmt/*.in; do spawn run_fmt "$f"; done
+for f in tests/lintfix/*.in; do spawn run_lintfix "$f"; done
 for p in examples/apps/bank_server; do spawn run_project "$p"; done
 for f in examples/*.grav examples/apps/*.grav examples/project/main.grav examples/apps/bank_server/src/main.grav; do
   spawn run_release "$f"

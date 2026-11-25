@@ -1,0 +1,20 @@
+// `grav lint --fix` on this file must give tests/expected/lintfix_messy.out (and change nothing more when run again).
+import "std"
+import "std/net"
+
+fn check(xs: Array<int>, s: string, ok: bool, n: long) -> bool {
+    if (xs.size() == 0) { return false }
+    if (ok == true) { print("ok") }
+    let b = Str.charAt(s, 0)
+    let c = n as long
+    let total = 0
+    total = total + b
+    let flag = !(c == 3)
+    let x = !!ok
+    let same = ok ? true : false
+    print(str(s) + " " + "${c} ${flag} ${x} ${same} ${total}")
+    return s.length == 0 || xs.size() > 0 && 1 + (ok == false ? 1 : 2) > 0
+}
+
+fn main() { print(check([1], "hi", true, 3)) }
+fn prec(a: int, b: int, ok: bool) -> bool { return ok == !(a == b) }
