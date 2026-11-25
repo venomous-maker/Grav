@@ -1,4 +1,4 @@
-// lib/data/encoding.grav — Base64, hex, and UTF-8 helpers.
+// lib/data/encoding.grav — Base64, Base32, hex, and UTF-8 helpers.
 //
 //   Base64.encode("hello")           // "aGVsbG8="
 //   Base64.decode("aGVsbG8=")        // "hello"
@@ -65,6 +65,41 @@ namespace std.data {
         GravBytes b; b.data = 0; b.len = 0;
         unsigned char* d = 0; long long n = grav_b64_decode(s, &d);
         if (n >= 0) { b.data = d; b.len = n; }
+        return b;
+    }
+    /* RFC 4648 Base32 (A-Z, 2-7), with = padding when `pad`. */
+    static const char* grav_b32_encode(const unsigned char* p, long long n, int pad) {
+        static const char a[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        long long chars = (n * 8 + 4) / 5, total = pad ? ((n + 4) / 5) * 8 : chars;
+        char* r = grav_str_new((size_t)total);
+        long long o = 0; unsigned int buf = 0; int bits = 0;
+        for (long long i = 0; i < n; i++) {
+            buf = (buf << 8) | p[i]; bits += 8;
+            while (bits >= 5) { r[o++] = a[(buf >> (bits - 5)) & 31]; bits -= 5; }
+        }
+        if (bits > 0) r[o++] = a[(buf << (5 - bits)) & 31];
+        while (o < total) r[o++] = '=';
+        r[o] = 0; return r;
+    }
+    /* Base32 text to bytes: either case; spaces, dashes and = padding ignored
+       (how secrets are often shown). data == 0 when a character is not Base32. */
+    static GravBytes grav_b32_decode_bin(const char* s) {
+        GravBytes b; b.data = 0; b.len = 0;
+        size_t n = strlen(s);
+        unsigned char* d = (unsigned char*)malloc(n * 5 / 8 + 1);
+        if (!d) abort();
+        long long o = 0; unsigned int buf = 0; int bits = 0;
+        for (size_t i = 0; i < n; i++) {
+            int c = (unsigned char)s[i], v;
+            if (c == ' ' || c == '-' || c == '=') continue;
+            if (c >= 'a' && c <= 'z') c -= 32;
+            if (c >= 'A' && c <= 'Z') v = c - 'A';
+            else if (c >= '2' && c <= '7') v = c - '2' + 26;
+            else { free(d); return b; }
+            buf = ((buf << 5) | (unsigned)v) & 0xFFFFu; bits += 5;
+            if (bits >= 8) { d[o++] = (unsigned char)(buf >> (bits - 8)); bits -= 8; }
+        }
+        b.data = d; b.len = o;
         return b;
     }
     static const char* grav_mem_to_str(const unsigned char* p, long long n) {
@@ -174,6 +209,37 @@ namespace std.data {
         // Whether `s` is valid Base64.
         static fn isValid(s: string) -> bool {
             let bin = %{ grav_b64_decode_bin(s) %} as binary
+            let ok = %{ bin.data != 0 %} as bool
+            %{ free((void*)bin.data); %};
+            return ok
+        }
+    }
+
+    // Base32 (RFC 4648: A-Z and 2-7), the alphabet authenticator apps use for
+    // secrets: case-insensitive and easy to read out or type.
+    class Base32 {
+        // The Base32 text of raw bytes (no padding unless `padding`).
+        static fn encode(b: Bytes, padding: bool = false) -> string {
+            let p = b.rawData()
+            let n = b.size()
+            return %{ grav_b32_encode(p, n, padding) %} as string
+        }
+        // The Base32 text of a string's bytes.
+        static fn encodeString(s: string, padding: bool = false) -> string {
+            return %{ grav_b32_encode((const unsigned char*)s, (long long)strlen(s), padding) %} as string
+        }
+        // The bytes of Base32 text (either case; spaces, dashes and = padding
+        // ignored); ValueError when it is not Base32.
+        static fn decode(s: string) -> Bytes {
+            let bin = %{ grav_b32_decode_bin(s) %} as binary
+            if (%{ bin.data == 0 %} as bool) { throw new ValueError("not Base32") }
+            let out = Bytes.fromBinary(bin)
+            %{ free((void*)bin.data); %};
+            return out
+        }
+        // Whether `s` is valid Base32.
+        static fn isValid(s: string) -> bool {
+            let bin = %{ grav_b32_decode_bin(s) %} as binary
             let ok = %{ bin.data != 0 %} as bool
             %{ free((void*)bin.data); %};
             return ok
