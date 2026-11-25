@@ -35,6 +35,7 @@ priority over the library's. See [Modules and packages](../learn/16-modules-and-
 | [panic](core/panic.md) | `Panic`: recovering from panics |
 | [gc](core/gc.md) | `GC`: the cycle collector |
 | [reflect](core/reflect.md) | `ClassInfo`, `FieldInfo`, `MethodInfo`, `Decorator`: classes, fields and decorators at run time |
+| [mem](core/mem.md) | `Mem`: how much memory a value uses at run time (`sizeOf`, `deepSizeOf`, `describe`) |
 | [iter](core/iter.md) | `Iterator<T>` and `Iterable<T>`: what `for (x in v)` walks besides positions |
 
 ### types

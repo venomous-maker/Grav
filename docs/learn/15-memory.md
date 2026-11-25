@@ -316,6 +316,35 @@ Memory you allocate yourself in C (`malloc`, through inline C or a pointer) is
 yours to free with `free(pointer)`, as in C. Grav never touches it. See
 [C interop](17-c-interop.md).
 
+## How much memory a value uses
+
+`sizeof(x)` is the size of the variable itself, fixed when compiling: a variable
+holds an object by reference, so `sizeof` of any object is 8. `Mem` measures
+at run time instead ([std page](../std/core/mem.md)):
+
+```grav
+import "std"
+
+fn main() {
+    let nums = new Array<long>()
+    for (i in 0..100000) { nums.push(i as long) }
+    print(sizeof(nums))                  // the reference
+    print(Mem.describe(nums).items)
+    print(Mem.sizeOf(nums) >= 800000)    // the array and its buffer of 100,000 longs
+}
+```
+
+Output:
+
+```text
+8
+100000
+true
+```
+
+`Mem.deepSizeOf(x)` adds everything `x` refers to, counting each object and
+string once, and `Mem.describe(x)` gives all of it as readable text.
+
 ## Finding memory bugs
 
 Build with `--sanitize` to have AddressSanitizer check every memory access while

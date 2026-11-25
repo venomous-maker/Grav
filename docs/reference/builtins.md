@@ -261,8 +261,13 @@ sizeof(Type) -> int
 sizeof(expression) -> int
 ```
 
-The size in bytes, as C's `sizeof`. For a class, it is the size of the object,
-not of the reference.
+The size in bytes, as C's `sizeof`, fixed when compiling. `sizeof(Type)` of a
+class is the size of its objects' fields (`sizeof(Point)`); `sizeof(expression)`
+is the size of the value as the variable holds it, which for any object,
+collection or string is a reference: 8. Neither counts what an object holds
+elsewhere (an array's elements, a string's text): for the memory a value uses at
+run time, see [`Mem`](../std/core/mem.md) (`Mem.sizeOf(x)`, `Mem.deepSizeOf(x)`,
+`Mem.describe(x)`).
 
 ## free
 
