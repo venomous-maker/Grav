@@ -4,7 +4,9 @@
 #include "sema/lints.h"
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 #include <tuple>
@@ -340,7 +342,13 @@ struct Linter {
         else if (auto *d = as<DeferStmt>(&s)) block(d->body);
         else if (auto *t = as<TryStmt>(&s)) {
             block(t->tryBlock);
-            for (auto &c : t->catches) block(c.block);
+            for (auto &c : t->catches) {
+                block(c.block);
+                // (the driver lets one with a comment beside it be: it says why)
+                if (c.block.statements.empty())
+                    warn(c.line, c.col, "empty-catch", "an empty `catch` hides the error",
+                         "handle it or log it, or say in a comment why it is safe to ignore");
+            }
             if (t->hasFinally) block(t->finallyBlock);
         } else if (auto *sw = as<SwitchStmt>(&s)) {
             for (auto &c : sw->cases) block(c.body);
@@ -428,10 +436,127 @@ struct Linter {
     }
 };
 
+// Whether `name` appears in C code as a whole word (inline C reaching a field or
+// a parameter: `self->total`, `count`).
+bool wordIn(const std::string &code, const std::string &name) {
+    if (name.empty()) return false;
+    auto ident = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+    for (size_t at = code.find(name); at != std::string::npos; at = code.find(name, at + 1)) {
+        bool startOk = at == 0 || !ident(code[at - 1]);
+        bool endOk = at + name.size() >= code.size() || !ident(code[at + name.size()]);
+        if (startOk && endOk) return true;
+    }
+    return false;
+}
+std::string baseName(const std::string &n) { return n.substr(0, n.find('$')); }
+
+// The names a body uses: names, members and methods it mentions, and its inline C.
+struct Uses {
+    std::set<std::string> names;
+    std::string c;
+    void expr(Expr &e) {
+        if (auto *n = as<NameExpr>(&e)) names.insert(n->name);
+        else if (auto *m = as<MemberExpr>(&e)) names.insert(baseName(m->member));
+        else if (auto *c2 = as<CallExpr>(&e)) { if (!c2->methodName.empty()) names.insert(baseName(c2->methodName)); }
+        else if (auto *cb = as<CBlockExpr>(&e)) c += cb->code + "\n";
+    }
+    // (what is only assigned is not used: `self.x = 0`, as a field's initial
+    // value becomes, does not count; reading it does)
+    std::set<const Expr *> written;
+    void block(Block &b) {
+        for (auto &st : b.statements)
+            visitStmt(*st, [this](Stmt &x) {
+                if (auto *a = as<AssignStmt>(&x); a && !a->isCompound && as<MemberExpr>(a->target.get())) written.insert(a->target.get());
+            }, [](Expr &) {});
+        for (auto &st : b.statements)
+            visitStmt(*st, [](Stmt &) {}, [this](Expr &e) { if (!written.count(&e)) expr(e); });
+    }
+    bool has(const std::string &name) const { return names.count(name) || wordIn(c, name); }
+};
+
+// unused-private (a private field or method nothing in its class uses) and
+// unused-parameter (a parameter its function never uses).
+void unusedMembers(Program &program, Linter &l) {
+    // every class's and interface's method names, and bases, to tell overrides
+    std::map<std::string, std::set<std::string>> methodsOf;
+    std::map<std::string, std::vector<std::string>> basesOf;
+    std::set<std::string> fnValues, boundMethods;
+    for (auto &d : program.decls) {
+        if (auto *c = as<ClassDecl>(d.get())) {
+            for (auto &m : c->methods) methodsOf[c->name].insert(baseName(m.sourceName.empty() ? m.name : m.sourceName));
+            auto &b = basesOf[c->name];
+            if (!c->baseName.empty()) b.push_back(c->baseName);
+            for (auto &x : c->extraBases) b.push_back(x);
+            for (auto &x : c->interfaceNames) b.push_back(x);
+        } else if (auto *i = as<InterfaceDecl>(d.get())) {
+            for (auto &m : i->methods) methodsOf[i->name].insert(baseName(m.sourceName.empty() ? m.name : m.sourceName));
+        }
+    }
+    visitExprs(program, [&](Expr &e) {
+        if (auto *n = as<NameExpr>(&e); n && !n->fnRef.empty()) fnValues.insert(n->name);
+        if (auto *m = as<MemberExpr>(&e); m && m->bound) boundMethods.insert(baseName(m->member));
+    });
+    auto shortName = [](std::string n) { auto dot = n.rfind('.'); return dot == std::string::npos ? n : n.substr(dot + 1); };
+    std::function<bool(const std::string &, const std::string &, int)> inherited = [&](const std::string &cls, const std::string &m, int depth) {
+        if (depth > 32) return false;
+        for (auto &b : basesOf[cls]) {
+            std::string sb = shortName(b.substr(0, b.find('<')));
+            if (methodsOf[sb].count(m) || inherited(sb, m, depth + 1)) return true;
+        }
+        return false;
+    };
+    auto params = [&](std::vector<Param> &ps, Block &body, int line, int col, bool skip) {
+        if (skip || body.statements.empty()) return;
+        Uses u;
+        u.block(body);
+        for (auto &p : ps)
+            if (!p.name.empty() && p.name[0] != '_' && p.name != "self" && p.name.find("__") == std::string::npos && !u.has(p.name))
+                l.warn(line, col, "unused-parameter", "parameter " + tick(p.name) + " is never used",
+                       "remove it, or name it " + tick("_" + p.name) + " if the signature must keep it");
+    };
+    for (auto &d : program.decls) {
+        if (auto *f = as<FunctionDecl>(d.get())) {
+            bool skip = !f->typeParams.empty() || f->name == "main" || fnValues.count(f->name) || f->name.find('$') != std::string::npos;
+            params(f->params, f->body, f->line, f->col, skip);
+            continue;
+        }
+        auto *c = as<ClassDecl>(d.get());
+        if (!c || c->name.find('$') != std::string::npos || !c->typeParams.empty() || !c->enumTemplate.empty()) continue;
+        // what the class's own code uses
+        Uses u;
+        u.block(c->constructor.body);
+        for (auto &x : c->extraCtors) u.block(x.body);
+        u.block(c->destructor.body);
+        for (auto &m : c->methods) u.block(m.body);
+        for (auto &f : c->fields) if (f.init) visitExpr(*f.init, [&](Expr &e) { u.expr(e); });
+        bool reflected = !c->decorators.empty();
+        for (auto &f : c->fields) {
+            if (f.access != Access::Private || reflected || !f.decorators.empty() || f.name.rfind("__", 0) == 0) continue;
+            if (!u.has(f.name))
+                l.warn(f.line, f.col, "unused-private", "private field " + tick(f.name) + " is never read", "remove it");
+        }
+        for (auto &m : c->methods) {
+            std::string name = baseName(m.sourceName.empty() ? m.name : m.sourceName);
+            bool overrides = inherited(c->name, name, 0);
+            if (m.access == Access::Private && !reflected && m.decorators.empty() && name.rfind("__", 0) != 0 &&
+                name != "toString" && name.rfind("op_", 0) != 0 && !overrides && !boundMethods.count(name) && !u.has(name))
+                l.warn(m.line, m.col, "unused-private", "private method " + tick(name) + " is never called", "remove it");
+            // (the methods `for`, `x[i]` and the like call by name keep their signatures)
+            static const std::set<std::string> protocol = {"get", "set", "size", "length", "iterator", "next", "hasNext",
+                                                           "compareTo", "equals", "hashCode", "hash", "toString", "close"};
+            bool hook = protocol.count(name) || name.rfind("op_", 0) == 0;
+            params(m.params, m.body, m.line, m.col, overrides || hook || m.isAbstract || !m.hasBody || boundMethods.count(name) || !m.typeParams.empty());
+        }
+        params(c->constructor.params, c->constructor.body, c->constructor.line, c->constructor.col, false);
+        for (auto &x : c->extraCtors) params(x.params, x.body, x.line, x.col, false);
+    }
+}
+
 } // namespace
 
 std::vector<GravError> lintProgram(Program &program) {
     Linter l;
+    unusedMembers(program, l);
     for (auto &d : program.decls) {
         if (auto *fn = as<FunctionDecl>(d.get())) l.block(fn->body);
         else if (auto *c = as<ClassDecl>(d.get())) {
