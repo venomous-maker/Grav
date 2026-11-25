@@ -1,0 +1,844 @@
+// lib/data/yaml.grav — YAML 1.2 read into, and written from, the same JsonValue
+// tree as JSON (mappings are objects, sequences arrays, scalars typed by the
+// core schema: null, true/false, integers, floats, else strings).
+//
+//   let spec = Yaml.parse(new File("openapi.yaml").read())
+//   print(spec.get("info").getString("title", ""))
+//   print(Yaml.stringify(spec))
+//
+// Read: block and flow collections, plain, single- and double-quoted scalars
+// (multi-line too), literal (|) and folded (>) block scalars with chomping,
+// anchors (&a) and aliases (*a), merge keys (<<), the !!str, !!int, !!float,
+// !!bool and !!null tags (others are ignored), comments, and documents
+// separated by --- (parseAll). Keys that are not strings become their text.
+// Malformed input is a ValueError naming the line and column.
+import "../core/exception.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "../text/strbuf.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "json.grav"
+import "encoding.grav"
+
+namespace std.data {
+
+    class Yaml {
+        // The first document (null as JsonValue when there is none); ValueError on bad input.
+        static fn parse(text: string) -> JsonValue {
+            let docs = new YamlParser(text).documents(true);
+            return docs.isEmpty() ? Json.nil() : docs[0];
+        }
+        // Every document of a stream (separated by ---).
+        static fn parseAll(text: string) -> Array<JsonValue> { return new YamlParser(text).documents(false); }
+        // Parse, or null when the text is not valid YAML.
+        static fn tryParse(text: string) -> JsonValue {
+            try { return Yaml.parse(text); } catch (e: ValueError) { return null; }
+        }
+        // A value as YAML in block style (`indent` spaces per level), ending in a newline.
+        static fn stringify(v: JsonValue, indent: int = 2) -> string {
+            let out = new StringBuilder();
+            if (v.isObject() && v.size() > 0) { YamlWriter.mapping(out, v, 0, indent); }
+            else if (v.isArray() && v.size() > 0) { YamlWriter.sequence(out, v, 0, indent); }
+            else { out.append(YamlWriter.scalar(v, 0, indent)); out.append("\n"); }
+            return out.toString();
+        }
+    }
+
+    class YamlWriter {
+        static fn pad(out: StringBuilder, n: int) { for (i in 0..n) { out.append(" "); } }
+        static fn mapping(out: StringBuilder, v: JsonValue, depth: int, step: int) {
+            let first = true;
+            for (k in v.keys()) {
+                if (!first || depth > 0) { YamlWriter.pad(out, depth); }
+                first = false;
+                out.append(YamlWriter.quoteIfNeeded(k));
+                out.append(":");
+                YamlWriter.child(out, v.get(k), depth, step);
+            }
+        }
+        static fn sequence(out: StringBuilder, v: JsonValue, depth: int, step: int) {
+            for (i in 0..v.size()) {
+                YamlWriter.pad(out, depth);
+                out.append("-");
+                let item = v.at(i);
+                if (item.isObject() && item.size() > 0) {
+                    // (compact: the first key on the dash's line)
+                    out.append(" ");
+                    let keys = item.keys();
+                    for (j in 0..keys.size()) {
+                        if (j > 0) { YamlWriter.pad(out, depth + 2); }
+                        out.append(YamlWriter.quoteIfNeeded(keys[j]));
+                        out.append(":");
+                        YamlWriter.child(out, item.get(keys[j]), depth + 2, step);
+                    }
+                } else if (item.isArray() && item.size() > 0) {
+                    out.append("\n");
+                    YamlWriter.sequence(out, item, depth + step, step);
+                } else {
+                    out.append(" ");
+                    out.append(YamlWriter.scalar(item, depth + step, step));
+                    out.append("\n");
+                }
+            }
+        }
+        // After "key:": a scalar on the same line, a collection on the next ones.
+        private static fn child(out: StringBuilder, v: JsonValue, depth: int, step: int) {
+            if (v.isObject() && v.size() > 0) { out.append("\n"); YamlWriter.mapping(out, v, depth + step, step); }
+            else if (v.isArray() && v.size() > 0) { out.append("\n"); YamlWriter.sequence(out, v, depth, step); }
+            else { out.append(" "); out.append(YamlWriter.scalar(v, depth + step, step)); out.append("\n"); }
+        }
+        static fn scalar(v: JsonValue, depth: int, step: int) -> string {
+            if (v.isNull()) { return "null"; }
+            if (v.isBool()) { return v.asBool() ? "true" : "false"; }
+            if (v.isNumber()) { return v.toJson(); }
+            if (v.isObject()) { return "{}"; }
+            if (v.isArray()) { return "[]"; }
+            let s = v.asString();
+            if (Str.contains(s, "\n") && !Str.contains(s, "\r") && Str.trimEnd(s) == Str.trimEnd(Str.replace(s, "\t", " "))) {
+                // multi-line text as a literal block (|, |- or |+ for its trailing line breaks)
+                let chomp = Str.endsWith(s, "\n\n") ? "+" : (Str.endsWith(s, "\n") ? "" : "-");
+                let lead = Str.startsWith(s, " ") ? str(step) : "";
+                let body = Str.endsWith(s, "\n") ? s[..s.length - 1] : s;
+                if (chomp == "+") { body = s; }
+                let out = new StringBuilder();
+                out.append("|" + lead + chomp);
+                for (line in Str.split(body, "\n")) {
+                    out.append("\n");
+                    if (line != "") { for (i in 0..depth) { out.append(" "); } out.append(line); }
+                }
+                if (chomp == "+") { return Str.trimEnd(out.toString()) == out.toString() ? out.toString() : out.toString(); }
+                return out.toString();
+            }
+            return YamlWriter.quoteIfNeeded(s);
+        }
+        // Text as a plain scalar when it reads back as the same string, else double-quoted.
+        static fn quoteIfNeeded(s: string) -> string {
+            if (YamlWriter.plainOk(s)) { return s; }
+            let out = new StringBuilder();
+            out.append("\"");
+            for (c in s as binary) {
+                if (c == 34) { out.append("\\\""); }
+                else if (c == 92) { out.append("\\\\"); }
+                else if (c == 10) { out.append("\\n"); }
+                else if (c == 13) { out.append("\\r"); }
+                else if (c == 9) { out.append("\\t"); }
+                else if (c < 32) { let hx = "0123456789abcdef"; out.append("\\x"); out.appendChar(hx[c >> 4] as int); out.appendChar(hx[c & 15] as int); }
+                else { out.appendChar(c as int); }
+            }
+            out.append("\"");
+            return out.toString();
+        }
+        private static fn plainOk(s: string) -> bool {
+            if (s == "" || s != Str.trim(s)) { return false; }
+            let c = Str.charAt(s, 0);
+            if (Str.indexOfAny(s[..1], "-?:,[]{}#&*!|>'\"%@`") >= 0) {
+                // ("-x" and ":x" are fine; "- x", "-" and the rest are not)
+                if (!((c == 45 || c == 63 || c == 58) && s.length > 1 && Str.charAt(s, 1) != 32)) { return false; }
+            }
+            if (Str.contains(s, ": ") || Str.contains(s, " #") || Str.endsWith(s, ":")) { return false; }
+            if (Str.indexOfAny(s, "\n\r\t") >= 0) { return false; }
+            let probe = YamlParser.resolve(s);
+            if (!probe.isString()) { return false; }
+            return !YamlWriter.oldSchema(s);
+        }
+        // Whether a YAML 1.1 reader (PyYAML and many tools) would read `s` as
+        // something other than text: yes/no/on/off, dates, 0777, 1_000, 1:30.
+        // (Not y and n: the 1.1 spec lists them, but PyYAML and most readers do not.)
+        private static fn oldSchema(s: string) -> bool {
+            let l = Str.lower(s);
+            if (l == "yes" || l == "no" || l == "on" || l == "off") { return true; }
+            let c = Str.charAt(s, 0);
+            if (!((c >= 48 && c <= 57) || c == 45 || c == 43 || c == 46)) { return false; }
+            // only digits and - _ : . + e E: quote it
+            for (i in 0..s.length) {
+                let d = Str.charAt(s, i);
+                if (!((d >= 48 && d <= 57) || d == 45 || d == 95 || d == 58 || d == 46 || d == 43 || d == 101 || d == 69 || d == 84 || d == 32 || d == 90)) { return false; }
+            }
+            return true;
+        }
+    }
+
+    class YamlParser {
+        private src: string
+        private n: int
+        private pos: int = 0
+        private line: int = 1
+        private lineStart: int = 0
+        private anchors: HashMap<string, JsonValue> = new HashMap<string, JsonValue>()
+        constructor(text: string) {
+            self.src = text;
+            self.n = text.length;
+            if (self.n >= 3 && Str.charAt(text, 0) == 239 && Str.charAt(text, 1) == 187 && Str.charAt(text, 2) == 191) { self.pos = 3; self.lineStart = 3; }
+        }
+
+        // ── characters ────────────────────────────────────────────────────────
+        private fn at(i: int) -> int { return i < self.n ? Str.charAt(self.src, i) : 0; }
+        private fn ch() -> int { return self.at(self.pos); }
+        private fn col() -> int { return self.pos - self.lineStart; }
+        private fn fail(msg: string) {
+            throw new ValueError("YAML error at line ${self.line}, column ${self.col() + 1}: " + msg);
+        }
+        private fn isSpace(c: int) -> bool { return c == 32 || c == 9; }
+        private fn isBreak(c: int) -> bool { return c == 10 || c == 13 || c == 0; }
+        private fn skipSpaces() { while (self.isSpace(self.ch())) { self.pos += 1; } }
+        private fn newline() {
+            if (self.ch() == 13) { self.pos += 1; }
+            if (self.ch() == 10) { self.pos += 1; }
+            self.line += 1;
+            self.lineStart = self.pos;
+        }
+        // Spaces, then a comment or the end of the line.
+        private fn atLineEnd() -> bool {
+            let p = self.pos;
+            while (self.isSpace(self.at(p))) { p += 1; }
+            let c = self.at(p);
+            return self.isBreak(c) || (c == 35 && (p == self.pos || p > self.pos));
+        }
+        private fn skipRestOfLine() {
+            while (!self.isBreak(self.ch())) { self.pos += 1; }
+            if (self.pos < self.n) { self.newline(); }
+        }
+        // Moves to the first character of the next line with content (past blank
+        // lines and comments); false at the end of the input or of a document.
+        private fn nextContent() -> bool {
+            while (true) {
+                if (self.pos >= self.n) { return false; }
+                self.skipSpaces();
+                let c = self.ch();
+                if (c == 35 || self.isBreak(c)) {
+                    if (self.pos >= self.n) { return false; }
+                    self.skipRestOfLine();
+                    continue;
+                }
+                if (self.col() == 0 && self.marker()) { return false; }
+                return true;
+            }
+            return false;
+        }
+        // "---" or "..." at the start of a line.
+        private fn marker() -> bool {
+            if (self.col() != 0) { return false; }
+            let c = self.ch();
+            if ((c != 45 && c != 46) || self.at(self.pos + 1) != c || self.at(self.pos + 2) != c) { return false; }
+            let d = self.at(self.pos + 3);
+            return self.isSpace(d) || self.isBreak(d);
+        }
+
+        // ── documents ─────────────────────────────────────────────────────────
+        fn documents(firstOnly: bool) -> Array<JsonValue> {
+            let out = new Array<JsonValue>();
+            let b0 = self.at(0);
+            let b1 = self.at(1);
+            if ((b0 == 255 && b1 == 254) || (b0 == 254 && b1 == 255)) { self.fail("the text is UTF-16 or UTF-32; YAML is read as UTF-8"); }
+            while (true) {
+                // directives (%YAML, %TAG) and the --- that starts a document
+                let started = false;
+                while (self.pos < self.n) {
+                    self.skipSpaces();
+                    let c = self.ch();
+                    if (self.col() == 0 && c == 37) { self.skipRestOfLine(); continue; }
+                    if (c == 35 || self.isBreak(c)) { if (self.pos >= self.n) { break; } self.skipRestOfLine(); continue; }
+                    if (self.marker() && c == 45) {
+                        self.pos += 3;
+                        started = true;
+                        if (self.atLineEnd()) { self.skipRestOfLine(); }
+                        else { self.skipSpaces(); }
+                        break;
+                    }
+                    if (self.marker() && c == 46) { self.pos += 3; self.skipRestOfLine(); continue; }
+                    break;
+                }
+                if (self.pos >= self.n && !started) { break; }
+                self.anchors.clear();
+                let doc = self.node(-1, false);
+                out.push(doc == null ? Json.nil() : doc);
+                if (firstOnly) {
+                    // (what follows must be another document, not more of this one)
+                    if (self.nextContent()) { self.fail("unexpected content (after the document)"); }
+                    break;
+                }
+                // to the next document marker
+                while (self.pos < self.n) {
+                    if (self.nextContent()) { self.fail("unexpected content (after the document)"); }
+                    if (self.pos >= self.n) { break; }
+                    if (self.marker()) {
+                        if (self.ch() == 46) { self.pos += 3; self.skipRestOfLine(); continue; }
+                        break;
+                    }
+                }
+                if (self.pos >= self.n) { break; }
+            }
+            return out;
+        }
+
+        // ── block nodes ───────────────────────────────────────────────────────
+        // The node starting at the next content, which must be indented more than
+        // `parent` (or, for a sequence that is a mapping's value, as much as it:
+        // `seqAtParent`); null when there is none there.
+        private fn node(parent: int, seqAtParent: bool) -> JsonValue {
+            if (!self.nextContent()) { return null; }
+            let c = self.col();
+            if (c < parent || (c == parent && !(seqAtParent && self.isSeqItem()))) { return null; }
+            if (c == parent && !seqAtParent) { return null; }
+            return self.nodeHere(parent);
+        }
+        // The node at the current position (a line's content, or after "- " or "key: ").
+        private fn nodeHere(parent: int) -> JsonValue {
+            let anchor = "";
+            let tag = "";
+            while (true) {
+                let c = self.ch();
+                if (c == 38) { anchor = self.name(); self.skipSpaces(); }
+                else if (c == 33) { tag = self.tagName(); self.skipSpaces(); }
+                else { break; }
+            }
+            if ((anchor != "" || tag != "") && self.atLineEnd()) {
+                // properties alone on their line: the node is on the next ones
+                self.skipRestOfLine();
+                let v = self.node(parent, true);
+                if (v == null) { v = Json.nil(); }
+                return self.finish(v, anchor, tag, false);
+            }
+            let c = self.ch();
+            let col = self.col();
+            let v: JsonValue = null;
+            let plain = false;
+            if (c == 42) {
+                let alias = self.name();
+                let hit = self.anchors.getOr(alias, null);
+                if (hit == null) { self.fail("no anchor called '" + alias + "'"); }
+                v = hit;
+                self.afterScalar(parent);
+                if (self.isKeyAt()) { self.fail("an alias cannot be a key here"); }
+                return v;
+            }
+            if (self.isSeqItem()) { v = self.sequence(col); }
+            else if (c == 124 || c == 62) { v = Json.of(self.blockScalar(parent)); }
+            else if (self.isKeyAt()) { v = self.mapping(col); }
+            else if (c == 91 || c == 123) {
+                v = self.flow();
+                self.afterScalar(parent);
+            } else {
+                let quoted = c == 34 || c == 39;
+                let text = quoted ? self.quoted(parent) : self.plain(parent);
+                plain = !quoted;
+                v = plain && tag == "" ? YamlParser.resolve(text) : Json.of(text);
+                if (!quoted) {
+                    // (a quoted scalar followed by ":" was a key: isKeyAt saw it)
+                }
+                self.afterScalar(parent);
+            }
+            return self.finish(v, anchor, tag, plain);
+        }
+        private fn finish(v: JsonValue, anchor: string, tag: string, plain: bool) -> JsonValue {
+            let out = tag == "" ? v : self.tagged(v, tag);
+            if (anchor != "") { self.anchors.put(anchor, out); }
+            return out;
+        }
+        // After a scalar or flow collection: only a comment may follow on its line.
+        private fn afterScalar(parent: int) {
+            self.skipSpaces();
+            let c = self.ch();
+            if (c == 35 || self.isBreak(c)) { return; }
+            self.fail("unexpected text after a value");
+        }
+        private fn tagged(v: JsonValue, tag: string) -> JsonValue {
+            let t = tag;
+            if (Str.startsWith(t, "tag:yaml.org,2002:")) { t = "!!" + t[18..]; }
+            if (!v.isString() && !v.isNumber() && !v.isBool() && !v.isNull()) { return v; }
+            let text = v.isString() ? v.asString() : (v.isNull() ? "" : v.toJson());
+            if (t == "!!str") { return Json.of(v.isNull() ? "" : text); }
+            if (t == "!!null") { return Json.nil(); }
+            if (t == "!!bool") {
+                let r = YamlParser.resolve(text);
+                if (!r.isBool()) { self.fail("not a boolean: " + text); }
+                return r;
+            }
+            if (t == "!!int" || t == "!!float") {
+                let r = YamlParser.resolve(text);
+                if (!r.isNumber()) { self.fail("not a number: " + text); }
+                return t == "!!float" ? Json.of(r.asFloat()) : r;
+            }
+            return v;
+        }
+        private fn isSeqItem() -> bool {
+            if (self.ch() != 45) { return false; }
+            let d = self.at(self.pos + 1);
+            return self.isSpace(d) || self.isBreak(d);
+        }
+        // Whether a mapping key starts here (a scalar followed by ": " or ":" at the line end).
+        private fn isKeyAt() -> bool {
+            let p = self.pos;
+            let c = self.at(p);
+            if (c == 34 || c == 39) {
+                let q = c;
+                p += 1;
+                while (p < self.n) {
+                    let d = self.at(p);
+                    if (d == 10 || d == 13) { return false; }
+                    if (q == 39 && d == 39) { if (self.at(p + 1) == 39) { p += 2; continue; } break; }
+                    if (q == 34 && d == 92) { p += 2; continue; }
+                    if (q == 34 && d == 34) { break; }
+                    p += 1;
+                }
+                p += 1;
+                while (self.isSpace(self.at(p))) { p += 1; }
+                return self.at(p) == 58 && (self.isSpace(self.at(p + 1)) || self.isBreak(self.at(p + 1)));
+            }
+            if (c == 91 || c == 123 || c == 38 || c == 42 || c == 33 || c == 124 || c == 62 || c == 35) { return false; }
+            if (c == 63 && (self.isSpace(self.at(p + 1)) || self.isBreak(self.at(p + 1)))) { self.fail("complex keys (?) are not supported"); }
+            while (p < self.n) {
+                let d = self.at(p);
+                if (self.isBreak(d)) { return false; }
+                if (d == 35 && p > self.pos && self.isSpace(self.at(p - 1))) { return false; }
+                if (d == 58 && (self.isSpace(self.at(p + 1)) || self.isBreak(self.at(p + 1)))) { return p > self.pos || true; }
+                p += 1;
+            }
+            return false;
+        }
+        private fn mapping(col: int) -> JsonValue {
+            let out = Json.object();
+            let merges = new Array<JsonValue>();
+            while (true) {
+                let c = self.ch();
+                let key = "";
+                let isMerge = false;
+                if (c == 34 || c == 39) { key = self.quoted(col); }
+                else {
+                    let start = self.pos;
+                    while (!(self.ch() == 58 && (self.isSpace(self.at(self.pos + 1)) || self.isBreak(self.at(self.pos + 1))))) { self.pos += 1; }
+                    key = Str.trim(self.src[start..self.pos]);
+                    isMerge = key == "<<";
+                    let r = YamlParser.resolve(key);
+                    key = r.isString() ? r.asString() : (r.isNull() ? "" : r.toJson());
+                }
+                self.skipSpaces();
+                if (self.ch() != 58) { self.fail("expected ':' after a key"); }
+                self.pos += 1;
+                self.skipSpaces();
+                let v: JsonValue = null;
+                if (self.atLineEnd()) {
+                    self.skipRestOfLine();
+                    v = self.node(col, true);
+                } else {
+                    v = self.nodeHere(col);
+                }
+                if (v == null) { v = Json.nil(); }
+                if (isMerge) {
+                    if (v.isObject()) { merges.push(v); }
+                    else if (v.isArray()) { for (i in 0..v.size()) { merges.push(v.at(i)); } }
+                    else { self.fail("a merge (<<) takes a mapping or a list of them"); }
+                } else {
+                    out.set(key, v);
+                }
+                if (!self.nextContent()) { break; }
+                let c2 = self.col();
+                if (c2 < col) { break; }
+                if (c2 > col) { self.fail("bad indentation (deeper than the mapping's keys)"); }
+                if (!self.isKeyAt()) {
+                    if (self.isSeqItem()) { break; }
+                    self.fail("expected a key");
+                }
+            }
+            // merged keys fill in what the mapping does not set (the first merge first)
+            for (m in merges) {
+                if (!m.isObject()) { self.fail("a merge (<<) takes a mapping or a list of them"); }
+                for (k in m.keys()) { if (!out.has(k)) { out.set(k, m.get(k)); } }
+            }
+            return out;
+        }
+        private fn sequence(col: int) -> JsonValue {
+            let out = Json.array();
+            while (true) {
+                self.pos += 1;                                                 // the '-'
+                self.skipSpaces();
+                let v: JsonValue = null;
+                if (self.atLineEnd()) {
+                    self.skipRestOfLine();
+                    v = self.node(col, false);
+                } else {
+                    v = self.nodeHere(col);
+                }
+                out.push(v == null ? Json.nil() : v);
+                if (!self.nextContent()) { break; }
+                let c2 = self.col();
+                if (c2 < col) { break; }
+                if (c2 > col) { self.fail("bad indentation (deeper than the list's items)"); }
+                if (!self.isSeqItem()) { break; }
+            }
+            return out;
+        }
+
+        // ── scalars ───────────────────────────────────────────────────────────
+        private fn name() -> string {
+            self.pos += 1;                                                     // & or *
+            let start = self.pos;
+            while (true) {
+                let c = self.ch();
+                if (c == 0 || self.isSpace(c) || self.isBreak(c) || c == 44 || c == 91 || c == 93 || c == 123 || c == 125) { break; }
+                self.pos += 1;
+            }
+            if (self.pos == start) { self.fail("an anchor or alias needs a name"); }
+            return self.src[start..self.pos];
+        }
+        private fn tagName() -> string {
+            let start = self.pos;
+            if (self.at(self.pos + 1) == 60) {                                 // !<verbatim>
+                while (self.ch() != 62 && !self.isBreak(self.ch())) { self.pos += 1; }
+                self.pos += 1;
+                let t = self.src[start + 2..self.pos - 1];
+                return t;
+            }
+            while (!self.isSpace(self.ch()) && !self.isBreak(self.ch())) { self.pos += 1; }
+            return self.src[start..self.pos];
+        }
+        // A plain scalar, folding continuation lines indented more than `parent`.
+        private fn plain(parent: int) -> string {
+            let text = self.plainLine(false);
+            let save = self.pos;
+            let saveLine = self.line;
+            let saveStart = self.lineStart;
+            let parts = new StringBuilder();
+            parts.append(text);
+            let blanks = 0;
+            while (true) {
+                // (a comment ends a plain scalar)
+                self.skipSpaces();
+                if (self.ch() == 35) { break; }
+                if (self.pos >= self.n) { break; }
+                self.skipRestOfLine();
+                // the next line: blank ones count, content must be indented more than the parent
+                let p = self.pos;
+                while (self.isSpace(self.at(p))) { p += 1; }
+                let c = self.at(p);
+                if (self.isBreak(c) && p < self.n) {
+                    blanks += 1;
+                    self.pos = p;
+                    continue;
+                }
+                if (p >= self.n || c == 35) { break; }
+                if (p - self.lineStart <= parent) { break; }
+                self.pos = p;
+                if (self.col() == 0 && self.marker()) { break; }
+                // (a deeper "- x" is more text; a deeper "k: v" is not allowed in a scalar)
+                if (self.isKeyAt()) { break; }
+                if (blanks > 0) { for (i in 0..blanks) { parts.append("\n"); } } else { parts.append(" "); }
+                blanks = 0;
+                parts.append(self.plainLine(false));
+                save = self.pos;
+                saveLine = self.line;
+                saveStart = self.lineStart;
+            }
+            self.pos = save;
+            self.line = saveLine;
+            self.lineStart = saveStart;
+            return parts.toString();
+        }
+        // The rest of a plain scalar on this line (in flow context also stopping at , ] }).
+        private fn plainLine(flow: bool) -> string {
+            let start = self.pos;
+            let end = self.pos;
+            while (true) {
+                let c = self.ch();
+                if (self.isBreak(c)) { break; }
+                if (c == 58) {
+                    let d = self.at(self.pos + 1);
+                    if (self.isSpace(d) || self.isBreak(d) || (flow && (d == 44 || d == 93 || d == 125))) { break; }
+                }
+                if (c == 35 && self.pos > start && self.isSpace(self.at(self.pos - 1))) { break; }
+                if (flow && (c == 44 || c == 91 || c == 93 || c == 123 || c == 125)) { break; }
+                self.pos += 1;
+                if (!self.isSpace(c)) { end = self.pos; }
+            }
+            let text = self.src[start..end];
+            self.pos = end;
+            return text;
+        }
+        // A single- or double-quoted scalar (lines folded: a line break is a
+        // space, an empty line a line break).
+        private fn quoted(parent: int) -> string {
+            let q = self.ch();
+            self.pos += 1;
+            let out = new StringBuilder();
+            while (true) {
+                let c = self.ch();
+                if (self.pos >= self.n) { self.fail("a quoted scalar is not closed"); }
+                if (q == 39 && c == 39) {
+                    if (self.at(self.pos + 1) == 39) { out.append("'"); self.pos += 2; continue; }
+                    self.pos += 1;
+                    break;
+                }
+                if (q == 34 && c == 34) { self.pos += 1; break; }
+                if (q == 34 && c == 92) {
+                    let e = self.at(self.pos + 1);
+                    if (e == 10 || e == 13) {                                   // an escaped line break: joined
+                        self.pos += 1;
+                        self.newline();
+                        self.skipSpaces();
+                        continue;
+                    }
+                    self.pos += 2;
+                    if (e == 110) { out.append("\n"); }
+                    else if (e == 116 || e == 9) { out.append("\t"); }
+                    else if (e == 114) { out.append("\r"); }
+                    else if (e == 34) { out.append("\""); }
+                    else if (e == 92) { out.append("\\"); }
+                    else if (e == 47) { out.append("/"); }
+                    else if (e == 48) { out.appendChar(0); }
+                    else if (e == 97) { out.appendChar(7); }
+                    else if (e == 98) { out.appendChar(8); }
+                    else if (e == 101) { out.appendChar(27); }
+                    else if (e == 102) { out.appendChar(12); }
+                    else if (e == 118) { out.appendChar(11); }
+                    else if (e == 32) { out.append(" "); }
+                    else if (e == 78) { out.append("\u{0085}"); }
+                    else if (e == 95) { out.append("\u{00a0}"); }
+                    else if (e == 120 || e == 117 || e == 85) {
+                        let digits = e == 120 ? 2 : (e == 117 ? 4 : 8);
+                        let hex = self.src[self.pos..(self.pos + digits < self.n ? self.pos + digits : self.n)];
+                        let cp = YamlParser.hexValue(hex);
+                        if (hex.length != digits || cp < 0) { self.fail("bad \\" + Str.fromChar(e) + " escape"); }
+                        out.append(Utf8.fromCodePoint(cp as int));
+                        self.pos += digits;
+                    } else { self.fail("unknown escape \\" + Str.fromChar(e)); }
+                    continue;
+                }
+                if (c == 10 || c == 13) {
+                    // trailing spaces go; one break is a space, more are breaks
+                    let s = out.toString();
+                    let trimmed = Str.trimEnd(s);
+                    out = new StringBuilder();
+                    out.append(trimmed);
+                    self.newline();
+                    let breaks = 0;
+                    while (true) {
+                        self.skipSpaces();
+                        if (self.ch() == 10 || self.ch() == 13) { breaks += 1; self.newline(); continue; }
+                        break;
+                    }
+                    if (breaks == 0) { out.append(" "); } else { for (i in 0..breaks) { out.append("\n"); } }
+                    continue;
+                }
+                out.appendChar(c);
+                self.pos += 1;
+            }
+            return out.toString();
+        }
+        // A literal (|) or folded (>) block scalar; `parent` is the enclosing indentation.
+        private fn blockScalar(parent: int) -> string {
+            let folded = self.ch() == 62;
+            self.pos += 1;
+            let chomp = 0;                                                     // 0 clip, -1 strip, 1 keep
+            let given = 0;
+            while (true) {
+                let c = self.ch();
+                if (c == 45) { chomp = -1; self.pos += 1; }
+                else if (c == 43) { chomp = 1; self.pos += 1; }
+                else if (c >= 49 && c <= 57) { given = c - 48; self.pos += 1; }
+                else { break; }
+            }
+            if (!self.atLineEnd()) { self.fail("unexpected text after a block scalar's indicator"); }
+            self.skipRestOfLine();
+            let base = parent < 0 ? 0 : parent;
+            let ind = given > 0 ? (parent < 0 ? 0 : parent) + given : -1;
+            let lines = new Array<string>();
+            while (self.pos < self.n) {
+                let p = self.pos;
+                while (self.at(p) == 32) { p += 1; }
+                let c = self.at(p);
+                let width = p - self.pos;
+                if (self.isBreak(c) && p < self.n) {
+                    // a blank line (its spaces beyond the indentation are kept)
+                    lines.push(ind > 0 && width > ind ? self.src[self.pos + ind..p] : "");
+                    self.pos = p;
+                    self.newline();
+                    continue;
+                }
+                if (p >= self.n) { break; }
+                if (ind < 0) {
+                    if (width <= base && parent >= 0) { break; }
+                    ind = width;
+                }
+                if (width < ind) { break; }
+                if (self.pos == self.lineStart && width == 0 && self.marker()) { break; }
+                let start = self.pos + ind;
+                while (!self.isBreak(self.ch())) { self.pos += 1; }
+                lines.push(self.src[start..self.pos]);
+                if (self.pos < self.n) { self.newline(); }
+            }
+            // trailing empty lines belong to the chomping
+            let trailing = 0;
+            while (!lines.isEmpty() && lines[lines.size() - 1] == "") { lines.pop(); trailing += 1; }
+            let out = new StringBuilder();
+            if (!folded) {
+                for (i in 0..lines.size()) { if (i > 0) { out.append("\n"); } out.append(lines[i]); }
+            } else {
+                // folded: lines joined by spaces; empty lines and more-indented lines keep their breaks
+                let prevMore = false;
+                for (i in 0..lines.size()) {
+                    let l = lines[i];
+                    let more = l != "" && (Str.startsWith(l, " ") || Str.startsWith(l, "\t"));
+                    if (i > 0) {
+                        // (an empty line is a break; the break before it folds away)
+                        let prev = lines[i - 1];
+                        if (l == "") { out.append("\n"); }
+                        else if (prev == "") { if (more && i >= 2 && lines[i - 2] != "") { out.append("\n"); } }
+                        else if (more || prevMore) { out.append("\n"); }
+                        else { out.append(" "); }
+                    }
+                    out.append(l);
+                    prevMore = more;
+                }
+            }
+            let text = out.toString();
+            if (lines.isEmpty()) { return chomp == 1 ? Str.repeat("\n", trailing) : ""; }
+            if (chomp == -1) { return text; }
+            if (chomp == 0) { return text + "\n"; }
+            return text + "\n" + Str.repeat("\n", trailing);
+        }
+
+        // ── flow collections ──────────────────────────────────────────────────
+        private fn flowSpace() {
+            while (true) {
+                let c = self.ch();
+                if (self.isSpace(c)) { self.pos += 1; continue; }
+                if ((c == 10 || c == 13) && self.pos < self.n) { self.newline(); continue; }
+                if (c == 35) { while (!self.isBreak(self.ch())) { self.pos += 1; } continue; }
+                break;
+            }
+        }
+        private fn flow() -> JsonValue {
+            let open = self.ch();
+            self.pos += 1;
+            let isMap = open == 123;
+            let close = isMap ? 125 : 93;
+            let out = isMap ? Json.object() : Json.array();
+            while (true) {
+                self.flowSpace();
+                if (self.pos >= self.n) { self.fail(isMap ? "a { is not closed" : "a [ is not closed"); }
+                if (self.ch() == close) { self.pos += 1; break; }
+                let k = self.flowNode();
+                self.flowSpace();
+                let pairValue: JsonValue = null;
+                let paired = false;
+                if (self.ch() == 58) {
+                    self.pos += 1;
+                    self.flowSpace();
+                    paired = true;
+                    pairValue = self.ch() == 44 || self.ch() == close ? Json.nil() : self.flowNode();
+                    self.flowSpace();
+                }
+                let keyText = k.isString() ? k.asString() : (k.isNull() ? "" : k.toJson());
+                if (isMap) { out.set(keyText, paired ? pairValue : Json.nil()); }
+                else if (paired) { out.push(Json.object().set(keyText, pairValue)); }
+                else { out.push(k); }
+                if (self.ch() == 44) { self.pos += 1; continue; }
+                if (self.ch() == close) { self.pos += 1; break; }
+                if (self.pos >= self.n) { self.fail(isMap ? "a { is not closed" : "a [ is not closed"); }
+                self.fail(isMap ? "expected ',' or '}'" : "expected ',' or ']'");
+            }
+            return out;
+        }
+        private fn flowNode() -> JsonValue {
+            let anchor = "";
+            let tag = "";
+            while (true) {
+                let c = self.ch();
+                if (c == 38) { anchor = self.name(); self.flowSpace(); }
+                else if (c == 33) { tag = self.tagName(); self.flowSpace(); }
+                else { break; }
+            }
+            let c = self.ch();
+            let v: JsonValue = null;
+            let plain = false;
+            if (c == 42) {
+                let alias = self.name();
+                v = self.anchors.getOr(alias, null);
+                if (v == null) { self.fail("no anchor called '" + alias + "'"); }
+                return v;
+            }
+            if (c == 91 || c == 123) { v = self.flow(); }
+            else if (c == 34 || c == 39) { v = Json.of(self.quoted(-1)); }
+            else {
+                let text = self.plainLine(true);
+                // (plain scalars in flow may go on over lines)
+                while (true) {
+                    let save = self.pos;
+                    self.flowSpace();
+                    let d = self.ch();
+                    if (self.pos == save || d == 44 || d == 93 || d == 125 || d == 58 || d == 0 || d == 35) { self.pos = self.pos; break; }
+                    text = text + " " + self.plainLine(true);
+                }
+                plain = true;
+                v = tag == "" ? YamlParser.resolve(text) : Json.of(text);
+            }
+            return self.finish(v, anchor, tag, plain);
+        }
+
+        // Hex digits as a number, or -1.
+        static fn hexValue(h: string) -> long {
+            if (h == "") { return -1; }
+            let v: long = 0;
+            for (i in 0..h.length) {
+                let d = Str.charAt(h, i);
+                let x = d >= 48 && d <= 57 ? d - 48 : (d >= 97 && d <= 102 ? d - 87 : (d >= 65 && d <= 70 ? d - 55 : -1));
+                if (x < 0) { return -1; }
+                v = v * 16 + x;
+            }
+            return v;
+        }
+
+        // ── the core schema ───────────────────────────────────────────────────
+        // A plain scalar's value: null, a boolean, an integer, a float, or text.
+        static fn resolve(s: string) -> JsonValue {
+            let n = s.length;
+            if (n == 0 || s == "~" || s == "null" || s == "Null" || s == "NULL") { return Json.nil(); }
+            let c = Str.charAt(s, 0);
+            if (c == 116 || c == 84 || c == 102 || c == 70) {
+                if (s == "true" || s == "True" || s == "TRUE") { return Json.of(true); }
+                if (s == "false" || s == "False" || s == "FALSE") { return Json.of(false); }
+                return Json.of(s);
+            }
+            if (!((c >= 48 && c <= 57) || c == 45 || c == 43 || c == 46)) { return Json.of(s); }
+            if (s == ".inf" || s == ".Inf" || s == ".INF" || s == "+.inf" || s == "+.Inf" || s == "+.INF") { return Json.of(1.0 / 0.0); }
+            if (s == "-.inf" || s == "-.Inf" || s == "-.INF") { return Json.of(-1.0 / 0.0); }
+            if (s == ".nan" || s == ".NaN" || s == ".NAN") { return Json.of(0.0 / 0.0); }
+            if (n > 2 && c == 48 && (Str.charAt(s, 1) == 120 || Str.charAt(s, 1) == 111)) {
+                let base = Str.charAt(s, 1) == 120 ? 16 : 8;
+                let v: long = 0;
+                for (i in 2..n) {
+                    let d = Str.charAt(s, i);
+                    let x = d >= 48 && d <= 57 ? d - 48 : (d >= 97 && d <= 102 ? d - 87 : (d >= 65 && d <= 70 ? d - 55 : 99));
+                    if (x >= base) { return Json.of(s); }
+                    v = v * base + x;
+                }
+                return Json.of(v);
+            }
+            // [-+]? digits, then maybe . digits and an exponent
+            let i = 0;
+            if (c == 45 || c == 43) { i = 1; }
+            let digits = 0;
+            while (i < n && Str.charAt(s, i) >= 48 && Str.charAt(s, i) <= 57) { i += 1; digits += 1; }
+            if (i == n) {
+                if (digits == 0 || digits > 18) { return digits == 0 ? Json.of(s) : Json.of(Format.toFloat(s)); }
+                return Json.of(Format.toLong(c == 43 ? s[1..] : s));
+            }
+            let frac = 0;
+            if (Str.charAt(s, i) == 46) {
+                i += 1;
+                while (i < n && Str.charAt(s, i) >= 48 && Str.charAt(s, i) <= 57) { i += 1; frac += 1; }
+            }
+            if (digits + frac == 0) { return Json.of(s); }
+            if (i < n && (Str.charAt(s, i) == 101 || Str.charAt(s, i) == 69)) {
+                i += 1;
+                if (i < n && (Str.charAt(s, i) == 45 || Str.charAt(s, i) == 43)) { i += 1; }
+                let ed = 0;
+                while (i < n && Str.charAt(s, i) >= 48 && Str.charAt(s, i) <= 57) { i += 1; ed += 1; }
+                if (ed == 0) { return Json.of(s); }
+            }
+            if (i != n) { return Json.of(s); }
+            return Json.of(Format.toFloat(c == 43 ? s[1..] : s));
+        }
+    }
+}
