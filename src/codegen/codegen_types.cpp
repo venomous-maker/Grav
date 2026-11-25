@@ -694,6 +694,25 @@ bool CodeGen::reflected(const std::string &fq) const {
                 (c->methodName == "listItems" || c->methodName == "mapEntries"))
                 rfItemsUsed_ = true;
         });
+        // ...and the classes its fields hold (`Line`, `Line?`, `Array<Line>`,
+        // `HashMap<string, Line>`), until none is added: a serializer walking an
+        // object reaches them. (Standard-library classes are left out.)
+        bool added = true;
+        std::function<void(const TypeRef &)> hold = [&](const TypeRef &t) {
+            if (t.kind == TypeRef::Kind::Nullable && t.elem) { hold(*t.elem); return; }
+            if (t.kind != TypeRef::Kind::Named) return;
+            TypeRef elem;
+            if (rfCollection(t.name, &elem)) { hold(elem); return; }
+            const ClassInfo *ci = reg_->cls(t.name);
+            if (!ci || !ci->decl || t.name.rfind("std.", 0) == 0) return;
+            if (reflectRoots_.insert(root(t.name)).second) added = true;
+        };
+        while (added) {
+            added = false;
+            for (const auto &d : program_->decls)
+                if (auto *c = as<const ClassDecl>(d.get()); c && reflectRoots_.count(root(c->fqName)))
+                    for (const auto &f : c->fields) hold(f.type);
+        }
     }
     return reflectRoots_.count(root(fq)) != 0;
 }
