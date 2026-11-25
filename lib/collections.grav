@@ -1,4 +1,4 @@
-// lib/collections.grav — `import "std/collections"`: Array, List, Stack/Queue, Set, Map, HashMap, HashSet, Deque, PriorityQueue, LinkedList, SortedMap, BitSet, Pair/Triple.
+// lib/collections.grav — `import "std/collections"`: Array, List, Stack/Queue, Set, Map, HashMap, HashSet, Deque, PriorityQueue, LinkedList, SortedMap, BitSet, BloomFilter, Pair/Triple.
 import "collections/array.grav"
 import "collections/list.grav"
 import "collections/stack.grav"
@@ -12,3 +12,4 @@ import "collections/linkedlist.grav"
 import "collections/sortedmap.grav"
 import "collections/bitset.grav"
 import "collections/tuple.grav"
+import "collections/bloom.grav"

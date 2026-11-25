@@ -1,0 +1,140 @@
+// lib/collections/bloom.grav — a Bloom filter: "certainly not seen" or
+// "probably seen" for millions of items in a little memory.
+//
+//   let seen = new BloomFilter(1000000, 0.01)        // a million items, 1% false positives: 1.2 MB
+//   seen.add("user:42")
+//   seen.mightContain("user:42")                     // true
+//   seen.mightContain("user:43")                     // false (or, 1 time in 100, true)
+//
+// No false negatives: what was added always answers true. Items cannot be
+// removed. Adding is safe from several threads at once (each bit is set with
+// an atomic OR). toBytes and fromBytes keep a filter in a cache or a file.
+import "../core/exception.grav"
+import "../data/bytes.grav"
+
+namespace std.collections {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdint.h>
+    #include <math.h>
+    /* Two independent 64-bit hashes of the item (FNV-1a, and a multiply-xorshift
+       mix of it); bit i of k is h1 + i*h2 (Kirsch and Mitzenmacher). */
+    static void grav_bloom_hashes(const char* s, uint64_t* h1, uint64_t* h2) {
+        uint64_t h = 1469598103934665603ULL;
+        for (const unsigned char* p = (const unsigned char*)s; *p; p++) { h ^= *p; h *= 1099511628211ULL; }
+        uint64_t m = h ^ (h >> 33); m *= 0xff51afd7ed558ccdULL; m ^= m >> 33; m *= 0xc4ceb9fe1a85ec53ULL; m ^= m >> 33;
+        *h1 = h; *h2 = m | 1;
+    }
+    /* Sets the item's k bits; how many were newly set (0: it was probably there already). */
+    static int grav_bloom_add(unsigned char* bits, uint64_t nbits, int k, const char* s) {
+        uint64_t h1, h2; grav_bloom_hashes(s, &h1, &h2);
+        int fresh = 0;
+        for (int i = 0; i < k; i++) {
+            uint64_t b = (h1 + (uint64_t)i * h2) % nbits;
+            unsigned char mask = (unsigned char)(1u << (b & 7));
+            unsigned char before = __atomic_fetch_or(&bits[b >> 3], mask, __ATOMIC_RELAXED);
+            if (!(before & mask)) fresh++;
+        }
+        return fresh;
+    }
+    static int grav_bloom_has(const unsigned char* bits, uint64_t nbits, int k, const char* s) {
+        uint64_t h1, h2; grav_bloom_hashes(s, &h1, &h2);
+        for (int i = 0; i < k; i++) {
+            uint64_t b = (h1 + (uint64_t)i * h2) % nbits;
+            if (!(__atomic_load_n(&bits[b >> 3], __ATOMIC_RELAXED) & (1u << (b & 7)))) return 0;
+        }
+        return 1;
+    }
+    static long long grav_bloom_popcount(const unsigned char* bits, long long nbytes) {
+        long long n = 0;
+        for (long long i = 0; i < nbytes; i++) n += __builtin_popcount(bits[i]);
+        return n;
+    }
+    %}
+
+    class BloomFilter {
+        private bits: byte*
+        // The filter's size in bits, and the bits each item sets.
+        public bitCount: long
+        public hashCount: int
+        // Items added that set a new bit (about how many distinct items it holds).
+        private added: long = 0
+        // A filter for about `expectedItems` with at most `falsePositiveRate` (0 to
+        // 1) of unseen items answering true: m = -n ln p / (ln 2)^2 bits, k = m/n ln 2.
+        constructor(expectedItems: long, falsePositiveRate: double = 0.01) {
+            if (expectedItems < 1) { throw new ValueError("a BloomFilter expects at least one item"); }
+            if (falsePositiveRate <= 0.0 || falsePositiveRate >= 1.0) { throw new ValueError("the false positive rate is between 0 and 1"); }
+            let n = expectedItems as double;
+            let m = %{ ceil(-n * log(falsePositiveRate) / (log(2.0) * log(2.0))) %} as double;
+            self.bitCount = m < 64.0 ? 64 as long : m as long;
+            let k = %{ (int)round((double)self->bitCount / n * log(2.0)) %} as int;
+            self.hashCount = k < 1 ? 1 : (k > 30 ? 30 : k);
+            self.bits = BloomFilter.alloc(self.bitCount);
+        }
+        private static fn alloc(nbits: long) -> byte* {
+            let p = %{ (unsigned char*)calloc((size_t)((nbits + 7) / 8), 1) %} as byte*;
+            if (p == null) { throw new StateError("out of memory for a BloomFilter of ${nbits} bits"); }
+            return p;
+        }
+        destructor() { %{ free(self->bits); self->bits = 0; %}; }
+
+        // Adds an item; whether it was new (false when it probably was there).
+        fn add(item: string) -> bool {
+            let fresh = %{ grav_bloom_add(self->bits, (uint64_t)self->bitCount, self->hashCount, item) %} as int;
+            if (fresh > 0) { self.added += 1; }
+            return fresh > 0;
+        }
+        fn addAll(items: Array<string>) { for (x in items) { self.add(x); } }
+        // False: certainly never added. True: probably added.
+        fn mightContain(item: string) -> bool {
+            return %{ grav_bloom_has(self->bits, (uint64_t)self->bitCount, self->hashCount, item) %} as bool;
+        }
+        // About how many distinct items were added.
+        fn approximateCount() -> long { return self.added; }
+        // The false positive rate now, from how full the bits are.
+        fn currentFalsePositiveRate() -> double {
+            let set = %{ grav_bloom_popcount(self->bits, (self->bitCount + 7) / 8) %} as long;
+            let full = (set as double) / (self.bitCount as double);
+            return %{ pow(full, (double)self->hashCount) %} as double;
+        }
+        // The memory its bits take, in bytes.
+        fn byteSize() -> long { return (self.bitCount + 7) / 8; }
+        // Forgets everything.
+        fn clear() { %{ memset(self->bits, 0, (size_t)((self->bitCount + 7) / 8)); %}; self.added = 0; }
+
+        // The filter as bytes (16 bytes of sizes, then its bits): to keep it.
+        fn toBytes() -> Bytes {
+            let n = self.byteSize();
+            let out = new Bytes((n + 16) as int);
+            for (shift in [56, 48, 40, 32, 24, 16, 8, 0]) { out.appendByte(((self.bitCount >> shift) & 255) as int); }
+            for (shift in [24, 16, 8, 0]) { out.appendByte((self.hashCount >> shift) & 255); }
+            for (shift in [24, 16, 8, 0]) { out.appendByte(((self.added >> shift) & 255) as int); }
+            let p = self.bits;
+            %{ memcpy(out->data + out->len, p, (size_t)n); out->len += (int)n; %};
+            return out;
+        }
+        // A filter from toBytes's bytes; ValueError when they are not one.
+        static fn fromBytes(b: Bytes) -> BloomFilter {
+            if (b.size() < 16) { throw new ValueError("not a BloomFilter: too short"); }
+            let nbits: long = 0;
+            for (i in 0..8) { nbits = (nbits << 8) | (b.get(i) as long); }
+            let k = 0;
+            for (i in 8..12) { k = (k << 8) | b.get(i); }
+            let added: long = 0;
+            for (i in 12..16) { added = (added << 8) | (b.get(i) as long); }
+            if (nbits < 1 || k < 1 || k > 30 || (b.size() - 16) as long != (nbits + 7) / 8) { throw new ValueError("not a BloomFilter: the sizes do not match"); }
+            let f = new BloomFilter(1, 0.5);
+            %{ free(f->bits); %};
+            f.bitCount = nbits;
+            f.hashCount = k;
+            f.added = added;
+            f.bits = BloomFilter.alloc(nbits);
+            let p = f.bits;
+            let src = b.rawData();
+            %{ memcpy(p, src + 16, (size_t)((nbits + 7) / 8)); %};
+            return f;
+        }
+    }
+}
