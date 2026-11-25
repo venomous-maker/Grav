@@ -1,0 +1,5 @@
+running 3 tests
+  ok    the next time: ranges, steps, names, both day fields
+  ok    L, LW, 5L, 1#2, seconds, shorthands
+  ok    previous, isDue, never, and bad expressions
+result: 3 passed, 0 failed

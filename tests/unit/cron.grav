@@ -1,0 +1,50 @@
+// Cron: parsing, the next and previous times (in UTC here, so the answers do
+// not depend on the machine's zone), L, LW, 5L, 1#2, seconds, shorthands.
+import "std"
+
+fn at(y: int, mo: int, d: int, h: int, mi: int, s: int = 0) -> DateTime { return DateTime.ofUtc(y, mo, d, h, mi, s) }
+fn next(expr: string, from: DateTime) -> string { return Cron.parse(expr).next(from, true).isoUtc() }
+
+test "the next time: ranges, steps, names, both day fields" {
+    assertEq(next("*/15 9-17 * * MON-FRI", at(2024, 3, 15, 17, 50)), "2024-03-18T09:00:00Z")        // Friday evening -> Monday
+    assertEq(next("*/15 9-17 * * MON-FRI", at(2024, 3, 18, 9, 0)), "2024-03-18T09:15:00Z")          // strictly after
+    assertEq(next("30 2 * * *", at(2024, 12, 31, 3, 0)), "2025-01-01T02:30:00Z")
+    assertEq(next("0 0 1,15 * MON", at(2024, 3, 2, 0, 0)), "2024-03-04T00:00:00Z")                   // either day field
+    assertEq(next("0 0 1,15 * MON", at(2024, 3, 11, 1, 0)), "2024-03-15T00:00:00Z")
+    assertEq(next("0 12 * JAN,jul *", at(2024, 2, 1, 0, 0)), "2024-07-01T12:00:00Z")
+    assertEq(next("5-55/25 * * * *", at(2024, 1, 1, 0, 6)), "2024-01-01T00:30:00Z")
+    assertEq(next("0 0 * * 7", at(2024, 3, 13, 0, 0)), "2024-03-17T00:00:00Z")                       // 7 is Sunday
+}
+
+test "L, LW, 5L, 1#2, seconds, shorthands" {
+    assertEq(next("0 0 L * *", at(2024, 2, 10, 0, 0)), "2024-02-29T00:00:00Z")
+    assertEq(next("0 0 L * *", at(2023, 2, 10, 0, 0)), "2023-02-28T00:00:00Z")
+    assertEq(next("0 0 LW * *", at(2024, 6, 1, 0, 0)), "2024-06-28T00:00:00Z")                      // the 30th is a Sunday
+    assertEq(next("0 9 * * 5L", at(2024, 3, 1, 0, 0)), "2024-03-29T09:00:00Z")                      // the last Friday
+    assertEq(next("0 9 * * 1#2", at(2024, 3, 1, 0, 0)), "2024-03-11T09:00:00Z")                     // the second Monday
+    assertEq(next("*/10 * * * * *", at(2024, 1, 1, 12, 0, 5)), "2024-01-01T12:00:10Z")
+    assertEq(next("@yearly", at(2024, 5, 5, 0, 0)), "2025-01-01T00:00:00Z")
+    assertEq(next("@hourly", at(2024, 5, 5, 10, 59, 59)), "2024-05-05T11:00:00Z")
+    let c = Cron.parse("0 9 * * MON-FRI")
+    let times = c.nextTimes(at(2024, 3, 15, 10, 0), 3, true)
+    assertEq("${times[0].isoUtc()} ${times[1].isoUtc()} ${times[2].isoUtc()}", "2024-03-18T09:00:00Z 2024-03-19T09:00:00Z 2024-03-20T09:00:00Z")
+}
+
+test "previous, isDue, never, and bad expressions" {
+    assertEq(Cron.parse("0 12 * * *").previous(at(2024, 3, 15, 11, 0), true).isoUtc(), "2024-03-14T12:00:00Z")
+    assertEq(Cron.parse("0 12 * * *").previous(at(2024, 3, 15, 12, 0), true).isoUtc(), "2024-03-14T12:00:00Z")
+    assertEq(Cron.parse("0 0 1 * *").previous(at(2024, 3, 15, 0, 0), true).isoUtc(), "2024-03-01T00:00:00Z")
+    assert(Cron.parse("*/5 * * * *").isDue(at(2024, 1, 1, 10, 25, 30), true))
+    assert(!Cron.parse("*/5 * * * *").isDue(at(2024, 1, 1, 10, 26), true))
+    let msg = ""
+    try { Cron.parse("0 0 30 2 *").next(at(2024, 1, 1, 0, 0), true) } catch (e: StateError) { msg = e.message() }
+    assertEq(msg, "'0 0 30 2 *' is never due")
+    for (bad in ["* * * *", "60 * * * *", "* 24 * * *", "* * 0 * *", "* * * 13 *", "* * * * 8", "5-1 * * * *", "*/0 * * * *", "* * * * MON#6", "x * * * *"]) {
+        assert(!Cron.isValid(bad), bad)
+    }
+    assert(Cron.isValid("0 0 * * SUN") && Cron.isValid("@midnight"))
+    // local time: the next time is later and is due
+    let now = DateTime.now()
+    let n = Cron.parse("*/7 * * * *").next(now)
+    assert(n.unix() > now.unix() && Cron.parse("*/7 * * * *").isDue(n))
+}
