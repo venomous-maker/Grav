@@ -89,11 +89,12 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [json](data/json.md) | `Json` and `JsonValue`: parsing, building, writing JSON |
 | [json_map](data/json_map.md) | `JsonMap`: JSON read straight into objects and written back |
 | [otp](data/otp.md) | `Totp` and `Hotp`: two-factor one-time passwords |
+| [tar](data/tar.md) | `TarWriter` and `TarReader`: tar archives, streamed (with gzip: `.tar.gz`) |
 | [bytes](data/bytes.md) | `Bytes`: a buffer of raw bytes |
 | [encoding](data/encoding.md) | `Base64`, `Hex`, `Utf8` |
 | [hash](data/hash.md) | `Hash` (SHA-256, SHA-1, MD5, CRC-32, FNV-1a, random tokens), `Uuid` (v4, v7) and `Ulid` |
 | [csv](data/csv.md) | `Csv`: reading and writing comma-separated values |
-| [compress](data/compress.md) | `Compress`: gzip, zlib and raw deflate (system zlib) |
+| [compress](data/compress.md) | `Compress`: gzip, zlib and raw deflate (system zlib); `GzipWriter` and `GzipReader` streams |
 | [crypto](data/crypto.md) | `Crypto` (SHA-2 digests, HMAC, random bytes), `AesGcm`, `CryptoKey` (RSA, ECDSA, Ed25519: sign, verify, PEM, JWK), `PasswordHash` (scrypt) |
 | [jwt](data/jwt.md) | `Jwt`, `JwtKey`, `Jwks`, `JwtOptions`: JSON Web Tokens (HS, RS, ES, EdDSA) and key sets |
 | [toml](data/toml.md) | `Toml`: TOML 1.0 read into and written from `JsonValue` |
