@@ -1,0 +1,53 @@
+// Base32, HOTP and TOTP against their RFCs' test vectors (4648, 4226, 6238).
+import "std"
+
+test "Base32: RFC 4648 vectors, either case, spaces and dashes" {
+    let want = ["", "MY======", "MZXQ====", "MZXW6===", "MZXW6YQ=", "MZXW6YTB", "MZXW6YTBOI======"]
+    let text = ["", "f", "fo", "foo", "foob", "fooba", "foobar"]
+    for (i in 0..text.length) {
+        assertEq(Base32.encodeString(text[i], true), want[i])
+        assertEq(Base32.decode(want[i]).toString(), text[i])
+    }
+    assertEq(Base32.encodeString("foobar"), "MZXW6YTBOI")
+    assertEq(Base32.decode("mzxw-6ytb oi").toString(), "foobar")
+    assert(!Base32.isValid("MZ1"))
+    let all = new Bytes()
+    for (b in 0..256) { all.appendByte(b) }
+    assertEq(Base32.decode(Base32.encode(all)).toHex(), all.toHex())
+}
+
+test "HOTP: RFC 4226 vectors" {
+    let key = Bytes.fromString("12345678901234567890")
+    let want = ["755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583", "399871", "520489"]
+    for (i in 0..10) { assertEq(Hotp.code(key, i as long), want[i]) }
+    assertEq(Hotp.verify(key, "969429", 1, 5), 3 as long)
+    assertEq(Hotp.verify(key, "969429", 4, 5), -1 as long)
+}
+
+test "TOTP: RFC 6238 vectors (8 digits; SHA-1, SHA-256, SHA-512)" {
+    let keys = ["12345678901234567890", "12345678901234567890123456789012", "1234567890123456789012345678901234567890123456789012345678901234"]
+    let algs = ["sha1", "sha256", "sha512"]
+    let times: Array<long> = [59, 1111111109, 1111111111, 1234567890, 2000000000, 20000000000]
+    let want = [["94287082", "07081804", "14050471", "89005924", "69279037", "65353130"],
+                ["46119246", "68084774", "67062674", "91819424", "90698825", "77737706"],
+                ["90693936", "25091201", "99943326", "93441116", "38618901", "47863826"]]
+    for (a in 0..3) {
+        let t = new Totp(Base32.encodeString(keys[a]), 8, 30, algs[a])
+        for (i in 0..times.size()) { assertEq(t.codeAt(times[i]), want[a][i]) }
+    }
+}
+
+test "TOTP: a window either side, each code once, the otpauth address" {
+    let t = new Totp(Base32.encodeString("12345678901234567890"))
+    let at: long = 1111111109
+    let step = t.stepAt(at)
+    assertEq(t.verifyAt(t.codeAt(at), at), step)
+    assertEq(t.verifyAt(t.codeAt(at - 30), at), step - 1)                 // the clock a step behind
+    assertEq(t.verifyAt(t.codeAt(at - 90), at), -1 as long)               // too far
+    assertEq(t.verifyAt(t.codeAt(at), at, step), -1 as long)              // used already
+    assertEq(t.verifyAt("12 34", at), -1 as long)
+    let fresh = new Totp(Totp.generateSecret())
+    assertEq(fresh.key.size(), 20)
+    assertEq(fresh.verify(fresh.now()) >= 0, true)
+    assertEq(t.uri("Acme Co", "ada@acme.test"), "otpauth://totp/Acme%20Co:ada%40acme.test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Acme%20Co&algorithm=SHA1&digits=6&period=30")
+}

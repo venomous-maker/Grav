@@ -1,0 +1,6 @@
+running 4 tests
+  ok    Base32: RFC 4648 vectors, either case, spaces and dashes
+  ok    HOTP: RFC 4226 vectors
+  ok    TOTP: RFC 6238 vectors (8 digits; SHA-1, SHA-256, SHA-512)
+  ok    TOTP: a window either side, each code once, the otpauth address
+result: 4 passed, 0 failed
