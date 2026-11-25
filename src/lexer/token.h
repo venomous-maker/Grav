@@ -151,6 +151,10 @@ struct Token {
     std::string lexeme;
     int line;
     int col;
+    // Where the token ends in the source (the column just past its last byte; 0:
+    // unknown, as for tokens made inside a string's ${...}).
+    int endLine = 0;
+    int endCol = 0;
 };
 
 const char *tokenTypeName(TokenType type);

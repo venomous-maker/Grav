@@ -136,7 +136,7 @@ void Lexer::skipWhitespaceAndComments() {
 }
 
 Token Lexer::makeToken(TokenType type, std::string lexeme) const {
-    return Token{type, std::move(lexeme), tokLine_, tokCol_};
+    return Token{type, std::move(lexeme), tokLine_, tokCol_, line_, col_};
 }
 
 Token Lexer::scanNumber() {

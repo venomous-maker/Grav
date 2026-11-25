@@ -200,6 +200,23 @@ private:
     std::vector<ExprPtr> parseArguments();
 
     std::vector<Token> tokens_;
+    ExprPtr parseTernaryInner();
+    ExprPtr parseCoalesceInner();
+    ExprPtr parseOrInner();
+    ExprPtr parseAndInner();
+    ExprPtr parseBitOrInner();
+    ExprPtr parseBitXorInner();
+    ExprPtr parseBitAndInner();
+    ExprPtr parseComparisonInner();
+    ExprPtr parseShiftInner();
+    ExprPtr parseAdditiveInner();
+    ExprPtr parseMultiplicativeInner();
+    ExprPtr parsePowerInner();
+    ExprPtr parseAsIsInner();
+    ExprPtr parseUnaryInner();
+    ExprPtr parsePostfixInner();
+    ExprPtr parsePrimaryInner();
+    void spanFrom(Expr &e, size_t start);
     size_t pos_ = 0;
     // Namespace path currently being parsed, e.g. {"geometry","shapes"}.
     std::vector<std::string> nsStack_;

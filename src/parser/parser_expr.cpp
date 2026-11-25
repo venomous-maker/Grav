@@ -67,7 +67,24 @@ StmtPtr Parser::parseIfValue() {
 
 ExprPtr Parser::parseExpression() { return parseTernary(); }
 
+// The span from token `start` to the last one consumed (for lint fixes).
+void Parser::spanFrom(Expr &e, size_t start) {
+    if (start >= tokens_.size() || pos_ == 0 || pos_ <= start) return;
+    const Token &a = tokens_[start];
+    const Token &b = tokens_[pos_ - 1];
+    if (a.endLine == 0 || b.endLine == 0) return;              // (made inside a string's ${...})
+    e.sline = a.line; e.scol = a.col; e.eline = b.endLine; e.ecol = b.endCol;
+}
+
 ExprPtr Parser::parseTernary() {
+    size_t st = pos_;
+    ExprPtr e = parseTernaryInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseTernaryInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr cond = parseCoalesce();
     if (!check(TokenType::Question)) return cond;
     const Token &q = advance(); // '?'
@@ -80,6 +97,14 @@ ExprPtr Parser::parseTernary() {
 }
 
 ExprPtr Parser::parseCoalesce() {
+    size_t st = pos_;
+    ExprPtr e = parseCoalesceInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseCoalesceInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseOr();
     while (check(TokenType::QuestionQuestion)) {
         const Token &opTok = advance();
@@ -87,11 +112,20 @@ ExprPtr Parser::parseCoalesce() {
         e->left = std::move(left);
         e->right = parseOr();
         left = std::move(e);
+        spanFrom(*left, st__);
     }
     return left;
 }
 
 ExprPtr Parser::parseOr() {
+    size_t st = pos_;
+    ExprPtr e = parseOrInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseOrInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseAnd();
     while (check(TokenType::PipePipe)) {
         const Token &opTok = advance();
@@ -100,11 +134,20 @@ ExprPtr Parser::parseOr() {
         bin->left = std::move(left);
         bin->right = parseAnd();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
     return left;
 }
 
 ExprPtr Parser::parseAnd() {
+    size_t st = pos_;
+    ExprPtr e = parseAndInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseAndInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseBitOr();
     while (check(TokenType::AmpAmp)) {
         const Token &opTok = advance();
@@ -113,11 +156,20 @@ ExprPtr Parser::parseAnd() {
         bin->left = std::move(left);
         bin->right = parseBitOr();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
     return left;
 }
 
 ExprPtr Parser::parseBitOr() {
+    size_t st = pos_;
+    ExprPtr e = parseBitOrInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseBitOrInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseBitXor();
     while (check(TokenType::Pipe)) {
         const Token &opTok = advance();
@@ -126,11 +178,20 @@ ExprPtr Parser::parseBitOr() {
         bin->left = std::move(left);
         bin->right = parseBitXor();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
     return left;
 }
 
 ExprPtr Parser::parseBitXor() {
+    size_t st = pos_;
+    ExprPtr e = parseBitXorInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseBitXorInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseBitAnd();
     while (check(TokenType::Caret)) {
         const Token &opTok = advance();
@@ -139,11 +200,20 @@ ExprPtr Parser::parseBitXor() {
         bin->left = std::move(left);
         bin->right = parseBitAnd();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
     return left;
 }
 
 ExprPtr Parser::parseBitAnd() {
+    size_t st = pos_;
+    ExprPtr e = parseBitAndInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseBitAndInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseComparison();
     // A line-leading `&` is address-of starting a new statement, not binary AND.
     while (check(TokenType::Amp) && !onNewLine()) {
@@ -153,11 +223,20 @@ ExprPtr Parser::parseBitAnd() {
         bin->left = std::move(left);
         bin->right = parseComparison();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
     return left;
 }
 
 ExprPtr Parser::parseComparison() {
+    size_t st = pos_;
+    ExprPtr e = parseComparisonInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseComparisonInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseShift();
     for (;;) {
         BinaryOp op;
@@ -176,10 +255,19 @@ ExprPtr Parser::parseComparison() {
         bin->left = std::move(left);
         bin->right = parseShift();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
 }
 
 ExprPtr Parser::parseShift() {
+    size_t st = pos_;
+    ExprPtr e = parseShiftInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseShiftInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseAdditive();
     for (;;) {
         BinaryOp op;
@@ -192,10 +280,19 @@ ExprPtr Parser::parseShift() {
         bin->left = std::move(left);
         bin->right = parseAdditive();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
 }
 
 ExprPtr Parser::parseAdditive() {
+    size_t st = pos_;
+    ExprPtr e = parseAdditiveInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseAdditiveInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseMultiplicative();
     for (;;) {
         // A line-leading `+`/`-` begins a new statement (unary), not a binary op.
@@ -211,10 +308,19 @@ ExprPtr Parser::parseAdditive() {
         bin->left = std::move(left);
         bin->right = parseMultiplicative();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
 }
 
 ExprPtr Parser::parseMultiplicative() {
+    size_t st = pos_;
+    ExprPtr e = parseMultiplicativeInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseMultiplicativeInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parsePower();
     for (;;) {
         // A line-leading `*` is a dereference starting a new statement.
@@ -230,12 +336,21 @@ ExprPtr Parser::parseMultiplicative() {
         bin->left = std::move(left);
         bin->right = parsePower();
         left = std::move(bin);
+        spanFrom(*left, st__);
     }
 }
 
 // `a ** b` — exponentiation, right-associative, binding tighter than `*`. Written
 // as two adjacent `*` tokens (the lexer keeps `**` apart so `T**` types still work).
 ExprPtr Parser::parsePower() {
+    size_t st = pos_;
+    ExprPtr e = parsePowerInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parsePowerInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseAsIs();
     if (check(TokenType::Star) && !onNewLine() && peekAt(1).type == TokenType::Star &&
         peekAt(1).line == peek().line && peekAt(1).col == peek().col + 1) {
@@ -252,6 +367,14 @@ ExprPtr Parser::parsePower() {
 
 // `expr as Type` (cast) and `expr is ClassName` (RTTI test). Left-associative.
 ExprPtr Parser::parseAsIs() {
+    size_t st = pos_;
+    ExprPtr e = parseAsIsInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseAsIsInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr left = parseUnary();
     for (;;) {
         if (check(TokenType::As)) {
@@ -262,6 +385,7 @@ ExprPtr Parser::parseAsIs() {
             e->target = parseType("after 'as'");
             typeAfterOperator_ = false;
             left = std::move(e);
+            spanFrom(*left, st__);
         } else if (check(TokenType::Is)) {
             const Token &kw = advance();
             auto e = at<IsExpr>(kw);
@@ -271,6 +395,7 @@ ExprPtr Parser::parseAsIs() {
             typeAfterOperator_ = false;
             if (e->target.isNamed()) e->typeName = e->target.name;
             left = std::move(e);
+            spanFrom(*left, st__);
         } else {
             return left;
         }
@@ -318,6 +443,14 @@ bool Parser::looksLikeCast() const {
 }
 
 ExprPtr Parser::parseUnary() {
+    size_t st = pos_;
+    ExprPtr e = parseUnaryInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parseUnaryInner() {
+    size_t st__ = pos_;
+    (void)st__;
     if (check(TokenType::LParen) && looksLikeCast()) {
         const Token &lp = advance(); // '('
         TypeRef ty = parseType("for the cast");
@@ -414,6 +547,14 @@ std::vector<ExprPtr> Parser::parseArguments() {
 }
 
 ExprPtr Parser::parsePostfix() {
+    size_t st = pos_;
+    ExprPtr e = parsePostfixInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parsePostfixInner() {
+    size_t st__ = pos_;
+    (void)st__;
     ExprPtr expr = parsePrimary();
     for (;;) {
         if (check(TokenType::Dot)) {
@@ -622,6 +763,14 @@ bool Parser::looksLikeTypeArg() const {
 }
 
 ExprPtr Parser::parsePrimary() {
+    size_t st = pos_;
+    ExprPtr e = parsePrimaryInner();
+    if (e) spanFrom(*e, st);
+    return e;
+}
+ExprPtr Parser::parsePrimaryInner() {
+    size_t st__ = pos_;
+    (void)st__;
     const Token &t = peek();
     switch (t.type) {
         case TokenType::CBlock: { // `%{ ... %}` inline C as an expression

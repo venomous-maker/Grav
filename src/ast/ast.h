@@ -31,6 +31,9 @@ inline T *as(B *node) {
 struct Expr {
     int line = 0;
     int col = 0;
+    // The source the expression was parsed from: its first byte, and the column
+    // just past its last (0 when unknown: made by the compiler, or inside ${...}).
+    int sline = 0, scol = 0, eline = 0, ecol = 0;
     TypeRef type; // filled in by the type checker
     virtual ~Expr() = default;
 };
