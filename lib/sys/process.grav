@@ -41,6 +41,30 @@ namespace std.sys {
        second SIGINT or SIGTERM ends the program at once (a stuck shutdown). */
     #include <errno.h>
     #include <fcntl.h>
+    #include <limits.h>
+    #if defined(__APPLE__)
+    extern int _NSGetExecutablePath(char* buf, unsigned int* size);
+    #endif
+    /* The running program's absolute path: /proc/self/exe (Linux), the loader's
+       record (macOS), else argv[0] made absolute; "" when none can be found. */
+    static const char* grav_proc_executable(void) {
+        char buf[PATH_MAX + 1];
+        long n = -1;
+    #if defined(__APPLE__)
+        unsigned int size = sizeof buf;
+        char raw[PATH_MAX + 1];
+        if (_NSGetExecutablePath(raw, &size) == 0 && realpath(raw, buf)) n = (long)strlen(buf);
+    #else
+        n = (long)readlink("/proc/self/exe", buf, PATH_MAX);
+        if (n < 0) n = (long)readlink("/proc/curproc/file", buf, PATH_MAX);   /* (FreeBSD) */
+        if (n >= 0) buf[n] = 0;
+    #endif
+        if (n < 0) {
+            const char* a0 = grav_argv_at(0);
+            if (!a0[0] || !realpath(a0, buf)) return grav_strdup("");
+        }
+        return grav_strdup(buf);
+    }
     static int grav_sig_pipe[2] = { -1, -1 };
     static volatile sig_atomic_t grav_sig_seen[65];
     static void grav_sig_forward(int sig) {
@@ -122,6 +146,9 @@ namespace std.sys {
         }
         // This process's id.
         static fn pid() -> int { return %{ (int)getpid() %} as int; }
+        // The running program's absolute path ("/home/ada/app/server"): to start
+        // more copies of itself (workers), or find files installed beside it.
+        static fn executable() -> string { return %{ grav_proc_executable() %} as string; }
         // The program's command-line arguments (without the program name).
         static fn args() -> Array<string> {
             let out = new Array<string>();
