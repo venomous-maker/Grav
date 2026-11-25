@@ -1,0 +1,73 @@
+// MessagePack round trips and exact bytes; Bloom filter sizes, answers, threads, saving.
+import "std"
+
+test "MessagePack: the smallest forms, and back" {
+    assertEq(MsgPack.encode(Json.parse("0")).toHex(), "00")
+    assertEq(MsgPack.encode(Json.parse("127")).toHex(), "7f")
+    assertEq(MsgPack.encode(Json.parse("128")).toHex(), "cc80")
+    assertEq(MsgPack.encode(Json.parse("-1")).toHex(), "ff")
+    assertEq(MsgPack.encode(Json.parse("-33")).toHex(), "d0df")
+    assertEq(MsgPack.encode(Json.parse("70000")).toHex(), "ce00011170")
+    assertEq(MsgPack.encode(Json.parse("-2147483649")).toHex(), "d3ffffffff7fffffff")
+    assertEq(MsgPack.encode(Json.parse("1.5")).toHex(), "cb3ff8000000000000")
+    assertEq(MsgPack.encode(Json.parse("[true,false,null]")).toHex(), "93c3c2c0")
+    assertEq(MsgPack.encode(Json.parse("{\"a\":\"hi\"}")).toHex(), "81a161a26869")
+    let doc = "{\"id\":7,\"name\":\"Ada é\",\"tags\":[\"x\",\"y\"],\"score\":-12.25,\"big\":9007199254740993,\"neg\":-40000,\"ok\":true,\"none\":null,\"nested\":{\"deep\":[1,[2,[3]]]}}"
+    assertEq(MsgPack.decode(MsgPack.encode(Json.parse(doc))).toJson(), Json.parse(doc).toJson())
+    let long = Str.repeat("x", 70000)
+    assertEq(MsgPack.decode(MsgPack.encode(Json.of(long))).asString().length, 70000)
+}
+
+test "MessagePack: what other writers make, and bad input" {
+    // (from Python's msgpack: bin 8, float 32, uint 64, an ext, a map with an integer key)
+    assertEq(MsgPack.decode(Bytes.fromHex("c403616263")).asString(), Base64.encodeBytes(Bytes.fromString("abc")))
+    assertEq(MsgPack.decode(Bytes.fromHex("ca3fc00000")).asFloat(), 1.5)
+    assertEq(MsgPack.decode(Bytes.fromHex("cf0000000100000000")).asLong(), 4294967296 as long)
+    assertEq(MsgPack.decode(Bytes.fromHex("d4ff07")).toJson(), "{\"ext\":-1,\"data\":\"Bw==\"}")
+    assertEq(MsgPack.decode(Bytes.fromHex("8101a36f6e65")).toJson(), "{\"1\":\"one\"}")
+    for (bad in ["c1", "a5616263", "92c0", "cd01", "dc0000ffff"]) {
+        let msg = ""
+        try { MsgPack.decode(Bytes.fromHex(bad)) } catch (e: ValueError) { msg = e.message() }
+        assert(Str.startsWith(msg, "MessagePack:"), bad + " -> " + msg)
+    }
+    let x = Json.parse("{\"a\":1}")
+    let extra = MsgPack.encode(x)
+    extra.appendByte(0)
+    let msg = ""
+    try { MsgPack.decode(extra) } catch (e: ValueError) { msg = e.message() }
+    assert(Str.contains(msg, "after the value"))
+}
+
+test "BloomFilter: sized by its rate, no false negatives, about the rate's false positives" {
+    let f = new BloomFilter(10000, 0.01)
+    assert(f.byteSize() >= 11000 && f.byteSize() <= 12500, "${f.byteSize()}")
+    assertEq(f.hashCount, 7)
+    for (i in 0..10000) { f.add("item-${i}") }
+    for (i in 0..10000) { assert(f.mightContain("item-${i}")) }
+    let wrong = 0
+    for (i in 0..20000) { if (f.mightContain("other-${i}")) { wrong += 1 } }
+    let rate = (wrong as double) / 20000.0
+    assert(rate < 0.02, "false positives: ${rate}")
+    assert(f.approximateCount() > 9900 && f.approximateCount() <= 10000)
+    assert(f.currentFalsePositiveRate() < 0.02)
+    assert(!f.add("item-5"))                                         // (already there)
+    let back = BloomFilter.fromBytes(f.toBytes())
+    assertEq(back.bitCount, f.bitCount)
+    for (i in 0..100) { assert(back.mightContain("item-${i}")) }
+    f.clear()
+    assert(!f.mightContain("item-1"))
+    let msg = ""
+    try { BloomFilter.fromBytes(Bytes.fromString("short")) } catch (e: ValueError) { msg = e.message() }
+    assert(Str.startsWith(msg, "not a BloomFilter"))
+}
+
+test "BloomFilter: threads adding at once lose nothing" {
+    let f = new BloomFilter(40000, 0.01)
+    let wg = new WaitGroup()
+    for (t in 0..4) {
+        wg.add(1)
+        Thread.spawn(fn() { for (i in 0..10000) { f.add("t${t}-${i}") }; wg.done() })
+    }
+    wg.wait()
+    for (t in 0..4) { for (i in 0..10000) { assert(f.mightContain("t${t}-${i}")) } }
+}

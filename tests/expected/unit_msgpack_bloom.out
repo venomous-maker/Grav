@@ -1,0 +1,6 @@
+running 4 tests
+  ok    MessagePack: the smallest forms, and back
+  ok    MessagePack: what other writers make, and bad input
+  ok    BloomFilter: sized by its rate, no false negatives, about the rate's false positives
+  ok    BloomFilter: threads adding at once lose nothing
+result: 4 passed, 0 failed
