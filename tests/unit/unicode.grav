@@ -1,0 +1,32 @@
+// Unicode normalization: the four forms, Hangul, ordering of marks, accents stripped.
+// (Checked against Python's unicodedata on every code point; these are the cases to remember.)
+import "std"
+
+test "the four forms" {
+    let composed = "\u{e9}"
+    let decomposed = "e\u{301}"
+    assertEq(Unicode.nfc(decomposed), composed)
+    assertEq(Unicode.nfd(composed), decomposed)
+    assert(Unicode.nfc(decomposed) == Unicode.nfc(composed))
+    assertEq(Unicode.nfkc("\u{fb01}x\u{b2}"), "fix2")                     // ligature, superscript
+    assertEq(Unicode.nfc("\u{fb01}"), "\u{fb01}")                         // (canonical forms keep them)
+    assertEq(Unicode.nfkd("\u{2126}"), "\u{3a9}")                          // ohm sign -> omega
+    assertEq(Unicode.nfc("\u{212b}"), "\u{c5}")                           // angstrom sign -> Å
+    assertEq(Unicode.normalize("A\u{30a}", "nfc"), "\u{c5}")
+    assert(Unicode.isNormalized("plain ascii"))
+    assert(!Unicode.isNormalized(decomposed))
+    assert(Unicode.isNormalized(decomposed, "NFD"))
+    let msg = ""
+    try { Unicode.normalize("x", "NFZ") } catch (e: ValueError) { msg = e.message() }
+    assert(Str.contains(msg, "NFZ"))
+}
+
+test "marks in order, Hangul, blocked composition, accents stripped" {
+    assertEq(Unicode.nfd("q\u{307}\u{323}"), "q\u{323}\u{307}")         // dot below (220) before dot above (230)
+    assertEq(Unicode.nfc("\u{1e0b}\u{323}"), "\u{1e0d}\u{307}")          // ḋ + dot below -> ḍ + dot above
+    assertEq(Unicode.nfc("\u{1100}\u{1161}\u{11a8}"), "\u{ac01}")       // jamo -> 각
+    assertEq(Unicode.nfd("\u{ac01}"), "\u{1100}\u{1161}\u{11a8}")
+    assertEq(Unicode.nfc("a\u{301}\u{301}"), "\u{e1}\u{301}")             // only the first accent composes
+    assertEq(Unicode.stripAccents("Crème brûlée, São Paulo, Ångström"), "Creme brulee, Sao Paulo, Angstrom")
+    assertEq(Unicode.nfc(""), "")
+}

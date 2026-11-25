@@ -1,0 +1,4 @@
+running 2 tests
+  ok    the four forms
+  ok    marks in order, Hangul, blocked composition, accents stripped
+result: 2 passed, 0 failed

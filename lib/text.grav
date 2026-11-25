@@ -1,4 +1,4 @@
-// lib/text.grav — `import "std/text"`: Str (string functions), StringBuilder, Format (parsing and formatting numbers), Regex.
+// lib/text.grav — `import "std/text"`: Str (string functions), StringBuilder, Format (parsing and formatting numbers), Regex, Markdown, Unicode (normalization).
 import "text/string.grav"
 import "text/strbuf.grav"
 import "text/convert.grav"
