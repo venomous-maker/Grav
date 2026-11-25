@@ -12,6 +12,7 @@ installed, it is `build/gravc`; both behave the same.)
 | `grav test [file.grav] [--filter text]` | runs the `test` blocks ([Testing](../learn/19-testing.md)) |
 | `grav bench [file.grav] [--filter text]` | times the `bench` blocks, built with `-O2` ([Benchmarks](../learn/19-testing.md#benchmarks)) |
 | `grav check [--json] [file.grav]` | type-checks without building; prints `gravc: ok` or the errors |
+| `grav lint [--fix] [file.grav]` | the warnings and lints; `--fix` applies their fixes to your own files ([Warnings and lints](#warnings-and-lints)) |
 | `grav fmt [--check] [paths]` | formats source files; `grav fmt -` formats standard input |
 | `grav env [--json]` | shows where the compiler, standard library and packages are |
 | `grav self-update [--check] [--force] [--ref REF]` | updates a grav that `install.sh` installed ([Installing](../tools/install.md#updating-grav-self-update)) |
@@ -115,6 +116,36 @@ gravc: app.grav:12:5: warning: this `if` returns its own condition [needless-boo
   `collapsible-else-if` (`else { if ... }`), `redundant-cast` (`n as int` on an
   int), `redundant-str` (`str(s)` on a string), `slow-char-at` (`Str.charAt(s, i)`
   is a call per byte; `s[i]` is not).
+- **Dead weight**: `unused-private` (a private field nothing in its class reads,
+  or a private method nothing calls; inline C that names it counts),
+  `unused-parameter` (a parameter its function never uses; not for a method
+  that overrides or implements another, one that `for`, `x[i]` and the like
+  call by name, a function passed around as a value, an empty body, or a name
+  starting with `_`), and `empty-catch` (a `catch` with nothing in it hides the
+  error; a comment beside it, saying why, makes it fine).
+
+#### grav lint --fix
+
+`grav lint` reports the same warnings as `grav check`. With `--fix` it rewrites
+your own files (never the standard library or a package) with the fixes that
+keep the program meaning the same: `bool-comparison`, `needless-bool` and
+`identical-branches` on a `?:`, `negated-comparison`, `double-negation`,
+`len-zero`, `assign-op`, `redundant-cast`, `redundant-str`, `slow-char-at`, and
+unused imports (the line goes). Brackets are added where the neighbouring code
+would otherwise group the new text differently (`ok == !(a == b)` becomes
+`ok == (a != b)`). It then looks again, as fixes can make others possible, until
+nothing more is fixable, and prints what it changed:
+
+```text
+$ grav lint --fix app.grav
+fixed app.grav:12: len-zero
+fixed app.grav:15: bool-comparison
+gravc: ok
+```
+
+If a round's changes ever stopped the program compiling, every file is put back
+as it was before `grav lint --fix` began. Lints that need judgement (an unused
+parameter, an empty `catch`, unreachable code) are reported, never changed.
 
 Lints and unused imports are reported for the program's own files, not the
 standard library's or a package's, and only once it type-checks. Write
