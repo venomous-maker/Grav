@@ -272,7 +272,6 @@ namespace std.collections {
             %{ memset(self->used, 0, (size_t)n); %};
             self.count = 0;
         }
-        // As text: {"a": 1, "b": 2} (strings in quotes).
         // (Mem.sizeOf) the slot buffers, and the strings in used slots
         private fn __bytesExtra() -> long {
             let n = %{ grav_mem_block(self->ks) + grav_mem_block(self->vs) + grav_mem_block(self->used) + grav_mem_block(self->hs) %} as long
@@ -283,6 +282,7 @@ namespace std.collections {
             }
             return n
         }
+        // As text: {"a": 1, "b": 2} (strings in quotes).
         public fn toString() -> string {
             let ks = self.keys()
             let out = new StringBuilder()
