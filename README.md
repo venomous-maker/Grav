@@ -103,7 +103,7 @@ cmake -S . -B build && cmake --build build
 ./build/gravc examples/apps/life.grav --run
 ```
 
-```grav
+```typescript
 // examples/06_inheritance.grav
 interface Shape {
     fn area() -> int
@@ -181,7 +181,7 @@ store per call-capable statement and disappears entirely under `--release`.
 
 Four primitives: `int`, `float`, `bool`, `string`.
 
-```grav
+```typescript
 let x: int = 10
 let pi: float = 3.14
 let ok: bool = true
@@ -193,7 +193,7 @@ const MAX: int = 100       // const: reassignment is a compile error
 
 Grav is **strongly typed** — there are no implicit conversions:
 
-```grav
+```typescript
 let a: int = 1
 let b: float = 2.0
 let c: int = a + b         // error: '+' requires matching types (int vs float)
@@ -204,7 +204,7 @@ Casts are `int(x)`, `float(x)`, `bool(x)`. String `+` string concatenates.
 
 ### Functions & `main`
 
-```grav
+```typescript
 fn add(a: int, b: int) -> int {
     return a + b
 }
@@ -225,7 +225,7 @@ fn main() {                        // program entry point
 work inside loops. Logical operators `&&`, `||`, `!` short-circuit; `++`/`--` work in
 prefix and postfix form.
 
-```grav
+```typescript
 fn classify(x: int) -> string {
     match (x) {                     // 'switch' is a synonym
         case 0:        { return "zero" }
@@ -257,7 +257,7 @@ An `enum` is a named set of integer constants. Members are referenced as
 `EnumName.Member`, compared with `==`/`!=`, used as `switch`/`match` subjects, and
 cast to their ordinal with `int(...)`. Enums lower to a real C `enum`.
 
-```grav
+```typescript
 enum Direction { North, East, South, West }
 
 fn turn(d: Direction) -> Direction {
@@ -290,7 +290,7 @@ Operands and arguments are evaluated **left to right**. Modulo, bitwise and shif
 operators require `int` operands. `string += string`
 concatenates in place. The ternary's branches must share a common type.
 
-```grav
+```typescript
 fn main() {
     let flags = 0
     flags |= 4
@@ -307,7 +307,7 @@ fn main() {
 A counting loop over a half-open (`..`) or inclusive (`..=`) integer range. The
 loop variable is an `int` scoped to the loop; the upper bound is evaluated once.
 
-```grav
+```typescript
 fn main() {
     let sum = 0
     for (i in 1..=100) { sum += i }  // 1 + 2 + … + 100
@@ -322,7 +322,7 @@ and any object with `length()`/`size()` plus `get(i)`/`at(i)` (so `Array<T>`,
 `List<T>`, `StringBuilder`-style classes, your own types). The two-name form binds the
 index too. Ranges take an optional `step`, which may be negative to count down.
 
-```grav
+```typescript
 fn main() {
     let xs = [3, 1, 4]
     for (x in xs) { print(x) }                 // 3 1 4
@@ -338,7 +338,7 @@ A class can implement `+ - * / %`, `== != < <= > >=`, and indexing with
 `fn operator<op>(other: T)`. `!=` falls back to `!(a == b)`; `operator[]` reads and
 `operator[]=` writes (`obj[k] = v`). Comparisons against `null` stay reference tests.
 
-```grav
+```typescript
 class Vec {
     public x: int  public y: int
     constructor(x: int, y: int) { self.x = x; self.y = y }
@@ -369,7 +369,7 @@ normally or through `return`, `break`, or `continue` — in last-in, first-out o
 `return` value is computed before deferred code runs. (Deferred code does not run when
 an exception propagates; use `finally` for that.)
 
-```grav
+```typescript
 class Conn {
     constructor() { print("open") }
     destructor() { print("close") }
@@ -395,7 +395,7 @@ after use. A variable that is returned, stored in a field/collection, captured b
 lambda, or passed to other code is left alone (it may be shared), as is everything in
 a function that contains inline C.
 
-```grav
+```typescript
 fn main() {
     let report = ""
     for (i in 0..1000) {
@@ -428,7 +428,7 @@ Functions are values. A function type is written `fn(A, B) -> R` (`-> R` omitted
 may be left out when the expected type is known (an argument, a typed `let`, a field
 assignment, a `return`). Named functions can be used as values too.
 
-```grav
+```typescript
 fn square(x: int) -> int { return x * x }
 fn twice(f: fn(int) -> int) -> fn(int) -> int { return fn(x) => f(f(x)) }
 
@@ -471,7 +471,7 @@ ones; overriding is by exact signature. Constructors overload the same way
 (`new Color()`, `new Color(128)`, `new Color(255, 64, 0)`), and `super(...)` picks
 the matching parent constructor.
 
-```grav
+```typescript
 class Fmt {
     static fn show(x: int) -> string { return "int ${x}" }
     static fn show(s: string) -> string { return "string ${s}" }
@@ -502,7 +502,7 @@ etc.) Two operators build on it:
   zero value (`0` / `""`) when `a` is null. The result must be a scalar, enum, or
   reference (not a value-type struct or interface).
 
-```grav
+```typescript
 fn main() {
     let s: Shape = null
     print(s == null)                 // true
@@ -527,7 +527,7 @@ Grav has three cast spellings — use whichever reads best:
 All cast between numeric types, enum→`int`, within a class hierarchy, class→interface,
 and between pointer types. `expr is ClassName` is a runtime type test (RTTI) → `bool`.
 
-```grav
+```typescript
 fn main() {
     let c = new Circle(2)
     let s = c as Shape               // class -> interface
@@ -544,7 +544,7 @@ variable, field, or dereference; `*p` dereferences (and is assignable); `p->fiel
 is sugar for `(*p).field`. Pointers compare against `null` and lower directly to C
 pointers, so they give real memory access.
 
-```grav
+```typescript
 fn bump(p: int*) { *p = *p + 1; }   // write through the pointer
 
 fn main() {
@@ -571,7 +571,7 @@ call `Async.setMaxProcs(n)` to change it. A task awaited before a worker picks i
 runs on the awaiting thread, so tasks can await tasks without deadlocking even with
 one worker.
 
-```grav
+```typescript
 import "lib/std.grav"
 
 async fn countPrimes(lo: int, hi: int) -> int {
@@ -603,7 +603,7 @@ A `struct` is a plain **value type**: named fields, no methods, no inheritance,
 no vtable, and no runtime type info. It lowers to a bare C `struct` and is
 passed, returned, and assigned **by value** (copied).
 
-```grav
+```typescript
 struct Point {
     x: int
     y: int
@@ -640,7 +640,7 @@ arrays are **value types**: they are copied on assignment and passed / returned 
 value (Grav boxes them in a small C struct so this stays sound — no hidden runtime,
 no heap). The element type may be any type (primitive, struct, class reference…).
 
-```grav
+```typescript
 fn sum(xs: int[3]) -> int {           // arrays pass by value
     let total = 0
     for (i in 0..xs.length) {         // `.length` is the compile-time length
@@ -672,7 +672,7 @@ bounds-checked.
 fully expanded during type checking, so `Celsius` below *is* `int` everywhere — they
 cost nothing and leave no trace in the generated C.
 
-```grav
+```typescript
 type Celsius = int
 type Row     = int[3]
 type Coord   = Point          // alias any named type, array, or pointer
@@ -695,7 +695,7 @@ A C-style preprocessor runs over the token stream before parsing. `#define` supp
 both **object-like** and **function-like** macros; each directive occupies one line
 and disappears from the output.
 
-```grav
+```typescript
 #define SIZE 8
 #define SQUARE(x) ((x) * (x))
 
@@ -715,7 +715,7 @@ caller's context, and a macro will not recursively expand into itself.
 `int`, lowering to C's `sizeof`. For a class or struct it reports the underlying
 object/value size.
 
-```grav
+```typescript
 fn main() {
     print(sizeof(int) > 0)                       // true
     let primes: int[4] = [2, 3, 5, 7]
@@ -734,7 +734,7 @@ and `T: Bound` constraints are all supported. See
 [08_generics.grav](examples/08_generics.grav) and
 [08_generics.grav](examples/08_generics.grav).
 
-```grav
+```typescript
 class Box<T> {
     private value: T
     constructor(v: T) { self.value = v; }
@@ -763,7 +763,7 @@ arguments into a runtime-length slice: `name.length` is the count and `name[i]`
 indexes elements. It lowers to a `(int count, T* ptr)` pair with a C compound
 literal at each call — no heap allocation. See [03_functions.grav](examples/03_functions.grav).
 
-```grav
+```typescript
 fn sum(...nums: int) -> int {
     let total = 0;
     for (i in 0..nums.length) { total += nums[i]; }
@@ -788,7 +788,7 @@ written inside `try` are made `volatile` so they keep their values in `catch` at
 optimization level); an uncaught exception prints a message and the stack trace of
 the original `throw`, then exits. See [10_exceptions.grav](examples/10_exceptions.grav).
 
-```grav
+```typescript
 class AppError { public msg: string  constructor(m: string) { self.msg = m; } }
 
 fn main() {
@@ -809,7 +809,7 @@ class-level field accessed as `Class.x`. Both need an explicit type and a consta
 initializer, and lower to C globals. `const`/`readonly` ones are immutable. See
 [05_classes.grav](examples/05_classes.grav).
 
-```grav
+```typescript
 const PI: float = 3.14159
 let hits: int = 0
 
@@ -825,7 +825,7 @@ fn main() {
 
 ### Classes
 
-```grav
+```typescript
 class User {
     public id: int
     public name: string
@@ -851,7 +851,7 @@ print(u.greet())
 `public` (default), `private`, `protected`, and `readonly` are enforced **at compile
 time**:
 
-```grav
+```typescript
 class BankAccount {
     private balance: int
     public readonly owner: string
@@ -870,7 +870,7 @@ For every **private** field, Grav synthesizes `get_<field>()` and `set_<field>(v
 methods (the setter is omitted for `readonly` private fields). You can still write your
 own method with that name to override the default.
 
-```grav
+```typescript
 class Person { private name: string  constructor(n: string){ self.name = n } }
 
 let p = new Person("Al")
@@ -886,7 +886,7 @@ it is read-only. Accessors are methods underneath, so they can be `static`,
 private, overridden (`super.name`), abstract, and declared in interfaces and
 traits; reflection lists them with `ClassInfo.properties()`.
 
-```grav
+```typescript
 class Temperature {
     private c: float = 0.0
     get celsius() -> float { return self.c }
@@ -905,7 +905,7 @@ t.celsius += 1.0
 Single base class via `extends`. Methods dispatch through a **vtable**, so overrides are
 called through a base-typed reference (true runtime polymorphism):
 
-```grav
+```typescript
 class Animal { public fn speak() -> void { print("...") } }
 class Dog extends Animal { public fn speak() -> void { print("woof") } }
 
@@ -918,7 +918,7 @@ a.speak()                 // woof
 `abstract class` cannot be instantiated; `abstract fn` has no body and must be
 implemented by every concrete subclass.
 
-```grav
+```typescript
 abstract class Shape {
     abstract fn area() -> int
     public fn kind() -> string { return "shape" }
@@ -935,7 +935,7 @@ class Square extends Shape {
 Interfaces are method contracts. A class may implement **several**. Interface-typed
 values dispatch through a per-class itable (fat pointer), so this works:
 
-```grav
+```typescript
 interface Shape { fn area() -> int }
 interface Named { fn label() -> string }
 
@@ -952,7 +952,7 @@ print(s.area())           // 16  (dispatched through the interface)
 
 ### Static methods
 
-```grav
+```typescript
 class Math {
     static fn add(a: int, b: int) -> int { return a + b }
 }
@@ -964,7 +964,7 @@ print(Math.add(2, 3))     // 5
 Namespaces group declarations and may be nested or dotted. Reference members with a
 qualified name; within a namespace, sibling names resolve unqualified.
 
-```grav
+```typescript
 namespace zoo {
     class Animal { public fn speak() -> void { print("...") } }
     class Dog extends Animal { public fn speak() -> void { print("woof") } }
@@ -982,7 +982,7 @@ fn main() {
 file. Paths are resolved relative to the importing file; each file is included at most
 once (cycle-safe).
 
-```grav
+```typescript
 // app.grav
 import "shapes.grav"
 fn main() { let s: Shape = new Square(6)  print(s.area()) }
@@ -1001,7 +1001,7 @@ a module to show that duplicate imports are a safe no-op.
 
 Every object carries a type descriptor. Two built-ins query it:
 
-```grav
+```typescript
 let a: zoo.Animal = new zoo.Dog()
 print(typename(a))            // "zoo.Dog"
 print(isInstance(a, zoo.Dog)) // true
@@ -1026,7 +1026,7 @@ print(isInstance(a, zoo.Animal)) // true  (walks the base chain)
 Inside a string literal, `${ expr }` splices a value, converted with `str()`, so
 any printable type works. Write `\$` for a literal dollar sign.
 
-```grav
+```typescript
 fn main() {
     let name = "Ada"; let n = 42;
     print("hello ${name}, answer = ${n}, doubled = ${n * 2}");
@@ -1036,7 +1036,7 @@ fn main() {
 
 ### Command-line arguments & stdin
 
-```grav
+```typescript
 fn main() {
     print("got ${argc()} args; first is ${argv(0)}");
     let line = input();              // read a line from stdin
@@ -1054,7 +1054,7 @@ and C values flow both ways. (Use sparingly — it shrinks as the language grows
 - **Expression** — `%{ c_expr %} as T` (or in a typed `let`) yields a value of
   type `T`, reading C globals/locals or calling C functions.
 
-```grav
+```typescript
 %{
 static int c_total = 0;
 int c_add(int a, int b) { c_total++; return a + b; }
@@ -1074,7 +1074,7 @@ fn main() {
 They are accepted as metadata (every top-level name is already visible across
 modules), so they document intent without changing behaviour.
 
-```grav
+```typescript
 @Entity
 @table("users")
 export class User { public name: string }
@@ -1082,7 +1082,7 @@ export class User { public name: string }
 
 ### Comments
 
-```grav
+```typescript
 // line comment
 /* block
    comment */
