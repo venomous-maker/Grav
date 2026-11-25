@@ -1327,6 +1327,14 @@ TypeRef TypeChecker::checkCall(CallExpr &e) {
             TypeRef t = checkExpr(*e.args[0]);
             return name->name == "__retain" ? t : TypeRef::prim(TypeRef::Kind::Void);
         }
+        // __memOf(x): the bytes of a counted string x holds (string or any), 0 for
+        // anything else (objects are counted by Mem's walk): for containers' __bytesExtra.
+        if (name->name == "__memOf" && e.args.size() == 1) {
+            e.kind = CallKind::Builtin;
+            e.targetName = name->name;
+            checkExpr(*e.args[0]);
+            return TypeRef::integer(64, false);
+        }
         if (name->name == "__fmt" && e.args.size() == 2 && as<StringLiteralExpr>(e.args[1].get())) {
             // `${x:spec}` (lexer-made): the spec's type letter must suit the value.
             e.kind = CallKind::Builtin;

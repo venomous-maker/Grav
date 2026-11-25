@@ -606,6 +606,12 @@ std::string CodeGen::emitCall(const CallExpr &call) const {
                 return "grav_assert_at(" + cond + ", " + msg + ", " + loc + ")";
             }
             if (call.targetName == "__retain") return retainOf(call.args[0]->type, emitExpr(*call.args[0]));
+            if (call.targetName == "__memOf") {
+                const TypeRef &t = call.args[0]->type;
+                if (refKind(t) == RefKind::Str) return "grav_mem_str(" + emitExpr(*call.args[0]) + ")";
+                if (refKind(t) == RefKind::Any) return "grav_mem_any(" + emitExpr(*call.args[0]) + ")";
+                return "((long long)0)";
+            }
             if (call.targetName == "__visit") { // report a buffer element to the cycle collector
                 std::string v = visitOf(call.args[0]->type, emitExpr(*call.args[0]));
                 return v.empty() ? "((void)0)" : "(" + v.substr(0, v.size() - 1) + ")";
