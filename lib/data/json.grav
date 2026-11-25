@@ -289,6 +289,149 @@ namespace std.data {
         }
         return -1;
     }
+    /* The parser's memory of keys: per nesting depth, the keys of the last object
+       there by position. Records in an array repeat them, and a key that matches
+       is neither decoded nor allocated again (the string is shared). */
+    typedef struct { const char** keys; int n, cap; } GravJsonRecent;
+    typedef struct { GravJsonRecent* d; int depths; } GravJsonCtx;
+    static void grav_jctx_free(GravJsonCtx* c) {
+        if (!c) return;
+        for (int i = 0; i < c->depths; i++) {
+            for (int k = 0; k < c->d[i].n; k++) if (c->d[i].keys[k]) grav_str_release(c->d[i].keys[k]);
+            free(c->d[i].keys);
+        }
+        free(c->d); free(c);
+    }
+    /* Object key number `ki` at `depth`, its quote at s[*pos]: owned (+1), or 0 with *err. */
+    static const char* grav_jkey_take(GravJsonCtx* c, int depth, int ki, const char* s, int* pos, const char** err) {
+        if (depth >= c->depths) {
+            int nd = depth + 8;
+            c->d = (GravJsonRecent*)realloc(c->d, sizeof(GravJsonRecent) * (size_t)nd);
+            if (!c->d) abort();
+            memset(c->d + c->depths, 0, sizeof(GravJsonRecent) * (size_t)(nd - c->depths));
+            c->depths = nd;
+        }
+        GravJsonRecent* r = &c->d[depth];
+        if (ki < r->n && r->keys[ki]) {
+            const char* cand = r->keys[ki];
+            if (grav_json_key_is(s, pos, cand, (int)strlen(cand))) return grav_str_retain(cand);
+        }
+        const char* k = grav_json_string(s, pos, err);
+        if (!k) return 0;
+        if (ki >= r->cap) {
+            int nc = r->cap < 8 ? 8 : r->cap * 2;
+            while (nc <= ki) nc *= 2;
+            r->keys = (const char**)realloc(r->keys, sizeof(const char*) * (size_t)nc);
+            if (!r->keys) abort();
+            memset(r->keys + r->cap, 0, sizeof(const char*) * (size_t)(nc - r->cap));
+            r->cap = nc;
+        }
+        if (ki >= r->n) r->n = ki + 1;
+        if (r->keys[ki]) grav_str_release(r->keys[ki]);
+        /* (only a key with no backslash or quote reads the same in the source) */
+        r->keys[ki] = strpbrk(k, "\\\"") == 0 ? grav_str_retain(k) : 0;
+        return k;
+    }
+    /* Parses the members of an array or object straight into its slots, from
+       *pos (just inside the bracket, or after a member when `after`). Returns 0
+       when the container closed (*pos past it), 1 when a nested array or object
+       starts at *pos (its slot is *slot, to be filled by the caller), or -1 with
+       *err. A repeated key in a small object reuses its slot (the last value
+       wins); larger objects are checked once closed (grav_json_dedupe). */
+    static int grav_json_members(GravJsonCtx* c, int depth, const char* s, int* pos, unsigned char** buf, int* cap, int* count,
+                                 int isObj, int after, int* ki, int* slot, const char** err) {
+        int i = *pos;
+        char close = isObj ? '}' : ']';
+        #define GRAV_JWS while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') i++
+        if (!after) { GRAV_JWS; if (s[i] == close) { *pos = i + 1; return 0; } }
+        for (;;) {
+            if (after) {
+                GRAV_JWS;
+                if (s[i] == ',') i++;
+                else if (s[i] == close) { *pos = i + 1; return 0; }
+                else { *err = isObj ? "expected ',' or '}' in an object" : "expected ',' or ']' in an array"; *pos = i; return -1; }
+            }
+            after = 1;
+            GRAV_JWS;
+            const char* key = 0;
+            if (isObj) {
+                if (s[i] != '"') { *err = "expected a string key in an object"; *pos = i; return -1; }
+                key = grav_jkey_take(c, depth, *ki, s, &i, err);
+                if (!key) { *pos = i; return -1; }
+                (*ki)++;
+                GRAV_JWS;
+                if (s[i] != ':') { grav_str_release(key); *err = "expected ':' after an object key"; *pos = i; return -1; }
+                i++;
+                GRAV_JWS;
+            }
+            int j = -1;
+            if (isObj && *count <= 8) j = grav_jfind(*buf, *cap, *count, key);
+            if (j >= 0) { grav_jslot_drop(grav_jslot(*buf, j)); grav_str_release(key); }
+            else {
+                *buf = grav_jgrow(*buf, cap, *count, *count + 1, isObj);
+                j = *count;
+                if (isObj) *grav_jkey(*buf, *cap, j) = key;
+                (*count)++;
+            }
+            GravJsonSlot* sl = grav_jslot(*buf, j);
+            sl->kind = GRAV_JNULL; sl->flag = 0; sl->u.i = 0;
+            char ch = s[i];
+            if (ch == '"') {
+                const char* t = grav_json_string(s, &i, err);
+                if (!t) { *pos = i; return -1; }
+                sl->kind = GRAV_JSTR; sl->u.s = t;
+            } else if (ch == '{' || ch == '[') {
+                *slot = j; *pos = i; return 1;
+            } else if (ch == 't' && strncmp(s + i, "true", 4) == 0) { i += 4; sl->kind = GRAV_JBOOL; sl->flag = 1; }
+            else if (ch == 'f' && strncmp(s + i, "false", 5) == 0) { i += 5; sl->kind = GRAV_JBOOL; }
+            else if (ch == 'n' && strncmp(s + i, "null", 4) == 0) { i += 4; }
+            else if (ch == '-' || (ch >= '0' && ch <= '9')) {
+                int isInt = 0; long long iv = 0; const char* e = 0;
+                double d = grav_json_number(s, &i, &isInt, &iv, &e);
+                if (e) { *err = e; *pos = i; return -1; }
+                sl->kind = GRAV_JNUM;
+                if (isInt) { sl->flag = 1; sl->u.i = iv; } else { sl->u.d = d; }
+            } else { *err = ch ? "unexpected character" : "unexpected end of input"; *pos = i; return -1; }
+        }
+        #undef GRAV_JWS
+    }
+    /* An object of more than 8 keys, once parsed: a repeated key keeps its first
+       position and its last value (as JSON.parse does). Linear when there are
+       none (an open-addressing set of the keys), quadratic only when there are. */
+    static void grav_json_dedupe(unsigned char* buf, int cap, int* count) {
+        int n = *count, size = 16;
+        while (size < n * 2) size *= 2;
+        const char** set = (const char**)calloc((size_t)size, sizeof(const char*));
+        if (!set) abort();
+        int dup = 0;
+        for (int j = 0; j < n && !dup; j++) {
+            const char* k = *grav_jkey(buf, cap, j);
+            unsigned long long h = 1469598103934665603ULL;
+            for (const unsigned char* q = (const unsigned char*)k; *q; q++) h = (h ^ *q) * 1099511628211ULL;
+            for (int b = (int)(h & (unsigned long long)(size - 1));; b = (b + 1) & (size - 1)) {
+                if (!set[b]) { set[b] = k; break; }
+                if (set[b] == k || strcmp(set[b], k) == 0) { dup = 1; break; }
+            }
+        }
+        free(set);
+        if (!dup) return;
+        int out = 0;
+        for (int j = 0; j < n; j++) {
+            const char* k = *grav_jkey(buf, cap, j);
+            int first = -1;
+            for (int m = 0; m < out; m++) if (strcmp(*grav_jkey(buf, cap, m), k) == 0) { first = m; break; }
+            if (first >= 0) {
+                grav_jslot_drop(grav_jslot(buf, first));
+                *grav_jslot(buf, first) = *grav_jslot(buf, j);
+                grav_str_release(k);
+            } else {
+                *grav_jslot(buf, out) = *grav_jslot(buf, j);
+                *grav_jkey(buf, cap, out) = k;
+                out++;
+            }
+        }
+        *count = out;
+    }
     %}
 
     enum JsonKind { Null, Bool, Number, String, Array, Object }
@@ -429,6 +572,10 @@ namespace std.data {
         private fn find(key: string) -> int {
             if (self.k != JsonKind.Object) { return -1; }
             if (self.index != null) { return self.index.getOr(key, -1); }
+            if (self.count > 8) {                                 // (a parsed object builds it when first read)
+                self.reindex();
+                return self.index.getOr(key, -1);
+            }
             return %{ grav_jfind(self->buf, self->cap, self->count, key) %} as int;
         }
         private fn reindex() {
@@ -723,46 +870,18 @@ namespace std.data {
         private pos: int
         private len: int
         private depth: int
-        // Object keys seen so far, so repeated keys ("id" in every record) share one
-        // string (made with the second object: a small document has one).
-        private keys: HashMap<string, string> = null
-        private objects: int = 0
-        // Per nesting depth, the keys of the last object there, by position: the
-        // records of an array usually repeat them, and a key that matches is not
-        // parsed into a new string at all.
-        private recent: Array<Array<string>>
+        // The keys of the last object at each depth (GravJsonCtx): records in an
+        // array repeat them, and a key that matches is not parsed again.
+        private ctx: byte*
         constructor(src: string) {
             self.src = src;
             self.pos = 0;
             self.len = %{ (int)strlen(src) %} as int;
             self.depth = 0;
-            self.recent = new Array<Array<string>>();
+            self.ctx = %{ (unsigned char*)calloc(1, sizeof(GravJsonCtx)) %} as byte*;
         }
-        // Key number `ki` of an object at the current depth.
-        private fn objectKey(ki: int) -> string {
-            while (self.recent.size() <= self.depth) { self.recent.push(new Array<string>()); }
-            let seen = self.recent.get(self.depth);
-            if (ki < seen.size()) {
-                let cand = seen.get(ki);
-                let n = cand.length;
-                let p = self.pos;
-                if (n > 0 && %{ grav_json_key_is(self->src, &p, cand, n) %} as bool) { self.pos = p; return cand; }
-            }
-            let k = self.sharedKey(self.str());
-            let plain = %{ strpbrk(k, "\\\"") == 0 %} as bool;   // no backslash or quote: comparable as written
-            let keep = plain ? k : "";
-            if (ki < seen.size()) { seen.set(ki, keep); } else { seen.push(keep); }
-            return k;
-        }
-        private fn sharedKey(k: string) -> string {
-            if (self.keys == null) {
-                if (self.objects < 2) { return k; }
-                self.keys = new HashMap<string, string>();
-            }
-            let seen = self.keys.getOr(k, "");
-            if (seen != "" || k == "") { return k == "" ? k : seen; }
-            if (self.keys.size() < 4096) { self.keys.put(k, k); }
-            return k;
+        destructor() {
+            %{ grav_jctx_free((GravJsonCtx*)self->ctx); self->ctx = 0; %};
         }
         private fn fail(msg: string) {
             let line = %{ grav_json_line(self->src, self->pos) %} as int;
@@ -854,46 +973,39 @@ namespace std.data {
             self.depth += 1;
             if (self.depth > 512) { self.fail("nesting is too deep"); }
         }
+        // The members of `out`, parsed in C straight into its slots; nested
+        // arrays and objects come back here.
+        private fn fill(out: JsonValue, isObj: bool) {
+            let after = false;
+            let ki = 0;
+            while (true) {
+                let err = "";
+                let j = 0;
+                let p = self.pos;
+                let d = self.depth;
+                let r = %{ grav_json_members((GravJsonCtx*)self->ctx, d, self->src, &p, &out->buf, &out->cap, &out->count, isObj, after, &ki, &j, &err) %} as int;
+                self.pos = p;
+                if (r < 0) { self.fail(err); }
+                if (r == 0) { break; }
+                let child = self.cur() == 123 ? self.object() : self.array();
+                %{ GravJsonSlot* grav_sl = grav_jslot(out->buf, j); grav_sl->u.o = grav_retain((void*)child); grav_sl->kind = (int)child->k; %};
+                after = true;
+            }
+        }
         private fn array() -> JsonValue {
             self.enter();
             self.pos += 1;
             let out = new JsonValue(JsonKind.Array);
-            self.skipSpace();
-            if (self.cur() == 93) { self.pos += 1; self.depth -= 1; return out; }
-            while (true) {
-                self.valueInto(out, null);
-                self.skipSpace();
-                let c = self.cur();
-                if (c == 44) { self.pos += 1; continue; }
-                if (c == 93) { self.pos += 1; break; }
-                self.fail("expected ',' or ']' in an array");
-            }
+            self.fill(out, false);
             self.depth -= 1;
             return out;
         }
         private fn object() -> JsonValue {
             self.enter();
-            self.objects += 1;
             self.pos += 1;
             let out = new JsonValue(JsonKind.Object);
-            self.skipSpace();
-            if (self.cur() == 125) { self.pos += 1; self.depth -= 1; return out; }
-            let ki = 0;
-            while (true) {
-                self.skipSpace();
-                if (self.cur() != 34) { self.fail("expected a string key in an object"); }
-                let key = self.objectKey(ki);
-                ki += 1;
-                self.skipSpace();
-                if (self.cur() != 58) { self.fail("expected ':' after an object key"); }
-                self.pos += 1;
-                self.valueInto(out, key);
-                self.skipSpace();
-                let c = self.cur();
-                if (c == 44) { self.pos += 1; continue; }
-                if (c == 125) { self.pos += 1; break; }
-                self.fail("expected ',' or '}' in an object");
-            }
+            self.fill(out, true);
+            %{ if (out->count > 8) grav_json_dedupe(out->buf, out->cap, &out->count); %};
             self.depth -= 1;
             return out;
         }
