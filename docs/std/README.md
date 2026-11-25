@@ -124,6 +124,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [process](sys/process.md) | `Process`: running shell command lines |
 | [time](sys/time.md) | `Time`, `Stopwatch` and `Duration`: clocks, measuring, lengths of time |
 | [datetime](sys/datetime.md) | `DateTime`: calendar dates and times, parsing and arithmetic |
+| [cron](sys/cron.md) | `Cron`: cron expressions, when they are next or last due |
 | [log](sys/log.md) | `Log` and `Logger`: leveled logging to standard error or a file |
 | [args](sys/args.md) | `Args`: command-line options, flags and `--help` |
 
