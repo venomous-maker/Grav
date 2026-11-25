@@ -154,7 +154,8 @@ Output:
 - `static fn isUpper(s: string) -> bool` — Whether no letter is lowercase (false for "").
 - `static fn isLower(s: string) -> bool` — Whether no letter is uppercase (false for "").
 - `static fn indexOf(s: string, sub: string) -> int` — The byte index of the first occurrence of `sub`, or -1.
-- `static fn indexFrom(s: string, sub: string, from: int) -> int` — The byte index of the first occurrence of `sub` at or after `from`, or -1.
+- `static fn indexOf(s: string, sub: string, from: int) -> int` — The byte index of the first occurrence of `sub` at or after `from`, or -1 (no copy made: for scanning a string piece by piece).
+- `static fn indexFrom(s: string, sub: string, from: int) -> int` — The same as indexOf(s, sub, from).
 - `static fn lastIndexOf(s: string, sub: string) -> int` — The byte index of the last occurrence of `sub`, or -1.
 - `static fn contains(s: string, sub: string) -> bool` — Whether `sub` occurs in the string.
 - `static fn indexOfAny(s: string, chars: string) -> int` — The index of the first byte of `s` that is one of `chars`' bytes, or -1 ("a/b?c", "/?" -> 1): one pass, for splitting on any of several separators.
@@ -181,6 +182,7 @@ Output:
 - `static fn padRight(s: string, len: int, ch: string) -> string` — Padded on the right to `len` characters with the first character of `ch` (a space if empty).
 - `static fn center(s: string, width: int, ch: string) -> string` — Centered in `width` characters, padded with the first character of `ch` (a space if empty).
 - `static fn split(s: string, delim: string) -> Array<string>` — The parts between occurrences of `delim` ("a,,b" by "," gives "a", "", "b").
+- `static fn split(s: string, delim: string, limit: int) -> Array<string>` — At most `limit` parts, the last keeping the rest (0 or less: no limit): split("k=v=w", "=", 2) == ["k", "v=w"]. The same as splitN.
 - `static fn lines(s: string) -> Array<string>` — Lines of text (handles \n and \r\n; no trailing empty line for a final newline).
 - `static fn words(s: string) -> Array<string>` — Whitespace-separated words (no empty entries).
 - `static fn join(parts: Array<string>, delim: string) -> string` — Joins with one allocation (no quadratic copying).
