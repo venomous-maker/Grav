@@ -1,0 +1,76 @@
+// Mem: the memory a value uses at run time (sizeof is the variable's size).
+import "std"
+
+class Line {
+    public sku: string = ""
+    public qty: int = 0
+    constructor(s: string, q: int) { self.sku = s; self.qty = q }
+}
+class Order {
+    public id: long = 0
+    public note: string = ""
+    public lines: Array<Line> = new Array<Line>()
+    public tags: HashMap<string, string> = new HashMap<string, string>()
+    constructor() {}
+}
+
+test "an array of numbers: its buffer, not 8" {
+    let nums = new Array<long>()
+    for (i in 0..100000) { nums.push(i as long) }
+    assertEq(sizeof(nums), 8)
+    let n = Mem.sizeOf(nums)
+    assert(n >= 800000 && n < 2000000, "${n}")
+    let d = Mem.describe(nums)
+    assertEq(d.type, "Array<long>")
+    assertEq(d.items, 100000 as long)
+    assertEq(d.objects, 1 as long)
+    assertEq(d.deepBytes, d.bytes)
+}
+
+test "strings: counted once, literals not at all" {
+    let words = new Array<string>()
+    for (i in 0..1000) { words.push("word number ${i}") }
+    let empty = new Array<string>()
+    for (i in 0..1000) { empty.push("same literal") }
+    assert(Mem.sizeOf(words) > Mem.sizeOf(empty) + 1000 * 16)
+    assertEq(Mem.sizeOf("a literal"), 0 as long)
+    assert(Mem.sizeOf("made ${7} now") > 0)
+    let s = "shared ${1}"
+    let twice = new Array<string>()
+    twice.push(s)
+    twice.push(s)
+    let once = new Array<string>()
+    once.push(s)
+    assertEq(Mem.deepSizeOf(twice) - Mem.deepSizeOf(once), Mem.sizeOf(twice) - Mem.sizeOf(once) - Mem.sizeOf(s))
+}
+
+test "objects: themselves, and with what they hold (shared parts once)" {
+    let o = new Order()
+    o.note = "deliver after ${5} pm"
+    for (i in 0..50) { o.lines.push(new Line("SKU-${i}", i)) }
+    o.tags.put("source", "web ${1}")
+    let d = Mem.describe(o)
+    assertEq(d.type, "Order")
+    assertEq(d.items, -1 as long)
+    assert(d.bytes < d.deepBytes)
+    assertEq(d.objects, 53 as long)                                    // the order, the array, the map, 50 lines
+    let shared = new Line("shared ${0}", 1)
+    let pair = new Array<Line>()
+    pair.push(shared)
+    pair.push(shared)
+    assertEq(Mem.describe(pair).objects, 2 as long)
+    assertEq(Mem.deepSizeOf(pair), Mem.sizeOf(pair) + Mem.sizeOf(shared))
+    let m = new HashMap<string, long>()
+    m.put("k ${1}", 1)
+    assertEq(Mem.describe(m).items, 1 as long)
+    assert(Str.contains(str(Mem.describe(o)), "Order: "))
+}
+
+test "numbers, null, and the readable sizes" {
+    assertEq(Mem.sizeOf(42), 8 as long)
+    assertEq(Mem.sizeOf(null), 0 as long)
+    assertEq(Mem.describe(true).type, "bool")
+    assertEq(Mem.human(512), "512 B")
+    assertEq(Mem.human(1536), "1.5 KB")
+    assertEq(Mem.human(10485760), "10.0 MB")
+}

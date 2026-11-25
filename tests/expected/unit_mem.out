@@ -1,0 +1,6 @@
+running 4 tests
+  ok    an array of numbers: its buffer, not 8
+  ok    strings: counted once, literals not at all
+  ok    objects: themselves, and with what they hold (shared parts once)
+  ok    numbers, null, and the readable sizes
+result: 4 passed, 0 failed
