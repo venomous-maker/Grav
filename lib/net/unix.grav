@@ -20,6 +20,9 @@ namespace std.net {
     #include <sys/stat.h>
     #include <sys/un.h>
     #include <unistd.h>
+    #ifndef SOCK_CLOEXEC
+    #define SOCK_CLOEXEC 0 /* (macOS has no such flag) */
+    #endif
     static int grav_unix_addr(const char* path, struct sockaddr_un* a, const char** err) {
         memset(a, 0, sizeof *a);
         a->sun_family = AF_UNIX;

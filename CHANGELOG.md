@@ -12,6 +12,11 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- std/net: multipart bodies are split without `memmem`, which glibc before 2.38 (Debian bookworm's)
+  hides from C11 programs: GCC took the undeclared call to return an `int`, so on 64-bit machines the
+  pointer it found was truncated (a crash or a wrong match when parsing a form upload). Unix sockets
+  build where `SOCK_CLOEXEC` is missing (macOS), as TCP ones already did.
+
 ## 1.13.3 (2026-11-26)
 
 - `grav cache` shows how much the build cache holds (built programs, GCC's link-time partitions,

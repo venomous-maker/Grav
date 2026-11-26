@@ -363,11 +363,21 @@ namespace std.net {
         snprintf(buf, sizeof buf, "%llx", n);
         return grav_net_copy(buf);
     }
-    /* The first index of needle[0..m) in hay[from..n), or -1. */
+    /* The first index of needle[0..m) in hay[from..n), or -1. (Not memmem: glibc before 2.38
+       hides it from C11 without _GNU_SOURCE, and an undeclared memmem returns a truncated int.)
+       memchr finds each candidate first byte, memcmp checks the rest. */
     static int grav_mem_find(const unsigned char* hay, int n, int from, const char* needle, int m) {
         if (m == 0 || from < 0 || n - from < m) return -1;
-        const unsigned char* p = (const unsigned char*)memmem(hay + from, (size_t)(n - from), needle, (size_t)m);
-        return p ? (int)(p - hay) : -1;
+        const unsigned char first = (unsigned char)needle[0];
+        const unsigned char* p = hay + from;
+        const unsigned char* last = hay + n - m;   /* the last place a match can start */
+        while (p <= last) {
+            p = (const unsigned char*)memchr(p, first, (size_t)(last - p) + 1);
+            if (!p) return -1;
+            if (memcmp(p + 1, needle + 1, (size_t)m - 1) == 0) return (int)(p - hay);
+            p++;
+        }
+        return -1;
     }
     %}
 
