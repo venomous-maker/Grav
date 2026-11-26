@@ -319,4 +319,10 @@ node -e 'const [index, dir] = process.argv.slice(1);
   fs.unlinkSync(a);
   if (def().length) bad.push("after the file is gone: " + def());
   if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/fresh" || fail "the index sees files change on disk"
+# The copies the editors ship (VS Code's index, Neovim's server) are the
+# server's current source: run editors/sync.sh after changing editors/lsp.
+tail -n +2 editors/vscode/grav-index.js | cmp -s - editors/lsp/grav-index.js || fail "editors/vscode/grav-index.js is stale (run editors/sync.sh)"
+for f in server.js grav-index.js; do
+  cmp -s "editors/nvim/lua/grav/server/$f" "editors/lsp/$f" || fail "editors/nvim/lua/grav/server/$f is stale (run editors/sync.sh)"
+done
 echo "editors: ok"
