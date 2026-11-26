@@ -30,14 +30,20 @@ plugin lives here ([`build.gradle.kts`](build.gradle.kts),
 a hand-written lexer, a syntax highlighter, and a commenter.
 
 It also wires up **navigation & refactoring** — go-to-definition, find
-references, rename, document symbols, hover, and compiler diagnostics — by
-launching the shared [Grav language server](../lsp/) through CLion's LSP API
-(`GravLspServerSupportProvider`). That needs **Node.js on `PATH`** and
-`editors/lsp/server.js` present in the open project; it's available in paid IDEs
-(CLion, IntelliJ Ultimate). The TextMate bundle in option A gives highlighting
-only — navigation requires this built plugin.
+usages, rename, hover, completion, parameter info, inlay hints, the file
+structure and compiler diagnostics — through the shared
+[Grav language server](../lsp/), which the plugin carries inside it
+(`GravLspServerSupportProvider`). It works in any project with `.grav` files and
+needs **Node.js**: on `PATH`, or installed by nvm, fnm or Volta, which an IDE
+started from the desktop finds without a shell. It also finds `grav` on `PATH`
+or in `~/.local/bin`. Without Node.js, a notification says so. In the Grav
+repository itself, the plugin runs `editors/lsp/server.js` from the checkout, so
+edits to the server take effect without rebuilding the plugin. The LSP API is in
+CLion and IntelliJ Ultimate. The TextMate bundle in option A gives highlighting
+only, so navigation needs this plugin.
 
-**Requirements:** JDK 21 and network access (the IntelliJ Platform SDK is
+**Requirements:** JDK 21 (CLion 2026.1 bundles Java 25, which this Kotlin
+compiler cannot run on, so point `JAVA_HOME` at a JDK 21) and network access (the IntelliJ Platform SDK is
 downloaded on first build), or an installed JetBrains IDE to build against
 (`-PlocalIde=...` below). You can also open the `editors/jetbrains` folder in IntelliJ IDEA (it
 provisions Gradle automatically).
@@ -45,7 +51,7 @@ provisions Gradle automatically).
 ```bash
 cd editors/jetbrains
 gradle wrapper            # once, if you don't already have ./gradlew
-./gradlew buildPlugin     # -> build/distributions/grav-jetbrains-0.11.0.zip
+./gradlew buildPlugin     # -> build/distributions/grav-jetbrains-0.12.0.zip
 # offline, against an installed CLion instead of downloading one:
 ./gradlew buildPlugin -PlocalIde=$HOME/.local/share/JetBrains/Toolbox/apps/clion
 ./gradlew runIde          # or: launch a sandbox IDE with the plugin loaded

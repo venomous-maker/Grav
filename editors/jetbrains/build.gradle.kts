@@ -12,7 +12,7 @@ plugins {
 }
 
 group = "dev.grav"
-version = "0.11.0"
+version = "0.12.0"
 
 repositories {
     mavenCentral()
@@ -42,6 +42,14 @@ intellijPlatform {
             sinceBuild = "242"   // 2024.2+
             untilBuild = provider { null as String? }
         }
+    }
+}
+
+// The language server ships inside the plugin (editors/lsp is its source).
+tasks.processResources {
+    from("../lsp") {
+        include("server.js", "grav-index.js")
+        into("grav-lsp")
     }
 }
 

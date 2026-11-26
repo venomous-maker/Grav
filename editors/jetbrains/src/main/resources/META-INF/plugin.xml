@@ -6,7 +6,9 @@
     <description><![CDATA[
         Language support for <b>Grav</b> (.grav) — a statically typed,
         TypeScript-inspired language that compiles to C.
-        Provides syntax highlighting and file-type recognition.
+        Syntax highlighting, and through the bundled Grav language server (needs
+        Node.js): go to definition, find usages, rename, hover, completion,
+        parameter info, inlay hints, the file structure and compiler diagnostics.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -24,9 +26,10 @@
         <lang.commenter
             language="Grav"
             implementationClass="dev.grav.GravCommenter"/>
-        <!-- Navigation / refactoring via the Grav language server (paid IDEs only;
-             requires Node.js + editors/lsp/server.js in the project). -->
+        <!-- Navigation / refactoring via the bundled Grav language server (IDEs with
+             the LSP API; needs Node.js). -->
         <platform.lsp.serverSupportProvider
             implementation="dev.grav.GravLspServerSupportProvider"/>
+        <notificationGroup id="Grav" displayType="BALLOON"/>
     </extensions>
 </idea-plugin>
