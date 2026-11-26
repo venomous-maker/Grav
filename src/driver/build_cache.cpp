@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <unistd.h>
 #include <vector>
 
@@ -140,6 +141,94 @@ void BuildCache::store(const std::string &exePath) const {
     if (all.size() <= keep) return;
     std::sort(all.begin(), all.end(), [](const auto &x, const auto &y) { return x.first > y.first; });
     for (size_t i = keep; i < all.size(); ++i) fs::remove(all[i].second, ec);
+}
+
+int ltoCacheEntries() {
+    if (const char *n = std::getenv("GRAV_CACHE_LTO_ENTRIES"); n && std::atoi(n) > 0) return std::atoi(n);
+    return 1024;
+}
+
+namespace {
+
+struct Usage {
+    uintmax_t bytes = 0;
+    size_t files = 0;
+};
+
+Usage usageOf(const fs::path &p) {
+    Usage u;
+    std::error_code ec;
+    if (fs::is_regular_file(p, ec)) return {fs::file_size(p, ec), 1};
+    for (auto it = fs::recursive_directory_iterator(p, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        u.bytes += it->file_size(ec);
+        ++u.files;
+    }
+    return u;
+}
+
+std::string human(uintmax_t b) {
+    char buf[32];
+    if (b >= (1ull << 30)) std::snprintf(buf, sizeof buf, "%.1f GB", b / double(1ull << 30));
+    else if (b >= (1ull << 20)) std::snprintf(buf, sizeof buf, "%.1f MB", b / double(1ull << 20));
+    else if (b >= 1024) std::snprintf(buf, sizeof buf, "%.0f KB", b / 1024.0);
+    else std::snprintf(buf, sizeof buf, "%ju B", b);
+    return buf;
+}
+
+// The built programs: the files at the top of the cache folder.
+std::vector<fs::path> binaries(const fs::path &dir) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    for (const auto &e : fs::directory_iterator(dir, ec))
+        if (e.is_regular_file(ec)) out.push_back(e.path());
+    return out;
+}
+
+} // namespace
+
+int runCacheCommand(const std::vector<std::string> &args) {
+    fs::path dir = cacheDir();
+    if (dir.empty()) { std::cerr << "grav cache: no cache folder (set GRAV_CACHE or HOME)\n"; return 1; }
+    std::string what = args.empty() ? "info" : args[0];
+    std::error_code ec;
+    if (what == "info") {
+        if (args.size() > 1) { std::cerr << "usage: grav cache [info] | grav cache clean [binaries|lto|infer]\n"; return 2; }
+        Usage bins;
+        for (const auto &b : binaries(dir)) { bins.bytes += usageOf(b).bytes; ++bins.files; }
+        Usage lto = usageOf(dir / "lto"), infer = usageOf(dir / "infer");
+        std::cout << "build cache: " << dir.string() << "\n"
+                  << "  binaries  " << human(bins.bytes) << " (" << bins.files << " built programs, keeps "
+                  << (std::getenv("GRAV_CACHE_MAX") ? std::getenv("GRAV_CACHE_MAX") : "40") << ")\n"
+                  << "  lto       " << human(lto.bytes) << " (GCC's link-time partitions, keeps " << ltoCacheEntries() << ")\n"
+                  << "  infer     " << human(infer.bytes) << " (inferred type arguments)\n"
+                  << "  total     " << human(bins.bytes + lto.bytes + infer.bytes) << "\n"
+                  << "grav cache clean removes it all (the next build of each program takes longer)\n";
+        return 0;
+    }
+    if (what == "clean") {
+        std::string part = args.size() > 1 ? args[1] : "all";
+        if (args.size() > 2 || (part != "all" && part != "binaries" && part != "lto" && part != "infer")) {
+            std::cerr << "usage: grav cache clean [binaries|lto|infer]\n";
+            return 2;
+        }
+        Usage freed;
+        auto drop = [&](const fs::path &p) {
+            Usage u = usageOf(p);
+            fs::remove_all(p, ec);
+            if (ec) { std::cerr << "grav cache: cannot remove " << p.string() << ": " << ec.message() << "\n"; return; }
+            freed.bytes += u.bytes;
+            freed.files += u.files;
+        };
+        if (part == "all" || part == "binaries") for (const auto &b : binaries(dir)) drop(b);
+        if (part == "all" || part == "lto") drop(dir / "lto");
+        if (part == "all" || part == "infer") drop(dir / "infer");
+        std::cout << "grav cache: removed " << freed.files << " files, " << human(freed.bytes) << "\n";
+        return ec ? 1 : 0;
+    }
+    std::cerr << "usage: grav cache [info] | grav cache clean [binaries|lto|infer]\n";
+    return 2;
 }
 
 } // namespace grav

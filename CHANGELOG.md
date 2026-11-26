@@ -12,6 +12,11 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- `grav cache` shows how much the build cache holds (built programs, GCC's link-time partitions,
+  inferred type arguments) and `grav cache clean [binaries|lto|infer]` empties it. GCC's partition
+  cache is capped at 1024 entries (`GRAV_CACHE_LTO_ENTRIES`) instead of GCC's 2048, which for a large
+  program reached several GB.
+
 - In a terminal, `grav build` (and `run`, `test`) says which stage a long build is in (reading the imports,
   turning the program into C, compiling the C) once that stage has run for two seconds, and how long the
   build took. A large program spends a minute or two in each stage and printed nothing until it was done,

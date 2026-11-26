@@ -142,6 +142,19 @@ run_release() {
 }
 # The documentation's snippets must compile and print what the docs claim
 # (tests/docs.sh runs its own builds in parallel).
+# `grav cache` reports a fresh cache's parts and `grav cache clean` empties them.
+run_cache() {
+  local c="$J/cache"
+  GRAV_CACHE="$c" "$GRAV" build tests/unit/generic_fold.grav -o "$J/cached" >"$J/err" 2>&1 \
+    && GRAV_CACHE="$c" "$GRAV" cache >"$J/info" 2>&1 \
+    && grep -q "binaries .*(2 built programs" "$J/info" \
+    && GRAV_CACHE="$c" "$GRAV" cache clean >"$J/clean" 2>&1 \
+    && GRAV_CACHE="$c" "$GRAV" cache | grep -q "total     0 B" \
+    && ! GRAV_CACHE="$c" "$GRAV" cache clean nonsense >/dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "FAIL (cache)   grav cache"; cat "$J/err" "$J/info" "$J/clean" 2>/dev/null | sed 's/^/    /'; res fail
+  else echo "ok   grav cache (info, clean)"; res pass; fi
+}
 run_docs() {
   if bash tests/docs.sh >"$J/docs.out" 2>&1; then tail -1 "$J/docs.out"; res none
   else cat "$J/docs.out"; res fail; fi
@@ -176,6 +189,7 @@ for f in tests/bench/*.grav; do spawn run_bench "$f"; done
 for f in tests/fmt/*.in; do spawn run_fmt "$f"; done
 for f in tests/lintfix/*.in; do spawn run_lintfix "$f"; done
 for p in examples/apps/bank_server; do spawn run_project "$p"; done
+spawn run_cache
 for f in examples/*.grav examples/apps/*.grav examples/project/main.grav examples/apps/bank_server/src/main.grav; do
   spawn run_release "$f"
 done

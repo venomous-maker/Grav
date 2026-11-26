@@ -273,6 +273,7 @@ int usage(const char *prog) {
         "       " << prog << " lint [--fix] [file.grav]  the warnings and lints; --fix applies their fixes to your own files\n"
         "       " << prog << " fmt [--check] [paths]           format source files (fmt - : stdin to stdout)\n"
         "       " << prog << " env [--json]                    where the standard library and packages are\n"
+        "       " << prog << " cache [info] | cache clean [binaries|lto|infer]   the build cache's size; empty it\n"
         "       " << prog << " self-update [--check]           update grav (installed by install.sh)\n"
         "       " << prog << " -                 read stdin, write C to stdout\n"
         "\n"
@@ -356,6 +357,10 @@ int main(int argc, char **argv) {
     if (argc > 1 && std::string(argv[1]) == "fmt") {
         std::vector<std::string> args(argv + 2, argv + argc);
         return grav::runFormat(args);
+    }
+    if (argc > 1 && std::string(argv[1]) == "cache") {
+        std::vector<std::string> args(argv + 2, argv + argc);
+        return grav::runCacheCommand(args);
     }
     if (argc > 1 && std::string(argv[1]) == "self-update") {
         std::vector<std::string> args(argv + 2, argv + argc);
@@ -917,7 +922,10 @@ int main(int argc, char **argv) {
                 // GCC 15+ keeps each partition it optimized: after an edit, only the
                 // partitions holding changed code are optimized again.
                 std::string inc = grav::ltoIncrementalDir(cc);
-                if (!inc.empty()) flags += " -flto-incremental=\"" + inc + "\"";
+                // (and at most so many of them: GCC's default, 2048, can reach several GB)
+                if (!inc.empty())
+                    flags += " -flto-incremental=\"" + inc + "\" -flto-incremental-cache-size=" +
+                             std::to_string(grav::ltoCacheEntries());
             }
         }
         // With GCC's partition cache, the C goes in on stdin: GCC's cache keys include

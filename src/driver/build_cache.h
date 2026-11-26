@@ -32,6 +32,14 @@ private:
 // The build cache's folder for `sub` ("" when caching is off, or there is no folder).
 std::string buildCacheDir(const std::string &sub);
 
+// GCC's link-time partition cache keeps at most this many entries (GRAV_CACHE_LTO_ENTRIES,
+// default 1024: a large program uses a few hundred).
+int ltoCacheEntries();
+
+// `grav cache [info]` shows what the build cache holds; `grav cache clean [binaries|lto|infer]`
+// removes it (or one part). Returns the exit code.
+int runCacheCommand(const std::vector<std::string> &args);
+
 // Whether `cc` is GCC, which optimizes one large file in parallel with -flto=auto.
 bool ccIsGcc(const std::string &cc);
 // Whether that GCC keeps its link-time partitions between builds (-flto-incremental,

@@ -222,9 +222,26 @@ dependency is read from its folder each time and is not pinned.
 | `GRAV_CACHE` | the compiler | the build cache folder (default `$XDG_CACHE_HOME/grav/builds`, else `~/.cache/grav/builds`) |
 | `GRAV_BUILD_CACHE` | the compiler | `0` turns the build cache off |
 | `GRAV_CACHE_MAX` | the compiler | how many built programs the cache keeps (default 40, the most recently used) |
+| `GRAV_CACHE_LTO_ENTRIES` | the compiler | how many of GCC's link-time partitions the cache keeps (default 1024; a large program uses a few hundred) |
 | `GRAV_PRUNE` | the compiler | `0` keeps every generated function in the C (by default those nothing calls are left out) |
 | `GRAV_FOLD` | the compiler | `0` writes every generic instance's methods in full (by default those that compile to the same code are written once) |
 | `GRAV_LTO` | the compiler | `1` always optimizes on every core (`-flto=auto`), `0` never; by default GCC does for large programs |
+
+## The build cache
+
+Builds keep their binaries, GCC's link-time partitions and inferred type arguments in
+`~/.cache/grav/builds` (`GRAV_CACHE` moves it), so building the same program again is quick. Each
+part is capped (`GRAV_CACHE_MAX`, `GRAV_CACHE_LTO_ENTRIES`). `grav cache` shows how much each
+holds; `grav cache clean` empties it, or one part of it (`grav cache clean lto`). Nothing breaks
+when it is emptied: the next build of each program just takes longer.
+
+```bash
+grav cache
+```
+
+```bash
+grav cache clean
+```
 
 ## Build speed
 
