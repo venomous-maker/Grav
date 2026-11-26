@@ -681,7 +681,29 @@ int main(int argc, char **argv) {
                 }
                 warnings.push_back(w);
             }
-            for (const auto &u : gLoader->unusedImports())
+            // Classes reflection finds by themselves (ClassInfo.all of a decorated base):
+            // importing their file is what puts them in the program.
+            std::set<std::string> discoverable;
+            {
+                std::map<std::string, const grav::ClassDecl *> classes;
+                for (const auto &d : program.decls)
+                    if (auto *c = dynamic_cast<const grav::ClassDecl *>(d.get())) { classes[c->name] = c; classes[c->fqName] = c; }
+                for (const auto &[key, c] : classes) {
+                    if (c->isAbstract || key != c->name) continue;
+                    const grav::ClassDecl *b = c;
+                    for (int hops = 0; hops < 64 && !b->baseName.empty(); ++hops) {
+                        auto it = classes.find(b->baseName);
+                        if (it == classes.end()) {
+                            size_t dot = b->baseName.find_last_of(".:");
+                            it = dot == std::string::npos ? classes.end() : classes.find(b->baseName.substr(dot + 1));
+                        }
+                        if (it == classes.end()) break;
+                        b = it->second;
+                        if (!b->decorators.empty()) { discoverable.insert(c->name); break; }
+                    }
+                }
+            }
+            for (const auto &u : gLoader->unusedImports(discoverable))
                 for (size_t i = 0; i < srcMap.size(); ++i)
                     if (srcMap[i].line == u.line && canonical(srcMap[i].file) == u.file) {
                         warnings.emplace_back("warning", static_cast<int>(i) + 1, u.col, u.message);

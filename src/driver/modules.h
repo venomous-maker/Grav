@@ -100,7 +100,10 @@ public:
         int line = 0, col = 0;
         std::string message;
     };
-    std::vector<Unused> unusedImports() const;
+    // `discoverable`: classes reflection finds without their name being written
+    // (concrete subclasses of a decorated class, e.g. ApogeeModule's): an import
+    // providing one is used just by being compiled in.
+    std::vector<Unused> unusedImports(const std::set<std::string> &discoverable = {}) const;
     // Whether `p` is one of the program's own files (not the standard library's
     // or a package's): lints are reported for these only.
     bool isOwnFile(const std::filesystem::path &p) const { return !isLibrary(p) && packageRootOf(p).empty(); }

@@ -505,7 +505,7 @@ std::set<std::string> usedWords(const std::string &src, bool &hasC, bool &declar
 
 } // namespace
 
-std::vector<ModuleLoader::Unused> ModuleLoader::unusedImports() const {
+std::vector<ModuleLoader::Unused> ModuleLoader::unusedImports(const std::set<std::string> &discoverable) const {
     std::vector<Unused> out;
     std::set<std::string> stdAll; // what bare `import "std"` brings
     if (fs::path dir = stdLibDir(); !dir.empty()) {
@@ -541,7 +541,7 @@ std::vector<ModuleLoader::Unused> ModuleLoader::unusedImports() const {
                     if (!provides) continue;
                     auto it = info_.find(f);
                     if (it == info_.end()) continue;
-                    for (const auto &[name, ns] : it->second.names) { ++names; isUsed = isUsed || used.count(name) > 0; }
+                    for (const auto &[name, ns] : it->second.names) { ++names; isUsed = isUsed || used.count(name) > 0 || discoverable.count(name) > 0; }
                     for (const auto &m : it->second.macros) { ++names; isUsed = isUsed || used.count(m) > 0; }
                     if (isUsed) break;
                 }

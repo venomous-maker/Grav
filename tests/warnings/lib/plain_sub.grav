@@ -1,0 +1,10 @@
+// A subclass of an undecorated class: nothing finds it unless it is named.
+import "std"
+
+class Basic {
+    fn hello() -> string { return "basic" }
+}
+
+class Fancy extends Basic {
+    constructor() {}
+}

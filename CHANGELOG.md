@@ -12,6 +12,10 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- The unused-import warning (and `grav lint --fix`) no longer flags an import that provides a concrete subclass
+  of a decorated class: reflection (`ClassInfo.all`) finds such classes without their names being written, so the
+  import is what puts them in the program (an app's `import "../modules/all.grav"`, a package's plugins).
+
 - `--sanitize` builds of large programs are optimized on every core (`-flto=auto`), like normal builds: an
   app of about 66 MB of generated C (an Apogee app with every module) went from a single-threaded compile of
   over 18 minutes and 3.5 GB to about 5 minutes. GCC's `-Wstringop-overflow` false positive on string headers,

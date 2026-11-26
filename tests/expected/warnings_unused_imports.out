@@ -1,7 +1,10 @@
-gravc: tests/warnings/unused_imports.grav:5:1: warning: unused import "std/net" (nothing it declares is used here)
+gravc: tests/warnings/unused_imports.grav:7:1: warning: unused import "std/net" (nothing it declares is used here)
     import "std/net"
     ^
-gravc: tests/warnings/unused_imports.grav:7:1: warning: unused import "lib/colors.grav" (nothing it declares is used here)
+gravc: tests/warnings/unused_imports.grav:9:1: warning: unused import "lib/colors.grav" (nothing it declares is used here)
     import "lib/colors.grav"
     ^
-gravc: ok (2 warning(s))
+gravc: tests/warnings/unused_imports.grav:14:1: warning: unused import "lib/plain_sub.grav" (nothing it declares is used here)
+    import "lib/plain_sub.grav"
+    ^
+gravc: ok (3 warning(s))

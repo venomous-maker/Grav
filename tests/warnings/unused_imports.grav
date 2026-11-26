@@ -1,16 +1,22 @@
 // `grav check` warns about imports nothing in the file uses (golden-checked):
 // std/net and colors.grav are unused; shapes.grav is used (by name and in a
-// string's ${...}); all.grav only re-exports; an `// allow(unused)` is quiet.
+// string's ${...}); all.grav only re-exports; an `// allow(unused)` is quiet;
+// plugins.grav is used without its names (reflection finds its subclass of a
+// decorated class), plain_sub.grav is not (its base has no decorator).
 import "std"
 import "std/net"
 import "lib/shapes.grav"
 import "lib/colors.grav"
 import "lib/all.grav"
 import "lib/colors.grav" // allow(unused)
+import "lib/plugin_base.grav"
+import "lib/plugins.grav"
+import "lib/plain_sub.grav"
 
 fn main() {
     let s = new Square(3)
     println("area ${area(s)}")
     // Color and SHADE appear only in this comment and in "Color" text
     println("Color")
+    println("${ClassInfo.all(reflect(Plugin)).size()} plugin")
 }

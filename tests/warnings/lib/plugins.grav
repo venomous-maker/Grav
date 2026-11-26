@@ -1,0 +1,8 @@
+// Found by ClassInfo.all(reflect(Plugin)), never named by the importer.
+import "std"
+import "plugin_base.grav"
+
+class Greeter extends Plugin {
+    constructor() {}
+    fn name() -> string { return "greeter" }
+}

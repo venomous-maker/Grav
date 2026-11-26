@@ -1,0 +1,6 @@
+// A decorated base: reflection finds every concrete class that extends it.
+import "std"
+
+@Plugin abstract class Plugin {
+    abstract fn name() -> string
+}
