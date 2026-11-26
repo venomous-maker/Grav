@@ -77,7 +77,7 @@ function handle(msg) {
   if (!method) return; // a response to one of our requests
   switch (method) {
     case "initialize": return onInitialize(id, params);
-    case "initialized": return;
+    case "initialized": return warm();
     case "shutdown": return reply(id, null);
     case "exit": return process.exit(0);
     case "textDocument/didOpen": ws.setDoc(uriToPath(params.textDocument.uri), params.textDocument.text); return diagnose(params.textDocument.uri);
@@ -190,6 +190,25 @@ function onInitialize(id, params) {
     },
     serverInfo: { name: "grav-lsp", version: "1.6.0" },
   });
+}
+
+// ---- warming the index ----------------------------------------------------
+// Parses the workspace, its packages and the standard library a few files at a time, between
+// requests, so the first go-to-definition does not parse them all while the
+// editor waits (it gives up after a few seconds).
+function warm() {
+  const std = ws.env().std;
+  const packages = [...ws.chosenPackages().values()].flatMap((dir) => ws.libraryFiles(dir));
+  const files = [...ws.workspaceFiles(), ...packages, ...(std ? ws.libraryFiles(std) : [])];
+  const t0 = Date.now(), w = ws;
+  let i = 0;
+  const step = () => {
+    if (w !== ws) return;                 // a new initialize replaced the workspace
+    for (const end = Math.min(i + 16, files.length); i < end; i++) ws.info(files[i]);
+    if (i < files.length) setImmediate(step);
+    else log(`indexed ${files.length} files in ${Date.now() - t0}ms`);
+  };
+  setImmediate(step);
 }
 
 // ---- diagnostics (grav check --json) ---------------------------------------
