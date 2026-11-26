@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.13.3 (2026-11-26)
+
 - `grav cache` shows how much the build cache holds (built programs, GCC's link-time partitions,
   inferred type arguments) and `grav cache clean [binaries|lto|infer]` empties it. GCC's partition
   cache is capped at 1024 entries (`GRAV_CACHE_LTO_ENTRIES`) instead of GCC's 2048, which for a large
