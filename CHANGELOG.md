@@ -12,6 +12,11 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- `--sanitize` builds of large programs are optimized on every core (`-flto=auto`), like normal builds: an
+  app of about 66 MB of generated C (an Apogee app with every module) went from a single-threaded compile of
+  over 18 minutes and 3.5 GB to about 5 minutes. GCC's `-Wstringop-overflow` false positive on string headers,
+  which only cross-program inlining triggers, is silenced in those builds.
+
 ## 1.13.1 (2026-11-26)
 
 - std/net: the HTTP server splits paths with standard C (`strcspn`), so programs build with compilers that hide GNU extensions such as `strchrnul` (Debian bookworm's gcc 12).

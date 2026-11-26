@@ -235,8 +235,8 @@ Two things keep that short:
   partitions (`-flto=auto`): about five times faster on eight cores. With GCC 15
   or later, the optimized partitions are also kept between builds
   (`-flto-incremental`, in the build cache): after an edit, only the code that
-  changed is optimized again. Debug (`-g`, `-O0`), `--race` and `--sanitize`
-  builds compile as before.
+  changed is optimized again. `--sanitize` builds are optimized on every core
+  too; debug (`-g`, `-O0`) and `--race` builds compile as before.
 - **A build cache.** A program built before is reused: when its source files,
   the compiler and the options are all the same, `build`, `run` and `test` copy
   the earlier binary without compiling anything; when only the compiler's front

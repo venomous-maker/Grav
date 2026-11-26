@@ -867,11 +867,16 @@ int main(int argc, char **argv) {
         // GRAV_LTO=1 forces it, GRAV_LTO=0 turns it off.
         const char *ltoEnv = std::getenv("GRAV_LTO");
         std::string ltoWant = ltoEnv ? ltoEnv : "";
-        if (emit != EmitMode::Asm && optFlag != "-O0" && !race && !sanitize && ltoWant != "0") {
+        // (--sanitize too: ASan and UBSan instrument each partition, and a large program's
+        // checked build would otherwise be one single-threaded compile of all its C.)
+        if (emit != EmitMode::Asm && optFlag != "-O0" && !race && ltoWant != "0") {
             std::error_code sz;
             bool large = fs::file_size(cPath, sz) > (16u << 20) && !sz;
             if ((ltoWant == "1" || large) && grav::ccIsGcc(cc)) {
                 flags += " -flto=auto";
+                // Inlined across the program, GCC can't see grav_shdr's range check and
+                // warns that a literal's (absent) string header is written: it never is.
+                flags += " -Wno-stringop-overflow";
                 // GCC 15+ keeps each partition it optimized: after an edit, only the
                 // partitions holding changed code are optimized again.
                 std::string inc = grav::ltoIncrementalDir(cc);
