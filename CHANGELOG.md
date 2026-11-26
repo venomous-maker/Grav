@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- std/net: the HTTP server splits paths with standard C (`strcspn`), so programs build with compilers that hide GNU extensions such as `strchrnul` (Debian bookworm's gcc 12).
+
 ## 1.13.0 (2026-11-25)
 
 ### Tools

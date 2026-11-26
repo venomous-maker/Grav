@@ -399,7 +399,7 @@ namespace std.net {
             let n = path.length;
             let i = 0;
             while (i < n) {
-                let j = %{ (int)(strchrnul(path + i, '/') - path) %} as int;
+                let j = %{ (int)(i + strcspn(path + i, "/")) %} as int;
                 if (j > i) { out.push(path[i..j]); }
                 i = j + 1;
             }
