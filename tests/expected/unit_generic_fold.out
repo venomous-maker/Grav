@@ -1,0 +1,5 @@
+running 3 tests
+  ok    each instance keeps its own elements and static state
+  ok    overrides are called through a shared method
+  ok    shared std collection methods and type names
+result: 3 passed, 0 failed

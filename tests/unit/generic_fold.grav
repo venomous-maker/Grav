@@ -1,0 +1,62 @@
+// Generic instances over class types share their methods' code (the copies fold
+// into one): each instance still keeps its own elements, overrides, type names
+// and static state.
+import "std"
+
+class Animal {
+    public name: string
+    constructor(name: string) { self.name = name }
+    fn sound() -> string { return "..." }
+}
+class Dog extends Animal {
+    constructor(name: string) { super(name) }
+    fn sound() -> string { return "woof" }
+}
+class Car {
+    public plate: string
+    constructor(plate: string) { self.plate = plate }
+}
+
+class Shelf<T> {
+    private items: Array<T> = new Array<T>()
+    static made: int = 0
+    constructor() { Shelf<T>.made += 1 }
+    fn add(x: T) -> Shelf<T> { self.items.push(x)  return self }
+    fn count() -> int { return self.items.length() }
+    fn at(i: int) -> T { return self.items[i] }
+    fn last() -> T { return self.items[self.items.length() - 1] }
+}
+
+test "each instance keeps its own elements and static state" {
+    let animals = new Shelf<Animal>()
+    animals.add(new Animal("cat")).add(new Dog("rex"))
+    let cars = new Shelf<Car>()
+    cars.add(new Car("KDA 123")).add(new Car("KCB 9")).add(new Car("KBZ 4"))
+    let other = new Shelf<Car>()
+    other.add(new Car("X"))
+    assertEq(animals.count(), 2)
+    assertEq(cars.count(), 3)
+    assertEq(other.count(), 1)
+    assertEq(cars.last().plate, "KBZ 4")
+    assertEq(cars.at(0).plate, "KDA 123")
+    assertEq(Shelf<Animal>.made, 1)
+    assertEq(Shelf<Car>.made, 2)
+}
+
+test "overrides are called through a shared method" {
+    let animals = new Shelf<Animal>()
+    animals.add(new Animal("cat")).add(new Dog("rex"))
+    assertEq(animals.last().name + " " + animals.last().sound(), "rex woof")
+    assertEq(animals.at(0).sound(), "...")
+}
+
+test "shared std collection methods and type names" {
+    let dogs = new Array<Dog>()
+    dogs.push(new Dog("a"))
+    dogs.push(new Dog("b"))
+    let plates = new Array<Car>()
+    for (p in ["p1", "p2", "p3"]) { plates.push(new Car(p)) }
+    assertEq(dogs.mapTo::<string>(fn(d: Dog) => d.name).join(","), "a,b")
+    assertEq(plates.filter(fn(c: Car) => c.plate != "p2").mapTo::<string>(fn(c: Car) => c.plate).join(","), "p1,p3")
+    assertEq(new Shelf<Animal>().typeName() + " " + new Shelf<Car>().typeName(), "Shelf$Animal Shelf$Car")
+}

@@ -121,7 +121,12 @@ static void vf_main(void) {
 
 **Generics.** `Box<int>` and `Box<string>` become two separate structs, each with
 its own copies of the methods. There is no boxing and no run-time type check:
-generic code is as fast as hand-written code for each type.
+generic code is as fast as hand-written code for each type. When the type
+arguments are classes (`Array<User>`, `Array<Order>`), most methods compile to the
+same code, since a class value is a pointer whatever its class: those are written
+once, and each other instance's copy is a one-line call to it that the C compiler
+inlines. A stack trace through a shared method names the instance with `*`
+(`std.collections.Array$*.push`). `GRAV_FOLD=0` writes every copy in full.
 
 **Closures.** A lambda becomes an ordinary C function that takes a pointer to an
 *environment*: a small heap block holding copies of the captured variables. A
@@ -147,7 +152,8 @@ null-reference access or a stack overflow into a panic with the Grav call stack.
 
 **Line numbers.** The C file carries `#line` directives pointing back at your
 `.grav` source, so C compiler errors, debuggers (`gdb`) and sanitizers report Grav
-file and line numbers. `--no-lines` turns them off.
+file and line numbers. A directive names the file only when it changes
+(`#line 42` stays in the current file). `--no-lines` turns them off.
 
 ## Performance notes
 

@@ -49,6 +49,7 @@ add_executable(gravc
         src/sema/typechecker_match.cpp
         src/sema/lints.cpp
         src/codegen/prune.cpp
+        src/codegen/fold.cpp
         src/codegen/mangle.cpp
         src/codegen/codegen_runtime.cpp
         src/codegen/codegen_faults.cpp

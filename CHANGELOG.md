@@ -21,6 +21,11 @@ Packages state the compiler versions they need in `grav.toml`
   over 18 minutes and 3.5 GB to about 5 minutes. GCC's `-Wstringop-overflow` false positive on string headers,
   which only cross-program inlining triggers, is silenced in those builds.
 
+- Generic instances over class types share their methods: `Array<User>` and `Array<Order>` compile most
+  methods to the same code, so it is written once and the other instances call it (`GRAV_FOLD=0` writes every
+  copy). Stack traces through a shared method name the instance with `*` (`std.collections.Array$*.push`).
+  `#line` directives name the file only when it changes. The 66 MB app above now emits about 50 MB of C.
+
 ## 1.13.1 (2026-11-26)
 
 - std/net: the HTTP server splits paths with standard C (`strcspn`), so programs build with compilers that hide GNU extensions such as `strchrnul` (Debian bookworm's gcc 12).

@@ -223,6 +223,7 @@ dependency is read from its folder each time and is not pinned.
 | `GRAV_BUILD_CACHE` | the compiler | `0` turns the build cache off |
 | `GRAV_CACHE_MAX` | the compiler | how many built programs the cache keeps (default 40, the most recently used) |
 | `GRAV_PRUNE` | the compiler | `0` keeps every generated function in the C (by default those nothing calls are left out) |
+| `GRAV_FOLD` | the compiler | `0` writes every generic instance's methods in full (by default those that compile to the same code are written once) |
 | `GRAV_LTO` | the compiler | `1` always optimizes on every core (`-flto=auto`), `0` never; by default GCC does for large programs |
 
 ## Build speed

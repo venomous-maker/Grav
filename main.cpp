@@ -24,6 +24,7 @@
 
 #include "codegen/codegen.h"
 #include "codegen/prune.h"
+#include "codegen/fold.h"
 #include "common/diagnostics.h"
 #include "driver/build_cache.h"
 #include "driver/infer_cache.h"
@@ -803,9 +804,12 @@ int main(int argc, char **argv) {
         // Most methods of generic instances are never called: leave them out of the C
         // (GRAV_PRUNE=0 keeps everything).
         if (const char *pr = std::getenv("GRAV_PRUNE"); !pr || std::string(pr) != "0") c = grav::pruneUnreachable(c);
+        // Of what is left, methods of generic instances that compile to the same code
+        // are written once (GRAV_FOLD=0 keeps every copy).
+        if (const char *fo = std::getenv("GRAV_FOLD"); !fo || std::string(fo) != "0") c = grav::foldGenericInstances(c);
 
         if (toStdout) {
-            std::cout << resolveLineResets(c, "<stdout>");
+            std::cout << grav::compactLineDirectives(resolveLineResets(c, "<stdout>"));
             return 0;
         }
 
@@ -849,7 +853,7 @@ int main(int argc, char **argv) {
         // whatever the output and temporary file are called, and the C compiler's caches
         // match it.
         std::string lineName = tempC ? "grav-generated.c" : cPath;
-        c = resolveLineResets(c, lineName);
+        c = grav::compactLineDirectives(resolveLineResets(c, lineName));
         std::ofstream out(cPath);
         if (!out) { std::cerr << "gravc: cannot write '" << cPath << "'\n"; return 1; }
         out << c;
