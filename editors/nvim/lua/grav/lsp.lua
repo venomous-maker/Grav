@@ -1,16 +1,19 @@
 -- Grav LSP client glue for Neovim's built-in LSP.
 --
--- Starts the dependency-free Grav language server (editors/lsp/server.js) when a
--- .grav buffer opens, giving go-to-definition, references, rename, document
--- symbols, hover, and compiler diagnostics. Falls back silently to the
--- regex-based `grav.goto` heuristics when node or the server can't be found.
+-- Starts the dependency-free Grav language server when a .grav buffer opens,
+-- giving go-to-definition, references, rename, document symbols, hover,
+-- completion, inlay hints and compiler diagnostics. The server ships with this
+-- plugin (lua/grav/server/, copied there by editors/sync.sh), so it works in any
+-- project; inside the Grav repository the checkout's editors/lsp/server.js is
+-- used instead. Falls back silently to the regex-based `grav.goto` heuristics
+-- when node can't be found.
 --
 -- Override the server path with g:grav_lsp_server or $GRAV_LSP_SERVER.
 
 local M = {}
 
--- Locate editors/lsp/server.js: explicit override, env var, or by walking up
--- from the current file (works whenever you edit inside the Grav repo).
+-- Locate the server: explicit override, env var, the Grav repo's
+-- editors/lsp/server.js above the current file, else the copy bundled here.
 local function find_server(bufnr)
   if vim.g.grav_lsp_server and vim.fn.filereadable(vim.g.grav_lsp_server) == 1 then
     return vim.g.grav_lsp_server
@@ -29,7 +32,26 @@ local function find_server(bufnr)
     if parent == dir then break end
     dir = parent
   end
+  local here = debug.getinfo(1, "S").source:sub(2)
+  local bundled = vim.fs.dirname(here) .. "/server/server.js"
+  if vim.fn.filereadable(bundled) == 1 then
+    return bundled
+  end
   return nil
+end
+
+-- node: on PATH, else the newest one nvm installed (a Neovim started outside a
+-- shell does not have nvm's PATH).
+local function find_node()
+  if vim.fn.executable("node") == 1 then return "node" end
+  local best, key = nil, nil
+  for _, bin in ipairs(vim.fn.glob(vim.fn.expand("~/.nvm/versions/node/*/bin/node"), false, true)) do
+    local v = bin:match("/v?([%d.]+)/bin/node$") or "0"
+    local parts = vim.tbl_map(tonumber, vim.split(v, ".", { plain = true }))
+    local k = (parts[1] or 0) * 1e6 + (parts[2] or 0) * 1e3 + (parts[3] or 0)
+    if not key or k > key then best, key = bin, k end
+  end
+  return best
 end
 
 local function on_attach(_, bufnr)
@@ -60,7 +82,8 @@ end
 
 function M.start(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
-  if vim.fn.executable("node") == 0 then return false end
+  local node = find_node()
+  if not node then return false end
   local server = find_server(bufnr)
   if not server then return false end
 
@@ -72,7 +95,7 @@ function M.start(bufnr)
 
   local ok = pcall(vim.lsp.start, {
     name = "grav",
-    cmd = { "node", server },
+    cmd = { node, server },
     root_dir = root,
     on_attach = on_attach,
     init_options = {

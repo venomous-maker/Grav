@@ -51,14 +51,16 @@ Set `GRAVC_REPO` (or `GRAVC`) in your shell if your checkout isn't at
 | `<leader>mr`    | compile to a binary and run it                           |
 | `<leader>mc`    | transpile to C and show the output                       |
 
-**LSP (recommended).** When `node` and the [Grav language server](../lsp/)
-(`editors/lsp/server.js`) are found, `ftplugin/grav.lua` starts it for `.grav`
+**LSP (recommended).** When `node` is found (on `PATH`, or the newest one nvm
+installed), `ftplugin/grav.lua` starts the [Grav language server](../lsp/) for `.grav`
 buffers and rebinds `gd`/`gr`/`gO`/`K` to real LSP requests, and adds `grn`
 (rename) plus inline compiler diagnostics and, in Neovim 0.10+, inlay hints with
 the types of untyped bindings (`let`, `for`, lambda parameters; off with
-`vim.g.grav_inlay_hints = false`). The server is located by walking up
-from the file for `editors/lsp/server.js`, or set `g:grav_lsp_server` /
-`$GRAV_LSP_SERVER`.
+`vim.g.grav_inlay_hints = false`). The server ships with the plugin in
+`lua/grav/server/` (the `cp -r` above copies it; `editors/sync.sh` refreshes it), so
+it works in any project. Inside the Grav repository the checkout's
+`editors/lsp/server.js` is used instead, so edits to it take effect at once. To
+use another, set `g:grav_lsp_server` or `$GRAV_LSP_SERVER`.
 
 **Fallback.** Without node/the server, go-to-definition stays LSP-free (pure Lua +
 grep): it understands plain names (variables, parameters, functions, types) and

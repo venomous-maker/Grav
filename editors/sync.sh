@@ -7,3 +7,6 @@ python3 grammar/build.py
 { echo "// NOTE: copy of editors/lsp/grav-index.js, bundled so the packaged .vsix is self-contained (editors/sync.sh)."
   cat lsp/grav-index.js; } > vscode/grav-index.js
 echo "synced vscode/grav-index.js"
+mkdir -p nvim/lua/grav/server
+cp lsp/server.js lsp/grav-index.js nvim/lua/grav/server/
+echo "synced nvim/lua/grav/server (the language server Neovim starts)"

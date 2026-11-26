@@ -1,0 +1,1955 @@
+// grav-index.js — a dependency-free index of Grav source for editors.
+//
+// Shared by the language server (server.js, used by Neovim, JetBrains, and any
+// LSP client) and the VS Code extension (a bundled copy: editors/sync.sh).
+//
+//   parseFile(text)      declarations (with namespaces, members, enum variants,
+//                        generics, signatures, doc comments), imports, `use` lines
+//   new Workspace(opts)  resolves imports the way the compiler does (relative,
+//                        std/…, grav.toml paths and dependencies, GRAV_PATH), and
+//                        answers definition / hover / completion / signature help /
+//                        references / symbols queries
+//
+// It is a careful scanner, not a full parser: strings, comments and inline C are
+// masked out first, then declarations are matched per line with a bracket stack
+// for nesting. Positions are LSP-style { line, character }, both 0-based.
+
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { execFileSync, execFile } = require("child_process");
+
+const KIND = {
+  File: 1, Module: 2, Namespace: 3, Class: 5, Method: 6, Property: 7, Field: 8,
+  Constructor: 9, Enum: 10, Interface: 11, Function: 12, Variable: 13, Constant: 14,
+  String: 15, EnumMember: 22, Struct: 23, Event: 24, TypeParameter: 26,
+};
+// LSP CompletionItemKind for a SymbolKind.
+const COMPLETION_KIND = {
+  [KIND.Namespace]: 9, [KIND.Class]: 7, [KIND.Method]: 2, [KIND.Field]: 5, [KIND.Property]: 10,
+  [KIND.Constructor]: 4, [KIND.Enum]: 13, [KIND.Interface]: 8, [KIND.Function]: 3,
+  [KIND.Variable]: 6, [KIND.Constant]: 21, [KIND.EnumMember]: 20, [KIND.Struct]: 22,
+  [KIND.TypeParameter]: 25, [KIND.Event]: 3, [KIND.Module]: 9,
+};
+
+const KEYWORDS = [
+  "fn", "class", "struct", "enum", "type", "interface", "trait", "abstract", "final",
+  "namespace", "constructor", "destructor", "extends", "implements", "uses", "use",
+  "import", "from", "export", "new", "return", "async", "await", "let", "const",
+  "static", "readonly", "weak", "public", "private", "protected", "if", "else", "while", "for",
+  "do", "switch", "case", "default", "match", "break", "continue", "in", "step", "try",
+  "catch", "finally", "throw", "as", "is", "sizeof", "defer", "yield", "operator", "test", "bench",
+  "self", "this", "super", "true", "false", "null", "free", "auto", "typedef",
+];
+const TYPES = [
+  "int", "long", "uint", "byte", "float", "float32", "double", "bool", "string", "void",
+  "binary", "any", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "Self",
+];
+const BUILTINS = [
+  ["print", "print(value)", "Print a value and a newline."],
+  ["str", "str(value) -> string", "Any printable value as text."],
+  ["input", "input() -> string", "Read a line from standard input."],
+  ["assert", "assert(condition[, message])", "Fail (or fail the test) when the condition is false."],
+  ["assertEq", "assertEq(actual, expected[, message])", "Fail with both values when they differ."],
+  ["panic", "panic(message)", "Stop the program with a message."],
+  ["exit", "exit(code)", "Exit with a status code."],
+  ["argc", "argc() -> int", "Number of command-line arguments (including the program)."],
+  ["argv", "argv(i) -> string", "Command-line argument i."],
+  ["typename", "typename(value) -> string", "The runtime type name of a value."],
+  ["sizeof", "sizeof(T) -> int", "Byte size of a type or value."],
+  ["nameof", "nameof(Type) -> string", "A type's fully-qualified name, fixed at compile time (in generic code, the type T stands for; interfaces included)."],
+  ["free", "free(object)", "Release an object (runs its destructor)."],
+  ["println", "println(value)", "Same as print."],
+  ["env", "env(name) -> string", "An environment variable (\"\" when unset)."],
+  ["cwd", "cwd() -> string", "The working directory."],
+  ["isInstance", "isInstance(object, Type) -> bool", "Is the object a Type (or a subclass)?"],
+  ["reflect", "reflect(Class) -> ClassInfo", "Run-time information about a class (import \"std\"): its fields (read and written through any), methods and decorators. In a static method, reflect(Self) is the class the call names."],
+  ["int", "int(value) -> int", "Convert a number, bool or enum to an int (floats are truncated)."],
+  ["float", "float(value) -> float", "Convert a number or bool to a float."],
+  ["bool", "bool(value) -> bool", "Convert a number to a bool (nonzero is true)."],
+];
+// Library-internal builtins (names starting with `__`): explained on hover, and
+// offered by completion only once `__` is typed.
+const INTERNAL_BUILTINS = [
+  ["__retain", "__retain(value) -> value",
+   "Library-internal: the value with one more reference. Containers call it when a reference-counted value (object, string, closure, any) goes into a raw buffer they manage. Does nothing for plain values, so it works in generic code."],
+  ["__release", "__release(value)",
+   "Library-internal: drop one reference (freeing the value when it was the last). Containers call it when a value leaves a raw buffer, and in their destructor for every element. Does nothing for plain values."],
+  ["__visit", "__visit(value)",
+   "Library-internal: report a value held in a raw buffer to the cycle collector, from a container's private `__visitRefs()` method, so cycles through containers can be collected."],
+  ["__unwrap", "__unwrap(value) -> T",
+   "Compiler-internal: what `x!` becomes. The value of a nullable `x` (an `int?` gives an `int`), or a `StateError` when it is null."],
+  ["__repr", "__repr(value) -> string",
+   "Library-internal: the text of any value as it appears inside a collection — like `str(value)`, but strings are quoted (\"a\"). Used by the collections' `toString()`."],
+  ["__show", "__show(value) -> string",
+   "Compiler-internal: the text of a data-enum variant's field, used by the generated `toString()` (`Circle(1.5)`)."],
+  ["__fmt", "__fmt(value, spec) -> string",
+   "Compiler-internal: what `\"${value:spec}\"` becomes — the value formatted by a spec such as `.2f`, `05`, `x` or `>8`."],
+];
+// Hover explanations for keywords and built-in types: [summary, example].
+const KEYWORD_DOCS = {
+  fn: ["Declares a function or method; `fn(a) => e` is a lambda. Parameters may have defaults (`b: int = 1`). A lambda copies the variables it reads and shares the ones it assigns. `fn Point.norm()` adds a method to a type from outside it (an extension method).", "fn add(a: int, b: int = 1) -> int { return a + b }"],
+  class: ["A reference type with fields, constructors, methods, single inheritance and interfaces. Types declared inside it are `Outer.Inner` outside it.", "class Dog extends Animal implements Named { ... }"],
+  struct: ["A value type: named fields, copied on assignment. It may have methods; inside them `self` is the struct.", "struct Point { x: int  y: int  fn sum() -> int { return self.x + self.y } }"],
+  enum: ["A set of named constants (members may have values), or a data enum whose variants carry fields.", "enum Http { Ok = 200, NotFound = 404 }\nenum Shape { Circle(r: float), Empty }"],
+  type: ["A type alias; fully interchangeable with what it names (`typedef` is a synonym). Outside a declaration `type` may also name a variable.", "type Meters = double"],
+  typedef: ["A synonym of `type`: a type alias.", "typedef Grid = int[3]"],
+  interface: ["A set of method signatures a class can implement; `is` / `as` check and convert at run time.", "interface Shape { fn area() -> float }"],
+  trait: ["An interface whose methods may have default bodies, and which may bring fields, static fields, private helpers and decorators: a class that implements it gets them all (a trait has no constructor: give its fields initializers). `Self` is the implementing class.",
+          "trait Versioned {\n    public version: int = 1\n    fn bump() { self.version = self.version + 1 }\n}\nclass Page implements Versioned { }"],
+  Self: ["As a class method's result type: the receiver's own class, so chains keep a subclass's type (the method returns `self`). In a static method: the class the call names (`new Self()`, `Self.table()`, `Array<Self>`). In a trait: the implementing class.", "fn where(c: string) -> Self { self.parts.push(c); return self }\nstatic fn find(id: int) -> Self { return new Self() }"],
+  abstract: ["An abstract class cannot be instantiated; an abstract method has no body and must be overridden.", "abstract class Shape { abstract fn area() -> float }"],
+  final: ["A final class cannot be extended; a final method cannot be overridden (calls are direct).", "final class Version { ... }"],
+  namespace: ["Groups declarations under a dotted name.", "namespace geo { class Point { ... } }"],
+  constructor: ["Runs when `new` creates an object. A class may have several; a subclass without one inherits its parent's. A `private constructor` only the class itself can call.", "constructor(name: string) { super(name) }"],
+  destructor: ["Runs when the object is released with `free(obj)`, most-derived class first.", "destructor() { print(\"bye\") }"],
+  extends: ["The base class(es) of a class.", "class Puppy extends Dog { }"],
+  implements: ["The interfaces a class implements.", "class Box implements Drawable, Resizable { }"],
+  uses: ["Composition: forwards the methods of a field's type to that field.", "class Car uses engine: Engine { }"],
+  use: ["Brings names from a namespace into scope (`*` for all, `as` to rename).", "use std.collections.*"],
+  import: ["Loads another file or library module: \"std\", \"std/json\", a relative path, or a package.", "import \"std\""],
+  from: ["Picks names out of an import.", "import { Array, HashMap as Map } from \"std/collections\""],
+  export: ["Marks a declaration as part of a package's public surface.", "export fn helper() { }"],
+  new: ["Creates an object by calling a constructor (type arguments may be inferred).", "let b = new Box(5)"],
+  return: ["Leaves the function, giving its value.", "return a + b"],
+  async: ["An async function or method runs on the worker pool; calling it gives a Future<T>.", "async fn fetch(url: string) -> string { ... }"],
+  await: ["Waits for a Future and gives its value (re-throwing its exception).", "let page = await fetch(url)"],
+  let: ["Declares a variable (its type is inferred from the value if omitted). Patterns take values apart.", "let (q, r) = divmod(17, 5)"],
+  const: ["Declares a constant: assigning it later is an error.", "const LIMIT: int = 10"],
+  static: ["A member that belongs to the class rather than to its instances.", "static fn make() -> Id { ... }"],
+  readonly: ["A field that can only be assigned in a constructor.", "readonly id: int"],
+  weak: ["A field that does not keep its object alive (breaks reference cycles).", "weak parent: Node"],
+  public: ["Visible everywhere (the default).", "public name: string"],
+  private: ["Visible only inside the class; private fields get get_/set_ accessors.", "private secret: string"],
+  protected: ["Visible inside the class and its subclasses.", "protected count: int"],
+  if: ["Runs a block when the condition (a bool) holds; also `case x if cond:` guards. As a value, `if (c) a else b` (each branch an expression or a block ending in one; `else` required).", "let s = if (n > 0) \"pos\" else \"neg\""],
+  else: ["The branch taken when the `if` condition is false.", "else if (n == 0) { ... }"],
+  while: ["Repeats a block while the condition holds.", "while (i < 10) { i++ }"],
+  for: ["A C-style loop, a range `for (i in 0..n step 2)`, or for-each `for (i, x in xs)` / `for ((k, v) in map)` over arrays, strings, collections and iterators (`iterator()`, or `hasNext()`/`next()`).", "for (x in xs) { print(x) }"],
+  do: ["A loop whose body runs at least once.", "do { tries++ } while (tries < 3)"],
+  in: ["Separates the loop variable from what it iterates.", "for (ch in \"héllo\") { }"],
+  step: ["The increment of a range loop (may be negative).", "for (i in 10..0 step -2) { }"],
+  switch: ["Picks a case: values, ranges (`lo..hi`), guards (`if cond`), data-enum patterns. No fall-through.", "switch (n) { case 1, 2: { } case 3..10: { } default: { } }"],
+  match: ["Like `switch`; where a value is expected each case gives an expression.", "let word = match (n) { case 1: \"one\" default: \"many\" }"],
+  case: ["One alternative of a switch/match: values, a range, a variant pattern, and an optional `if` guard.", "case Circle(r) if r > 1.0: print(r)"],
+  default: ["The case taken when no other case matches.", "default: { print(\"other\") }"],
+  break: ["Leaves the innermost loop, or the loop with the given label.", "break outer"],
+  continue: ["Goes on with the next iteration of the innermost (or labeled) loop.", "continue outer"],
+  try: ["Runs a block whose exceptions the `catch` clauses handle. As a value, `try v catch fallback` (or `catch (e: T) fallback`) gives the fallback when `v` throws.", "let port = try Format.toInt(s) catch 8080"],
+  catch: ["Handles exceptions of a class (or its subclasses) thrown in the `try` block.", "catch (e: IndexError) { print(e.message()) }"],
+  finally: ["Always runs when leaving the `try`, normally or by an exception.", "finally { file.close() }"],
+  throw: ["Raises an exception: any class instance.", "throw new ValueError(\"bad input\")"],
+  yield: ["In a function returning Iterator<T>: hands one value to the loop walking it, and carries on from here when the loop asks for the next.", "fn evens() -> Iterator<int> { let i = 0; while (true) { yield i; i += 2 } }"],
+  defer: ["Runs a statement when the enclosing block exits (last registered first).", "defer { lock.unlock() }"],
+  as: ["Converts: numbers, enums from ints, down/up casts, interfaces, `any` (checked at run time).", "let d = animal as Dog"],
+  is: ["Tests a value's runtime type: a class, an interface, or what an `any` holds.", "if (shape is Named) { }"],
+  sizeof: ["The size in bytes of a type or value.", "sizeof(Point)"],
+  operator: ["Defines an operator for a class: + - * / % == < [] []= ...", "fn operator+(o: Vec) -> Vec { ... }"],
+  test: ["A test block, run by `grav test`.", "test \"adds\" { assertEq(1 + 1, 2) }"],
+  bench: ["A benchmark block, timed by `grav bench` (and skipped by `grav test`).", "bench \"parses a line\" { Json.parse(line) }"],
+  self: ["The object (or struct) a method, or an extension method, was called on. `this` is a synonym.", "self.count += 1"],
+  this: ["A synonym of `self`: the object a method was called on.", "this.count += 1"],
+  super: ["The parent class: `super(...)` runs its constructor, `super.m()` its method.", "super(name)"],
+  true: ["The boolean true.", "let ok = true"],
+  false: ["The boolean false.", "let done = false"],
+  null: ["No value: valid for classes, interfaces, functions, pointers and nullable `T?` values.", "let next: Node = null\nlet port: int? = null"],
+  free: ["Releases an object now (running destructors), a pointer, closure, or finished future.", "free(conn)"],
+  auto: ["An inferred type or type argument.", "let xs = new Array<auto>()"],
+  int: ["32-bit signed integer. Integer literals beyond its range are longs.", "let n: int = 42"],
+  long: ["64-bit signed integer (int64).", "let big: long = 9000000000\nlet ms = long(seconds * 1000)   // a conversion"],
+  uint: ["32-bit unsigned integer.", "let mask: uint = 0xFFFF"],
+  byte: ["8-bit unsigned integer (uint8); `s[i]` gives one.", "let b: byte = 255\nlet low = byte(n)   // a conversion: the low 8 bits"],
+  float: ["64-bit floating point (like double). Prints in the shortest exact form.", "let ratio = 0.5"],
+  float32: ["32-bit floating point.", "let f: float32 = 1.5"],
+  double: ["64-bit floating point (same as float).", "let d: double = 3.14\nlet half = double(n) / 2   // a conversion"],
+  bool: ["true or false; conditions must be bools.", "let ready: bool = false"],
+  string: ["Immutable UTF-8 text: `+`, `==`, `<`, `s.length`, `s[i]`, `s[lo..hi]`, `${...}` interpolation.", "let s = \"sum=${a + b:.2f}\""],
+  void: ["No value: the result of a function that returns nothing.", "fn log(msg: string) -> void { }"],
+  binary: ["Raw bytes with a length (may contain zeros).", "let data: binary = new File(path).readBinary()"],
+  any: ["A value of any type with its runtime type; `is` tests and `as` takes it out.", "let v: any = 42"],
+};
+for (const t of ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"])
+  KEYWORD_DOCS[t] = [`${t.startsWith("u") ? "Unsigned" : "Signed"} ${t.replace(/\D/g, "")}-bit integer.`, `let v: ${t} = 1\nlet w = ${t}(x)   // a conversion`];
+
+// `get` and `set` are keywords only before `name(` in a class (hover text).
+const PROPERTY_DOCS = {
+  get: ["A property's getter: `obj.name` calls it. Without a `set`, the property is read-only.",
+    "get fullName() -> string { return self.first + \" \" + self.last }"],
+  set: ["A property's setter: `obj.name = v` (and `obj.name += v`) calls it with the new value.",
+    "set fullName(v: string) { let i = Str.indexOf(v, \" \"); self.first = v[..i]; self.last = v[i + 1..] }"],
+};
+
+// Completion snippets (LSP snippet syntax): [label, description, body].
+const SNIPPETS = [
+  ["fn", "function", "fn ${1:name}(${2}) -> ${3:void} {\n\t$0\n}"],
+  ["main", "entry point", "fn main() {\n\t$0\n}"],
+  ["prop", "property with a getter and a setter", "get ${1:name}() -> ${2:int} { return self.${3:_name} }\nset ${1:name}(value: ${2:int}) { self.${3:_name} = value }"],
+  ["get", "read-only property", "get ${1:name}() -> ${2:int} { return $0 }"],
+  ["class", "class with a constructor", "class ${1:Name} {\n\tpublic ${2:value}: ${3:int}\n\tconstructor(${2:value}: ${3:int}) { self.${2:value} = ${2:value} }\n\t$0\n}"],
+  ["struct", "struct with a method", "struct ${1:Name} {\n\t${2:x}: ${3:int}\n\tfn ${4:describe}() -> string { return \"${self.${2:x}}\" }\n}"],
+  ["enum", "enum", "enum ${1:Name} { ${2:A}, ${3:B} }"],
+  ["enumdata", "data enum with a match", "enum ${1:Shape} {\n\t${2:Circle}(${3:r}: float),\n\t${4:Empty},\n}"],
+  ["interface", "interface", "interface ${1:Name} {\n\tfn ${2:method}() -> ${3:int}\n}"],
+  ["if", "if / else", "if (${1:cond}) {\n\t$0\n} else {\n}"],
+  ["ifv", "if as a value", "if (${1:cond}) ${2:a} else ${0:b}"],
+  ["for", "for-each loop", "for (${1:x} in ${2:xs}) {\n\t$0\n}"],
+  ["fori", "range loop", "for (${1:i} in ${2:0}..${3:n}) {\n\t$0\n}"],
+  ["forkv", "destructuring loop", "for ((${1:k}, ${2:v}) in ${3:pairs}) {\n\t$0\n}"],
+  ["while", "while loop", "while (${1:cond}) {\n\t$0\n}"],
+  ["match", "match statement", "match (${1:value}) {\n\tcase ${2:pattern}: ${3}\n\tdefault: ${0}\n}"],
+  ["matchexpr", "match expression", "let ${1:result} = match (${2:value}) { case ${3:1}: ${4:\"one\"} default: ${5:\"other\"} }"],
+  ["try", "try / catch / finally", "try {\n\t$1\n} catch (e: ${2:Exception}) {\n\tprint(e.message())\n} finally {\n\t$0\n}"],
+  ["gen", "generator function", "fn ${1:name}() -> Iterator<${2:int}> {\n\tyield ${0:value}\n}"],
+  ["tryv", "try as a value", "try ${1:value} catch ${0:fallback}"],
+  ["test", "test block", "test \"${1:does something}\" {\n\tassertEq(${2:actual}, ${3:expected})\n}"],
+  ["bench", "bench block (grav bench)", "bench \"${1:what it times}\" {\n\t${2:// one run of the code to time}\n}"],
+  ["lambda", "lambda", "fn(${1:x}) => ${0}"],
+  ["defer", "defer block", "defer { $0 }"],
+  ["label", "labeled loop", "${1:outer}: for (${2:x} in ${3:xs}) {\n\t$0\n}"],
+  ["letd", "destructuring let", "let (${1:a}, ${2:b}) = ${0}"],
+  ["fnlocal", "function inside a block", "fn ${1:name}(${2:n}: ${3:int}) -> ${4:int} {\n\t$0\n}"],
+  ["ifnull", "use a nullable value", "if (${1:x} != null) {\n\t$0\n}"],
+  ["text", "multi-line string", "\"\"\"\n${1:text}\n\"\"\""],
+  ["map", "map literal", "{${1:\"key\"}: ${2:value}}"],
+  ["fmt", "formatted interpolation", "\"\\${${1:value}:${2:.2f}}\""],
+  ["async", "async function", "async fn ${1:name}(${2}) -> ${3:int} {\n\t$0\n}"],
+  ["extends", "subclass", "class ${1:Name} extends ${2:Base} {\n\tconstructor(${3}) { super(${4}) }\n\t$0\n}"],
+  ["trait", "trait with a default method", "trait ${1:Name} {\n\tfn ${2:method}() -> ${3:int}\n\tfn ${4:helper}() -> ${3:int} { return self.${2:method}() }\n}"],
+  ["importstd", "import the standard library", "import \"std\""],
+  ["inlinec", "inline C", "%{ $0 %}"],
+];
+const KEYWORD_SET = new Set([...KEYWORDS, ...TYPES]);
+const IDENT = "[A-Za-z_][A-Za-z0-9_]*";
+
+function splitLines(text) { return text.split(/\r\n|\r|\n/); }
+
+// ---------------------------------------------------------------------------
+// Masking: strings, comments and inline C become spaces (same length), so
+// regexes and bracket counting only see code. Interpolations `${...}` in strings
+// are kept (they are code) except for the quotes around them.
+// ---------------------------------------------------------------------------
+function mask(text) {
+  const out = text.split("");
+  let i = 0;
+  const n = text.length;
+  const blank = (a, b) => { for (let k = a; k < b; k++) if (out[k] !== "\n") out[k] = " "; };
+  function skipString(start) { // start at the opening quote; returns index after closing
+    let j = start + 1;
+    while (j < n && text[j] !== "\n") {
+      const c = text[j];
+      if (c === "\\") { j += 2; continue; }
+      if (c === '"') { blank(start, j + 1); return j + 1; }
+      if (c === "$" && text[j + 1] === "{") {
+        blank(start, j + 2);
+        let depth = 1;
+        j += 2;
+        while (j < n && depth > 0) {
+          if (text[j] === '"') { j = skipString(j); continue; }
+          if (text[j] === "{") depth++;
+          else if (text[j] === "}") depth--;
+          j++;
+        }
+        start = j - 1; // the closing } of the interpolation stays; mask from here on
+        continue;
+      }
+      j++;
+    }
+    blank(start, j);
+    return j;
+  }
+  // """...""" spans lines (its ${...} stay, like a string's); r"..." and
+  // r"""...""" are raw: blanked whole, a backslash escapes nothing.
+  function skipTriple(start, raw) {
+    let j = start + 3;
+    while (j < n && text.substr(j, 3) !== '"""') {
+      if (!raw && text[j] === "\\") { j += 2; continue; }
+      if (!raw && text[j] === "$" && text[j + 1] === "{") {
+        blank(start, j + 2);
+        let depth = 1;
+        j += 2;
+        while (j < n && depth > 0) {
+          if (text[j] === '"') { j = skipString(j); continue; }
+          if (text[j] === "{") depth++;
+          else if (text[j] === "}") depth--;
+          j++;
+        }
+        start = j - 1;
+        continue;
+      }
+      j++;
+    }
+    const end = Math.min(n, j + 3);
+    blank(start, end);
+    return end;
+  }
+  while (i < n) {
+    const c = text[i];
+    if (c === "r" && text[i + 1] === '"' && !/[\w$]/.test(text[i - 1] || "")) {
+      if (text.substr(i + 1, 3) === '"""') { blank(i, i + 1); i = skipTriple(i + 1, true); continue; }
+      let j = i + 2;
+      while (j < n && text[j] !== '"' && text[j] !== "\n") j++;
+      blank(i, j + 1); i = j + 1; continue;
+    }
+    if (c === '"' && text.substr(i, 3) === '"""') { i = skipTriple(i, false); continue; }
+    if (c === "/" && text[i + 1] === "/") { const e = text.indexOf("\n", i); const end = e < 0 ? n : e; blank(i, end); i = end; continue; }
+    if (c === "/" && text[i + 1] === "*") { const e = text.indexOf("*/", i + 2); const end = e < 0 ? n : e + 2; blank(i, end); i = end; continue; }
+    if (c === "%" && text[i + 1] === "{") { const e = text.indexOf("%}", i + 2); const end = e < 0 ? n : e + 2; blank(i, end); out[i] = "C"; i = end; continue; }
+    if (c === '"') { i = skipString(i); continue; }
+    if (c === "'") { let j = i + 1; while (j < n && text[j] !== "'" && text[j] !== "\n") j += text[j] === "\\" ? 2 : 1; blank(i, j + 1); i = j + 1; continue; }
+    i++;
+  }
+  return out.join("");
+}
+
+// The `// ...` comment lines directly above line `i` (the doc comment).
+function docAbove(lines, i) {
+  const doc = [];
+  for (let j = i - 1; j >= 0; j--) {
+    const t = lines[j].trim();
+    if (!t.startsWith("//")) break;
+    const body = t.replace(/^\/\/+\s?/, "");
+    if (/^[─━-]{3,}|^──/.test(body)) break; // section dividers end a doc comment
+    doc.unshift(body);
+  }
+  if (!doc.length) { // a comment at the end of the declaration's own line
+    const line = lines[i] || "";
+    for (let k = line.indexOf("//"); k > 0; k = line.indexOf("//", k + 2)) {
+      const before = line.slice(0, k);
+      if ((before.match(/"/g) || []).length % 2 === 0 && /\s$/.test(before)) return line.slice(k).replace(/^\/\/+\s?/, "").trim();
+    }
+  }
+  return doc.join("\n").trim();
+}
+
+function range(line, ch, len) {
+  return { start: { line, character: ch }, end: { line, character: ch + len } };
+}
+
+function splitParams(s) {
+  // "a: int, f: fn(int) -> bool, m: Map<K, V>" -> top-level comma split
+  const out = [];
+  let depth = 0, cur = "";
+  for (const c of s) {
+    if ("(<[{".includes(c)) depth++;
+    else if (")>]}".includes(c)) depth--;
+    if (c === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += c;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+// "(a: int, b: string) -> bool" from a declaration line starting at the "(".
+function signatureFrom(line, at) {
+  let depth = 0, j = at;
+  for (; j < line.length; j++) {
+    if (line[j] === "(") depth++;
+    else if (line[j] === ")") { depth--; if (depth === 0) break; }
+  }
+  const params = line.slice(at + 1, j);
+  const rest = line.slice(j + 1);
+  const ret = /^\s*->\s*([^{=;]+?)\s*(?:\{|=>|$|;)/.exec(rest);
+  return { params: splitParams(params), ret: ret ? ret[1].trim() : "" };
+}
+
+// ---------------------------------------------------------------------------
+// parseFile: declarations, imports, uses
+// ---------------------------------------------------------------------------
+const MODS = "(?:(?:export|public|private|protected|static|abstract|final|async|readonly|weak)\\s+)*";
+const RE = {
+  namespace: new RegExp(`^\\s*namespace\\s+(${IDENT}(?:\\.${IDENT})*)`),
+  classLike: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(class|struct|interface|trait|enum)\\s+(${IDENT})\\s*(<[^>{]*>)?`),
+  alias: new RegExp(`^\\s*${MODS}type\\s+(${IDENT})\\s*(<[^>=]*>)?\\s*=\\s*(.+)$`),
+  fn: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}fn\\s+(operator\\s*\\S+?|${IDENT})\\s*(<[^>(]*>)?\\s*\\(`),
+  // fn Point.norm() / fn int.twice() / fn Array<int>.total(): an extension method of that type
+  ext: new RegExp(`^\\s*${MODS}fn\\s+((?:${IDENT}\\.)*${IDENT}(?:<[^>(]*>)?)\\.(${IDENT})\\s*(<[^>(]*>)?\\s*\\(`),
+  prop: new RegExp(`^\\s*(?:@${IDENT}(?:\\([^)]*\\))?\\s*)*${MODS}(get|set)\\s+(${IDENT})\\s*\\(`),
+  ctor: /^\s*constructor\s*\(/,
+  dtor: /^\s*destructor\s*\(/,
+  global: new RegExp(`^\\s*${MODS}(const|let)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=`),
+  local: new RegExp(`\\b(let|const)\\s+(${IDENT})\\s*(?::\\s*([^=]+?))?\\s*=\\s*(.*)$`),
+  field: new RegExp(`^\\s*(?:(?:public|private|protected|readonly|static|weak)\\s+)*(${IDENT})\\s*:\\s*([^=]+?)\\s*(?:=.*)?$`),
+  test: /^\s*(test|bench)\s+"([^"]*)"/,
+  forVar: new RegExp(`\\bfor\\s*\\(\\s*(${IDENT})(?:\\s*,\\s*(${IDENT}))?\\s+in\\b\\s*(.*)$`),
+  caseBind: new RegExp(`\\bcase\\s+(?:${IDENT}\\.)*${IDENT}\\s*\\(([^()]*)\\)`, "g"),
+  catchVar: new RegExp(`\\bcatch\\s*\\(\\s*(${IDENT})\\s*:\\s*(${IDENT}(?:\\.${IDENT})*)`),
+  lambdaParams: /\bfn\s*\(([^()]*)\)\s*(?:->\s*[^{=]+)?\s*(?:=>|\{)/g,
+};
+
+function parseFile(text) {
+  const lines = splitLines(text);
+  const masked = splitLines(mask(text));
+  const symbols = [];    // flat list
+  const imports = [];    // { spec, alias, names: [{name, as}], range, specRange }
+  const uses = [];       // { target, alias, glob, namespace }
+  // Bracket stack entries: { ch, ctx } where ctx is the symbol that opened a body.
+  const stack = [];
+  let pendingCtx = null; // a declaration whose `{` has not been seen yet
+
+  const ctxOf = () => { for (let k = stack.length - 1; k >= 0; k--) if (stack[k].ctx) return stack[k].ctx; return null; };
+  const nsOf = () => {
+    const parts = [];
+    for (const s of stack) if (s.ctx && s.ctx.kind === KIND.Namespace) parts.push(s.ctx.name);
+    return parts.join(".");
+  };
+  const add = (sym) => { symbols.push(sym); return sym; };
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const m = masked[i];
+    const ctx = ctxOf();
+    const inType = ctx && [KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(ctx.kind);
+    const inEnum = ctx && ctx.kind === KIND.Enum;
+    const inBody = ctx && [KIND.Function, KIND.Method, KIND.Constructor, KIND.Event].includes(ctx.kind);
+    const ns = nsOf();
+    const container = ctx && ctx.kind !== KIND.Namespace ? ctx : null;
+    let mm;
+
+    // ---- imports (read from the raw line: the spec is a string) ----
+    const it = raw.trim();
+    if (/^import\b/.test(it)) {
+      const imp = { spec: "", alias: "", names: [], line: i };
+      const sel = /^import\s*\{([^}]*)\}\s*from\s*"([^"]*)"/.exec(it);
+      const plain = /^import\s*"([^"]*)"(?:\s+as\s+(\w+))?/.exec(it);
+      if (sel) {
+        imp.spec = sel[2];
+        for (const part of sel[1].split(",")) {
+          const p = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(part);
+          if (p) imp.names.push({ name: p[1], as: p[2] || p[1] });
+        }
+      } else if (plain) {
+        imp.spec = plain[1];
+        imp.alias = plain[2] || "";
+      }
+      if (imp.spec) {
+        const q = raw.indexOf('"' + imp.spec + '"');
+        imp.specRange = range(i, q + 1, imp.spec.length);
+        imports.push(imp);
+      }
+      continue;
+    }
+    // ---- use ----
+    if ((mm = /^\s*use\s+([\w.:]+?)(\.\*|::\*)?(?:\s+as\s+(\w+))?\s*;?\s*$/.exec(m))) {
+      const target = mm[1].replace(/::/g, ".");
+      uses.push({ target, glob: !!mm[2], alias: mm[3] || (mm[2] ? "" : target.split(".").pop()), namespace: ns, line: i });
+    }
+
+    // ---- declarations ----
+    let opened = null; // a symbol whose body may start on this line
+    if ((mm = RE.namespace.exec(m))) {
+      const name = mm[1];
+      opened = add({ name, kind: KIND.Namespace, line: i, ch: m.indexOf(name, mm.index + 9), namespace: ns,
+        detail: "namespace " + (ns ? ns + "." : "") + name, doc: docAbove(lines, i), children: [] });
+    } else if ((mm = RE.classLike.exec(m)) && !inBody) {
+      const kw = mm[1], name = mm[2];
+      const kind = { class: KIND.Class, struct: KIND.Struct, interface: KIND.Interface, trait: KIND.Interface, enum: KIND.Enum }[kw];
+      const decl = raw.trim().replace(/\s*\{.*$/, "");
+      const ext = /\bextends\s+([\w.<>, ]+?)(?:\s+implements|\s+uses|\s*\{|$)/.exec(m);
+      const imp = /\bimplements\s+([\w.<>, ]+?)(?:\s+extends|\s+uses|\s*\{|$)/.exec(m);
+      // a type declared in a class body (`class Tree { class Node {} }`) is Tree.Node: not a member, but
+      // in the namespace named after the types around it
+      const outer = inType ? stack.filter((s) => s.ctx && s.ctx.kind !== KIND.Enum).map((s) => s.ctx.name).join(".") : "";
+      opened = add({ name, kind, keyword: kw, line: i, ch: m.indexOf(name, mm.index + mm[0].indexOf(kw) + kw.length),
+        namespace: inType ? outer : ns, memberNs: ns, container: inType ? undefined : container && container.name, typeParams: mm[3] || "",
+        base: ext ? ext[1].trim().replace(/<.*$/, "") : "", detail: decl, doc: docAbove(lines, i), children: [],
+        // implemented interfaces and traits (a trait's fields, statics and methods become the class's)
+        impls: imp ? splitParams(imp[1]).map((x) => x.trim().replace(/<.*$/, "")).filter(Boolean) : [] });
+      // a one-line enum: enum Color { Red, Green }
+      if (kw === "enum") {
+        const ob = m.indexOf("{"), cb = m.lastIndexOf("}");
+        if (ob >= 0 && cb > ob) {
+          const inner = m.slice(ob + 1, cb);
+          for (const v of inner.matchAll(new RegExp(`(?:^|,)\\s*(${IDENT})\\s*(\\([^)]*\\))?`, "g"))) {
+            if (v[1] === "fn" || KEYWORD_SET.has(v[1])) continue;
+            const ch = ob + 1 + v.index + v[0].indexOf(v[1]);
+            const variant = add({ name: v[1], kind: KIND.EnumMember, line: i, ch, namespace: ns, container: name,
+              detail: `${name}.${v[1]}${v[2] ? raw.slice(ch + v[1].length, ch + v[1].length + v[2].length) : ""}`, doc: "" });
+            opened.children.push(variant);
+          }
+        }
+      }
+    } else if ((mm = RE.alias.exec(m)) && !inBody) {
+      add({ name: mm[1], kind: KIND.TypeParameter, line: i, ch: m.indexOf(mm[1], mm.index + 4), namespace: ns,
+        detail: raw.trim(), doc: docAbove(lines, i), aliasOf: mm[3].trim() });
+    } else if ((mm = RE.test.exec(raw)) && !inBody && !inType) {
+      opened = add({ name: `${mm[1]} "${mm[2]}"`, kind: KIND.Event, line: i, ch: raw.indexOf(mm[1]), namespace: ns,
+        detail: `${mm[1]} "${mm[2]}"`, doc: "", children: [] });
+    } else if ((mm = RE.ext.exec(m)) && !inBody && !inType) {
+      const paren = m.indexOf("(", mm.index + mm[0].length - 1);
+      const sig = signatureFrom(raw, paren);
+      opened = add({ name: mm[2], kind: KIND.Method, line: i, ch: m.indexOf("." + mm[2], mm.index) + 1, namespace: ns,
+        extends: mm[1], typeParams: mm[3] || "", params: sig.params, returns: sig.ret, isStatic: false,
+        detail: raw.trim().replace(/\s*(\{.*|=>.*)$/, ""), doc: docAbove(lines, i), children: [] });
+      addParams(opened, sig.params, i, raw, paren);
+    } else if ((mm = RE.fn.exec(m)) && !inBody) {
+      const name = mm[1].replace(/\s+/g, "");
+      const paren = m.indexOf("(", mm.index + mm[0].length - 1);
+      const sig = signatureFrom(raw, paren);
+      const kind = inType ? KIND.Method : KIND.Function;
+      const isStatic = /\bstatic\s+(?:\w+\s+)*fn\b/.test(m);
+      opened = add({ name, kind, line: i, ch: m.indexOf(mm[1], mm.index), namespace: ns,
+        container: container && container.name, typeParams: mm[2] || "", params: sig.params, returns: sig.ret,
+        isStatic, detail: raw.trim().replace(/\s*(\{.*|=>.*)$/, ""), doc: docAbove(lines, i), children: [] });
+      addParams(opened, sig.params, i, raw, paren);
+    } else if ((mm = RE.prop.exec(m)) && inType && !inBody) {
+      // get name() -> T { } / set name(v: T) { }: one property; each accessor's body is a hidden method
+      const isGet = mm[1] === "get", name = mm[2];
+      const paren = m.indexOf("(", mm.index + mm[0].length - 1);
+      const sig = signatureFrom(raw, paren);
+      const pm = !isGet && sig.params[0] ? /^(?:\.\.\.)?\w+\s*:\s*(.+)$/.exec(sig.params[0]) : null;
+      const type = isGet ? sig.ret : pm ? pm[1].trim() : "";
+      const isStatic = /\bstatic\s+(?:\w+\s+)*(?:get|set)\b/.test(m);
+      let prop = symbols.find((x) => x.kind === KIND.Property && x.container === ctx.name && x.namespace === ns && x.name === name && !x.local);
+      if (!prop) {
+        prop = add({ name, kind: KIND.Property, line: i, ch: m.indexOf(name, mm.index + mm[0].indexOf(mm[1]) + 3), namespace: ns,
+          container: ctx.name, type, isStatic, readable: false, writable: false, detail: "", doc: docAbove(lines, i) });
+      }
+      if (isGet) prop.readable = true; else prop.writable = true;
+      if (!prop.type) prop.type = type;
+      prop.detail = `${prop.isStatic ? "static " : ""}${prop.name}: ${prop.type}` +
+        (prop.readable && prop.writable ? "" : prop.readable ? " (read-only)" : " (write-only)") + " — property";
+      opened = { name: `${mm[1]} ${name}`, kind: KIND.Method, accessor: true, line: i, ch: m.indexOf(name), namespace: ns,
+        container: ctx.name, params: sig.params, returns: sig.ret, isStatic, detail: raw.trim().replace(/\s*\{.*$/, ""),
+        doc: "", children: [] };
+      addParams(opened, sig.params, i, raw, paren);
+    } else if ((RE.ctor.test(m) || RE.dtor.test(m)) && inType) {
+      const isCtor = RE.ctor.test(m);
+      const paren = m.indexOf("(");
+      const sig = signatureFrom(raw, paren);
+      opened = add({ name: isCtor ? "constructor" : "destructor", kind: KIND.Constructor, line: i,
+        ch: m.search(/\S/), namespace: ns, container: container && container.name, params: sig.params,
+        detail: `${container ? container.name : ""}(${sig.params.join(", ")})`, doc: docAbove(lines, i), children: [] });
+      addParams(opened, sig.params, i, raw, paren);
+    } else if (inEnum && stack.length && stack[stack.length - 1].ctx === ctx &&
+               (mm = new RegExp(`^\\s*(${IDENT})\\s*(\\(.*?\\))?\\s*,?\\s*$`).exec(m)) && !KEYWORD_SET.has(mm[1])) {
+      add({ name: mm[1], kind: KIND.EnumMember, line: i, ch: m.indexOf(mm[1]), namespace: ns, container: ctx.name,
+        detail: `${ctx.name}.${mm[1]}${mm[2] ? raw.trim().replace(/,\s*$/, "").slice(mm[1].length) : ""}`,
+        doc: docAbove(lines, i), payload: mm[2] || "" });
+    } else if ((mm = RE.global.exec(m)) && !inBody && !inType) {
+      add({ name: mm[2], kind: mm[1] === "const" ? KIND.Constant : KIND.Variable, line: i,
+        ch: m.indexOf(mm[2], mm.index + mm[0].indexOf(mm[1]) + mm[1].length), namespace: ns,
+        type: mm[3] ? mm[3].trim() : "", detail: raw.trim(), doc: docAbove(lines, i) });
+    } else if (inType && !inEnum && stack.length && stack[stack.length - 1].ctx === ctx &&
+               (mm = RE.field.exec(m)) && (!KEYWORD_SET.has(mm[1]) || /^\s*(?:public|private|protected|readonly|static|weak)\s/.test(m))) {
+      // (a keyword is a field's name after a modifier: `public type: string`)
+      add({ name: mm[1], kind: KIND.Field, line: i, ch: m.search(new RegExp(`\\b${mm[1]}\\s*:`)), namespace: ns, container: ctx.name,
+        type: mm[2].trim(), isStatic: /\bstatic\b/.test(m), detail: raw.trim(), doc: docAbove(lines, i) });
+    }
+    // ---- locals inside bodies: let/const, for-in variables, catch variables, lambda params ----
+    if (inBody || (opened && [KIND.Function, KIND.Method, KIND.Event, KIND.Constructor].includes(opened.kind))) {
+      const owner = inBody ? ctx : opened;
+      for (const lm of m.matchAll(new RegExp(RE.local.source, "g"))) {
+        const ch = lm.index + lm[0].indexOf(lm[2], lm[1].length);
+        const init = raw.slice(lm.index + lm[0].lastIndexOf("=", lm[0].length - lm[4].length - 1) + 1).trim();
+        add({ name: lm[2], kind: lm[1] === "const" ? KIND.Constant : KIND.Variable, line: i, ch, local: owner,
+          type: lm[3] ? lm[3].trim() : inferType(init), written: !!lm[3], role: lm[1], detail: raw.trim(), doc: "" });
+      }
+      // for (x in xs), for (i, x in xs): `iter` is what is iterated, for guessing x's type
+      if ((mm = RE.forVar.exec(m))) {
+        let iter = "", depth = 0;
+        for (const c of mm[3]) { if (c === "(" || c === "[") depth++; else if (c === ")" || c === "]") { if (!depth--) break; } iter += c; }
+        for (const g of [mm[1], mm[2]]) if (g)
+          add({ name: g, kind: KIND.Variable, line: i, ch: m.indexOf(g, mm.index), local: owner, type: mm[2] && g === mm[1] ? "int" : "",
+            role: mm[2] && g === mm[1] ? "index" : "for", iter: raw.slice(m.length - mm[3].length).slice(0, iter.length).trim(), detail: raw.trim(), doc: "" });
+      }
+      if ((mm = RE.catchVar.exec(m)))
+        add({ name: mm[1], kind: KIND.Variable, line: i, ch: m.indexOf(mm[1], mm.index), local: owner, type: mm[2], written: true,
+          role: "catch", detail: raw.trim(), doc: "" });
+      for (const lp of m.matchAll(RE.lambdaParams)) {
+        if (opened && lp.index === m.indexOf("(", 0) - 2) continue;
+        for (const p of splitParams(lp[1])) {
+          const pm = new RegExp(`^(${IDENT})\\s*(?::\\s*(.+))?$`).exec(p);
+          if (pm) add({ name: pm[1], kind: KIND.Variable, line: i, ch: m.indexOf(pm[1], lp.index), local: owner,
+            type: pm[2] || "", written: !!pm[2], role: "lambda", detail: `${pm[1]}${pm[2] ? ": " + pm[2] : ""} (lambda parameter)`, doc: "" });
+        }
+      }
+      // case Some(x):, case Rect(w, h): the bindings of a match arm
+      for (const cb of m.matchAll(RE.caseBind))
+        for (const b of cb[1].split(",")) {
+          const name = b.trim();
+          if (!new RegExp(`^${IDENT}$`).test(name) || name === "_" || KEYWORD_SET.has(name)) continue;
+          add({ name, kind: KIND.Variable, line: i, ch: m.indexOf(name, cb.index + cb[0].indexOf("(")), local: owner, type: "",
+            role: "case", detail: raw.trim(), doc: "" });
+        }
+      // case (x, _), case ((a, 2), s) if a > 1: the names a tuple pattern binds
+      for (const ct of m.matchAll(/\bcase\s+\(/g)) {
+        let at = ct.index + ct[0].length - 1, depth = 0, end = at;
+        for (; end < m.length; end++) {
+          if (m[end] === "(") depth++;
+          else if (m[end] === ")" && --depth === 0) break;
+        }
+        const pat = m.slice(at, end + 1);
+        for (const b of pat.matchAll(new RegExp(`(?<=[(,]\\s*)(${IDENT})(?=\\s*[,)])`, "g"))) {
+          const name = b[1];
+          if (name === "_" || KEYWORD_SET.has(name) || name === "true" || name === "false" || name === "null") continue;
+          add({ name, kind: KIND.Variable, line: i, ch: at + b.index, local: owner, type: "",
+            role: "case", detail: raw.trim(), doc: "" });
+        }
+      }
+    }
+
+    // ---- brackets: bodies of the declarations opened above ----
+    if (opened) pendingCtx = opened;
+    for (let c = 0; c < m.length; c++) {
+      const ch = m[c];
+      if (ch === "{" || ch === "(" || ch === "[") {
+        let entry = { ch, ctx: null };
+        if (ch === "{" && pendingCtx) { entry.ctx = pendingCtx; pendingCtx = null; }
+        stack.push(entry);
+      } else if (ch === "}" || ch === ")" || ch === "]") {
+        const top = stack.pop();
+        if (top && top.ctx) top.ctx.endLine = i;
+      }
+    }
+    // a bodiless declaration (abstract fn, interface method, `=>` lambda body) closes now
+    if (pendingCtx && !/\{\s*$/.test(m) && pendingCtx.line === i && !m.includes("{")) pendingCtx.endLine = i, pendingCtx = null;
+  }
+  // Ranges and parent links.
+  const byContainer = new Map();
+  for (const s of symbols) {
+    s.range = range(s.line, Math.max(0, s.ch), s.name.length);
+    s.selectionRange = s.range;
+    s.fqName = (s.namespace ? s.namespace + "." : "") + (s.container ? s.container + "." : "") + s.name;
+    if (s.container && !s.local) {
+      if (!byContainer.has(s.container)) byContainer.set(s.container, []);
+      byContainer.get(s.container).push(s);
+    }
+  }
+  for (const s of symbols) if (!s.local && [KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(s.kind))
+    s.members = (byContainer.get(s.name) || []).filter((x) => x.namespace === (s.memberNs ?? s.namespace));
+  return { symbols, imports, uses };
+
+  function addParams(owner, params, line, rawLine, at) {
+    for (const p of params) {
+      const pm = new RegExp(`^(?:\\.\\.\\.)?(${IDENT})\\s*:\\s*(.+)$`).exec(p);
+      if (!pm) continue;
+      const ch = rawLine.indexOf(pm[1], at);
+      symbols.push({ name: pm[1], kind: KIND.Variable, line, ch, local: owner, type: pm[2].trim(), written: true, role: "param",
+        detail: `${pm[1]}: ${pm[2].trim()} (parameter of ${owner.name})`, doc: "", isParam: true });
+    }
+  }
+}
+
+// A decorator's hover and completion text.
+const DECORATOR_DOC = (name) => `\`@${name}\` — a decorator: recorded with its arguments on the class, field or method ` +
+  `it precedes and read at run time through reflection (\`reflect(T).decorator("${name}")\`, \`field.decorator("${name}")\`, ` +
+  `then \`.arg(i)\` / \`.named("key")\`). It does nothing by itself.`;
+
+// What the compiler's built-in functions return (for types after `reflect(User).`).
+const BUILTIN_RETURNS = { str: "string", input: "string", typename: "string", nameof: "string", sizeof: "int", argc: "int", argv: "string",
+  env: "string", cwd: "string", isInstance: "bool", reflect: "ClassInfo", int: "int", long: "long", float: "float",
+  double: "float", bool: "bool", byte: "byte", uint: "uint", string: "string" };
+
+// ---- types of built-in values, for std/types' value methods ----
+const INT_TYPES = new Set(["int", "long", "byte", "short", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16",
+                           "uint32", "uint64", "ulong", "signed", "unsigned"]);
+const BUILTIN_VALUE = new Set([...INT_TYPES, "float", "float32", "float64", "double", "string", "bool", "binary", "any", "void"]);
+// Spelling a type the way the checker sees it: `double` is a float, `int32` an int.
+function normType(t) {
+  const s = String(t || "").replace(/\s+/g, "").replace(/^std\.\w+\./, "");
+  return { double: "float", float64: "float", int32: "int", signed: "int", int64: "long", unsigned: "uint", uint32: "uint" }[s] || s;
+}
+function paramType(p) { const i = p.indexOf(":"); return i < 0 ? "" : p.slice(i + 1).replace(/=.*$/, "").trim(); }
+// How well a value of type `v` fits a parameter of type `p`: 2 exactly, 1 by
+// widening (an int for a long, anything for an `any`, a `T?` for a generic `T?`), 0 not.
+function typeFits(p, v, typeParams) {
+  p = normType(p); v = normType(v);
+  const generic = new Set((typeParams || "").replace(/[<>\s]/g, "").split(",").filter(Boolean));
+  if (!p || !v) return 0;
+  if (p === v) return 2;
+  if (p === "any") return 1;
+  if (generic.has(p.replace(/\?$/, ""))) return p.endsWith("?") === v.endsWith("?") || !p.endsWith("?") ? 1 : 0;
+  const rank = { byte: 1, uint8: 1, int8: 1, int16: 2, short: 2, uint16: 2, int: 3, uint: 3, long: 4, ulong: 4, uint64: 4 };
+  return rank[p] && rank[v] && rank[v] <= rank[p] ? 1 : 0;
+}
+// A value method's types for a value of type `v`, its type parameter bound:
+// `Null.orElse<T>(v: T?, fallback: T) -> T` on an int? takes and gives an int.
+function bindTypes(sym, v, text) {
+  const tp = (sym.typeParams || "").replace(/[<>\s]/g, "").split(",").filter(Boolean);
+  const first = normType(paramType(sym.params[0]));
+  const bare = first.replace(/\?$/, "");
+  if (!v || !tp.includes(bare)) return text;
+  const bound = first.endsWith("?") ? String(v).replace(/\?$/, "") : String(v);
+  return text.replace(new RegExp(`\\b${bare}\\b`, "g"), bound);
+}
+function bindReturn(sym, v) { return bindTypes(sym, v, sym.returns || ""); }
+// A method as a function value's type: `fn(int, int) -> int` (`skip` parameters left
+// out: a value method's receiver).
+function fnTypeOf(sym, skip) {
+  const ps = (sym.params || []).slice(skip).map(paramType);
+  return `fn(${ps.join(", ")})${sym.returns ? " -> " + sym.returns : ""}`;
+}
+// A value method as completion and signature help show it: without the receiver
+// (and for a value of type `v`, with a type parameter it binds filled in).
+function valueSignature(sym, v) {
+  return bindTypes(sym, v, `${sym.name}(${(sym.params || []).slice(1).join(", ")})${sym.returns ? " -> " + sym.returns : ""}`);
+}
+// Text before a `//` comment that is not inside a string.
+function stripComment(s) {
+  for (let i = 0, q = false; i < s.length; i++) {
+    if (q && s[i] === "\\") { i++; continue; }
+    if (s[i] === '"') q = !q;
+    else if (!q && s[i] === "/" && s[i + 1] === "/") return s.slice(0, i);
+  }
+  return s;
+}
+
+// A type as an inlay hint shows it: namespaces dropped (`db.Row` -> `Row`,
+// `geo.Point<int>` -> `Point<int>`); a data enum variant keeps its enum (`Shape.Circle`).
+function shortType(t) { return String(t).replace(/\b(?:[a-z_]\w*\.)+(?=[A-Za-z_])/g, ""); }
+
+// The type of `new T<...>(...)`, `T.of(...)`-style or literal initializers.
+function inferType(init) {
+  let m;
+  init = stripComment(init || "").trim().replace(/;\s*$/, "").trim();
+  if ((m = /^new\s+([\w.]+)\s*(<[^(]*>)?/.exec(init))) return m[1] + (m[2] || "");
+  if ((m = /^[^"]*(?:"(?:[^"\\]|\\.)*"[^"]*)*?\s+as\s+([A-Za-z_][\w.]*(?:<.*>)?\??)$/.exec(init))) return m[1];   // x as Decimal
+  // a chain of members and calls (n.toHex(), "a,b".split(","), Integer.compare,
+  // 0.5.round(1)) or a plain name: typed by the workspace
+  const ARGS = "\\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\"|\\((?:[^()\"]|\"(?:[^\"\\\\]|\\\\.)*\")*\\))*\\)";
+  const HEAD = `(?:"(?:[^"\\\\]|\\\\.)*"|-?\\d+(?:\\.\\d+)?|\\(-?\\d+(?:\\.\\d+)?\\)|[A-Za-z_]\\w*)`;
+  if (new RegExp(`^${HEAD}(?:${ARGS})?(?:\\.[A-Za-z_]\\w*(?:${ARGS})?)+$`).test(init)) return { expr: init };
+  if (new RegExp(`^[A-Za-z_]\\w*${ARGS}$`).test(init) && !/^[A-Z]/.test(init)) return { expr: init };   // fresh(): its return type
+  if (/^"(?:[^"\\]|\\.)*"(?:\s*\+.*)?$/.test(init)) return "string";   // "x", "a" + b
+  if (/^-?\d+\.\d/.test(init)) return "float";
+  if (/^-?\d/.test(init)) return "int";
+  if (/^(true|false)\b/.test(init)) return "bool";
+  if ((m = /^([A-Z]\w*)\.(\w+)\(/.exec(init))) return { call: m[1], method: m[2] };
+  if ((m = /^([A-Z]\w*)\.(\w+)\b/.exec(init))) return m[1];   // Enum.Variant
+  if (/^[A-Za-z_]\w*$/.test(init) && !KEYWORD_SET.has(init)) return { expr: init };   // let big = Infinity
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Words and positions
+// ---------------------------------------------------------------------------
+function wordAtPosition(text, position) {
+  const line = splitLines(text)[position.line];
+  if (line === undefined) return null;
+  const isWord = (c) => c && /[A-Za-z0-9_]/.test(c);
+  let start = position.character, end = position.character;
+  if (!isWord(line[start]) && start > 0 && isWord(line[start - 1])) start--;
+  if (!isWord(line[start])) return null;
+  while (start > 0 && isWord(line[start - 1])) start--;
+  while (end < line.length && isWord(line[end])) end++;
+  // the qualifier chain before it: a.b.Word
+  let q = start, qualifier = "";
+  while (q > 1 && line[q - 1] === ".") {
+    let s = q - 1;
+    if (line[s - 1] === ")") break;
+    while (s > 0 && isWord(line[s - 1])) s--;
+    if (s === q - 1) break;
+    qualifier = line.slice(s, q - 1) + (qualifier ? "." + qualifier : "");
+    q = s;
+  }
+  return { word: line.slice(start, end), qualifier, range: range(position.line, start, end - start) };
+}
+
+// ---------------------------------------------------------------------------
+// Workspace
+// ---------------------------------------------------------------------------
+class Workspace {
+  // The entry points editors call; each runs in a snapshot (see snapshot()).
+  static QUERIES = ["definition", "references", "hover", "completion", "signature", "outline", "workspaceSymbols",
+                    "prepareRename", "rename", "inlayHints", "organizeImports", "declarationAt", "symbolsNamed"];
+  static TREE_TTL_MS = 5000;
+  // opts: { root, compiler, log }
+  constructor(opts = {}) {
+    this.root = opts.root || null;
+    this.compiler = opts.compiler || process.env.GRAV_COMPILER || "grav";
+    this.log = opts.log || (() => {});
+    this.docs = new Map();      // path -> text (open editors, possibly unsaved)
+    this.cache = new Map();     // path -> { mtime, text, info }
+    this.envInfo = null;
+    this.types = new Map();     // path -> Map(name + "\0" + line text -> type), from `grav check --types`
+    this.files = new Map();     // path -> { mtime, size, text }: files on disk, re-read only when they change
+    this.projects = new Map();  // root -> { stamp, proj }: grav.toml and grav.lock, re-read when either changes
+    this.tree = null;           // { at, files }: the workspace's .grav files, listed again after a few seconds
+    this.snap = null;           // what one query has looked up (see snapshot)
+    for (const q of Workspace.QUERIES) {
+      const f = this[q];
+      this[q] = (...a) => this.snapshot(() => f.apply(this, a));
+    }
+  }
+
+  // Runs a query with its own memo of the file system: each file read, file
+  // tested, project read and import resolved once, however often the query asks
+  // (a definition or an inlay hint asks thousands of times). Nested queries share it.
+  snapshot(fn) {
+    if (this.snap) return fn();
+    this.snap = { text: new Map(), exists: new Map(), project: new Map(), resolve: new Map(), reach: new Map(), chosen: null, tree: null };
+    try { return fn(); } finally { this.snap = null; }
+  }
+  exists(p) {
+    const m = this.snap && this.snap.exists;
+    if (m && m.has(p)) return m.get(p);
+    let r = 0;
+    try { r = fs.statSync(p).isFile() ? 1 : 2; } catch {}
+    if (m) m.set(p, r);
+    return r;
+  }
+  isFile(p) { return this.exists(p) === 1; }
+  isDir(p) { return this.exists(p) === 2; }
+
+  setDoc(file, text) { this.docs.set(path.resolve(file), text); }
+  closeDoc(file) { this.docs.delete(path.resolve(file)); }
+
+  // `grav env --json`: where the standard library and packages live.
+  env() {
+    if (this.envInfo) return this.envInfo;
+    let info = {};
+    try {
+      info = JSON.parse(execFileSync(this.compiler, ["env", "--json"], { timeout: 5000, cwd: this.root || undefined }).toString());
+    } catch (e) {
+      this.log("grav env failed: " + e.message);
+    }
+    if (!info.std) info.std = process.env.GRAV_STD || this.guessStd();
+    if (!info.packages) info.packages = process.env.GRAV_PACKAGES || path.join(os.homedir(), ".local", "grav", "packages");
+    this.envInfo = info;
+    return info;
+  }
+  guessStd() {
+    for (const c of [path.join(__dirname, "..", "..", "lib"), path.join(os.homedir(), ".local", "share", "grav", "lib")])
+      if (fs.existsSync(path.join(c, "std.grav"))) return c;
+    return "";
+  }
+
+  text(file) {
+    const p = path.resolve(file);
+    if (this.docs.has(p)) return this.docs.get(p);
+    const m = this.snap && this.snap.text;
+    if (m && m.has(p)) return m.get(p);
+    let text = null;
+    try {
+      const st = fs.statSync(p), c = this.files.get(p);
+      if (c && c.mtime === st.mtimeMs && c.size === st.size) text = c.text;
+      else { text = fs.readFileSync(p, "utf8"); this.files.set(p, { mtime: st.mtimeMs, size: st.size, text }); }
+    } catch { this.files.delete(p); }
+    if (m) m.set(p, text);
+    return text;
+  }
+  info(file) {
+    const p = path.resolve(file);
+    const text = this.text(p);
+    if (text == null) return null;
+    const c = this.cache.get(p);
+    if (c && c.text === text) return c.info;
+    const info = parseFile(text);
+    this.cache.set(p, { text, info });
+    return info;
+  }
+  isLibrary(file) {
+    const std = this.env().std;
+    const pk = this.env().packages;
+    const p = path.resolve(file);
+    return (std && p.startsWith(path.resolve(std) + path.sep)) || (pk && p.startsWith(path.resolve(pk) + path.sep));
+  }
+
+  // ---- grav.toml / packages ----
+  project(dir) {
+    const start = path.resolve(dir), m = this.snap && this.snap.project;
+    if (m && m.has(start)) return m.get(start);
+    let found = null;
+    for (let d = start; ; d = path.dirname(d)) {
+      if (this.isFile(path.join(d, "grav.toml"))) { found = this.readProject(d); break; }
+      if (path.dirname(d) === d) break;
+    }
+    if (m) m.set(start, found);
+    return found;
+  }
+  readProject(root) {
+    const stamp = (f) => { try { const st = fs.statSync(path.join(root, f)); return st.mtimeMs + ":" + st.size; } catch { return "-"; } };
+    const key = stamp("grav.toml") + "|" + stamp("grav.lock"), c = this.projects.get(root);
+    if (c && c.stamp === key) return c.proj;
+    const proj = this.readProjectNow(root);
+    this.projects.set(root, { stamp: key, proj });
+    return proj;
+  }
+  readProjectNow(root) {
+    const proj = { root, paths: [], deps: [], lib: "", main: "", lock: {} };
+    let section = "";
+    try {
+      for (const l of fs.readFileSync(path.join(root, "grav.toml"), "utf8").split(/\r?\n/)) {
+        const t = l.trim();
+        if (!t || t.startsWith("#")) continue;
+        if (t.startsWith("[")) { section = t.slice(1, t.indexOf("]")).trim(); continue; }
+        const eq = t.indexOf("=");
+        if (eq < 0) continue;
+        const key = t.slice(0, eq).trim(), val = t.slice(eq + 1).trim();
+        const strs = [...val.matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+        if (section === "dependencies") {
+          let source = "", version = "", local = false;
+          if (val.startsWith("{")) {
+            const g = /\b(git|source|path)\s*=\s*"([^"]*)"/.exec(val), v = /\b(?:version|tag|branch|rev)\s*=\s*"([^"]*)"/.exec(val);
+            source = g ? g[2] : ""; version = v ? v[1] : ""; local = !!g && g[1] === "path";
+          } else {
+            const spec = strs[0] || "", at = spec.lastIndexOf("@");
+            if (at > 0 && !spec.slice(at).includes("/") && !(spec.startsWith("git@") && at === 3)) { source = spec.slice(0, at); version = spec.slice(at + 1); }
+            else source = spec;
+          }
+          proj.deps.push({ name: key, source, version, local });
+        } else if (key === "paths") proj.paths = strs.map((s) => path.join(root, s));
+        else if (key === "lib" && strs[0]) proj.lib = path.join(root, strs[0]);
+        else if (key === "main" && strs[0]) proj.main = path.join(root, strs[0]);
+      }
+      const lock = path.join(root, "grav.lock");
+      if (fs.existsSync(lock))
+        for (const l of fs.readFileSync(lock, "utf8").split(/\r?\n/)) {
+          const m = /^(\S+)\s*=\s*\{.*version = "([^"]*)".*commit = "([^"]*)"/.exec(l), s = /source = "([^"]*)"/.exec(l);
+          if (m) proj.lock[m[1]] = { source: s ? s[1] : "", version: m[2], commit: m[3] };
+        }
+    } catch {}
+    return proj;
+  }
+  static sourceKey(source) {
+    let s = source.replace(/^(https?|ssh|git|file):\/\//, "");
+    if (s.startsWith("git@")) s = s.slice(4).replace(":", "/");
+    s = s.replace(/\.git$/, "").replace(/\/+$/, "");
+    if (s.startsWith("/")) s = "local" + s;
+    return s.replace(/^\./, "_");
+  }
+  // Where a dependency's files are, like the driver's installedPackage(): a
+  // `{ path = ... }` one in place (relative to grav.toml), a git one in the
+  // package cache at its grav.lock commit, else its version, else any installed.
+  packageDir(proj, dep) {
+    const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+    if (dep.local) {
+      let p = dep.source;
+      if (p.startsWith("~")) p = path.join(os.homedir(), p.slice(1));
+      p = path.resolve(proj.root, p);
+      try { p = fs.realpathSync(p); } catch {}
+      return isDir(p) ? p : null;
+    }
+    const key = Workspace.sourceKey(dep.source);
+    const base = path.join(this.env().packages, path.dirname(key));
+    const repo = path.basename(key);
+    const lock = proj.lock[dep.name];
+    const wants = [];
+    if (lock && (!lock.source || lock.source === dep.source)) wants.push(lock.version || (lock.commit || "").slice(0, 12));
+    if (dep.version) wants.push(dep.version);
+    for (const want of wants) if (want && isDir(path.join(base, `${repo}@${want}`))) return path.join(base, `${repo}@${want}`);
+    try {
+      const found = fs.readdirSync(base).filter((n) => n.startsWith(repo + "@"))
+        .map((n) => path.join(base, n)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      return found[0] || null;
+    } catch { return null; }
+  }
+
+  // Resolve an import spec written in `fromFile`, like the compiler's loader.
+  // For each package name, the directory the whole program uses: the
+  // workspace's own declaration, else a local path anywhere in the graph, else
+  // the first one found (the compiler's chosenPackages()).
+  chosenPackages() {
+    if (this.snap && this.snap.chosen) return this.snap.chosen;
+    const chosen = new Map(), rank = new Map(), walked = new Set();
+    const top = this.root ? this.project(this.root) : null;
+    const todo = top ? [[top, 0]] : [];
+    while (todo.length) {
+      const [proj, depth] = todo.pop();
+      for (const dep of proj.deps) {
+        const dir = this.packageDir(proj, dep);
+        if (!dir) continue;
+        const r = depth === 0 ? 0 : dep.local ? 1 : 2;
+        if (!rank.has(dep.name) || r < rank.get(dep.name)) { rank.set(dep.name, r); chosen.set(dep.name, dir); }
+        if (!walked.has(dir) && this.isFile(path.join(dir, "grav.toml"))) { walked.add(dir); todo.push([this.readProject(dir), depth + 1]); }
+      }
+    }
+    if (this.snap) this.snap.chosen = chosen;
+    return chosen;
+  }
+  resolveImport(fromFile, spec) {
+    const m = this.snap && this.snap.resolve, key = path.dirname(path.resolve(fromFile)) + "\0" + spec;
+    if (m && m.has(key)) return m.get(key);
+    const r = this.resolveImportNow(fromFile, spec);
+    if (m) m.set(key, r);
+    return r;
+  }
+  resolveImportNow(fromFile, spec) {
+    const tryFile = (p) => {
+      if (this.isFile(p)) return p;
+      if (!path.extname(p) && this.isFile(p + ".grav")) return p + ".grav";
+      return null;
+    };
+    const fromDir = path.dirname(path.resolve(fromFile));
+    if (path.isAbsolute(spec)) return tryFile(spec);
+    const std = this.env().std;
+    if (spec === "std" || spec.startsWith("std/")) return std ? tryFile(spec === "std" ? path.join(std, "std.grav") : path.join(std, spec.slice(4))) : null;
+    let r = tryFile(path.join(fromDir, spec));
+    if (r) return r;
+    const own = this.project(fromDir);
+    if (own) {
+      const head = spec.split("/")[0];
+      const dep = own.deps.find((d) => d.name === head);
+      if (dep) {
+        // One copy of each package for the whole program, as the compiler picks it.
+        const chosen = this.chosenPackages().get(head);
+        const dir = chosen || this.packageDir(own, dep);
+        if (!dir) return null;
+        if (spec === head) {
+          const sub = this.readProject(dir);
+          for (const c of [sub.lib, path.join(dir, head + ".grav"), path.join(dir, "lib.grav"), path.join(dir, "src", "lib.grav"), path.join(dir, "mod.grav"), path.join(dir, "src", head + ".grav")])
+            if (c && this.isFile(c)) return c;
+          return null;
+        }
+        return tryFile(path.join(dir, spec.slice(head.length + 1)));
+      }
+      for (const p of own.paths) if ((r = tryFile(path.join(p, spec)))) return r;
+    }
+    for (const p of (process.env.GRAV_PATH || "").split(":").filter(Boolean)) if ((r = tryFile(path.join(p, spec)))) return r;
+    if (std && (r = tryFile(path.join(std, spec)))) return r;
+    return null;
+  }
+
+  // The file and everything it imports (transitively).
+  reachable(file) {
+    const m = this.snap && this.snap.reach, p = path.resolve(file);
+    if (m && m.has(p)) return m.get(p);
+    const out = this.reachableNow(file);
+    if (m) m.set(p, out);
+    return out;
+  }
+  reachableNow(file) {
+    const out = [], seen = new Set();
+    const stack = [path.resolve(file)];
+    const std = this.env().std;
+    if (std && this.isFile(path.join(std, "prelude.grav"))) stack.push(path.join(std, "prelude.grav"));
+    while (stack.length && out.length < 400) {
+      const f = stack.pop();
+      if (seen.has(f)) continue;
+      seen.add(f);
+      out.push(f);
+      const info = this.info(f);
+      if (!info) continue;
+      for (const imp of info.imports) {
+        const r = this.resolveImport(f, imp.spec);
+        if (r) stack.push(path.resolve(r));
+      }
+    }
+    return out;
+  }
+
+  // Every .grav file under the workspace root, plus open documents.
+  workspaceFiles() {
+    if (this.snap && this.snap.tree) return this.snap.tree;
+    const now = Date.now();
+    if (!this.tree || now - this.tree.at > Workspace.TREE_TTL_MS) this.tree = { at: now, files: this.listTree() };
+    const out = [...new Set([...this.docs.keys(), ...this.tree.files])];
+    if (this.snap) this.snap.tree = out;
+    return out;
+  }
+  // Every .grav file of the standard library.
+  libraryFiles(std) {
+    const out = [];
+    const walk = (d) => { try { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (e.name.endsWith(".grav")) out.push(f); } } catch {} };
+    walk(std);
+    return out;
+  }
+  listTree() {
+    const out = new Set();
+    const walk = (dir, depth) => {
+      if (depth > 12) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith(".") || ["build", "node_modules"].includes(e.name) || e.name.startsWith("cmake-build")) continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full, depth + 1);
+        else if (e.isFile() && e.name.endsWith(".grav")) out.add(full);
+      }
+    };
+    if (this.root) walk(this.root, 0);
+    return [...out];
+  }
+
+  // Files searched for a name used in `file`: what it imports first, then the workspace.
+  searchOrder(file) {
+    const r = this.reachable(file);
+    const set = new Set(r);
+    return [...r, ...this.workspaceFiles().filter((f) => !set.has(path.resolve(f)))];
+  }
+
+  // ---- queries ----
+  // `files`: where to look (default: what `file` imports, then the workspace). The
+  // result's `qualified` says the qualifier picked them (false: it matched none).
+  symbolsNamed(file, name, qualifier, files) {
+    const out = [];
+    out.qualified = !qualifier;
+    for (const f of files || this.searchOrder(file)) {
+      const info = this.info(f);
+      if (!info) continue;
+      for (const s of info.symbols) {
+        if (s.name !== name) continue;
+        if (s.local && path.resolve(f) !== path.resolve(file)) continue;
+        out.push({ file: f, sym: s });
+      }
+    }
+    if (qualifier) { // prefer those whose namespace/container matches the qualifier's last part
+      const last = qualifier.split(".").pop();
+      const q = out.filter((x) => x.sym.container === last || (x.sym.namespace || "").split(".").pop() === last ||
+                                  (x.sym.namespace || "").endsWith(qualifier));
+      if (q.length) { q.qualified = true; return q; }
+    }
+    return out;
+  }
+
+  // Locals visible at a position: those declared above it in the enclosing function.
+  localsAt(file, pos) {
+    const info = this.info(file);
+    if (!info) return [];
+    const owners = info.symbols.filter((s) => s.children && s.line <= pos.line && (s.endLine === undefined || s.endLine >= pos.line));
+    const owner = owners[owners.length - 1];
+    return info.symbols.filter((s) => s.local && s.local === owner && s.line <= pos.line);
+  }
+
+  definition(file, pos) {
+    const text = this.text(file) || "";
+    const line = splitLines(text)[pos.line] || "";
+    // on an import string: open the module
+    const info = this.info(file);
+    for (const imp of (info ? info.imports : [])) {
+      if (imp.line === pos.line && pos.character >= imp.specRange.start.character - 1 && pos.character <= imp.specRange.end.character + 1) {
+        const r = this.resolveImport(file, imp.spec);
+        return r ? [{ file: r, range: range(0, 0, 0) }] : [];
+      }
+    }
+    const w = wordAtPosition(text, pos);
+    if (!w) return [];
+    if (!w.qualifier) {
+      const locals = this.localsAt(file, pos).filter((s) => s.name === w.word);
+      if (locals.length) return [{ file, range: locals[locals.length - 1].range }];
+    } else if (w.qualifier === "self" || w.qualifier.startsWith("self.")) {
+      const cls = this.enclosingClass(file, pos);
+      if (cls) {
+        const m = this.membersOf(file, cls.name).filter((x) => x.sym.name === w.word);
+        if (m.length) return m.map((x) => ({ file: x.file, range: x.sym.range }));
+      }
+    } else {
+      const t = this.typeOfExpr(file, pos, w.qualifier);
+      if (t) {
+        const m = this.membersOf(file, t).filter((x) => x.sym.name === w.word);
+        if (m.length) return m.map((x) => ({ file: x.file, range: x.sym.range }));
+        const vm = this.valueMethod(file, t, w.word);       // n.toHex(): Integer.toHex
+        if (vm) return [{ file: vm.file, range: vm.sym.range }];
+      }
+    }
+    // an alias from `import { A as B }` or `use a.A as B` means A
+    let name = w.word, qualifier = w.qualifier;
+    if (!qualifier && info) {
+      for (const imp of info.imports) for (const n of imp.names) if (n.as === name && n.name !== name) name = n.name;
+      for (const u of info.uses) if (!u.glob && u.alias === name && u.target.split(".").pop() !== name) {
+        qualifier = u.target.split(".").slice(0, -1).join(".");
+        name = u.target.split(".").pop();
+      }
+    }
+    // a qualifier that is a `use … as` alias: sh.Rect -> geometry.shapes.Rect
+    if (qualifier && info) {
+      const head = qualifier.split(".")[0];
+      for (const u of info.uses) if (!u.glob && u.alias === head) qualifier = u.target + qualifier.slice(head.length);
+    }
+    // What the file imports first (rank() prefers it anyway); the whole workspace
+    // only when that has nothing, which spares parsing every file on a cold start.
+    let near = this.symbolsNamed(file, name, qualifier, this.reachable(file));
+    let found = (near.length && near.qualified ? near : this.symbolsNamed(file, name, qualifier)).filter((x) => !x.sym.isParam);
+    found = this.rank(file, found, qualifier);
+    void line;
+    return found.map((x) => ({ file: x.file, range: x.sym.range }));
+  }
+
+  // Narrow candidate declarations the way the compiler would choose: what the
+  // file imports beats the rest of the workspace; a qualifier must match the
+  // namespace; unqualified names prefer the global scope and `use`d namespaces.
+  rank(file, found, qualifier) {
+    if (found.length < 2) return found;
+    const reach = new Set(this.reachable(file).map((f) => path.resolve(f)));
+    let r = found.filter((x) => reach.has(path.resolve(x.file)));
+    if (!r.length) r = found;
+    if (qualifier) {
+      const exact = r.filter((x) => x.sym.namespace === qualifier || (x.sym.namespace || "").endsWith("." + qualifier) || x.sym.container === qualifier.split(".").pop());
+      if (exact.length) r = exact;
+    } else if (r.length > 1) {
+      const info = this.info(file);
+      const globs = new Set((info ? info.uses : []).filter((u) => u.glob).map((u) => u.target));
+      const pref = r.filter((x) => !x.sym.container && (!x.sym.namespace || globs.has(x.sym.namespace) || x.sym.namespace.startsWith("std.")));
+      if (pref.length) r = pref;
+    }
+    return r;
+  }
+
+  enclosingClass(file, pos) {
+    const info = this.info(file);
+    if (!info) return null;
+    const cands = info.symbols.filter((s) => [KIND.Class, KIND.Struct, KIND.Enum, KIND.Interface].includes(s.kind) && !s.local &&
+      s.line <= pos.line && (s.endLine === undefined || s.endLine >= pos.line));
+    return cands[cands.length - 1] || null;
+  }
+
+  // Members of a type (and its bases), by type name.
+  // What a name written in `file` really refers to, after `use a.B as C` and
+  // `import { B as C } from ...` aliases: { name, qualifier }.
+  unalias(file, name, qualifier) {
+    const info = this.info(file);
+    if (!info || qualifier) return { name, qualifier };
+    for (const imp of info.imports) for (const n of imp.names) if (n.as === name && n.name !== name) return { name: n.name, qualifier: "" };
+    for (const u of info.uses) {
+      if (u.glob || u.alias !== name) continue;
+      const parts = u.target.split(".");
+      if (parts[parts.length - 1] !== name || parts.length > 1) return { name: parts.pop(), qualifier: parts.join(".") };
+    }
+    return { name, qualifier };
+  }
+
+  membersOf(file, typeName, seen = new Set()) {
+    let base = String(typeName).replace(/<.*$/, "").replace(/\?$/, "").trim();
+    let short = base.split(".").pop();
+    let qual = base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : "";
+    ({ name: short, qualifier: qual } = this.unalias(file, short, qual));   // Dict -> std.collections.HashMap
+    if (!short || seen.has(short)) return [];
+    seen.add(short);
+    const out = [];
+    let found = this.symbolsNamed(file, short, qual).filter((x) =>
+      [KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(x.sym.kind));
+    found = this.rank(file, found, qual);
+    for (const { file: f, sym } of found) {
+      if (![KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(sym.kind)) continue;
+      for (const m of sym.members || []) out.push({ file: f, sym: m });
+      if (sym.base) out.push(...this.membersOf(file, sym.base, seen));
+      for (const t of sym.impls || [])                                    // implements Versioned: its members too
+        for (const x of this.membersOf(file, t, seen)) if (!out.some((o) => o.sym.name === x.sym.name)) out.push(x);
+      // a data enum variant's fields live on Shape$Circle: none in source; its methods on the base
+      break;
+    }
+    // Extension methods (`fn Point.norm()`) of this type, from every file in reach.
+    for (const f of this.searchOrder(file)) {
+      const info = this.info(f);
+      for (const s of (info && info.symbols) || [])
+        if (s.extends && s.extends.replace(/<.*$/, "").split(".").pop() === short && !out.some((o) => o.sym.name === s.name))
+          out.push({ file: f, sym: s });
+    }
+    return out;
+  }
+
+  // Best-effort type of `a`, `a.b`, `a.b()` at a position (locals, params, fields, returns).
+  typeOfExpr(file, pos, expr, depth = 0) {
+    // strings to "", call arguments to (), so the dots left separate members
+    let e = expr.trim().replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    let type = "";
+    const made = /^new\s+([\w.]+(?:<[^()]*>)?)\s*\([^()]*\)/.exec(e);   // new User().posts()
+    if (made) { type = made[1]; e = "_" + e.slice(made[0].length); }
+    const lit = /^(""|-?\d+\.\d+|-?\d+|true|false)(?=[.(]|$)/.exec(e) || /^\((""|-?\d+(?:\.\d+)?)\)(?=\.|$)/.exec(e);
+    if (lit) {                                                    // "x".upper(), 255.toHex(), (-7).abs()
+      type = lit[1] === '""' ? "string" : /^(true|false)$/.test(lit[1]) ? "bool" : lit[1].includes(".") ? "float" : "int";
+      e = "_" + e.slice(lit[0].length);
+    }
+    for (let prev = ""; prev !== e;) { prev = e; e = e.replace(/\([^()]*\)/g, "()").replace(/\[[^\[\]]*\]/g, "[]"); }
+    const parts = e.split(".");
+    // xs[0], m["k"], f()[1]: the element type, once per index
+    const indexed = (t, p) => { for (let k = (/(\[\])+$/.exec(p) || [""])[0].length / 2; k > 0 && t; k--) t = this.elementType(file, t); return t; };
+    const first = parts[0].replace(/(\[\])+$/, "").replace(/\(\)$/, "");
+    const builtin = parts[0].replace(/(\[\])+$/, "").endsWith("()") && BUILTIN_RETURNS[first];
+    if (lit || made) {
+    } else if (builtin) {
+      type = builtin;                                             // reflect(User) is a ClassInfo
+    } else if (first === "self") {
+      const c = this.enclosingClass(file, pos);
+      type = c ? c.name : "";
+    } else if (first === "super") {                               // super.x: the base class's members
+      const c = this.enclosingClass(file, pos);
+      type = c && c.base ? c.base : "";
+    } else {
+      const local = this.localsAt(file, pos).filter((s) => s.name === first).pop();
+      if (local) type = this.localType(file, local, depth);
+      else {
+        const decl = this.symbolsNamed(file, first).find((x) => [KIND.Class, KIND.Struct, KIND.Enum, KIND.Interface, KIND.Namespace].includes(x.sym.kind));
+        const fn = parts[0].endsWith("()") && this.symbolsNamed(file, first).find((x) => x.sym.kind === KIND.Function && !x.sym.container);
+        if (fn) type = fn.sym.returns || "";
+        else if (decl) type = decl.sym.name;
+        else {
+          const g = this.symbolsNamed(file, first).find((x) => x.sym.type);
+          if (g) type = g.sym.type;
+        }
+      }
+    }
+    if (typeof type === "string") type = indexed(type, parts[0]);
+    for (const p0 of parts.slice(1)) {
+      if (!type || typeof type !== "string") return "";
+      const p = p0.replace(/(\[\])+$/, "");
+      const name = p.replace(/\(\)$/, ""), called = p.endsWith("()");
+      const m = this.membersOf(file, type).find((x) => x.sym.name === name);
+      if (!m) {                                                   // n.toHex(): Integer.toHex(n)
+        const vm = this.valueMethod(file, type, name);
+        if (!vm) return "";
+        type = indexed(called ? vm.returns : fnTypeOf(vm.sym, 1), p0);
+        continue;
+      }
+      let t;
+      if (m.sym.kind === KIND.EnumMember) t = m.sym.container;       // Shape.Circle(1.0) is a Shape
+      else if (m.sym.kind === KIND.Field || m.sym.kind === KIND.Property) t = m.sym.type;
+      else t = called ? (m.sym.returns || "") : fnTypeOf(m.sym, 0);   // Integer.compare as a value
+      type = indexed(this.bindMember(file, type, m.sym, t), p0);
+    }
+    return typeof type === "string" ? type : "";
+  }
+  // A member's type as seen on a receiver: the class's type parameters bound to the
+  // receiver's arguments (Array<int>.get() -> int, Query<User>.first() -> User) and
+  // Self to the receiver (User.where(...) -> Query<User>).
+  bindMember(file, recv, sym, t) {
+    if (!t || typeof t !== "string") return t;
+    const m = /^([\w.]+)\s*(?:<(.*)>)?\??$/.exec(String(recv).trim());
+    if (!m) return t;
+    const base = m[1], args = m[2] ? splitParams(m[2]).map((a) => a.trim()) : [];
+    let out = t.replace(/\bSelf\b/g, base.split(".").pop() + (m[2] ? `<${m[2]}>` : ""));
+    if (args.length && sym.container) {
+      const cls = this.symbolsNamed(file, sym.container).find((x) => [KIND.Class, KIND.Struct, KIND.Interface].includes(x.sym.kind) && x.sym.typeParams);
+      const names = cls ? splitParams(cls.sym.typeParams.replace(/^<|>$/g, "")).map((p) => p.split(":")[0].trim()) : [];
+      names.forEach((n, k) => { if (args[k]) out = out.replace(new RegExp(`\\b${n}\\b`, "g"), args[k]); });
+    }
+    return out;
+  }
+  returnOf(file, cls, method) {
+    const m = this.membersOf(file, cls).find((x) => x.sym.name === method);
+    if (m && m.sym.kind === KIND.EnumMember) return cls;   // Shape.Circle(1.0) is a Shape
+    return m ? (m.sym.returns || "") : "";
+  }
+
+  // The type of a local binding: the compiler's, from the last `grav check --types`
+  // of the file (matched by name and line text, so edits elsewhere keep it), else
+  // what the source says or suggests ("" when unknown).
+  localType(file, sym, depth = 0) {
+    const known = this.types.get(path.resolve(file));
+    const line = known && splitLines(this.text(file) || "")[sym.line];
+    const t = line !== undefined && known && known.get(sym.name + "\0" + line.trim());
+    if (t) return t;
+    if (depth > 4) return "";
+    if (sym.type && sym.type.expr) return this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.type.expr, depth + 1);
+    if (typeof sym.type === "object") return this.returnOf(file, sym.type.call, sym.type.method);
+    if (sym.type || sym.role !== "for" || !sym.iter) return sym.type || "";
+    if (/\.\./.test(sym.iter)) return "int";                                   // for (i in 0..n)
+    const it = this.typeOfExpr(file, { line: sym.line, character: sym.ch }, sym.iter, depth + 1);
+    if (it === "string" || /\]$|^(?:[\w.]+\.)?Array</.test(it)) return this.elementType(file, it);
+    const r = it ? this.loopElement(file, it, 0) : "";
+    return /^[A-Z]$/.test(r) ? "" : r;
+  }
+  // Decorator names written in the project (the file's imports and the workspace),
+  // with how often: [[name, uses]], the most used first.
+  decoratorNames(file) {
+    const count = new Map();
+    for (const f of this.searchOrder(file)) {
+      if (this.isLibrary(f) && !/reflect\.grav$/.test(f)) continue;
+      const text = this.text(f);
+      if (!text) continue;
+      for (const m of mask(text).matchAll(/(?:^|[^\w@.])@([A-Za-z_][\w.]*)/gm)) count.set(m[1], (count.get(m[1]) || 0) + 1);
+    }
+    return [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }
+  // The types `expr as T` can convert a value of expr's type to, as the compiler's
+  // casts and conversionMethod(): numbers between themselves, strings and numbers
+  // or bools through std/types (`"42" as int`), a class with toInt()/toFloat()/...,
+  // and any class with a static from(x) that takes the value (`d as Decimal`).
+  conversions(file, pos, expr) {
+    const t = normType(this.typeOfExpr(file, pos, expr));
+    const out = [], seen = new Set();
+    const add = (type, detail, doc) => { if (!seen.has(type)) { seen.add(type); out.push({ type, detail, doc: doc || "" }); } };
+    const nums = ["int", "long", "float", "byte", "uint", "double"];
+    const numeric = INT_TYPES.has(t) || t === "float" || t === "float32";
+    if (numeric) for (const n of nums) if (n !== t) add(n, `${t} -> ${n}`, "A numeric cast.");
+    if (t === "bool") for (const n of ["int", "long", "float"]) add(n, "true is 1, false is 0", "");
+    if (t === "string") for (const [n, m] of [["int", "toInt"], ["long", "toLong"], ["float", "toFloat"], ["bool", "toBool"]])
+      add(n, `"…".${m}() (std/types)`, `Parses the string; fails with an error when it is not a ${n}.`);
+    if (numeric || t === "bool") add("string", `${t} -> string`, "Through std/types: the value's text.");
+    if (t === "bool" || numeric) add("bool", "nonzero is true", "");
+    // a class instance with toInt/toFloat/toString/toBool/toLong
+    if (t && !BUILTIN_VALUE.has(t.replace(/\?$/, "")))
+      for (const { sym } of this.membersOf(file, t))
+        if (!sym.isStatic && sym.params && !sym.params.length && /^to(Int|Long|Float|String|Bool)$/.test(sym.name))
+          add({ toInt: "int", toLong: "long", toFloat: "float", toString: "string", toBool: "bool" }[sym.name], `${sym.container}.${sym.name}()`, sym.doc);
+    // classes with a static from(x) taking the value
+    for (const f of this.reachable(file)) {
+      const info = this.info(f);
+      if (!info) continue;
+      for (const s of info.symbols)
+        if (s.name === "from" && s.isStatic && s.container && s.params && s.params.length === 1 && t && typeFits(paramType(s.params[0]), t))
+          add(s.container, `${s.container}.from(${paramType(s.params[0])})`, s.doc);
+    }
+    // the class itself and its bases (an upcast), for a class instance
+    if (t && /^[A-Z]/.test(t)) {
+      const decl = this.symbolsNamed(file, t.replace(/<.*$/, "")).find((x) => x.sym.kind === KIND.Class);
+      for (let b = decl && decl.sym.base, k = 0; b && k < 10; k++) {
+        add(b, "a base class", "");
+        const bd = this.symbolsNamed(file, b).find((x) => x.sym.kind === KIND.Class);
+        b = bd && bd.sym.base;
+      }
+    }
+    return out;
+  }
+
+  // ---- methods on built-in values (std/types) ----
+  // `n.toHex()` is `Integer.toHex(n)`: the std.types classes whose static methods
+  // a value of type `t` takes as its own, the most specific first (as the
+  // compiler's valueMethodClasses); a class instance takes Object's for names
+  // its class lacks.
+  static valueClasses(t) {
+    const b = normType(t);
+    if (/\?$/.test(b) && BUILTIN_VALUE.has(b.slice(0, -1))) return ["Null"];
+    if (b === "byte" || b === "uint8") return ["Byte", "Integer"];
+    if (INT_TYPES.has(b)) return ["Integer"];
+    if (b === "float" || b === "float32") return ["Float"];
+    if (b === "string") return ["String"];
+    if (b === "bool") return ["Bool"];
+    if (b === "any") return ["Object"];
+    return b && /^[A-Za-z_][\w.]*(<.*>)?\??$/.test(b) && !BUILTIN_VALUE.has(b) ? ["Object"] : [];
+  }
+  // The static methods of std.types class `cls` a value of type `t` can call as its
+  // own (first parameter fits), each with its owner and the return type for `t`.
+  valueMethods(file, t, cls) {
+    const out = [];
+    for (const { file: f, sym } of this.membersOf(file, "std.types." + cls)) {
+      if (!sym.isStatic || ![KIND.Method, KIND.Function].includes(sym.kind) || !sym.params || !sym.params.length) continue;
+      const fit = typeFits(paramType(sym.params[0]), t, sym.typeParams);
+      if (fit) out.push({ file: f, sym, owner: cls, fit, returns: bindReturn(sym, t) });
+    }
+    return out;
+  }
+  // The method `name` a value of type `t` calls (`port.grouped()`), the best fit; or null.
+  valueMethod(file, t, name) {
+    const ms = this.valueMethodsNamed(file, t, name);
+    return ms[0] || null;
+  }
+  // Every overload of `name` a value of type `t` may call, the best first.
+  valueMethodsNamed(file, t, name) {
+    for (const cls of Workspace.valueClasses(t)) {
+      if (cls === "Object" && this.membersOf(file, t).some((x) => x.sym.name === name)) return [];
+      const ms = this.valueMethods(file, t, cls).filter((x) => x.sym.name === name);
+      if (ms.length) return ms.sort((a, b) => b.fit - a.fit);
+    }
+    return [];
+  }
+
+  // What `for (x in <a value of type t>)` gives x.
+  // What `for (x in v)` gives for a class or interface type, as the compiler picks it:
+  // iterator()'s next(), else get(i)/at(i), else its own next() beside hasNext().
+  loopElement(file, t, depth) {
+    const members = this.membersOf(file, t);
+    const ret = (name) => members.find((x) => x.sym.name === name && x.sym.returns);
+    const iter = depth < 3 && ret("iterator");
+    if (iter) {
+      const r = this.loopElement(file, this.bindMember(file, t, iter.sym, iter.sym.returns), depth + 1);
+      if (r) return r;
+    }
+    const get = ret("get") || ret("at");
+    if (get && depth === 0) return this.bindMember(file, t, get.sym, get.sym.returns);
+    const next = ret("next");
+    return next && members.some((x) => x.sym.name === "hasNext") ? this.bindMember(file, t, next.sym, next.sym.returns) : "";
+  }
+
+  elementType(file, t) {
+    let m, r = "";
+    if (t === "string") r = "string";
+    else if ((m = /^(.+)\[\d*\]$/.exec(t))) r = m[1];                       // int[3], T[]
+    else if ((m = /^(?:[\w.]+\.)?Array<(.+)>$/.exec(t))) r = m[1];
+    else if (t) {
+      const get = this.membersOf(file, t).find((x) => ["get", "at"].includes(x.sym.name) && x.sym.returns);
+      r = get ? this.bindMember(file, t, get.sym, get.sym.returns) : "";
+    }
+    return /^[A-Z]$/.test(r) ? "" : r;                                         // a bare type parameter: unknown
+  }
+
+  hover(file, pos) {
+    const text = this.text(file) || "";
+    const w = wordAtPosition(text, pos);
+    if (!w) return null;
+    const lineText = splitLines(text)[pos.line] || "";
+    if (lineText[w.range.start.character - 1] === "@") {          // @Column: what a decorator is, and how to read it
+      const uses = (this.decoratorNames(file).find((d) => d[0] === w.word) || [, 0])[1];
+      return { markdown: DECORATOR_DOC(w.word) + (uses ? `\n\n*used ${uses} time${uses === 1 ? "" : "s"} in this project*` : ""), range: w.range };
+    }
+    const acc = (w.word === "get" || w.word === "set") && RE.prop.exec(lineText);
+    if (acc && lineText.indexOf(acc[1] + " ", acc.index) === w.range.start.character) {
+      const [what, ex] = PROPERTY_DOCS[w.word];
+      return { markdown: `**${w.word}** — ${what}\n\n\`\`\`grav\n${ex}\n\`\`\``, range: w.range };
+    }
+    // A keyword in a member's place is a name: req.string(), Rule.in(...), fn match(), public type: T.
+    const before = lineText.slice(0, w.range.start.character).replace(/\s+$/, "");
+    const asMember = /[^.]\.$/.test(before) || /->$/.test(before) || /\bfn$/.test(before) ||
+      (/\b(?:public|private|protected|static|readonly|weak)$/.test(before) && /^\s*:(?!:)/.test(lineText.slice(w.range.end.character)));
+    if (KEYWORD_SET.has(w.word) && !asMember) {
+      const d = KEYWORD_DOCS[w.word];
+      return d ? { markdown: `**${w.word}** — ${d[0]}\n\n\`\`\`grav\n${d[1]}\n\`\`\``, range: w.range } : null;
+    }
+    const b = BUILTINS.find((x) => x[0] === w.word) || INTERNAL_BUILTINS.find((x) => x[0] === w.word);
+    const defs = this.definition(file, pos);
+    for (const d of defs) {
+      const info = this.info(d.file);
+      const sym = info && info.symbols.find((s) => s.range.start.line === d.range.start.line && s.range.start.character === d.range.start.character);
+      if (!sym) continue;
+      if (sym.local) return { markdown: this.localHover(d.file, sym), range: w.range };
+      const vm = w.qualifier && sym.isStatic && this.valueCall(file, pos, w);
+      if (vm) {
+        const recv = w.qualifier.length > 24 ? "x" : w.qualifier, rest = (sym.params || []).slice(1).map((p) => p.split(":")[0].trim());
+        let md = "```grav\n" + valueSignature(sym, this.typeOfExpr(file, pos, w.qualifier)) + "\n```";
+        if (sym.doc) md += "\n\n" + sym.doc;
+        md += `\n\n*\`${recv}.${sym.name}(${rest.join(", ")})\` is \`${vm.owner}.${sym.name}(${[recv, ...rest].join(", ")})\` · std/types*`;
+        return { markdown: md, range: w.range };
+      }
+      const where = [];
+      if (sym.namespace) where.push("namespace " + sym.namespace);
+      if (sym.container) where.push("in " + sym.container);
+      if (this.isLibrary(d.file)) where.push(this.moduleName(d.file));
+      let md = "```grav\n" + sym.detail + "\n```";
+      if (sym.type && sym.kind === KIND.Variable && !sym.detail.includes(":")) md += `\n\ntype: \`${typeof sym.type === "string" ? sym.type : ""}\``;
+      if (sym.doc) md += "\n\n" + sym.doc;
+      if (where.length) md += "\n\n*" + where.join(" · ") + "*";
+      return { markdown: md, range: w.range };
+    }
+    if (b) return { markdown: "```grav\n" + b[1] + "\n```\n\n" + b[2], range: w.range };
+    return null;
+  }
+  // The value method a qualified word is (`n.toHex` at the cursor: Integer.toHex), or null.
+  valueCall(file, pos, w) {
+    const t = this.typeOfExpr(file, pos, w.qualifier);
+    if (!t || this.membersOf(file, t).some((x) => x.sym.name === w.word)) return null;
+    return this.valueMethod(file, t, w.word);
+  }
+  // A local binding as hover shows it: `let xs: Array<int>`, `x: int` (loop variable), ...
+  localHover(file, sym) {
+    const type = this.localType(file, sym);
+    const decl = ["let", "const"].includes(sym.role) ? `${sym.role} ${sym.name}` : sym.name;
+    const what = { for: "loop variable", index: "loop index", catch: "caught exception", lambda: "lambda parameter",
+                   case: "match binding", param: `parameter of ${sym.local.name}` }[sym.role];
+    return "```grav\n" + decl + (type ? ": " + type : "") + "\n```" + (what ? `\n\n*${what}*` : "");
+  }
+  // Inlay hints, within lines [from, to]: the type after each binding whose type is
+  // not written (let without `: T`, for-in, lambda parameters, match bindings), and
+  // (unless opts.parameterNames is false) the parameter's name before each literal
+  // argument of a call (`square(n: 3)`), as TypeScript's "literals" setting.
+  inlayHints(file, from = 0, to = Infinity, opts = {}) {
+    const info = this.info(file);
+    if (!info) return [];
+    const out = [];
+    for (const s of info.symbols) {
+      if (!s.local || s.written || s.role === "param" || s.line < from || s.line > to || s.name === "_") continue;
+      const type = this.localType(file, s);
+      if (!type) continue;
+      out.push({ position: { line: s.line, character: s.ch + s.name.length }, label: ": " + shortType(type), kind: 1 });
+    }
+    if (opts.parameterNames !== false) out.push(...this.parameterHints(file, from, to));
+    return out.sort((a, b) => a.position.line - b.position.line || a.position.character - b.position.character);
+  }
+  parameterHints(file, from, to) {
+    const text = this.text(file) || "";
+    const raws = splitLines(text), masked = splitLines(mask(text)), out = [];
+    const LITERAL = /^(?:-?\d[\d_]*(?:\.\d+)?(?:[eE][-+]?\d+)?|0[xXbB]\w+|r?"(?:[^"\\]|\\.)*"|r?"{3}[\s\S]*|'(?:[^'\\]|\\.)+'|true|false|null)$/;
+    const NOT_CALLS = new Set([...KEYWORDS, "print", "println", "str", "assert", "assertEq", "panic", "typename", "nameof", "sizeof", "reflect", "env"]);
+    for (let i = Math.max(0, from); i <= Math.min(to, masked.length - 1); i++) {
+      const m = masked[i], raw = raws[i];
+      for (const c of m.matchAll(/([A-Za-z_]\w*)\s*(?:::<[^>]*>)?\s*\(/g)) {
+        if (NOT_CALLS.has(c[1]) || /\bfn\s+$/.test(m.slice(0, c.index))) continue;     // keywords, builtins, declarations
+        const open = c.index + c[0].length - 1;
+        // the arguments, split at top-level commas (strings are blanked in the masked line)
+        const args = [];
+        let depth = 0, start = open + 1, close = -1;
+        for (let k = open + 1; k < m.length && close < 0; k++) {
+          const ch = m[k];
+          if ("([{".includes(ch)) depth++;
+          else if (")]}".includes(ch)) { if (depth-- === 0) { args.push([start, k]); close = k; } }
+          else if (ch === "," && depth === 0) { args.push([start, k]); start = k + 1; }
+        }
+        if (close < 0 || !args.some(([a, b]) => LITERAL.test(raw.slice(a, b).trim()))) continue;
+        const sig = this.signature(file, { line: i, character: open + 1 });
+        if (!sig || !sig.signatures.length) continue;
+        const n = args.filter(([a, b]) => raw.slice(a, b).trim()).length;
+        const pick = sig.signatures.find((s) => s.parameters.length === n) ||
+                     sig.signatures.find((s) => s.parameters.length >= n) || sig.signatures[0];
+        args.forEach(([a, b], k) => {
+          const arg = raw.slice(a, b), p = pick.parameters[k];
+          if (!p || !LITERAL.test(arg.trim()) || /^\s*\w+\s*:(?!:)/.test(arg)) return;
+          const name = p.label.split(":")[0].replace(/^\.\.\./, "").trim();
+          if (!/^[A-Za-z_]\w*$/.test(name)) return;
+          out.push({ position: { line: i, character: a + (arg.length - arg.trimStart().length) }, label: name + ":", kind: 2 });
+        });
+      }
+    }
+    return out;
+  }
+  moduleName(file) {
+    const std = this.env().std;
+    if (std && path.resolve(file).startsWith(path.resolve(std))) {
+      const rel = path.relative(std, file).replace(/\.grav$/, "");
+      return "std/" + rel.split(path.sep).join("/");
+    }
+    return path.basename(file);
+  }
+
+  // Completion items at a position.
+  completion(file, pos) {
+    const text = this.text(file) || "";
+    const lineText = (splitLines(text)[pos.line] || "").slice(0, pos.character);
+    const items = [];
+    const seen = new Set();
+    const push = (label, kind, detail, doc, insert) => {
+      const key = label + "|" + kind;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ label, kind, detail: detail || "", documentation: doc || "", insertText: insert });
+    };
+    // import paths: import "std/<cursor>
+    let m = /\bimport\b[^"]*"([^"]*)$/.exec(lineText);
+    if (m) {
+      const typed = m[1];
+      const dir = typed.includes("/") ? typed.slice(0, typed.lastIndexOf("/")) : "";
+      const std = this.env().std;
+      const bases = [];
+      if (typed.startsWith("std")) { if (std) bases.push([path.join(std, dir.slice(3).replace(/^\//, "")), dir ? dir + "/" : "std/"]); if (!dir) push("std", 9, "the whole standard library"); }
+      else {
+        bases.push([path.join(path.dirname(file), dir), dir ? dir + "/" : ""]);
+        if (!dir) push("std", 9, "the whole standard library (except networking)");
+        const proj = this.project(path.dirname(file));
+        if (proj && !dir) for (const d of proj.deps) push(d.name, 9, d.local ? `package at ${d.source}` : `package ${d.source}${d.version ? "@" + d.version : ""}`);
+        // inside a package: import "grav-db/src/<cursor>
+        const dep = proj && dir && proj.deps.find((d) => d.name === dir.split("/")[0]);
+        const pdir = dep && this.packageDir(proj, dep);
+        if (pdir) bases.push([path.join(pdir, dir.slice(dep.name.length + 1)), dir + "/"]);
+      }
+      for (const [base, prefix] of bases) {
+        try {
+          for (const e of fs.readdirSync(base, { withFileTypes: true })) {
+            if (e.name.startsWith(".")) continue;
+            if (e.isDirectory()) push(prefix + e.name, 19, "folder");
+            else if (e.name.endsWith(".grav") && e.name !== "prelude.grav") {
+              const first = (this.text(path.join(base, e.name)) || "").split("\n")[0].replace(/^\/\/\s*/, "");
+              push(prefix + e.name.replace(/\.grav$/, ""), 17, first);
+            }
+          }
+        } catch {}
+      }
+      return items.map((it) => ({ ...it, insertText: it.label.slice(typed.lastIndexOf("/") + 1), filterText: it.label.slice(typed.lastIndexOf("/") + 1) }));
+    }
+    // decorators: @<cursor> offers the decorator names used in the project
+    m = /(?:^|[^\w@])@([A-Za-z_]\w*)?$/.exec(lineText);
+    if (m) {
+      for (const [name, uses] of this.decoratorNames(file))
+        push(name, 15, `decorator · used ${uses} time${uses === 1 ? "" : "s"}`, DECORATOR_DOC(name));
+      return items;
+    }
+    // casts: `expr as <cursor>` offers the types the value converts to
+    m = /((?:[A-Za-z_]\w*|"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|\)|\])(?:[\w.()\[\]"]*))\s+as\s+(\w*)$/.exec(lineText);
+    if (m) {
+      for (const c of this.conversions(file, pos, m[1])) push(c.type, 7, c.detail, c.doc);
+      return items;
+    }
+    // members after a dot: expr.<cursor> (also "text".<cursor>, (-7).<cursor>, and 255.t<cursor>)
+    m = /((?:[A-Za-z_]\w*|"(?:[^"\\]|\\.)*"|\(-?\d+(?:\.\d+)?\))(?:\([^()]*\)|\[[^\[\]]*\])*(?:\.[A-Za-z_]\w*(?:\([^()]*\)|\[[^\[\]]*\])*)*)\.(\w*)$/.exec(lineText) ||
+        /(?:^|[^\w.])(-?\d+(?:\.\d+)?)\.([A-Za-z_]\w*)$/.exec(lineText);
+    if (m) {
+      const expr = m[1];
+      const t = this.typeOfExpr(file, pos, expr);
+      const first = expr.split(".")[0];
+      const isTypeName = /^[A-Z]/.test(first) && !this.localsAt(file, pos).some((s) => s.name === first) && expr.indexOf("(") < 0 && !expr.includes(".");
+      // a namespace or alias prefix: std.collections.<cursor>, col.<cursor>
+      const nsItems = this.namespaceMembers(file, expr);
+      for (const s of nsItems) push(s.name, COMPLETION_KIND[s.kind] || 6, s.detail, s.doc);
+      if (t) {
+        for (const { sym } of this.membersOf(file, t)) {
+          if (sym.kind === KIND.Constructor || sym.name.startsWith("operator")) continue;   // used as syntax, not by name
+          if (isTypeName && sym.kind !== KIND.EnumMember && !sym.isStatic) continue;   // Type.<static members>
+          if (!isTypeName && sym.isStatic && expr !== "super") continue;   // super.x also reaches the base's statics
+          const cls = this.enclosingClass(file, pos);
+          if (/^\s*private\b/.test(sym.detail) && (!cls || (cls.name !== sym.container && !(cls.impls || []).includes(sym.container)))) continue;
+          push(sym.name, COMPLETION_KIND[sym.kind] || 6, this.bindMember(file, t, sym, sym.detail), sym.doc);
+        }
+        // n.toHex(), "a,b".split(","), u.toMap(): the std/types methods the value takes
+        if (!isTypeName) {
+          const own = new Set(items.map((x) => x.label));
+          for (const cls of Workspace.valueClasses(t))
+            for (const vm of this.valueMethods(file, t, cls).sort((a, b) => b.fit - a.fit)) {
+              if (own.has(vm.sym.name)) continue;
+              own.add(vm.sym.name);
+              push(vm.sym.name, COMPLETION_KIND[KIND.Method], valueSignature(vm.sym, t),
+                (vm.sym.doc ? vm.sym.doc + "\n\n" : "") + `*${vm.owner}.${vm.sym.name} in std/types*`);
+            }
+        }
+      }
+      return items;
+    }
+    // everything visible: locals, then declarations from reachable files, keywords, builtins
+    for (const s of this.localsAt(file, pos)) { const t = this.localType(file, s); push(s.name, COMPLETION_KIND[s.kind] || 6, t ? `${s.name}: ${t}` : s.detail, ""); }
+    for (const f of this.reachable(file)) {
+      const info = this.info(f);
+      if (!info) continue;
+      for (const s of info.symbols) {
+        if (s.local || s.container || s.kind === KIND.Event) continue;
+        push(s.name, COMPLETION_KIND[s.kind] || 6, s.detail, s.doc);
+      }
+    }
+    const kwDoc = (k) => KEYWORD_DOCS[k] ? `${KEYWORD_DOCS[k][0]}\n\n\`\`\`grav\n${KEYWORD_DOCS[k][1]}\n\`\`\`` : "";
+    for (const k of KEYWORDS) push(k, 14, "keyword", kwDoc(k));
+    for (const t of TYPES) push(t, 25, "type", kwDoc(t));
+    if (!/\S$/.test(lineText) || /^\s*\w*$/.test(lineText))   // statement position: offer snippets
+      for (const [label, desc, body] of SNIPPETS)
+        items.push({ label, kind: 15, detail: desc, documentation: "```grav\n" + body.replace(/\$\{\d+:?([^}]*)\}|\$\d/g, "$1") + "\n```",
+                     insertText: body, snippet: true, sortText: "~" + label });
+    for (const b of BUILTINS) push(b[0], 3, b[1], b[2]);
+    if (/(^|[^\w])__\w*$/.test(lineText)) for (const b of INTERNAL_BUILTINS) push(b[0], 3, b[1], b[2]);
+    return items;
+  }
+
+  // Declarations directly inside a namespace (or alias) written as `prefix`.
+  namespaceMembers(file, prefix) {
+    const info = this.info(file);
+    let ns = prefix;
+    for (const u of (info ? info.uses : [])) if (!u.glob && u.alias === prefix) ns = u.target;
+    for (const imp of (info ? info.imports : [])) {
+      if (imp.alias === prefix) {
+        const r = this.resolveImport(file, imp.spec);
+        const ri = r && this.info(r);
+        const own = ri && ri.symbols.find((s) => s.kind === KIND.Namespace);
+        if (own) ns = (own.namespace ? own.namespace + "." : "") + own.name;
+        else if (ri) for (const i2 of ri.imports) { const r2 = this.resolveImport(r, i2.spec); const o2 = r2 && this.info(r2) && this.info(r2).symbols.find((s) => s.kind === KIND.Namespace); if (o2) { ns = (o2.namespace ? o2.namespace + "." : "") + o2.name; break; } }
+      }
+    }
+    const out = [];
+    for (const f of this.searchOrder(file)) {
+      const fi = this.info(f);
+      if (!fi) continue;
+      for (const s of fi.symbols) {
+        if (s.local || s.container) continue;
+        if (s.namespace === ns) out.push(s);
+        else if (s.kind === KIND.Namespace && s.namespace === ns) out.push(s);
+      }
+    }
+    return out;
+  }
+
+  // Signature help: the call around the cursor.
+  signature(file, pos) {
+    const text = this.text(file) || "";
+    const before = (splitLines(text)[pos.line] || "").slice(0, pos.character);
+    let depth = 0, i = before.length - 1, commas = 0;
+    for (; i >= 0; i--) {
+      const c = before[i];
+      if (c === ")") depth++;
+      else if (c === "(") { if (depth === 0) break; depth--; }
+      else if (c === "," && depth === 0) commas++;
+    }
+    if (i < 0) return null;
+    const head = /((?:[A-Za-z_]\w*\s*\.\s*)*)([A-Za-z_]\w*)\s*(?:::<[^>]*>)?\s*$/.exec(before.slice(0, i));
+    if (!head) return null;
+    const name = head[2];
+    const qual = head[1].replace(/\s/g, "").replace(/\.$/, "");
+    let cands = [];
+    if (/^new\s*$/.test(before.slice(0, i - name.length).trimEnd().slice(-3))) {
+      cands = this.membersOf(file, name).filter((x) => x.sym.kind === KIND.Constructor).map((x) => x.sym);
+    } else if (qual) {
+      const t = this.typeOfExpr(file, pos, qual);
+      cands = (t ? this.membersOf(file, t) : []).filter((x) => x.sym.name === name && x.sym.params).map((x) => x.sym);
+      const vms = !cands.length && t ? this.valueMethodsNamed(file, t, name) : [];
+      if (vms.length) return {   // maybe.orElse(<cursor>: shown without the value itself
+        signatures: vms.slice(0, 8).map((x) => ({ label: valueSignature(x.sym, t), documentation: x.sym.doc || "",
+          parameters: x.sym.params.slice(1).map((p) => ({ label: bindTypes(x.sym, t, p) })) })),
+        activeParameter: commas,
+      };
+      if (!cands.length) cands = this.symbolsNamed(file, name, qual).map((x) => x.sym).filter((s) => s.params);
+    } else {
+      cands = this.symbolsNamed(file, name).map((x) => x.sym).filter((s) => s.params && !s.container);
+      const b = BUILTINS.find((x) => x[0] === name);
+      if (!cands.length && b) return { signatures: [{ label: b[1], documentation: b[2], parameters: [] }], activeParameter: commas };
+    }
+    cands = cands.filter((s) => s.params);   // (a field of the same name is not called)
+    if (!cands.length) return null;
+    const shown = cands.slice(0, 8);
+    const takes = (s) => (s.params || []).length > commas || (s.params || []).some((p) => p.startsWith("..."));
+    const active = Math.max(0, shown.findIndex(takes));
+    return {
+      activeSignature: active,
+      signatures: shown.map((s) => ({
+        label: `${s.container && s.kind !== KIND.Constructor ? s.container + "." : ""}${s.kind === KIND.Constructor ? s.container : s.name}(${s.params.join(", ")})${s.returns ? " -> " + s.returns : ""}`,
+        documentation: s.doc || "",
+        parameters: s.params.map((p) => ({ label: p })),
+      })),
+      activeParameter: commas,
+    };
+  }
+
+  // Outline: top-level symbols with members nested.
+  outline(file) {
+    const info = this.info(file);
+    if (!info) return [];
+    const top = [];
+    const nsNodes = new Map();
+    const node = (s) => ({
+      name: s.name, detail: s.detail.length > 80 ? s.detail.slice(0, 80) + "…" : s.detail, kind: s.kind,
+      range: { start: { line: s.line, character: 0 }, end: { line: s.endLine !== undefined ? s.endLine : s.line, character: 200 } },
+      selectionRange: s.range, children: [],
+    });
+    const byName = new Map();
+    for (const s of info.symbols) {
+      if (s.local || s.isParam) continue;
+      const n = node(s);
+      if (s.container && byName.has(s.container)) byName.get(s.container).children.push(n);
+      else if (s.namespace && nsNodes.has(s.namespace)) nsNodes.get(s.namespace).children.push(n);
+      else if (s.kind === KIND.Namespace && s.namespace && nsNodes.has(s.namespace)) nsNodes.get(s.namespace).children.push(n);
+      else top.push(n);
+      if (s.kind === KIND.Namespace) nsNodes.set((s.namespace ? s.namespace + "." : "") + s.name, n);
+      if ([KIND.Class, KIND.Struct, KIND.Interface, KIND.Enum].includes(s.kind)) byName.set(s.name, n);
+    }
+    return top;
+  }
+
+  // Workspace symbols matching a query.
+  workspaceSymbols(query, includeLibrary) {
+    const q = query.toLowerCase();
+    const out = [];
+    const files = [...this.workspaceFiles()];
+    if (includeLibrary) {
+      const std = this.env().std;
+      if (std) files.push(...this.libraryFiles(std));
+    }
+    for (const f of files) {
+      const info = this.info(f);
+      if (!info) continue;
+      for (const s of info.symbols) {
+        if (s.local || s.isParam) continue;
+        if (q && !s.name.toLowerCase().includes(q)) continue;
+        out.push({ file: f, sym: s });
+        if (out.length > 500) return out;
+      }
+    }
+    return out;
+  }
+
+  // Whole-word occurrences of a name (code only, not strings/comments).
+  // The declaration a name at a position stands for: the one go to definition
+  // picks (or the declaration itself, when the position is on one); null if none.
+  declarationAt(file, pos) {
+    const info = this.info(file);
+    const w = wordAtPosition(this.text(file) || "", pos);
+    if (!info || !w) return null;
+    const own = info.symbols.find((s) => s.line === pos.line && s.name === w.word && pos.character >= s.ch && pos.character <= s.ch + s.name.length);
+    if (own) return { file: path.resolve(file), line: own.line, ch: own.ch, sym: own };
+    const d = this.definition(file, pos)[0];
+    if (!d) return null;
+    const di = this.info(d.file);
+    const sym = di && di.symbols.find((s) => s.line === d.range.start.line && s.ch === d.range.start.character);
+    return sym ? { file: path.resolve(d.file), line: sym.line, ch: sym.ch, sym } : null;
+  }
+
+  // Where the name at a position is used: every occurrence of the word (outside
+  // strings and comments) whose definition is the same declaration, so a local
+  // is found only in its function and a member only on its type (when the
+  // receiver's type is known). Without a declaration, every occurrence of the word.
+  references(file, pos, includeLibrary) {
+    const w = wordAtPosition(this.text(file) || "", pos);
+    if (!w) return [];
+    const re = new RegExp(`(?<![A-Za-z0-9_])${w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "g");
+    {
+      const target = this.declarationAt(file, pos);
+      const same = (d) => d && path.resolve(d.file) === target.file && d.range.start.line === target.line && d.range.start.character === target.ch;
+      let files = [...new Set([...this.workspaceFiles(), ...this.reachable(file)].map((f) => path.resolve(f)))];
+      if (target && target.sym.local) files = [target.file];          // a local: only its own file
+      const out = [];
+      for (const f of files) {
+        if (!includeLibrary && this.isLibrary(f) && f !== path.resolve(file) && !(target && target.file === f)) continue;
+        const text = this.text(f);
+        if (text == null) continue;
+        const lines = splitLines(mask(text));
+        const from = target && target.sym.local ? target.sym.local.line : 0;
+        const to = target && target.sym.local ? (target.sym.local.endLine ?? lines.length) : lines.length;
+        for (let i = from; i <= Math.min(to, lines.length - 1); i++) {
+          let m;
+          while ((m = re.exec(lines[i])) !== null) {
+            const at = { line: i, character: m.index };
+            if (target) {
+              const own = target.file === f && target.line === i && target.ch === m.index;
+              if (!own) {
+                const here = this.declarationAt(f, at);
+                if (!here || !same({ file: here.file, range: range(here.line, here.ch, 0) })) continue;
+              }
+            }
+            out.push({ file: f, range: range(i, m.index, w.word.length) });
+          }
+        }
+      }
+      return out;
+    }
+  }
+
+  // Can the name at a position be renamed? { range, placeholder } or { error }.
+  prepareRename(file, pos) {
+    const w = wordAtPosition(this.text(file) || "", pos);
+    if (!w || KEYWORD_SET.has(w.word) || BUILTINS.some((b) => b[0] === w.word)) return { error: "You cannot rename this element." };
+    const target = this.declarationAt(file, pos);
+    if (!target) return { error: `No declaration of '${w.word}' was found to rename.` };
+    if (this.isLibrary(target.file)) return { error: `'${w.word}' is declared in ${this.moduleName(target.file)} (the standard library or an installed package) and cannot be renamed here.` };
+    return { range: w.range, placeholder: w.word };
+  }
+  // The edits that rename the name at a position: [{ file, range }], or { error }.
+  rename(file, pos) {
+    const ok = this.prepareRename(file, pos);
+    if (ok.error) return ok;
+    return this.references(file, pos, false).filter((r) => !this.isLibrary(r.file));
+  }
+
+  // Organize imports: the file's leading block of import lines sorted (the standard
+  // library, then packages, then relative paths) with duplicates removed.
+  // { range, newText } or null when there is nothing to change.
+  organizeImports(file) {
+    const lines = splitLines(this.text(file) || "");
+    let first = -1, last = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (/^import\b/.test(t)) { if (first < 0) first = i; last = i; continue; }
+      if (first >= 0 && t !== "" && !t.startsWith("//")) break;
+      if (first < 0 && t !== "" && !t.startsWith("//")) return null;    // code before the imports
+    }
+    if (first < 0) return null;
+    const block = lines.slice(first, last + 1);
+    if (block.some((l) => l.trim().startsWith("//"))) return null;       // comments among them: leave as written
+    const specOf = (l) => (/"([^"]*)"/.exec(l) || [, ""])[1];
+    const group = (s) => (s === "std" || s.startsWith("std/") ? 0 : /^\.{0,2}\//.test(s) || s.endsWith(".grav") ? 2 : 1);
+    const imports = [...new Set(block.filter((l) => l.trim()).map((l) => l.trim()))]
+      .sort((a, b) => group(specOf(a)) - group(specOf(b)) || specOf(a).localeCompare(specOf(b)) || a.localeCompare(b));
+    const out = [];
+    imports.forEach((l, k) => { if (k && group(specOf(l)) !== group(specOf(imports[k - 1]))) out.push(""); out.push(l); });
+    const newText = out.join("\n");
+    if (newText === block.join("\n")) return null;
+    return { range: { start: { line: first, character: 0 }, end: { line: last, character: lines[last].length } }, newText };
+  }
+
+  // ---- compiler-backed features ----
+  // Diagnostics from `grav check --json` (for a file saved on disk).
+  // Also keeps the types of the file's local bindings (`--types`) for hover,
+  // completion and inlay hints.
+  check(file, cb) {
+    const types = !this.noTypes;
+    execFile(this.compiler, ["check", "--json", ...(types ? ["--types"] : []), file], { timeout: 20000, cwd: path.dirname(file) }, (err, stdout, stderr) => {
+      if (types && /unknown option '--types'/.test(stderr || "")) {   // a compiler older than --types
+        this.noTypes = true;
+        return this.check(file, cb);
+      }
+      let diags = [], report = {};
+      try { report = JSON.parse(stdout); diags = report.diagnostics || []; } catch { diags = []; }
+      if (Array.isArray(report.types)) {
+        const lines = splitLines(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : ""), known = new Map();
+        for (const t of report.types) {
+          const key = t.name + "\0" + (lines[t.line - 1] || "").trim();
+          if (!known.has(key)) known.set(key, t.type);
+        }
+        this.types.set(path.resolve(file), known);
+      }
+      cb(diags.map((d) => ({
+        file: d.file ? path.resolve(path.dirname(file), d.file) : file,
+        line: Math.max(0, (d.line || 1) - 1), character: Math.max(0, (d.column || 1) - 1),
+        severity: d.severity, message: d.message + (d.note ? "\n" + d.note : ""), stage: d.stage,
+      })));
+    });
+  }
+  // `grav fmt -`: the formatted text (or null when the compiler is unavailable).
+  format(text) {
+    try { return execFileSync(this.compiler, ["fmt", "-"], { input: text, timeout: 10000 }).toString(); } catch { return null; }
+  }
+}
+
+module.exports = {
+  KIND, COMPLETION_KIND, KEYWORDS, TYPES, BUILTINS, INTERNAL_BUILTINS, KEYWORD_DOCS, SNIPPETS, splitLines, mask, parseFile, wordAtPosition,
+  Workspace, inferType, shortType,
+};
