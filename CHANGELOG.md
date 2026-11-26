@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.13.4 (2026-11-26)
+
 - std/net: multipart bodies are split without `memmem`, which glibc before 2.38 (Debian bookworm's)
   hides from C11 programs: GCC took the undeclared call to return an `int`, so on 64-bit machines the
   pointer it found was truncated (a crash or a wrong match when parsing a form upload). Unix sockets
