@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.13.2 (2026-11-26)
+
 - The unused-import warning (and `grav lint --fix`) no longer flags an import that provides a concrete subclass
   of a decorated class: reflection (`ClassInfo.all`) finds such classes without their names being written, so the
   import is what puts them in the program (an app's `import "../modules/all.grav"`, a package's plugins).
