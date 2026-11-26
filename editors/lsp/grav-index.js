@@ -750,6 +750,10 @@ function wordAtPosition(text, position) {
 // Workspace
 // ---------------------------------------------------------------------------
 class Workspace {
+  // The entry points editors call; each runs in a snapshot (see snapshot()).
+  static QUERIES = ["definition", "references", "hover", "completion", "signature", "outline", "workspaceSymbols",
+                    "prepareRename", "rename", "inlayHints", "organizeImports", "declarationAt", "symbolsNamed"];
+  static TREE_TTL_MS = 5000;
   // opts: { root, compiler, log }
   constructor(opts = {}) {
     this.root = opts.root || null;
@@ -759,7 +763,34 @@ class Workspace {
     this.cache = new Map();     // path -> { mtime, text, info }
     this.envInfo = null;
     this.types = new Map();     // path -> Map(name + "\0" + line text -> type), from `grav check --types`
+    this.files = new Map();     // path -> { mtime, size, text }: files on disk, re-read only when they change
+    this.projects = new Map();  // root -> { stamp, proj }: grav.toml and grav.lock, re-read when either changes
+    this.tree = null;           // { at, files }: the workspace's .grav files, listed again after a few seconds
+    this.snap = null;           // what one query has looked up (see snapshot)
+    for (const q of Workspace.QUERIES) {
+      const f = this[q];
+      this[q] = (...a) => this.snapshot(() => f.apply(this, a));
+    }
   }
+
+  // Runs a query with its own memo of the file system: each file read, file
+  // tested, project read and import resolved once, however often the query asks
+  // (a definition or an inlay hint asks thousands of times). Nested queries share it.
+  snapshot(fn) {
+    if (this.snap) return fn();
+    this.snap = { text: new Map(), exists: new Map(), project: new Map(), resolve: new Map(), reach: new Map(), chosen: null, tree: null };
+    try { return fn(); } finally { this.snap = null; }
+  }
+  exists(p) {
+    const m = this.snap && this.snap.exists;
+    if (m && m.has(p)) return m.get(p);
+    let r = 0;
+    try { r = fs.statSync(p).isFile() ? 1 : 2; } catch {}
+    if (m) m.set(p, r);
+    return r;
+  }
+  isFile(p) { return this.exists(p) === 1; }
+  isDir(p) { return this.exists(p) === 2; }
 
   setDoc(file, text) { this.docs.set(path.resolve(file), text); }
   closeDoc(file) { this.docs.delete(path.resolve(file)); }
@@ -787,7 +818,16 @@ class Workspace {
   text(file) {
     const p = path.resolve(file);
     if (this.docs.has(p)) return this.docs.get(p);
-    try { return fs.readFileSync(p, "utf8"); } catch { return null; }
+    const m = this.snap && this.snap.text;
+    if (m && m.has(p)) return m.get(p);
+    let text = null;
+    try {
+      const st = fs.statSync(p), c = this.files.get(p);
+      if (c && c.mtime === st.mtimeMs && c.size === st.size) text = c.text;
+      else { text = fs.readFileSync(p, "utf8"); this.files.set(p, { mtime: st.mtimeMs, size: st.size, text }); }
+    } catch { this.files.delete(p); }
+    if (m) m.set(p, text);
+    return text;
   }
   info(file) {
     const p = path.resolve(file);
@@ -808,13 +848,25 @@ class Workspace {
 
   // ---- grav.toml / packages ----
   project(dir) {
-    for (let d = path.resolve(dir); ; d = path.dirname(d)) {
-      const toml = path.join(d, "grav.toml");
-      if (fs.existsSync(toml)) return this.readProject(d);
-      if (path.dirname(d) === d) return null;
+    const start = path.resolve(dir), m = this.snap && this.snap.project;
+    if (m && m.has(start)) return m.get(start);
+    let found = null;
+    for (let d = start; ; d = path.dirname(d)) {
+      if (this.isFile(path.join(d, "grav.toml"))) { found = this.readProject(d); break; }
+      if (path.dirname(d) === d) break;
     }
+    if (m) m.set(start, found);
+    return found;
   }
   readProject(root) {
+    const stamp = (f) => { try { const st = fs.statSync(path.join(root, f)); return st.mtimeMs + ":" + st.size; } catch { return "-"; } };
+    const key = stamp("grav.toml") + "|" + stamp("grav.lock"), c = this.projects.get(root);
+    if (c && c.stamp === key) return c.proj;
+    const proj = this.readProjectNow(root);
+    this.projects.set(root, { stamp: key, proj });
+    return proj;
+  }
+  readProjectNow(root) {
     const proj = { root, paths: [], deps: [], lib: "", main: "", lock: {} };
     let section = "";
     try {
@@ -889,7 +941,7 @@ class Workspace {
   // workspace's own declaration, else a local path anywhere in the graph, else
   // the first one found (the compiler's chosenPackages()).
   chosenPackages() {
-    if (this.chosenMemo) return this.chosenMemo;
+    if (this.snap && this.snap.chosen) return this.snap.chosen;
     const chosen = new Map(), rank = new Map(), walked = new Set();
     const top = this.root ? this.project(this.root) : null;
     const todo = top ? [[top, 0]] : [];
@@ -900,16 +952,23 @@ class Workspace {
         if (!dir) continue;
         const r = depth === 0 ? 0 : dep.local ? 1 : 2;
         if (!rank.has(dep.name) || r < rank.get(dep.name)) { rank.set(dep.name, r); chosen.set(dep.name, dir); }
-        if (!walked.has(dir) && fs.existsSync(path.join(dir, "grav.toml"))) { walked.add(dir); todo.push([this.readProject(dir), depth + 1]); }
+        if (!walked.has(dir) && this.isFile(path.join(dir, "grav.toml"))) { walked.add(dir); todo.push([this.readProject(dir), depth + 1]); }
       }
     }
-    this.chosenMemo = chosen;
+    if (this.snap) this.snap.chosen = chosen;
     return chosen;
   }
   resolveImport(fromFile, spec) {
+    const m = this.snap && this.snap.resolve, key = path.dirname(path.resolve(fromFile)) + "\0" + spec;
+    if (m && m.has(key)) return m.get(key);
+    const r = this.resolveImportNow(fromFile, spec);
+    if (m) m.set(key, r);
+    return r;
+  }
+  resolveImportNow(fromFile, spec) {
     const tryFile = (p) => {
-      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
-      if (!path.extname(p) && fs.existsSync(p + ".grav")) return p + ".grav";
+      if (this.isFile(p)) return p;
+      if (!path.extname(p) && this.isFile(p + ".grav")) return p + ".grav";
       return null;
     };
     const fromDir = path.dirname(path.resolve(fromFile));
@@ -930,7 +989,7 @@ class Workspace {
         if (spec === head) {
           const sub = this.readProject(dir);
           for (const c of [sub.lib, path.join(dir, head + ".grav"), path.join(dir, "lib.grav"), path.join(dir, "src", "lib.grav"), path.join(dir, "mod.grav"), path.join(dir, "src", head + ".grav")])
-            if (c && fs.existsSync(c)) return c;
+            if (c && this.isFile(c)) return c;
           return null;
         }
         return tryFile(path.join(dir, spec.slice(head.length + 1)));
@@ -944,16 +1003,17 @@ class Workspace {
 
   // The file and everything it imports (transitively).
   reachable(file) {
-    if (this.reachMemo && this.reachMemo.has(path.resolve(file))) return this.reachMemo.get(path.resolve(file));
+    const m = this.snap && this.snap.reach, p = path.resolve(file);
+    if (m && m.has(p)) return m.get(p);
     const out = this.reachableNow(file);
-    if (this.reachMemo) this.reachMemo.set(path.resolve(file), out);
+    if (m) m.set(p, out);
     return out;
   }
   reachableNow(file) {
     const out = [], seen = new Set();
     const stack = [path.resolve(file)];
     const std = this.env().std;
-    if (std && fs.existsSync(path.join(std, "prelude.grav"))) stack.push(path.join(std, "prelude.grav"));
+    if (std && this.isFile(path.join(std, "prelude.grav"))) stack.push(path.join(std, "prelude.grav"));
     while (stack.length && out.length < 400) {
       const f = stack.pop();
       if (seen.has(f)) continue;
@@ -971,7 +1031,22 @@ class Workspace {
 
   // Every .grav file under the workspace root, plus open documents.
   workspaceFiles() {
-    const out = new Set(this.docs.keys());
+    if (this.snap && this.snap.tree) return this.snap.tree;
+    const now = Date.now();
+    if (!this.tree || now - this.tree.at > Workspace.TREE_TTL_MS) this.tree = { at: now, files: this.listTree() };
+    const out = [...new Set([...this.docs.keys(), ...this.tree.files])];
+    if (this.snap) this.snap.tree = out;
+    return out;
+  }
+  // Every .grav file of the standard library.
+  libraryFiles(std) {
+    const out = [];
+    const walk = (d) => { try { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (e.name.endsWith(".grav")) out.push(f); } } catch {} };
+    walk(std);
+    return out;
+  }
+  listTree() {
+    const out = new Set();
     const walk = (dir, depth) => {
       if (depth > 12) return;
       let entries;
@@ -995,9 +1070,12 @@ class Workspace {
   }
 
   // ---- queries ----
-  symbolsNamed(file, name, qualifier) {
+  // `files`: where to look (default: what `file` imports, then the workspace). The
+  // result's `qualified` says the qualifier picked them (false: it matched none).
+  symbolsNamed(file, name, qualifier, files) {
     const out = [];
-    for (const f of this.searchOrder(file)) {
+    out.qualified = !qualifier;
+    for (const f of files || this.searchOrder(file)) {
       const info = this.info(f);
       if (!info) continue;
       for (const s of info.symbols) {
@@ -1010,7 +1088,7 @@ class Workspace {
       const last = qualifier.split(".").pop();
       const q = out.filter((x) => x.sym.container === last || (x.sym.namespace || "").split(".").pop() === last ||
                                   (x.sym.namespace || "").endsWith(qualifier));
-      if (q.length) return q;
+      if (q.length) { q.qualified = true; return q; }
     }
     return out;
   }
@@ -1069,7 +1147,10 @@ class Workspace {
       const head = qualifier.split(".")[0];
       for (const u of info.uses) if (!u.glob && u.alias === head) qualifier = u.target + qualifier.slice(head.length);
     }
-    let found = this.symbolsNamed(file, name, qualifier).filter((x) => !x.sym.isParam);
+    // What the file imports first (rank() prefers it anyway); the whole workspace
+    // only when that has nothing, which spares parsing every file on a cold start.
+    let near = this.symbolsNamed(file, name, qualifier, this.reachable(file));
+    let found = (near.length && near.qualified ? near : this.symbolsNamed(file, name, qualifier)).filter((x) => !x.sym.isParam);
     found = this.rank(file, found, qualifier);
     void line;
     return found.map((x) => ({ file: x.file, range: x.sym.range }));
@@ -1718,11 +1799,10 @@ class Workspace {
   workspaceSymbols(query, includeLibrary) {
     const q = query.toLowerCase();
     const out = [];
-    const files = this.workspaceFiles();
+    const files = [...this.workspaceFiles()];
     if (includeLibrary) {
       const std = this.env().std;
-      const walk = (d) => { try { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (e.name.endsWith(".grav")) files.push(f); } } catch {} };
-      if (std) walk(std);
+      if (std) files.push(...this.libraryFiles(std));
     }
     for (const f of files) {
       const info = this.info(f);
@@ -1761,9 +1841,7 @@ class Workspace {
     const w = wordAtPosition(this.text(file) || "", pos);
     if (!w) return [];
     const re = new RegExp(`(?<![A-Za-z0-9_])${w.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "g");
-    this.reachMemo = new Map();
-    this.chosenMemo = null;
-    try {
+    {
       const target = this.declarationAt(file, pos);
       const same = (d) => d && path.resolve(d.file) === target.file && d.range.start.line === target.line && d.range.start.character === target.ch;
       let files = [...new Set([...this.workspaceFiles(), ...this.reachable(file)].map((f) => path.resolve(f)))];
@@ -1792,7 +1870,7 @@ class Workspace {
         }
       }
       return out;
-    } finally { this.reachMemo = null; this.chosenMemo = null; }
+    }
   }
 
   // Can the name at a position be renamed? { range, placeholder } or { error }.
