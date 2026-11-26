@@ -300,4 +300,23 @@ node -e 'const [index, file] = process.argv.slice(1);
   const h = ws.hover(file, { line: 3, character: 5 });
   if (!h || !/getter/.test(h.markdown)) bad.push("no accessor hover on get");
   if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/props.grav" || fail "properties in the index"
+# The index keeps what it read between queries: a file changed on disk (a git
+# checkout, another editor), added or removed is seen by the next query.
+mkdir -p "$T/fresh"
+printf 'class Alpha {}\n' > "$T/fresh/a.grav"
+printf 'import "a.grav"\nfn main() { let x = new Alpha() }\n' > "$T/fresh/main.grav"
+node -e 'const [index, dir] = process.argv.slice(1);
+  const g = require(index), fs = require("fs"), path = require("path");
+  const ws = new g.Workspace({ root: dir, compiler: "/nonexistent/grav" });
+  g.Workspace.TREE_TTL_MS = 0;
+  const main = path.join(dir, "main.grav"), a = path.join(dir, "a.grav"), bad = [];
+  const def = () => ws.definition(main, { line: 1, character: 25 }).map((d) => path.basename(d.file) + ":" + d.range.start.line);
+  if (def().join() !== "a.grav:0") bad.push("before: " + def());
+  fs.writeFileSync(a, "// moved down\n\nclass Alpha {}\n");                      // (another size: a new stat)
+  if (def().join() !== "a.grav:2") bad.push("after an edit on disk: " + def());
+  fs.writeFileSync(path.join(dir, "b.grav"), "class Beta {}\n");
+  if (!ws.workspaceSymbols("Beta", false).some((s) => s.sym.name === "Beta")) bad.push("a new file is not found");
+  fs.unlinkSync(a);
+  if (def().length) bad.push("after the file is gone: " + def());
+  if (bad.length) { console.log(bad.join("\n")); process.exit(1); }' "$INDEX" "$T/fresh" || fail "the index sees files change on disk"
 echo "editors: ok"
