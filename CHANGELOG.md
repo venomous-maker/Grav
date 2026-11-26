@@ -12,6 +12,11 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- In a terminal, `grav build` (and `run`, `test`) says which stage a long build is in (reading the imports,
+  turning the program into C, compiling the C) once that stage has run for two seconds, and how long the
+  build took. A large program spends a minute or two in each stage and printed nothing until it was done,
+  which looked like a hang. Off when stderr is not a terminal and with `-v`.
+
 ## 1.13.2 (2026-11-26)
 
 - The unused-import warning (and `grav lint --fix`) no longer flags an import that provides a concrete subclass

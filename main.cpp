@@ -25,6 +25,7 @@
 #include "codegen/codegen.h"
 #include "codegen/prune.h"
 #include "codegen/fold.h"
+#include "driver/progress.h"
 #include "common/diagnostics.h"
 #include "driver/build_cache.h"
 #include "driver/infer_cache.h"
@@ -483,6 +484,11 @@ int main(int argc, char **argv) {
         inputPath = project.main.string();
     if (!useStdin && inputPath.empty()) return usage(argv[0]);
 
+    // In a terminal, a long build says what it is doing (see Progress); -v prints the
+    // C compiler's command instead.
+    grav::Progress progress(isatty(STDERR_FILENO) && !verbose && !toStdout && !checkOnly && !gJson);
+    progress.stage("reading " + (useStdin ? std::string("the program") : inputPath) + " and its imports");
+
     // ---- load source (with imports) ----
     std::string source;
     std::vector<SrcLoc> srcMap; // combined line -> original file:line
@@ -500,8 +506,11 @@ int main(int argc, char **argv) {
 
     // After a binary is built (or reused): say so, and run it for `run`/`test`.
     auto finishBuilt = [&](const std::string &exePath, bool tempExe, const std::string &also = "") -> int {
+        progress.stop();
+        std::string took = progress.elapsed();
         if (!tempExe)
-            std::cerr << "gravc: built " << exePath << (also.empty() ? "" : " (and wrote " + also + ")") << "\n";
+            std::cerr << "gravc: built " << exePath << (also.empty() ? "" : " (and wrote " + also + ")")
+                      << (took.empty() ? "" : " in " + took) << "\n";
         if (!runAfter) return 0;
         // A relative path with no directory needs a `./` so the shell finds it.
         std::string runPath = exePath;
@@ -553,6 +562,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    progress.stage("turning " + (useStdin ? std::string("the program") : inputPath) + " into C");
     try {
         // The front end may run more than once: when the checker infers omitted
         // generic type arguments (`maxOf(1, 2)`, `new Box(5)`), it records them and
@@ -860,6 +870,7 @@ int main(int argc, char **argv) {
         out.close();
 
         if (emit == EmitMode::C) {
+            progress.stop();
             std::cerr << "gravc: wrote " << cPath << "\n";
             return 0;
         }
@@ -922,7 +933,9 @@ int main(int argc, char **argv) {
         grav::BuildCache cache(cPath, cc, flags + libs);
         bool reused = emit != EmitMode::Asm && cache.restore(exePath);
         if (reused && verbose) std::cerr << "gravc: reused the cached build of this program\n";
+        if (!reused) progress.stage("compiling the C with " + cc + " (a large program takes a few minutes)");
         int rc = reused ? 0 : std::system(cmd.c_str());
+        progress.stop();
         if (rc == 0 && !reused && emit != EmitMode::Asm) cache.store(exePath);
         if (tempC) { std::error_code ec; fs::remove(cPath, ec); }
         if (rc != 0) {

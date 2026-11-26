@@ -62,7 +62,7 @@ These are passed to the C compiler.
 | Option | Meaning |
 |--------|---------|
 | `-Werror` | treat warnings as errors |
-| `-v`, `--verbose` | print the C compiler command |
+| `-v`, `--verbose` | print the C compiler command (instead of the progress lines a build prints in a terminal) |
 | `-h`, `--help` | show the usage summary |
 
 ### check --json
