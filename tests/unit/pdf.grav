@@ -1,0 +1,92 @@
+// PdfDocument: the file's structure, text in standard and embedded fonts, measuring and
+// wrapping, shapes, images, links, and tables flowing across pages.
+import "std"
+
+fn text(doc: PdfDocument) -> string { return doc.bytes().toString() }
+
+test "a minimal document is well formed" {
+    let doc = new PdfDocument()
+    doc.compress = false
+    doc.title = "Hello (world)"
+    doc.addPage().text(72, 72, "Hi (there) \\ €5")
+    let s = text(doc)
+    assert(Str.startsWith(s, "%PDF-1.7\n"))
+    assert(Str.endsWith(s, "%%EOF\n"))
+    assert(Str.contains(s, "/Type /Catalog /Pages 2 0 R"))
+    assert(Str.contains(s, "/Title (Hello \\(world\\))"))
+    assert(Str.contains(s, "/BaseFont /Helvetica /Encoding /WinAnsiEncoding"))
+    assert(Str.contains(s, "BT /F1 12 Tf 72 761.274 Td (Hi \\(there\\) \\\\ \\2005) Tj ET"))
+    // every xref offset points at its object
+    let xref = Str.indexOf(s, "\nxref\n") + 1
+    let lines = Str.lines(s[xref..])
+    let count = Format.toInt(Str.split(lines[1], " ")[1])
+    for (i in 1..count) {
+        let off = Format.toInt(lines[2 + i][..10])
+        assert(Str.startsWith(s[off..], "${i} 0 obj"))
+    }
+    assertEq(Str.split(s, "startxref\n")[1], "${xref}\n%%EOF\n")
+}
+
+test "measuring and wrapping" {
+    let doc = new PdfDocument()
+    let page = doc.addPage().setFont(doc.font("Helvetica"), 10)
+    assertEq(page.textWidth("Hello"), 22.78)
+    assertEq(doc.font("Helvetica-Bold").width("Hello", 10), 24.45)
+    assertEq(doc.font("Courier").width("abc", 10), 18.0)
+    assertEq(doc.font("Times-Roman").width("W", 1000), 944.0)
+    let lines = page.wrap("the quick brown fox jumps over the lazy dog", 60)
+    assertEq(Str.join(lines, "|"), "the quick|brown fox|jumps over|the lazy dog")
+    assertEq(Str.join(page.wrap("a\nb c", 100), "|"), "a\n|b c")
+    let pieces = page.wrap("Supercalifragilisticexpialidocious", 50)
+    assertEq(pieces.size(), 3)
+    assertEq(Str.join(pieces, ""), "Supercalifragilisticexpialidocious")
+    for (p in pieces) { assert(page.textWidth(p) <= 50) }
+    let caught = false
+    try { doc.font("Comic Sans") } catch (e: ValueError) { caught = true }
+    assert(caught)
+}
+
+test "an embedded TrueType font, images, shapes and links" {
+    let path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if (!new File(path).exists()) { return }
+    let doc = new PdfDocument()
+    doc.compress = false
+    let dv = doc.loadFont(path)
+    assert(dv.isEmbedded())
+    let page = doc.addPage(300, 200).setFont(dv, 12)
+    page.text(10, 10, "Ω₹")
+    page.rect(10, 40, 50, 20, true, true).circle(100, 50, 10).roundRect(150, 40, 60, 30, 5).line(0, 0, 300, 200)
+    page.drawImage(Image.create(4, 4, 4, 0xff000080), 10, 100, 40)
+    page.link(10, 100, 40, 40, "https://example.test/(x)")
+    page.qrCode(QrCode.encode("hi"), 200, 100, 80)
+    // the embedded font file has NUL bytes: search the bytes, not a string
+    let b = doc.bytes()
+    for (want in ["/Subtype /Type0 /BaseFont /DejaVuSans /Encoding /Identity-H", "/FontFile2", "    2 beginbfchar\n<033E> <03A9>\n<0B8F> <20B9>\n",
+                  "/W [830[764]2959[636]]", "/Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask",
+                  "/URI (https://example.test/\\(x\\))", "/MediaBox [0 0 300 200]", "BT /F1 12 Tf 10 178.864 Td <033E0B8F> Tj ET"]) {
+        assert(b.indexOf(want) >= 0)
+    }
+    let bad = false
+    try { doc.fontFromBytes(Bytes.fromString("not a font at all")) } catch (e: ValueError) { bad = true }
+    assert(bad)
+}
+
+test "tables flow onto new pages with the header again" {
+    let doc = new PdfDocument()
+    doc.compress = false
+    let page = doc.addPage()
+    let t = new PdfTable([200, 100]).header(["Item", "Amount"]).alignRight(1)
+    for (i in 0..120) { t.row(["Row ${i}", "${i}.00"]) }
+    let last = doc.table(t, page, 50, 100)
+    assert(doc.pageCount() >= 3)
+    assert(last.lastTableBottom > 40.0 && last.lastTableBottom < 842.0)
+    let s = text(doc)
+    assertEq(Str.split(s, "(Item)").size() - 1, doc.pageCount())
+    assert(Str.contains(s, "(Row 119)"))
+    assertEq(Str.split(s, "(Row 0)").size(), 2)
+    // a JPEG is embedded as it is
+    if (Image.jpegAvailable()) {
+        let j = doc.addJpeg(Image.create(10, 8, 3, 0x00ff00ff).jpeg())
+        assertEq("${j.width}x${j.height}", "10x8")
+    }
+}

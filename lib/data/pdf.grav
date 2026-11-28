@@ -1,0 +1,1010 @@
+// pdf.grav — PDF documents written from code: text in the standard fonts or an embedded
+// TrueType font (any Unicode), wrapped paragraphs, lines, rectangles and circles, images
+// (PNG-style pixels or JPEG files as they are), QR codes as vectors, links, and tables that
+// flow onto new pages with their header repeated.
+//
+//   let doc = new PdfDocument()                    // A4; PdfDocument(612, 792) is US Letter
+//   doc.title = "Invoice INV-0042"
+//   let page = doc.addPage()
+//   page.setFont(doc.font("Helvetica-Bold"), 18).text(50, 50, "Invoice INV-0042")
+//   page.setFont(doc.font("Helvetica"), 10).textBox(50, 80, 300, notes)
+//   let t = new PdfTable([250, 80, 120]).header(["Item", "Qty", "Amount"]).alignRight(1).alignRight(2)
+//   t.row(["Hosting", "12", "KES 14,400.00"])
+//   doc.table(t, page, 50, 140)                    // continues on new pages when it must
+//   doc.save("invoice.pdf")
+//
+// Coordinates are points (1/72 inch) from the top-left corner of the page, y downward;
+// text is placed by the top of its line. The standard fonts (Helvetica, Times, Courier,
+// each with Bold and Oblique/Italic) need nothing embedded and cover Western European text
+// (Windows-1252); loadFont("DejaVuSans.ttf") embeds a TrueType font for everything else.
+// Content streams, pixel images and fonts are compressed with zlib when it is present.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../text/strbuf.grav"
+import "../text/string.grav"
+import "bytes.grav"
+import "compress.grav"
+import "image.grav"
+import "qrcode.grav"
+
+namespace std.data {
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdio.h>
+    #include <math.h>
+
+    static const short GP_W[8][224] = {
+        /* Helvetica */ {278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584,0,556,0,222,556,333,1000,556,556,333,1000,667,333,1000,0,611,0,0,222,222,333,333,350,556,1000,333,1000,500,333,944,0,500,667,278,333,556,556,556,556,260,556,333,737,370,556,584,333,737,552,400,549,333,333,333,576,537,333,333,333,365,556,834,834,834,611,667,667,667,667,667,667,1000,722,667,667,667,667,278,278,278,278,722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,556,556,556,556,556,556,889,500,556,556,556,556,278,278,278,278,556,556,556,556,556,556,556,549,611,556,556,556,556,500,556,500},
+        /* Helvetica-Bold */ {278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584,0,556,0,278,556,500,1000,556,556,333,1000,667,333,1000,0,611,0,0,278,278,500,500,350,556,1000,333,1000,556,333,944,0,500,667,278,333,556,556,556,556,280,556,333,737,370,556,584,333,737,552,400,549,333,333,333,576,556,333,333,333,365,556,834,834,834,611,722,722,722,722,722,722,1000,722,667,667,667,667,278,278,278,278,722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,556,556,556,556,556,556,889,556,556,556,556,556,278,278,278,278,611,611,611,611,611,611,611,549,611,611,611,611,611,556,611,556},
+        /* Helvetica-Oblique */ {278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584,0,556,0,222,556,333,1000,556,556,333,1000,667,333,1000,0,611,0,0,222,222,333,333,350,556,1000,333,1000,500,333,944,0,500,667,278,333,556,556,556,556,260,556,333,737,370,556,584,333,737,552,400,549,333,333,333,576,537,333,333,333,365,556,834,834,834,611,667,667,667,667,667,667,1000,722,667,667,667,667,278,278,278,278,722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,556,556,556,556,556,556,889,500,556,556,556,556,278,278,278,278,556,556,556,556,556,556,556,549,611,556,556,556,556,500,556,500},
+        /* Helvetica-BoldOblique */ {278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584,0,556,0,278,556,500,1000,556,556,333,1000,667,333,1000,0,611,0,0,278,278,500,500,350,556,1000,333,1000,556,333,944,0,500,667,278,333,556,556,556,556,280,556,333,737,370,556,584,333,737,552,400,549,333,333,333,576,556,333,333,333,365,556,834,834,834,611,722,722,722,722,722,722,1000,722,667,667,667,667,278,278,278,278,722,722,778,778,778,778,778,584,778,722,722,722,722,667,667,611,556,556,556,556,556,556,889,556,556,556,556,556,278,278,278,278,611,611,611,611,611,611,611,549,611,611,611,611,611,556,611,556},
+        /* Times-Roman */ {250,333,408,500,500,833,778,180,333,333,500,564,250,333,250,278,500,500,500,500,500,500,500,500,500,500,278,278,564,564,564,444,921,722,667,667,722,611,556,722,722,333,389,722,611,889,722,722,556,722,667,556,611,722,722,944,722,722,611,333,278,333,469,500,333,444,500,444,500,444,333,500,500,278,278,500,278,778,500,500,500,500,333,389,278,500,500,722,500,500,444,480,200,480,541,0,500,0,333,500,444,1000,500,500,333,1000,556,333,889,0,611,0,0,333,333,444,444,350,500,1000,333,980,389,333,722,0,444,722,250,333,500,500,500,500,200,500,333,760,276,500,564,333,760,500,400,549,300,300,333,576,453,333,333,300,310,500,750,750,750,444,722,722,722,722,722,722,889,667,611,611,611,611,333,333,333,333,722,722,722,722,722,722,722,564,722,722,722,722,722,722,556,500,444,444,444,444,444,444,667,444,444,444,444,444,278,278,278,278,500,500,500,500,500,500,500,549,500,500,500,500,500,500,500,500},
+        /* Times-Bold */ {250,333,555,500,500,1000,833,278,333,333,500,570,250,333,250,278,500,500,500,500,500,500,500,500,500,500,333,333,570,570,570,500,930,722,667,722,722,667,611,778,778,389,500,778,667,944,722,778,611,778,722,556,667,722,722,1000,722,722,667,333,278,333,581,500,333,500,556,444,556,444,333,500,556,278,333,556,278,833,556,500,556,556,444,389,333,556,500,722,500,500,444,394,220,394,520,0,500,0,333,500,500,1000,500,500,333,1000,556,333,1000,0,667,0,0,333,333,500,500,350,500,1000,333,1000,389,333,722,0,444,722,250,333,500,500,500,500,220,500,333,747,300,500,570,333,747,500,400,549,300,300,333,576,540,333,333,300,330,500,750,750,750,500,722,722,722,722,722,722,1000,722,667,667,667,667,389,389,389,389,722,722,778,778,778,778,778,570,778,722,722,722,722,722,611,556,500,500,500,500,500,500,722,444,444,444,444,444,278,278,278,278,500,556,500,500,500,500,500,549,500,556,556,556,556,500,556,500},
+        /* Times-Italic */ {250,333,420,500,500,833,778,214,333,333,500,675,250,333,250,278,500,500,500,500,500,500,500,500,500,500,333,333,675,675,675,500,920,611,611,667,722,611,611,722,722,333,444,667,556,833,667,722,611,722,611,500,556,722,611,833,611,556,556,389,278,389,422,500,333,500,500,444,500,444,278,500,500,278,278,444,278,722,500,500,500,500,389,389,278,500,444,667,444,444,389,400,275,400,541,0,500,0,333,500,556,889,500,500,333,1000,500,333,944,0,556,0,0,333,333,556,556,350,500,889,333,980,389,333,667,0,389,556,250,389,500,500,500,500,275,500,333,760,276,500,675,333,760,500,400,549,300,300,333,576,523,250,333,300,310,500,750,750,750,500,611,611,611,611,611,611,889,667,611,611,611,611,333,333,333,333,722,667,722,722,722,722,722,675,722,722,722,722,722,556,611,500,500,500,500,500,500,500,667,444,444,444,444,444,278,278,278,278,500,500,500,500,500,500,500,549,500,500,500,500,500,444,500,444},
+        /* Times-BoldItalic */ {250,389,555,500,500,833,778,278,333,333,500,570,250,333,250,278,500,500,500,500,500,500,500,500,500,500,333,333,570,570,570,500,832,667,667,667,722,667,667,722,778,389,500,667,611,889,722,722,611,722,667,556,611,722,667,889,667,611,611,333,278,333,570,500,333,500,500,444,500,444,333,500,556,278,278,500,278,778,556,500,500,500,389,389,278,556,444,667,500,444,389,348,220,348,570,0,500,0,333,500,500,1000,500,500,333,1000,556,333,944,0,611,0,0,333,333,500,500,350,500,1000,333,1000,389,333,722,0,389,611,250,389,500,500,500,500,220,500,333,747,266,500,606,333,747,500,400,549,300,300,333,576,500,250,333,300,300,500,750,750,750,500,667,667,667,667,667,667,944,667,667,667,667,667,389,389,389,389,722,722,722,722,722,722,722,570,722,722,722,722,722,611,611,500,500,500,500,500,500,500,722,444,444,444,444,444,278,278,278,278,500,556,500,500,500,500,500,549,500,556,556,556,556,444,500,444},
+    };
+
+    // A number for a content stream: at most 3 decimals, no trailing zeros.
+    static const char* grav_pdf_num(double v) {
+        char b[48];
+        if (fabs(v) < 0.0005) v = 0;
+        snprintf(b, sizeof b, "%.3f", v);
+        char* e = b + strlen(b) - 1;
+        while (*e == '0') *e-- = 0;
+        if (*e == '.') *e = 0;
+        size_t n = strlen(b);
+        char* r = grav_str_new(n); memcpy(r, b, n + 1);
+        return r;
+    }
+    // The next code point of UTF-8 text (U+FFFD for a bad byte).
+    static unsigned gp_utf8(const unsigned char** p) {
+        const unsigned char* s = *p; unsigned c = *s++;
+        if (c >= 0xC0 && c < 0xE0 && (s[0] & 0xC0) == 0x80) { c = ((c & 31) << 6) | (s[0] & 63); s += 1; }
+        else if (c >= 0xE0 && c < 0xF0 && (s[0] & 0xC0) == 0x80 && (s[1] & 0xC0) == 0x80) { c = ((c & 15) << 12) | ((s[0] & 63) << 6) | (s[1] & 63); s += 2; }
+        else if (c >= 0xF0 && (s[0] & 0xC0) == 0x80 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) { c = ((c & 7) << 18) | ((s[0] & 63) << 12) | ((s[1] & 63) << 6) | (s[2] & 63); s += 3; }
+        else if (c >= 0x80) c = 0xFFFD;
+        *p = s;
+        return c;
+    }
+    // Windows-1252 for a code point ('?' when it has none).
+    static int gp_ansi(unsigned c) {
+        if (c < 0x80 || (c >= 0xA0 && c <= 0xFF)) return (int)c;
+        static const unsigned short hi[32] = {0x20AC,0,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,0x02C6,0x2030,0x0160,0x2039,0x0152,0,0x017D,0,
+                                              0,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,0x02DC,0x2122,0x0161,0x203A,0x0153,0,0x017E,0x0178};
+        for (int i = 0; i < 32; i++) if (hi[i] == c) return 0x80 + i;
+        return '?';
+    }
+    // UTF-8 text as a PDF literal string in Windows-1252: "(…)", escaped, ASCII only.
+    static const char* grav_pdf_ansi_literal(const char* s) {
+        size_t cap = strlen(s) * 4 + 3, n = 0;
+        char* b = (char*)malloc(cap);
+        b[n++] = '(';
+        const unsigned char* p = (const unsigned char*)s;
+        while (*p) {
+            int c = gp_ansi(gp_utf8(&p));
+            if (c == '(' || c == ')' || c == '\\') { b[n++] = '\\'; b[n++] = (char)c; }
+            else if (c < 32 || c >= 127) n += (size_t)sprintf(b + n, "\\%03o", c & 255);
+            else b[n++] = (char)c;
+        }
+        b[n++] = ')';
+        char* r = grav_str_new(n); memcpy(r, b, n); r[n] = 0;
+        free(b);
+        return r;
+    }
+    // The width of text in a standard font (0-7 the table above, 8 Courier), in ems.
+    static double grav_pdf_std_width(int font, const char* s) {
+        const unsigned char* p = (const unsigned char*)s;
+        long total = 0;
+        while (*p) {
+            int c = gp_ansi(gp_utf8(&p));
+            if (font >= 8) { total += 600; continue; }
+            int w = c >= 32 ? GP_W[font][c - 32] : 0;
+            total += w ? w : GP_W[font][0];
+        }
+        return total / 1000.0;
+    }
+
+    // ── TrueType ───────────────────────────────────────────────────────────
+    typedef struct {
+        unsigned char* d; long n;
+        int upm, glyphs, nhm, ascent, descent, cap, bbox[4], italic, fixed;
+        long hmtx, cmap; int cmapFmt;
+        unsigned* uni;               // the code point each used glyph was asked for
+        char name[64];
+    } GPTtf;
+    static unsigned gp_u16(const unsigned char* p) { return (unsigned)((p[0] << 8) | p[1]); }
+    static unsigned gp_u32(const unsigned char* p) { return ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) | ((unsigned)p[2] << 8) | p[3]; }
+    static long gp_table(const unsigned char* d, long n, const char* tag) {
+        if (n < 12) return -1;
+        unsigned count = gp_u16(d + 4);
+        for (unsigned i = 0; i < count && 12 + (long)(i + 1) * 16 <= n; i++) {
+            const unsigned char* e = d + 12 + i * 16;
+            if (!memcmp(e, tag, 4)) { long off = gp_u32(e + 8), len = gp_u32(e + 12); return off + len <= n ? off : -1; }
+        }
+        return -1;
+    }
+    static GPTtf* grav_ttf_open(const unsigned char* data, long n, const char** err) {
+        if (n < 12 || !(gp_u32(data) == 0x00010000 || !memcmp(data, "true", 4))) { *err = "not a TrueType font (.ttf; OpenType CFF and collections are not supported)"; return NULL; }
+        long head = gp_table(data, n, "head"), hhea = gp_table(data, n, "hhea"), maxp = gp_table(data, n, "maxp");
+        long hmtx = gp_table(data, n, "hmtx"), cmap = gp_table(data, n, "cmap"), glyf = gp_table(data, n, "glyf");
+        if (head < 0 || hhea < 0 || maxp < 0 || hmtx < 0 || cmap < 0 || glyf < 0) { *err = "the font is missing a table PDF needs"; return NULL; }
+        GPTtf* f = (GPTtf*)calloc(1, sizeof(GPTtf));
+        f->d = (unsigned char*)malloc((size_t)n); memcpy(f->d, data, (size_t)n); f->n = n;
+        const unsigned char* d = f->d;
+        f->upm = (int)gp_u16(d + head + 18);
+        for (int i = 0; i < 4; i++) f->bbox[i] = (short)gp_u16(d + head + 36 + i * 2);
+        f->ascent = (short)gp_u16(d + hhea + 4);
+        f->descent = (short)gp_u16(d + hhea + 6);
+        f->nhm = (int)gp_u16(d + hhea + 34);
+        f->glyphs = (int)gp_u16(d + maxp + 4);
+        f->hmtx = hmtx;
+        f->cap = f->ascent;
+        long os2 = gp_table(d, n, "OS/2");
+        if (os2 >= 0 && gp_u16(d + os2) >= 2 && os2 + 90 <= n) f->cap = (short)gp_u16(d + os2 + 88);
+        long post = gp_table(d, n, "post");
+        if (post >= 0) { f->italic = (short)gp_u16(d + post + 4); f->fixed = gp_u32(d + post + 12) != 0; }
+        // the best Unicode cmap: format 12 (all planes), else format 4 (the BMP)
+        unsigned subs = gp_u16(d + cmap + 2);
+        for (unsigned i = 0; i < subs; i++) {
+            const unsigned char* e = d + cmap + 4 + i * 8;
+            unsigned pid = gp_u16(e), eid = gp_u16(e + 2); long off = cmap + gp_u32(e + 4);
+            if (off + 2 > n) continue;
+            unsigned fmt = gp_u16(d + off);
+            int unicode = pid == 0 || (pid == 3 && (eid == 1 || eid == 10));
+            if (!unicode) continue;
+            if (fmt == 12) { f->cmap = off; f->cmapFmt = 12; break; }
+            if (fmt == 4 && f->cmapFmt != 12) { f->cmap = off; f->cmapFmt = 4; }
+        }
+        if (!f->cmapFmt) { free(f->d); free(f); *err = "the font has no Unicode character map"; return NULL; }
+        f->uni = (unsigned*)calloc((size_t)f->glyphs + 1, sizeof(unsigned));
+        strcpy(f->name, "EmbeddedFont");
+        long name = gp_table(d, n, "name");
+        if (name >= 0) {
+            unsigned count = gp_u16(d + name + 2), strings = gp_u16(d + name + 4);
+            for (unsigned i = 0; i < count; i++) {
+                const unsigned char* r = d + name + 6 + i * 12;
+                if (gp_u16(r + 6) != 6) continue;
+                unsigned len = gp_u16(r + 8), off = gp_u16(r + 10), pid = gp_u16(r + 0);
+                const unsigned char* s = d + name + strings + off;
+                int k = 0;
+                for (unsigned j = 0; j < len && k < 60; j += (pid == 3 || pid == 0) ? 2 : 1) {
+                    unsigned c = (pid == 3 || pid == 0) ? s[j + 1] : s[j];
+                    if (c > 32 && c < 127 && c != '/' && c != '(' && c != ')' && c != '[' && c != ']' && c != '<' && c != '>' && c != '%') f->name[k++] = (char)c;
+                }
+                if (k > 0) { f->name[k] = 0; break; }
+            }
+        }
+        return f;
+    }
+    static void grav_ttf_free(GPTtf* f) { if (f) { free(f->d); free(f->uni); free(f); } }
+    static unsigned grav_ttf_gid(GPTtf* f, unsigned c) {
+        const unsigned char* t = f->d + f->cmap;
+        if (f->cmapFmt == 12) {
+            unsigned groups = gp_u32(t + 12);
+            unsigned lo = 0, hi = groups;
+            while (lo < hi) {
+                unsigned mid = (lo + hi) / 2; const unsigned char* g = t + 16 + mid * 12;
+                unsigned start = gp_u32(g), end = gp_u32(g + 4);
+                if (c < start) hi = mid; else if (c > end) lo = mid + 1; else return gp_u32(g + 8) + (c - start);
+            }
+            return 0;
+        }
+        if (c > 0xFFFF) return 0;
+        unsigned segs = gp_u16(t + 6) / 2;
+        const unsigned char* ends = t + 14, *starts = ends + segs * 2 + 2, *deltas = starts + segs * 2, *ranges = deltas + segs * 2;
+        unsigned lo = 0, hi = segs;
+        while (lo < hi) { unsigned mid = (lo + hi) / 2; if (gp_u16(ends + mid * 2) < c) lo = mid + 1; else hi = mid; }
+        if (lo >= segs) return 0;
+        unsigned start = gp_u16(starts + lo * 2);
+        if (c < start) return 0;
+        unsigned delta = gp_u16(deltas + lo * 2), range = gp_u16(ranges + lo * 2);
+        if (!range) return (c + delta) & 0xFFFF;
+        const unsigned char* gp = ranges + lo * 2 + range + (c - start) * 2;
+        if (gp + 2 > f->d + f->n) return 0;
+        unsigned g = gp_u16(gp);
+        return g ? (g + delta) & 0xFFFF : 0;
+    }
+    static int gp_adv(GPTtf* f, unsigned g) {
+        unsigned i = g < (unsigned)f->nhm ? g : (unsigned)f->nhm - 1;
+        return (int)gp_u16(f->d + f->hmtx + i * 4);
+    }
+    static double grav_ttf_width(GPTtf* f, const char* s) {
+        const unsigned char* p = (const unsigned char*)s; long total = 0;
+        while (*p) total += gp_adv(f, grav_ttf_gid(f, gp_utf8(&p)));
+        return (double)total / f->upm;
+    }
+    // Text as glyph ids for Identity-H: "<0024004B…>", the glyphs noted as used.
+    static const char* grav_ttf_hex(GPTtf* f, const char* s) {
+        size_t cap = strlen(s) * 4 + 3, n = 0;
+        char* b = (char*)malloc(cap);
+        b[n++] = '<';
+        const unsigned char* p = (const unsigned char*)s;
+        while (*p) {
+            unsigned c = gp_utf8(&p), g = grav_ttf_gid(f, c);
+            if (g < (unsigned)f->glyphs && !f->uni[g]) f->uni[g] = c ? c : 0xFFFD;
+            n += (size_t)sprintf(b + n, "%04X", g & 0xFFFF);
+        }
+        b[n++] = '>';
+        char* r = grav_str_new(n); memcpy(r, b, n); r[n] = 0;
+        free(b);
+        return r;
+    }
+    // /W for the used glyphs: "[3 [278] 17 [556 556]]".
+    static const char* grav_ttf_widths(GPTtf* f) {
+        size_t cap = 64, n = 0; char* b = (char*)malloc(cap);
+        b[n++] = '[';
+        int g = 0;
+        while (g < f->glyphs) {
+            if (!f->uni[g]) { g++; continue; }
+            if (n + 32 > cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            n += (size_t)sprintf(b + n, "%d[", g);
+            while (g < f->glyphs && f->uni[g]) {
+                if (n + 16 > cap) { cap *= 2; b = (char*)realloc(b, cap); }
+                n += (size_t)sprintf(b + n, "%ld ", lround(gp_adv(f, (unsigned)g) * 1000.0 / f->upm));
+                g++;
+            }
+            b[n - 1] = ']';
+        }
+        if (n + 2 > cap) { cap += 2; b = (char*)realloc(b, cap); }
+        b[n++] = ']';
+        char* r = grav_str_new(n); memcpy(r, b, n); r[n] = 0;
+        free(b);
+        return r;
+    }
+    // The ToUnicode CMap for the used glyphs (so text can be copied and searched).
+    static const char* grav_ttf_tounicode(GPTtf* f) {
+        size_t cap = 1024, n = 0; char* b = (char*)malloc(cap);
+        n += (size_t)sprintf(b, "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+        int g = 0;
+        while (g < f->glyphs) {
+            int batch = 0; size_t mark = n;
+            if (n + 40 > cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            n += (size_t)sprintf(b + n, "%5d beginbfchar\n", 0);
+            for (; g < f->glyphs && batch < 100; g++) {
+                if (!f->uni[g]) continue;
+                if (n + 40 > cap) { cap *= 2; b = (char*)realloc(b, cap); }
+                unsigned c = f->uni[g];
+                if (c > 0xFFFF) { unsigned v = c - 0x10000; n += (size_t)sprintf(b + n, "<%04X> <%04X%04X>\n", g, 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)); }
+                else n += (size_t)sprintf(b + n, "<%04X> <%04X>\n", g, c);
+                batch++;
+            }
+            if (!batch) { n = mark; break; }
+            char head[16]; sprintf(head, "%5d", batch); memcpy(b + mark, head, 5);
+            if (n + 16 > cap) { cap *= 2; b = (char*)realloc(b, cap); }
+            n += (size_t)sprintf(b + n, "endbfchar\n");
+        }
+        if (n + 64 > cap) { cap += 64; b = (char*)realloc(b, cap); }
+        n += (size_t)sprintf(b + n, "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+        char* r = grav_str_new(n); memcpy(r, b, n); r[n] = 0;
+        free(b);
+        return r;
+    }
+    static int grav_ttf_metric(GPTtf* f, int which) {
+        double k = 1000.0 / f->upm;
+        switch (which) {
+            case 0: return (int)lround(f->ascent * k);
+            case 1: return (int)lround(f->descent * k);
+            case 2: return (int)lround(f->cap * k);
+            case 3: case 4: case 5: case 6: return (int)lround(f->bbox[which - 3] * k);
+            case 7: return f->italic;
+            default: return f->fixed;
+        }
+    }
+    // A JPEG's size and colour components from its frame header (0 when it has none).
+    static int grav_pdf_jpeg_info(const unsigned char* d, long n, int* w, int* h, int* comps) {
+        if (n < 4 || d[0] != 0xFF || d[1] != 0xD8) return 0;
+        long p = 2;
+        while (p + 9 < n) {
+            if (d[p] != 0xFF) { p++; continue; }
+            int m = d[p + 1];
+            if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7) || m == 0xFF) { p += m == 0xFF ? 1 : 2; continue; }
+            int len = (d[p + 2] << 8) | d[p + 3];
+            if ((m >= 0xC0 && m <= 0xC3) || (m >= 0xC5 && m <= 0xC7) || (m >= 0xC9 && m <= 0xCB) || (m >= 0xCD && m <= 0xCF)) {
+                *h = (d[p + 5] << 8) | d[p + 6]; *w = (d[p + 7] << 8) | d[p + 8]; *comps = d[p + 9];
+                return 1;
+            }
+            p += 2 + len;
+        }
+        return 0;
+    }
+    // The pixels of an image split into colour (grey or RGB) and alpha planes.
+    static void grav_pdf_split_alpha(const unsigned char* px, long n, int ch, unsigned char* color, unsigned char* alpha) {
+        int cc = ch - 1;
+        for (long i = 0; i < n; i++) {
+            memcpy(color + i * cc, px + i * ch, (size_t)cc);
+            alpha[i] = px[i * ch + cc];
+        }
+    }
+    %}
+
+    // A font a page can write with: one of the 14 standard ones, or an embedded TrueType.
+    class PdfFont {
+        // The resource name pages use ("F1").
+        public id: string
+        // The PostScript name ("Helvetica-Bold").
+        public name: string
+        // The height above and below the baseline, and of capitals, in 1/1000 em.
+        public ascent: int
+        public descent: int
+        public capHeight: int
+        private std: int
+        private ttf: byte*
+        public objectNumber: int = 0
+
+        constructor(id: string, name: string, std: int, ttf: byte*) {
+            self.id = id; self.name = name; self.std = std; self.ttf = ttf;
+            if (ttf != null) {
+                self.ascent = %{ grav_ttf_metric((GPTtf*)ttf, 0) %} as int;
+                self.descent = %{ grav_ttf_metric((GPTtf*)ttf, 1) %} as int;
+                self.capHeight = %{ grav_ttf_metric((GPTtf*)ttf, 2) %} as int;
+            } else if (std >= 8) {
+                self.ascent = 629; self.descent = -157; self.capHeight = 562;
+            } else if (std >= 4) {
+                self.ascent = 683; self.descent = -217; self.capHeight = 662;
+            } else {
+                self.ascent = 718; self.descent = -207; self.capHeight = 718;
+            }
+        }
+        destructor() { %{ grav_ttf_free((GPTtf*)self->ttf); %}; }
+
+        // Whether it is embedded (a TrueType file) rather than one of the standard 14.
+        fn isEmbedded() -> bool { return self.ttf != null; }
+        // The width of `text` at `size` points.
+        fn width(text: string, size: double) -> double {
+            if (self.ttf != null) { return (%{ grav_ttf_width((GPTtf*)self->ttf, text) %} as double) * size; }
+            let s = self.std;
+            return (%{ grav_pdf_std_width(s, text) %} as double) * size;
+        }
+        // `text` as a string operand for Tj.
+        fn encode(text: string) -> string {
+            if (self.ttf != null) { return %{ grav_ttf_hex((GPTtf*)self->ttf, text) %} as string; }
+            return %{ grav_pdf_ansi_literal(text) %} as string;
+        }
+
+        // Writes the font's objects.
+        fn writeTo(w: PdfWriter) {
+            if (self.ttf == null) {
+                w.object(self.objectNumber, "<< /Type /Font /Subtype /Type1 /BaseFont /${self.name} /Encoding /WinAnsiEncoding >>");
+                return;
+            }
+            let f = self.ttf;
+            let n = self.objectNumber;
+            let widths = %{ grav_ttf_widths((GPTtf*)f) %} as string;
+            let cmap = %{ grav_ttf_tounicode((GPTtf*)f) %} as string;
+            let bx0 = %{ grav_ttf_metric((GPTtf*)f, 3) %} as int;
+            let by0 = %{ grav_ttf_metric((GPTtf*)f, 4) %} as int;
+            let bx1 = %{ grav_ttf_metric((GPTtf*)f, 5) %} as int;
+            let by1 = %{ grav_ttf_metric((GPTtf*)f, 6) %} as int;
+            let italic = %{ grav_ttf_metric((GPTtf*)f, 7) %} as int;
+            let fixed = %{ grav_ttf_metric((GPTtf*)f, 8) %} as int;
+            let flags = 32 + (fixed != 0 ? 1 : 0) + (italic != 0 ? 64 : 0);
+            w.object(n, "<< /Type /Font /Subtype /Type0 /BaseFont /${self.name} /Encoding /Identity-H /DescendantFonts [${n + 1} 0 R] /ToUnicode ${n + 4} 0 R >>");
+            w.object(n + 1, "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${self.name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${n + 2} 0 R /CIDToGIDMap /Identity /DW 1000 /W ${widths} >>");
+            w.object(n + 2, "<< /Type /FontDescriptor /FontName /${self.name} /Flags ${flags} /FontBBox [${bx0} ${by0} ${bx1} ${by1}] /ItalicAngle ${italic} /Ascent ${self.ascent} /Descent ${self.descent} /CapHeight ${self.capHeight} /StemV 80 /FontFile2 ${n + 3} 0 R >>");
+            let file = new Bytes();
+            let len = %{ (int)((GPTtf*)f)->n %} as int;
+            file.appendRaw(%{ ((GPTtf*)f)->d %} as byte*, len);
+            w.stream(n + 3, "/Length1 ${len}", file, true);
+            w.stream(n + 4, "", Bytes.fromString(cmap), true);
+        }
+        // Objects the font takes.
+        fn objectCount() -> int { return self.ttf == null ? 1 : 5; }
+    }
+
+    // An image placed in the document once and drawn as often as wanted.
+    class PdfImage {
+        public width: int
+        public height: int
+        public id: string
+        public objectNumber: int = 0
+        // "jpeg" (the file as it is) or "pixels" (flate-compressed samples)
+        private kind: string
+        private data: Bytes
+        private components: int
+        private alpha: Bytes = null
+
+        constructor(id: string, kind: string, data: Bytes, width: int, height: int, components: int, alpha: Bytes) {
+            self.id = id; self.kind = kind; self.data = data; self.width = width; self.height = height;
+            self.components = components; self.alpha = alpha;
+        }
+        fn objectCount() -> int { return self.alpha == null ? 1 : 2; }
+        fn writeTo(w: PdfWriter) {
+            let cs = self.components == 1 ? "/DeviceGray" : (self.components == 4 ? "/DeviceCMYK" : "/DeviceRGB");
+            let n = self.objectNumber;
+            let head = "/Type /XObject /Subtype /Image /Width ${self.width} /Height ${self.height} /ColorSpace ${cs} /BitsPerComponent 8";
+            if (self.kind == "jpeg") {
+                let decode = self.components == 4 ? " /Decode [1 0 1 0 1 0 1 0]" : "";
+                w.stream(n, head + " /Filter /DCTDecode" + decode, self.data, false);
+                return;
+            }
+            let smask = self.alpha == null ? "" : " /SMask ${n + 1} 0 R";
+            w.stream(n, head + smask, self.data, true);
+            if (self.alpha != null) {
+                w.stream(n + 1, "/Type /XObject /Subtype /Image /Width ${self.width} /Height ${self.height} /ColorSpace /DeviceGray /BitsPerComponent 8", self.alpha, true);
+            }
+        }
+    }
+
+    // A table's columns, header, rows and look, drawn by PdfPage.table or, across pages,
+    // PdfDocument.table.
+    class PdfTable {
+        public widths: Array<double>
+        public headerRow: Array<string> = null
+        public rows: Array<Array<string>> = new Array<Array<string>>()
+        public fontSize: double = 9.0
+        public padding: double = 4.0
+        // Colours as 0xRRGGBB; -1 for none.
+        public headerFill: long = 0xeeeeee
+        public stripeFill: long = -1
+        public borderColor: long = 0xbbbbbb
+        public textColor: long = 0x000000
+        public font: PdfFont = null
+        public boldFont: PdfFont = null
+        private aligns: HashMap<int, string> = new HashMap<int, string>()
+
+        constructor(widths: Array<double>) { self.widths = widths; }
+        fn header(cells: Array<string>) -> PdfTable { self.headerRow = cells; return self; }
+        fn row(cells: Array<string>) -> PdfTable { self.rows.push(cells); return self; }
+        // Column `col` (0-based) aligned "left", "right" or "center".
+        fn align(col: int, how: string) -> PdfTable { self.aligns.put(col, how); return self; }
+        fn alignRight(col: int) -> PdfTable { return self.align(col, "right"); }
+        fn alignCenter(col: int) -> PdfTable { return self.align(col, "center"); }
+        // Every other row shaded with `color` (0xRRGGBB).
+        fn stripes(color: long) -> PdfTable { self.stripeFill = color; return self; }
+        fn alignOf(col: int) -> string { return self.aligns.containsKey(col) ? self.aligns.get(col) : "left"; }
+        fn totalWidth() -> double {
+            let t = 0.0;
+            for (w in self.widths) { t += w; }
+            return t;
+        }
+    }
+
+    // A page: draw on it with its methods; each returns the page, so calls chain.
+    class PdfPage {
+        public width: double
+        public height: double
+        private doc: PdfDocument
+        public content: StringBuilder = new StringBuilder()
+        public fontIds: Array<string> = new Array<string>()
+        public imageIds: Array<string> = new Array<string>()
+        public links: Array<string> = new Array<string>()
+        private curFont: PdfFont = null
+        private curSize: double = 12.0
+        private textColor: long = 0x000000
+        // Where the last table drawn on this page ended.
+        public lastTableBottom: double = 0.0
+
+        constructor(doc: PdfDocument, width: double, height: double) {
+            self.doc = doc; self.width = width; self.height = height;
+        }
+
+        // ── state ────────────────────────────────────────────────────────────
+        // The font and size for the text that follows (Helvetica 12 until set).
+        fn setFont(font: PdfFont, size: double) -> PdfPage {
+            self.curFont = font;
+            self.curSize = size;
+            if (self.fontIds.indexOf(font.id) < 0) { self.fontIds.push(font.id); }
+            return self;
+        }
+        // The current font and size.
+        fn font() -> PdfFont { return self.ensureFont(); }
+        fn fontSize() -> double { return self.curSize; }
+        // The colour text and filled shapes are drawn in (0xRRGGBB).
+        fn setFillColor(rgb: long) -> PdfPage {
+            self.textColor = rgb;
+            self.content.append(PdfPage.rgb(rgb)).append(" rg\n");
+            return self;
+        }
+        // The colour of lines and outlines (0xRRGGBB).
+        fn setStrokeColor(rgb: long) -> PdfPage { self.content.append(PdfPage.rgb(rgb)).append(" RG\n"); return self; }
+        // The width of lines and outlines, in points.
+        fn setLineWidth(w: double) -> PdfPage { self.content.append(PdfPage.n(w)).append(" w\n"); return self; }
+        // Dashed lines (`on`, `off` points); 0, 0 for solid ones.
+        fn setDash(on: double, off: double) -> PdfPage {
+            if (on <= 0.0) { self.content.append("[] 0 d\n"); } else { self.content.append("[${PdfPage.n(on)} ${PdfPage.n(off)}] 0 d\n"); }
+            return self;
+        }
+
+        // ── text ─────────────────────────────────────────────────────────────
+        // `s` with the top of its line at (x, y).
+        fn text(x: double, y: double, s: string) -> PdfPage {
+            let f = self.ensureFont();
+            let base = y + f.ascent * self.curSize / 1000.0;
+            self.content.append("BT /").append(f.id).append(" ").append(PdfPage.n(self.curSize)).append(" Tf ")
+                .append(PdfPage.n(x)).append(" ").append(PdfPage.n(self.height - base)).append(" Td ").append(f.encode(s)).append(" Tj ET\n");
+            return self;
+        }
+        // `s` ending at x (right-aligned).
+        fn textRight(x: double, y: double, s: string) -> PdfPage { return self.text(x - self.textWidth(s), y, s); }
+        // `s` centred on x.
+        fn textCenter(x: double, y: double, s: string) -> PdfPage { return self.text(x - self.textWidth(s) / 2.0, y, s); }
+        // The width of `s` in the current font and size.
+        fn textWidth(s: string) -> double { return self.ensureFont().width(s, self.curSize); }
+        // `s` wrapped to `width` (at spaces; a word longer than a line is split; "\n" starts
+        // a new line), aligned "left", "right", "center" or "justify", `lineHeight` times the
+        // font size apart. Returns the height used.
+        fn textBox(x: double, y: double, width: double, s: string, align: string = "left", lineHeight: double = 1.25) -> double {
+            let lines = self.wrap(s, width);
+            let step = self.curSize * lineHeight;
+            let yy = y;
+            for (i in 0..lines.size()) {
+                let line = lines[i];
+                let last = i == lines.size() - 1 || Str.endsWith(line, "\n");
+                let t = Str.trimEnd(line);
+                if (align == "right") { self.textRight(x + width, yy, t); }
+                else if (align == "center") { self.textCenter(x + width / 2.0, yy, t); }
+                else if (align == "justify" && !last) { self.justified(x, yy, width, t); }
+                else { self.text(x, yy, t); }
+                yy += step;
+            }
+            return yy - y;
+        }
+        // The lines textBox would draw.
+        fn wrap(s: string, width: double) -> Array<string> {
+            let out = new Array<string>();
+            let f = self.ensureFont();
+            let size = self.curSize;
+            let paragraphs = Str.split(s, "\n");
+            for (p in 0..paragraphs.size()) {
+                let words = Str.split(paragraphs[p], " ");
+                let line = "";
+                for (word in words) {
+                    let attempt = line == "" ? word : line + " " + word;
+                    if (f.width(attempt, size) <= width || line == "" && f.width(word, size) <= width) { line = attempt; continue; }
+                    if (line != "") { out.push(line); line = ""; }
+                    // a word wider than the line: split it where it overflows
+                    let rest = word;
+                    while (f.width(rest, size) > width && rest.length > 1) {
+                        let cut = PdfPage.fitChars(f, rest, size, width);
+                        out.push(rest[..cut]);
+                        rest = rest[cut..];
+                    }
+                    line = rest;
+                }
+                out.push(p < paragraphs.size() - 1 ? line + "\n" : line);
+            }
+            return out;
+        }
+
+        // ── shapes ───────────────────────────────────────────────────────────
+        fn line(x1: double, y1: double, x2: double, y2: double) -> PdfPage {
+            self.content.append(PdfPage.n(x1)).append(" ").append(PdfPage.n(self.height - y1)).append(" m ")
+                .append(PdfPage.n(x2)).append(" ").append(PdfPage.n(self.height - y2)).append(" l S\n");
+            return self;
+        }
+        // A rectangle, filled with the fill colour, outlined, or both.
+        fn rect(x: double, y: double, w: double, h: double, fill: bool = false, stroke: bool = true) -> PdfPage {
+            if (!fill && !stroke) { return self; }
+            self.content.append(PdfPage.n(x)).append(" ").append(PdfPage.n(self.height - y - h)).append(" ")
+                .append(PdfPage.n(w)).append(" ").append(PdfPage.n(h)).append(" re ").append(fill && stroke ? "B" : (fill ? "f" : "S")).append("\n");
+            return self;
+        }
+        // A filled rectangle in `rgb` (0xRRGGBB), leaving the fill colour as it was.
+        fn fillRect(x: double, y: double, w: double, h: double, rgb: long) -> PdfPage {
+            let keep = self.textColor;
+            self.content.append("q ").append(PdfPage.rgb(rgb)).append(" rg ");
+            self.rect(x, y, w, h, true, false);
+            self.content.append("Q\n");
+            self.textColor = keep;
+            return self;
+        }
+        // A rectangle with corners rounded by `r`.
+        fn roundRect(x: double, y: double, w: double, h: double, r: double, fill: bool = false, stroke: bool = true) -> PdfPage {
+            let k = 0.5523 * r;
+            let top = self.height - y;
+            let bottom = self.height - y - h;
+            let c = self.content;
+            c.append(PdfPage.n(x + r)).append(" ").append(PdfPage.n(top)).append(" m ");
+            c.append(PdfPage.n(x + w - r)).append(" ").append(PdfPage.n(top)).append(" l ");
+            c.append("${PdfPage.n(x + w - r + k)} ${PdfPage.n(top)} ${PdfPage.n(x + w)} ${PdfPage.n(top - r + k)} ${PdfPage.n(x + w)} ${PdfPage.n(top - r)} c ");
+            c.append(PdfPage.n(x + w)).append(" ").append(PdfPage.n(bottom + r)).append(" l ");
+            c.append("${PdfPage.n(x + w)} ${PdfPage.n(bottom + r - k)} ${PdfPage.n(x + w - r + k)} ${PdfPage.n(bottom)} ${PdfPage.n(x + w - r)} ${PdfPage.n(bottom)} c ");
+            c.append(PdfPage.n(x + r)).append(" ").append(PdfPage.n(bottom)).append(" l ");
+            c.append("${PdfPage.n(x + r - k)} ${PdfPage.n(bottom)} ${PdfPage.n(x)} ${PdfPage.n(bottom + r - k)} ${PdfPage.n(x)} ${PdfPage.n(bottom + r)} c ");
+            c.append(PdfPage.n(x)).append(" ").append(PdfPage.n(top - r)).append(" l ");
+            c.append("${PdfPage.n(x)} ${PdfPage.n(top - r + k)} ${PdfPage.n(x + r - k)} ${PdfPage.n(top)} ${PdfPage.n(x + r)} ${PdfPage.n(top)} c ");
+            c.append(fill && stroke ? "B" : (fill ? "f" : "S")).append("\n");
+            return self;
+        }
+        // A circle centred on (cx, cy).
+        fn circle(cx: double, cy: double, r: double, fill: bool = false, stroke: bool = true) -> PdfPage {
+            let k = 0.5523 * r;
+            let y = self.height - cy;
+            let c = self.content;
+            c.append("${PdfPage.n(cx + r)} ${PdfPage.n(y)} m ");
+            c.append("${PdfPage.n(cx + r)} ${PdfPage.n(y + k)} ${PdfPage.n(cx + k)} ${PdfPage.n(y + r)} ${PdfPage.n(cx)} ${PdfPage.n(y + r)} c ");
+            c.append("${PdfPage.n(cx - k)} ${PdfPage.n(y + r)} ${PdfPage.n(cx - r)} ${PdfPage.n(y + k)} ${PdfPage.n(cx - r)} ${PdfPage.n(y)} c ");
+            c.append("${PdfPage.n(cx - r)} ${PdfPage.n(y - k)} ${PdfPage.n(cx - k)} ${PdfPage.n(y - r)} ${PdfPage.n(cx)} ${PdfPage.n(y - r)} c ");
+            c.append("${PdfPage.n(cx + k)} ${PdfPage.n(y - r)} ${PdfPage.n(cx + r)} ${PdfPage.n(y - k)} ${PdfPage.n(cx + r)} ${PdfPage.n(y)} c ");
+            c.append(fill && stroke ? "B" : (fill ? "f" : "S")).append("\n");
+            return self;
+        }
+
+        // ── images, codes, links ─────────────────────────────────────────────
+        // An image scaled into the `w` x `h` box at (x, y) (h 0: from the aspect ratio).
+        fn image(img: PdfImage, x: double, y: double, w: double, h: double = 0.0) -> PdfPage {
+            let hh = h > 0.0 ? h : w * img.height / img.width;
+            if (self.imageIds.indexOf(img.id) < 0) { self.imageIds.push(img.id); }
+            self.content.append("q ").append(PdfPage.n(w)).append(" 0 0 ").append(PdfPage.n(hh)).append(" ")
+                .append(PdfPage.n(x)).append(" ").append(PdfPage.n(self.height - y - hh)).append(" cm /").append(img.id).append(" Do Q\n");
+            return self;
+        }
+        // An Image added to the document and drawn (add it once with doc.addImage to draw it
+        // several times).
+        fn drawImage(img: Image, x: double, y: double, w: double, h: double = 0.0) -> PdfPage {
+            return self.image(self.doc.addImage(img), x, y, w, h);
+        }
+        // A QR code drawn as vector squares, `size` points wide (quiet zone included).
+        fn qrCode(qr: QrCode, x: double, y: double, size: double, border: int = 2) -> PdfPage {
+            let m = size / (qr.size + border * 2);
+            self.content.append("q 0 0 0 rg\n");
+            for (row in 0..qr.size) {
+                let col = 0;
+                while (col < qr.size) {
+                    if (!qr.get(col, row)) { col += 1; continue; }
+                    let start = col;
+                    while (col < qr.size && qr.get(col, row)) { col += 1; }
+                    let px = x + (start + border) * m;
+                    let py = self.height - (y + (row + border + 1) * m);
+                    self.content.append(PdfPage.n(px)).append(" ").append(PdfPage.n(py)).append(" ")
+                        .append(PdfPage.n((col - start) * m)).append(" ").append(PdfPage.n(m)).append(" re\n");
+                }
+            }
+            self.content.append("f Q\n");
+            return self;
+        }
+        // A clickable area that opens `url`.
+        fn link(x: double, y: double, w: double, h: double, url: string) -> PdfPage {
+            let esc = Str.replace(Str.replace(Str.replace(url, "\\", "\\\\"), "(", "\\("), ")", "\\)");
+            self.links.push("<< /Type /Annot /Subtype /Link /Rect [${PdfPage.n(x)} ${PdfPage.n(self.height - y - h)} ${PdfPage.n(x + w)} ${PdfPage.n(self.height - y)}] /Border [0 0 0] /A << /S /URI /URI (${esc}) >> >>");
+            return self;
+        }
+        // Raw content-stream operators, for what the methods do not cover (PDF coordinates:
+        // origin bottom-left).
+        fn raw(operators: string) -> PdfPage { self.content.append(operators).append("\n"); return self; }
+
+        // ── tables ───────────────────────────────────────────────────────────
+        // Draws rows of `t` from row `from` at (x, y) until `bottom` (a y on this page);
+        // returns the index of the first row that did not fit (t.rows.size() when all did).
+        fn table(t: PdfTable, x: double, y: double, from: int = 0, bottom: double = -1.0) -> int {
+            let limit = bottom < 0.0 ? self.height - 40.0 : bottom;
+            let regular = t.font == null ? self.doc.font("Helvetica") : t.font;
+            let bold = t.boldFont == null ? self.doc.font("Helvetica-Bold") : t.boldFont;
+            let yy = y;
+            if (t.headerRow != null) { yy += self.tableRow(t, t.headerRow, x, yy, bold, t.headerFill); }
+            let i = from;
+            while (i < t.rows.size()) {
+                let h = self.rowHeight(t, t.rows[i], regular);
+                if (yy + h > limit && i > from) { break; }
+                let fill = t.stripeFill >= 0 && (i % 2) == 1 ? t.stripeFill : -1;
+                yy += self.tableRow(t, t.rows[i], x, yy, regular, fill);
+                i += 1;
+            }
+            self.lastTableBottom = yy;
+            return i;
+        }
+        private fn rowHeight(t: PdfTable, cells: Array<string>, f: PdfFont) -> double {
+            self.setFont(f, t.fontSize);
+            let lines = 1;
+            for (c in 0..t.widths.size()) {
+                let text = c < cells.size() ? cells[c] : "";
+                let n = self.wrap(text, t.widths[c] - t.padding * 2.0).size();
+                if (n > lines) { lines = n; }
+            }
+            return lines * t.fontSize * 1.2 + t.padding * 2.0;
+        }
+        private fn tableRow(t: PdfTable, cells: Array<string>, x: double, y: double, f: PdfFont, fill: long) -> double {
+            let h = self.rowHeight(t, cells, f);
+            if (fill >= 0) { self.fillRect(x, y, t.totalWidth(), h, fill); }
+            self.setFont(f, t.fontSize);
+            self.setFillColor(t.textColor);
+            let cx = x;
+            for (c in 0..t.widths.size()) {
+                let text = c < cells.size() ? cells[c] : "";
+                let w = t.widths[c];
+                self.textBox(cx + t.padding, y + t.padding, w - t.padding * 2.0, text, t.alignOf(c), 1.2);
+                cx += w;
+            }
+            if (t.borderColor >= 0) {
+                self.content.append("q ");
+                self.setStrokeColor(t.borderColor);
+                self.setLineWidth(0.5);
+                self.rect(x, y, t.totalWidth(), h, false, true);
+                let lx = x;
+                for (c in 0..t.widths.size() - 1) {
+                    lx += t.widths[c];
+                    self.line(lx, y, lx, y + h);
+                }
+                self.content.append("Q\n");
+            }
+            return h;
+        }
+        private fn justified(x: double, y: double, width: double, line: string) {
+            let words = Str.split(line, " ");
+            if (words.size() < 2) { self.text(x, y, line); return; }
+            let used = 0.0;
+            for (word in words) { used += self.textWidth(word); }
+            let gap = (width - used) / (words.size() - 1);
+            let cx = x;
+            for (word in words) {
+                self.text(cx, y, word);
+                cx += self.textWidth(word) + gap;
+            }
+        }
+        private fn ensureFont() -> PdfFont {
+            if (self.curFont == null) { self.setFont(self.doc.font("Helvetica"), self.curSize); }
+            return self.curFont;
+        }
+        private static fn fitChars(f: PdfFont, s: string, size: double, width: double) -> int {
+            let cut = 1;
+            // whole UTF-8 characters only
+            let i = 1;
+            while (i <= s.length) {
+                while (i < s.length && (s[i] as int & 0xC0) == 0x80) { i += 1; }
+                if (f.width(s[..i], size) > width) { break; }
+                cut = i;
+                i += 1;
+            }
+            return cut;
+        }
+        static fn n(v: double) -> string { return %{ grav_pdf_num(v) %} as string; }
+        static fn rgb(c: long) -> string {
+            return "${PdfPage.n(((c >> 16) & 255) / 255.0)} ${PdfPage.n(((c >> 8) & 255) / 255.0)} ${PdfPage.n((c & 255) / 255.0)}";
+        }
+    }
+
+    // Assembles the file: objects, cross-reference table, trailer.
+    class PdfWriter {
+        public out: Bytes = new Bytes()
+        public offsets: Array<int> = new Array<int>()
+        public compress: bool = true
+        constructor(compress: bool) { self.compress = compress && Compress.available(); }
+        fn object(n: int, body: string) {
+            self.mark(n);
+            self.out.appendString("${n} 0 obj\n").appendString(body).appendString("\nendobj\n");
+        }
+        fn stream(n: int, dict: string, data: Bytes, deflate: bool) {
+            self.mark(n);
+            let body = data;
+            let filter = "";
+            if (deflate && self.compress) {
+                body = Compress.deflate(data);
+                filter = " /Filter /FlateDecode";
+            }
+            self.out.appendString("${n} 0 obj\n<< ").appendString(dict).appendString(filter).appendString(" /Length ${body.size()} >>\nstream\n");
+            self.out.append(body);
+            self.out.appendString("\nendstream\nendobj\n");
+        }
+        private fn mark(n: int) {
+            while (self.offsets.size() <= n) { self.offsets.push(0); }
+            self.offsets[n] = self.out.size();
+        }
+    }
+
+    // A PDF document.
+    class PdfDocument {
+        // Metadata shown in viewers' document properties.
+        public title: string = ""
+        public author: string = ""
+        public subject: string = ""
+        public keywords: string = ""
+        public creator: string = "Grav"
+        // Flate-compress page contents, pixel images and fonts (when zlib is present).
+        public compress: bool = true
+        public pageWidth: double
+        public pageHeight: double
+        // Margins PdfDocument.table keeps from the page edges when it adds pages.
+        public marginTop: double = 40.0
+        public marginBottom: double = 40.0
+        private pages: Array<PdfPage> = new Array<PdfPage>()
+        private fonts: Array<PdfFont> = new Array<PdfFont>()
+        private fontByName: HashMap<string, PdfFont> = new HashMap<string, PdfFont>()
+        private images: Array<PdfImage> = new Array<PdfImage>()
+
+        // A document whose pages are `width` x `height` points (A4 by default).
+        constructor(width: double = 595.28, height: double = 841.89) { self.pageWidth = width; self.pageHeight = height; }
+        // Page sizes in points.
+        static fn a4() -> Array<double> { return [595.28, 841.89]; }
+        static fn a5() -> Array<double> { return [419.53, 595.28]; }
+        static fn a3() -> Array<double> { return [841.89, 1190.55]; }
+        static fn letter() -> Array<double> { return [612.0, 792.0]; }
+        static fn legal() -> Array<double> { return [612.0, 1008.0]; }
+
+        // A new page at the document's size (or `width` x `height`).
+        fn addPage(width: double = 0.0, height: double = 0.0) -> PdfPage {
+            let p = new PdfPage(self, width > 0.0 ? width : self.pageWidth, height > 0.0 ? height : self.pageHeight);
+            self.pages.push(p);
+            return p;
+        }
+        fn pageCount() -> int { return self.pages.size(); }
+        fn page(i: int) -> PdfPage { return self.pages[i]; }
+
+        // One of the standard fonts: Helvetica, Helvetica-Bold, Helvetica-Oblique,
+        // Helvetica-BoldOblique, Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic,
+        // Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique.
+        fn font(name: string) -> PdfFont {
+            if (self.fontByName.containsKey(name)) { return self.fontByName.get(name); }
+            let names: Array<string> = ["Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique", "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
+                         "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"]
+            let i = names.indexOf(name);
+            if (i < 0) { throw new ValueError("'${name}' is not a standard PDF font: use loadFont for a TrueType file"); }
+            let f = new PdfFont("F${self.fonts.size() + 1}", name, i < 8 ? i : 8, null);
+            self.fonts.push(f);
+            self.fontByName.put(name, f);
+            return f;
+        }
+        // A TrueType font from a .ttf file, embedded so any character it has can be written.
+        fn loadFont(path: string) -> PdfFont {
+            if (self.fontByName.containsKey(path)) { return self.fontByName.get(path); }
+            let n: long = 0;
+            let p = %{ grav_img_read_file(path, &n) %} as byte*;
+            if (p == null) { throw new IOError("cannot read ${path}"); }
+            try {
+                let f = self.ttf(p, n);
+                self.fontByName.put(path, f);
+                return f;
+            } finally { free(p); }
+        }
+        // loadFont, from the font file's bytes.
+        fn fontFromBytes(data: Bytes) -> PdfFont { return self.ttf(data.rawData(), data.size() as long); }
+        private fn ttf(p: byte*, n: long) -> PdfFont {
+            let err = %{ (const char*)0 %} as byte*;
+            let h = %{ (unsigned char*)grav_ttf_open(p, n, (const char**)&err) %} as byte*;
+            if (h == null) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
+            let name = %{ grav_strdup(((GPTtf*)h)->name) %} as string;
+            let f = new PdfFont("F${self.fonts.size() + 1}", name, -1, h);
+            self.fonts.push(f);
+            return f;
+        }
+
+        // An Image for drawing: compressed once, drawn by reference as often as wanted.
+        // Transparency becomes a soft mask.
+        fn addImage(img: Image) -> PdfImage {
+            let id = "Im${self.images.size() + 1}";
+            let pdfImg: PdfImage = null;
+            if (img.channels == 1 || img.channels == 3) {
+                pdfImg = new PdfImage(id, "pixels", img.pixels(), img.width, img.height, img.channels, null);
+            } else {
+                let n = (img.width as long) * (img.height as long);
+                let cc = img.channels - 1;
+                let color = new Bytes((n * cc) as int);
+                let alpha = new Bytes(n as int);
+                let px = img.pixels();
+                let src = px.rawData();
+                %{ grav_pdf_split_alpha(src, n, cc + 1, color->data, alpha->data); color->len = (int)(n * cc); alpha->len = (int)n; %};
+                pdfImg = new PdfImage(id, "pixels", color, img.width, img.height, cc, alpha);
+            }
+            self.images.push(pdfImg);
+            return pdfImg;
+        }
+        // A JPEG file's bytes, embedded as they are (no re-encoding, no quality lost).
+        fn addJpeg(data: Bytes) -> PdfImage {
+            let w = 0;
+            let h = 0;
+            let comps = 0;
+            let p = data.rawData();
+            let n = data.size() as long;
+            if (!(%{ grav_pdf_jpeg_info(p, n, &w, &h, &comps) %} as bool)) { throw new ValueError("not a JPEG"); }
+            let img = new PdfImage("Im${self.images.size() + 1}", "jpeg", data, w, h, comps, null);
+            self.images.push(img);
+            return img;
+        }
+
+        // Draws a table from (x, y) on `page`, adding pages (at marginTop, with the header
+        // again) while rows remain. Returns the page it ended on; that page's
+        // lastTableBottom is where it ended.
+        fn table(t: PdfTable, page: PdfPage, x: double, y: double) -> PdfPage {
+            let p = page;
+            let next = p.table(t, x, y, 0, p.height - self.marginBottom);
+            while (next < t.rows.size()) {
+                p = self.addPage(p.width, p.height);
+                next = p.table(t, x, self.marginTop, next, p.height - self.marginBottom);
+            }
+            return p;
+        }
+
+        // The finished file.
+        fn bytes() -> Bytes {
+            let w = new PdfWriter(self.compress);
+            w.out.appendString("%PDF-1.7\n%\u{e2}\u{e3}\u{cf}\u{d3}\n");
+            // numbering: 1 catalog, 2 page tree, 3 info, then fonts, images, pages
+            let next = 4;
+            for (f in self.fonts) { f.objectNumber = next; next += f.objectCount(); }
+            for (img in self.images) { img.objectNumber = next; next += img.objectCount(); }
+            let pageObjs = new Array<int>();
+            let kids = new StringBuilder();
+            for (p in self.pages) {
+                pageObjs.push(next);
+                kids.append("${next} 0 R ");
+                next += 2 + p.links.size();
+            }
+            w.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+            w.object(2, "<< /Type /Pages /Kids [${kids.toString()}] /Count ${self.pages.size()} >>");
+            let info = new StringBuilder();
+            info.append("<< /Producer (Grav std.data.PdfDocument)");
+            if (self.title != "") { info.append(" /Title ").append(PdfDocument.textString(self.title)); }
+            if (self.author != "") { info.append(" /Author ").append(PdfDocument.textString(self.author)); }
+            if (self.subject != "") { info.append(" /Subject ").append(PdfDocument.textString(self.subject)); }
+            if (self.keywords != "") { info.append(" /Keywords ").append(PdfDocument.textString(self.keywords)); }
+            if (self.creator != "") { info.append(" /Creator ").append(PdfDocument.textString(self.creator)); }
+            info.append(" >>");
+            w.object(3, info.toString());
+            // pages first: drawing text records which glyphs embedded fonts need
+            for (i in 0..self.pages.size()) {
+                let p = self.pages[i];
+                let n = pageObjs[i];
+                let res = new StringBuilder();
+                res.append("<< /ProcSet [/PDF /Text /ImageB /ImageC]");
+                if (p.fontIds.size() > 0) {
+                    res.append(" /Font <<");
+                    for (id in p.fontIds) { res.append(" /").append(id).append(" ${self.fontById(id).objectNumber} 0 R"); }
+                    res.append(" >>");
+                }
+                if (p.imageIds.size() > 0) {
+                    res.append(" /XObject <<");
+                    for (id in p.imageIds) { res.append(" /").append(id).append(" ${self.imageById(id).objectNumber} 0 R"); }
+                    res.append(" >>");
+                }
+                res.append(" >>");
+                let annots = "";
+                if (p.links.size() > 0) {
+                    let a = new StringBuilder();
+                    a.append(" /Annots [");
+                    for (k in 0..p.links.size()) { a.append("${n + 2 + k} 0 R "); }
+                    a.append("]");
+                    annots = a.toString();
+                }
+                w.object(n, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PdfPage.n(p.width)} ${PdfPage.n(p.height)}] /Resources ${res.toString()} /Contents ${n + 1} 0 R${annots} >>");
+                w.stream(n + 1, "", Bytes.fromString(p.content.toString()), true);
+                for (k in 0..p.links.size()) { w.object(n + 2 + k, p.links[k]); }
+            }
+            for (f in self.fonts) { f.writeTo(w); }
+            for (img in self.images) { img.writeTo(w); }
+            let xref = w.out.size();
+            let sb = new StringBuilder();
+            sb.append("xref\n0 ${next}\n0000000000 65535 f \n");
+            for (i in 1..next) {
+                let off = i < w.offsets.size() ? w.offsets[i] : 0;
+                let s = str(off);
+                sb.append(Str.repeat("0", 10 - s.length)).append(s).append(" 00000 n \n");
+            }
+            sb.append("trailer\n<< /Size ${next} /Root 1 0 R /Info 3 0 R >>\nstartxref\n${xref}\n%%EOF\n");
+            w.out.appendString(sb.toString());
+            return w.out;
+        }
+        // Writes the file.
+        fn save(path: string) {
+            let data = self.bytes();
+            let p = data.rawData();
+            let n = data.size() as long;
+            if (!(%{ grav_img_write_file(path, p, n) %} as bool)) { throw new IOError("cannot write ${path}"); }
+        }
+
+        private fn fontById(id: string) -> PdfFont {
+            for (f in self.fonts) { if (f.id == id) { return f; } }
+            return self.fonts[0];
+        }
+        private fn imageById(id: string) -> PdfImage {
+            for (i in self.images) { if (i.id == id) { return i; } }
+            return self.images[0];
+        }
+        // A text string for metadata: PDFDocEncoding when it is ASCII, UTF-16BE otherwise.
+        private static fn textString(s: string) -> string {
+            let ascii = true;
+            for (c in s as binary) { if (c >= 128) { ascii = false; break; } }
+            if (ascii) { return "(" + Str.replace(Str.replace(Str.replace(s, "\\", "\\\\"), "(", "\\("), ")", "\\)") + ")"; }
+            let sb = new StringBuilder();
+            sb.append("<FEFF");
+            let out = "";
+            %{ { const unsigned char* p = (const unsigned char*)s; size_t cap = strlen(s) * 8 + 1, n = 0; char* b = (char*)malloc(cap);
+                 while (*p) { unsigned c = gp_utf8(&p);
+                   if (c > 0xFFFF) { unsigned v = c - 0x10000; n += (size_t)sprintf(b + n, "%04X%04X", 0xD800 + (v >> 10), 0xDC00 + (v & 0x3FF)); }
+                   else n += (size_t)sprintf(b + n, "%04X", c); }
+                 char* r = grav_str_new(n); memcpy(r, b, n); r[n] = 0; free(b); out = r; } %};
+            sb.append(out).append(">");
+            return sb.toString();
+        }
+    }
+}

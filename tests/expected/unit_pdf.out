@@ -1,0 +1,6 @@
+running 4 tests
+  ok    a minimal document is well formed
+  ok    measuring and wrapping
+  ok    an embedded TrueType font, images, shapes and links
+  ok    tables flow onto new pages with the header again
+result: 4 passed, 0 failed
