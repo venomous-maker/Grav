@@ -1,0 +1,339 @@
+// diff.grav — differences between two texts: by line, by word or by character, as a list of
+// runs, a unified diff (what `diff -u` and `git diff` print) or HTML with <del> and <ins>.
+//
+//   Diff.unified(old, new, "a/config.toml", "b/config.toml")
+//   for (op in Diff.words("the quick fox", "the slow fox")) { print("${op.kind} '${op.text}'") }
+//   Diff.html(Diff.words(before, after))          // the <del>quick</del><ins>slow</ins> fox
+//   Diff.similarity("kitten", "sitting")           // 0.615…
+//
+// Myers' O(ND) algorithm in its linear-space form, in C: tokens are interned to integers
+// first, the common start and end are trimmed, and memory stays O(N + M) however different
+// the texts are.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "string.grav"
+import "strbuf.grav"
+import "html.grav"
+
+namespace std.text {
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+
+    typedef struct { const char* s; int len; } GDTok;
+    typedef struct { const int* a; const int* b; int* vf; int* vb; char* da; char* db; int max; } GDCtx;
+
+    // Splits `s` into tokens: 0 lines (each with its "\n"), 1 words (word runs, space runs,
+    // single punctuation), 2 characters (UTF-8 code points).
+    static GDTok* gd_split(const char* s, int mode, int* count) {
+        int n = (int)strlen(s), cap = 16, k = 0;
+        GDTok* t = (GDTok*)malloc(sizeof(GDTok) * (size_t)cap);
+        int i = 0;
+        while (i < n) {
+            int j = i;
+            unsigned char c = (unsigned char)s[i];
+            if (mode == 0) {
+                const char* nl = memchr(s + i, '\n', (size_t)(n - i));
+                j = nl ? (int)(nl - s) + 1 : n;
+            } else if (mode == 2) {
+                j = i + 1;
+                while (j < n && ((unsigned char)s[j] & 0xC0) == 0x80) j++;
+            } else {
+                #define GD_WORD(ch) (((ch) >= '0' && (ch) <= '9') || ((ch) >= 'a' && (ch) <= 'z') || ((ch) >= 'A' && (ch) <= 'Z') || (ch) == '_' || (ch) >= 0x80)
+                #define GD_SPACE(ch) ((ch) == ' ' || (ch) == '\t' || (ch) == '\n' || (ch) == '\r')
+                if (GD_WORD(c)) { while (j < n && GD_WORD((unsigned char)s[j])) j++; }
+                else if (GD_SPACE(c)) { while (j < n && GD_SPACE((unsigned char)s[j])) j++; }
+                else j = i + 1;
+            }
+            if (k == cap) { cap *= 2; t = (GDTok*)realloc(t, sizeof(GDTok) * (size_t)cap); }
+            t[k].s = s + i; t[k].len = j - i; k++;
+            i = j;
+        }
+        *count = k;
+        return t;
+    }
+    // Gives equal tokens equal numbers (FNV-1a into an open-addressed table).
+    static void gd_intern(GDTok* ta, int na, GDTok* tb, int nb, int* ia, int* ib) {
+        size_t size = 16;
+        while (size < (size_t)(na + nb) * 2) size *= 2;
+        int* slot = (int*)malloc(sizeof(int) * size);
+        GDTok** owner = (GDTok**)malloc(sizeof(GDTok*) * size);
+        memset(slot, -1, sizeof(int) * size);
+        int next = 0;
+        for (int side = 0; side < 2; side++) {
+            GDTok* t = side ? tb : ta; int n = side ? nb : na; int* out = side ? ib : ia;
+            for (int i = 0; i < n; i++) {
+                unsigned long long h = 1469598103934665603ULL;
+                for (int k = 0; k < t[i].len; k++) { h ^= (unsigned char)t[i].s[k]; h *= 1099511628211ULL; }
+                size_t at = (size_t)h & (size - 1);
+                while (slot[at] >= 0 && !(owner[at]->len == t[i].len && memcmp(owner[at]->s, t[i].s, (size_t)t[i].len) == 0))
+                    at = (at + 1) & (size - 1);
+                if (slot[at] < 0) { slot[at] = next++; owner[at] = &t[i]; }
+                out[i] = slot[at];
+            }
+        }
+        free(slot); free(owner);
+    }
+    // The middle snake of a[aLo, aHi) and b[bLo, bHi) (Myers 1986, section 4b).
+    static void gd_sms(GDCtx* c, int aLo, int aHi, int bLo, int bHi, int* sx, int* sy) {
+        int max = c->max;
+        int downK = aLo - bLo, upK = aHi - bHi;
+        int delta = (aHi - aLo) - (bHi - bLo), odd = delta & 1;
+        int downOff = max - downK, upOff = max - upK;
+        int maxD = ((aHi - aLo) + (bHi - bLo)) / 2 + 1;
+        int* vf = c->vf; int* vb = c->vb;
+        vf[downOff + downK + 1] = aLo;
+        vb[upOff + upK - 1] = aHi;
+        for (int d = 0; d <= maxD; d++) {
+            for (int k = downK - d; k <= downK + d; k += 2) {
+                int x;
+                if (k == downK - d) x = vf[downOff + k + 1];
+                else {
+                    x = vf[downOff + k - 1] + 1;
+                    if (k < downK + d && vf[downOff + k + 1] >= x) x = vf[downOff + k + 1];
+                }
+                int y = x - k;
+                while (x < aHi && y < bHi && c->a[x] == c->b[y]) { x++; y++; }
+                vf[downOff + k] = x;
+                if (odd && upK - d < k && k < upK + d && vb[upOff + k] <= vf[downOff + k]) {
+                    *sx = vf[downOff + k]; *sy = vf[downOff + k] - k; return;
+                }
+            }
+            for (int k = upK - d; k <= upK + d; k += 2) {
+                int x;
+                if (k == upK + d) x = vb[upOff + k - 1];
+                else {
+                    x = vb[upOff + k + 1] - 1;
+                    if (k > upK - d && vb[upOff + k - 1] < x) x = vb[upOff + k - 1];
+                }
+                int y = x - k;
+                while (x > aLo && y > bLo && c->a[x - 1] == c->b[y - 1]) { x--; y--; }
+                vb[upOff + k] = x;
+                if (!odd && downK - d <= k && k <= downK + d && vb[upOff + k] <= vf[downOff + k]) {
+                    *sx = vf[downOff + k]; *sy = vf[downOff + k] - k; return;
+                }
+            }
+        }
+        *sx = aLo; *sy = bLo;   // not reached
+    }
+    static void gd_lcs(GDCtx* c, int aLo, int aHi, int bLo, int bHi) {
+        for (;;) {
+            while (aLo < aHi && bLo < bHi && c->a[aLo] == c->b[bLo]) { aLo++; bLo++; }
+            while (aLo < aHi && bLo < bHi && c->a[aHi - 1] == c->b[bHi - 1]) { aHi--; bHi--; }
+            if (aLo == aHi) { while (bLo < bHi) c->db[bLo++] = 1; return; }
+            if (bLo == bHi) { while (aLo < aHi) c->da[aLo++] = 1; return; }
+            int x, y;
+            gd_sms(c, aLo, aHi, bLo, bHi, &x, &y);
+            // the smaller half by recursion, the larger by the loop: the stack stays shallow
+            if ((x - aLo) + (y - bLo) < (aHi - x) + (bHi - y)) { gd_lcs(c, aLo, x, bLo, y); aLo = x; bLo = y; }
+            else { gd_lcs(c, x, aHi, y, bHi); aHi = x; bHi = y; }
+        }
+    }
+
+    // The runs of the diff of a and b, as (kind, byte start, byte length, tokens) quads;
+    // kind 0 equal (bytes of a), 1 deleted (of a), 2 inserted (of b). Returns the run count.
+    static int grav_diff(const char* sa, const char* sb, int mode, int** outp) {
+        int na, nb;
+        GDTok* ta = gd_split(sa, mode, &na);
+        GDTok* tb = gd_split(sb, mode, &nb);
+        int* ia = (int*)malloc(sizeof(int) * (size_t)(na + 1));
+        int* ib = (int*)malloc(sizeof(int) * (size_t)(nb + 1));
+        gd_intern(ta, na, tb, nb, ia, ib);
+        GDCtx c;
+        c.a = ia; c.b = ib; c.max = na + nb + 1;
+        c.vf = (int*)malloc(sizeof(int) * (size_t)(2 * c.max + 2));
+        c.vb = (int*)malloc(sizeof(int) * (size_t)(2 * c.max + 2));
+        c.da = (char*)calloc((size_t)na + 1, 1);
+        c.db = (char*)calloc((size_t)nb + 1, 1);
+        gd_lcs(&c, 0, na, 0, nb);
+        int cap = 16, k = 0;
+        int* out = (int*)malloc(sizeof(int) * 4 * (size_t)cap);
+        int i = 0, j = 0;
+        while (i < na || j < nb) {
+            int kind, start, len = 0, toks = 0;
+            if (i < na && c.da[i]) {
+                kind = 1; start = (int)(ta[i].s - sa);
+                while (i < na && c.da[i]) { len += ta[i].len; toks++; i++; }
+            } else if (j < nb && c.db[j]) {
+                kind = 2; start = (int)(tb[j].s - sb);
+                while (j < nb && c.db[j]) { len += tb[j].len; toks++; j++; }
+            } else {
+                kind = 0; start = (int)(ta[i].s - sa);
+                while (i < na && j < nb && !c.da[i] && !c.db[j]) { len += ta[i].len; toks++; i++; j++; }
+            }
+            if (k == cap) { cap *= 2; out = (int*)realloc(out, sizeof(int) * 4 * (size_t)cap); }
+            out[4 * k] = kind; out[4 * k + 1] = start; out[4 * k + 2] = len; out[4 * k + 3] = toks; k++;
+        }
+        free(ta); free(tb); free(ia); free(ib); free(c.vf); free(c.vb); free(c.da); free(c.db);
+        *outp = out;
+        return k;
+    }
+    static const char* grav_diff_slice(const char* s, int start, int len) {
+        char* r = grav_str_new((size_t)len);
+        memcpy(r, s + start, (size_t)len); r[len] = 0;
+        return r;
+    }
+    %}
+
+    enum DiffKind { Equal, Delete, Insert }
+
+    // A run of equal, deleted or inserted tokens.
+    class DiffOp {
+        public kind: DiffKind
+        // The run's text (whole lines with their "\n" for a line diff).
+        public text: string
+        // Where the run starts in the old and the new text, in tokens (lines, words or
+        // characters), 0-based.
+        public oldStart: int
+        public newStart: int
+        // How many tokens it has.
+        public count: int
+        constructor(kind: DiffKind, text: string, oldStart: int, newStart: int, count: int) {
+            self.kind = kind; self.text = text; self.oldStart = oldStart; self.newStart = newStart; self.count = count;
+        }
+        fn toString() -> string {
+            let mark = self.kind == DiffKind.Equal ? " " : (self.kind == DiffKind.Delete ? "-" : "+");
+            return mark + self.text;
+        }
+    }
+
+    // Line, word and character diffs.
+    class Diff {
+        // The runs that turn `a` into `b`, line by line.
+        static fn lines(a: string, b: string) -> Array<DiffOp> { return Diff.run(a, b, 0); }
+        // The runs, word by word (spaces and punctuation are tokens of their own).
+        static fn words(a: string, b: string) -> Array<DiffOp> { return Diff.run(a, b, 1); }
+        // The runs, character by character (UTF-8 code points).
+        static fn chars(a: string, b: string) -> Array<DiffOp> { return Diff.run(a, b, 2); }
+
+        // Whether two texts are equal (no diff needed).
+        static fn same(a: string, b: string) -> bool { return a == b; }
+
+        // How alike two texts are, from 0 to 1: twice the characters they share over the
+        // characters in both (1 for equal texts).
+        static fn similarity(a: string, b: string) -> double {
+            if (a.length + b.length == 0) { return 1.0; }
+            let ops = Diff.chars(a, b);
+            let common = 0;
+            let total = 0;
+            for (op in ops) {
+                total += op.count;
+                if (op.kind == DiffKind.Equal) { common += op.count; total += op.count; }
+            }
+            return 2.0 * common / total;
+        }
+
+        // The runs as HTML: deleted text in <del>, inserted text in <ins>, everything escaped.
+        static fn html(ops: Array<DiffOp>) -> string {
+            let sb = new StringBuilder();
+            for (op in ops) {
+                if (op.kind == DiffKind.Delete) { sb.append("<del>").append(Html.escape(op.text)).append("</del>"); }
+                else if (op.kind == DiffKind.Insert) { sb.append("<ins>").append(Html.escape(op.text)).append("</ins>"); }
+                else { sb.append(Html.escape(op.text)); }
+            }
+            return sb.toString();
+        }
+
+        // A unified diff of two texts with `context` unchanged lines around each change;
+        // "" when they are equal.
+        static fn unified(a: string, b: string, fromName: string = "a", toName: string = "b", context: int = 3) -> string {
+            if (a == b) { return ""; }
+            // every line, marked: ' ', '-' or '+'
+            let marks = new Array<int>();
+            let texts = new Array<string>();
+            for (op in Diff.lines(a, b)) {
+                let mark = op.kind == DiffKind.Equal ? 32 : (op.kind == DiffKind.Delete ? 45 : 43);
+                for (line in Diff.splitLines(op.text)) { marks.push(mark); texts.push(line); }
+            }
+            let sb = new StringBuilder();
+            sb.append("--- ").append(fromName).append("\n+++ ").append(toName).append("\n");
+            let n = marks.size();
+            let i = 0;
+            // line numbers (1-based) of the next old and new line
+            let oldLine = 1;
+            let newLine = 1;
+            while (i < n) {
+                // the next change
+                let c = i;
+                while (c < n && marks[c] == 32) { c += 1; }
+                if (c == n) { break; }
+                let start = c - context < i ? i : c - context;
+                // count the lines skipped before the hunk
+                oldLine += start - i;
+                newLine += start - i;
+                // extend while changes come within 2 * context lines of each other
+                let end = c;
+                let quiet = 0;
+                while (end < n) {
+                    if (marks[end] == 32) {
+                        quiet += 1;
+                        if (quiet > 2 * context) { quiet -= 1; break; }
+                    } else { quiet = 0; }
+                    end += 1;
+                }
+                if (quiet > context) { end -= quiet - context; }
+                let oldCount = 0;
+                let newCount = 0;
+                for (k in start..end) {
+                    if (marks[k] != 43) { oldCount += 1; }
+                    if (marks[k] != 45) { newCount += 1; }
+                }
+                sb.append("@@ -").append(Diff.range(oldLine, oldCount)).append(" +").append(Diff.range(newLine, newCount)).append(" @@\n");
+                for (k in start..end) {
+                    sb.appendChar(marks[k]);
+                    let t = texts[k];
+                    if (Str.endsWith(t, "\n")) { sb.append(t); }
+                    else { sb.append(t).append("\n\\ No newline at end of file\n"); }
+                }
+                oldLine += oldCount;
+                newLine += newCount;
+                i = end;
+            }
+            return sb.toString();
+        }
+
+        private static fn range(start: int, count: int) -> string {
+            if (count == 1) { return str(start); }
+            return "${count == 0 ? start - 1 : start},${count}";
+        }
+        // Lines with their "\n" (the last one may have none).
+        private static fn splitLines(text: string) -> Array<string> {
+            let out = new Array<string>();
+            let from = 0;
+            while (from < text.length) {
+                let nl = Str.indexOf(text, "\n", from);
+                let to = nl < 0 ? text.length : nl + 1;
+                out.push(text[from..to]);
+                from = to;
+            }
+            return out;
+        }
+        private static fn run(a: string, b: string, mode: int) -> Array<DiffOp> {
+            let out = new Array<DiffOp>();
+            let quads: int* = null;
+            let n = %{ grav_diff(a, b, mode, &quads) %} as int;
+            let oldAt = 0;
+            let newAt = 0;
+            for (r in 0..n) {
+                let kind = quads[4 * r];
+                let start = quads[4 * r + 1];
+                let len = quads[4 * r + 2];
+                let toks = quads[4 * r + 3];
+                let src = kind == 2 ? b : a;
+                let text = %{ grav_diff_slice(src, start, len) %} as string;
+                if (kind == 0) {
+                    out.push(new DiffOp(DiffKind.Equal, text, oldAt, newAt, toks));
+                    oldAt += toks; newAt += toks;
+                } else if (kind == 1) {
+                    out.push(new DiffOp(DiffKind.Delete, text, oldAt, newAt, toks));
+                    oldAt += toks;
+                } else {
+                    out.push(new DiffOp(DiffKind.Insert, text, oldAt, newAt, toks));
+                    newAt += toks;
+                }
+            }
+            free(quads);
+            return out;
+        }
+    }
+}

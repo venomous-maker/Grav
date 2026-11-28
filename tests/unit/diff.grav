@@ -1,0 +1,57 @@
+// Diff: line, word and character runs, unified output checked against diff -u, HTML, similarity.
+import "std"
+
+fn show(ops: Array<DiffOp>) -> string {
+    let parts = new Array<string>()
+    for (op in ops) { parts.push(op.toString()) }
+    return Str.join(parts, "|")
+}
+
+test "words and characters" {
+    assertEq(show(Diff.words("the quick brown fox", "the slow brown fox!")), " the |-quick|+slow|  brown fox|+!")
+    assertEq(show(Diff.chars("kitten", "sitting")), "-k|+s| itt|-e|+i| n|+g")
+    assertEq(show(Diff.chars("naïve", "naive")), " na|-ï|+i| ve")
+    assertEq(show(Diff.words("", "")), "")
+    assertEq(show(Diff.words("", "new")), "+new")
+    assertEq(show(Diff.words("old", "")), "-old")
+}
+
+test "lines, with positions" {
+    let ops = Diff.lines("a\nb\nc\nd\n", "a\nc\nd\ne\n")
+    assertEq(show(ops), " a\n|-b\n| c\nd\n|+e\n")
+    assertEq(ops[2].oldStart, 2)
+    assertEq(ops[2].newStart, 1)
+    assertEq(ops[2].count, 2)
+    assertEq(ops[3].oldStart, 4)
+}
+
+test "unified diff" {
+    let a = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n"
+    let b = "1\n2\nthree\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\nfourteen\n15\n"
+    assertEq(Diff.unified(a, b), "--- a\n+++ b\n@@ -1,6 +1,6 @@\n 1\n 2\n-3\n+three\n 4\n 5\n 6\n@@ -11,5 +11,5 @@\n 11\n 12\n 13\n-14\n+fourteen\n 15\n")
+    assertEq(Diff.unified("x\ny", "x\nz", "old", "new", 1), "--- old\n+++ new\n@@ -1,2 +1,2 @@\n x\n-y\n\\ No newline at end of file\n+z\n\\ No newline at end of file\n")
+    assertEq(Diff.unified("a\n", "a\n"), "")
+    assertEq(Diff.unified("", "a\nb\n"), "--- a\n+++ b\n@@ -0,0 +1,2 @@\n+a\n+b\n")
+    assertEq(Diff.unified("1\n2\n3\n4\n5\n6\n7\n8\n", "1\n2\nX\n4\n5\n6\nY\n8\n", "a", "b", 1), "--- a\n+++ b\n@@ -2,3 +2,3 @@\n 2\n-3\n+X\n 4\n@@ -6,3 +6,3 @@\n 6\n-7\n+Y\n 8\n")
+    assertEq(Diff.unified("1\n2\n3\n4\n5\n", "1\nX\n3\nY\n5\n", "a", "b", 1), "--- a\n+++ b\n@@ -1,5 +1,5 @@\n 1\n-2\n+X\n 3\n-4\n+Y\n 5\n")
+}
+
+test "html and similarity" {
+    assertEq(Diff.html(Diff.words("a <b> c", "a <i> c")), "a &lt;<del>b</del><ins>i</ins>&gt; c")
+    assertEq(Diff.similarity("abc", "abc"), 1.0)
+    assertEq(Diff.similarity("", ""), 1.0)
+    assertEq(Diff.similarity("abc", "xyz"), 0.0)
+    assert(Diff.similarity("kitten", "sitting") > 0.6 && Diff.similarity("kitten", "sitting") < 0.62)
+}
+
+test "large, very different inputs stay linear in memory" {
+    let a = new StringBuilder()
+    let b = new StringBuilder()
+    for (i in 0..20000) { a.append("line ${i}\n"); b.append("other ${i * 7}\n") }
+    let ops = Diff.lines(a.toString(), b.toString())
+    let del = 0
+    let ins = 0
+    for (op in ops) { if (op.kind == DiffKind.Delete) { del += op.count } else if (op.kind == DiffKind.Insert) { ins += op.count } }
+    assertEq(del, 20000)
+    assertEq(ins, 20000)
+}

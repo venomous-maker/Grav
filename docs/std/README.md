@@ -87,6 +87,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [unicode](text/unicode.md) | `Unicode`: normalization (NFC, NFD, NFKC, NFKD) and accents stripped |
 | [html](text/html.md) | `Html`, `HtmlSanitizer`: escaping, entities, tags stripped, and an allow-list sanitizer for HTML from users |
 | [template](text/template.md) | `Template`: Mustache templates over JSON, HTML-escaped by default |
+| [diff](text/diff.md) | `Diff`: line, word and character diffs; unified output and HTML |
 
 ### data
 
