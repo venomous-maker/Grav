@@ -1,0 +1,104 @@
+// DNS: query encoding, answer parsing (compressed names, every record type), and lookups
+// against a local fake name server over UDP, and over TCP after a truncated answer.
+import "std"
+import "std/net"
+
+// An answer to `q` with `records` (each: type, rdata) for the question's name.
+fn answer(q: Bytes, rcode: int, truncated: bool, records: Array<Pair<int, Bytes>>) -> Bytes {
+    // the question runs from byte 12 to the end of its name plus 4
+    let pos = 12
+    while (q.get(pos) != 0) { pos += 1 + q.get(pos) }
+    pos += 5
+    let b = new Bytes()
+    b.append(q.slice(0, 2))
+    b.appendUint((0x8180 | (truncated ? 0x0200 : 0) | rcode) as long, 2).appendUint(1, 2).appendUint(records.size() as long, 2).appendUint(0, 2).appendUint(0, 2)
+    b.append(q.slice(12, pos))
+    for (r in records) {
+        b.appendUint(0xc00c, 2).appendUint(r.first as long, 2).appendUint(1, 2).appendUint(120, 4).appendUint(r.second.size() as long, 2).append(r.second)
+    }
+    return b
+}
+
+fn name(n: string) -> Bytes {
+    let b = new Bytes()
+    for (l in Str.split(n, ".")) { b.appendByte(l.length).appendString(l) }
+    b.appendByte(0)
+    return b
+}
+
+fn records() -> Array<Pair<int, Bytes>> {
+    let out = new Array<Pair<int, Bytes>>()
+    out.push(new Pair<int, Bytes>(33, new Bytes().appendUint(20, 2).appendUint(5, 2).appendUint(5269, 2).append(name("b.example.test"))))
+    out.push(new Pair<int, Bytes>(33, new Bytes().appendUint(10, 2).appendUint(1, 2).appendUint(5269, 2).append(name("a.example.test"))))
+    out.push(new Pair<int, Bytes>(33, new Bytes().appendUint(10, 2).appendUint(9, 2).appendUint(5270, 2).append(name("c.example.test"))))
+    return out
+}
+
+test "queries and answers on the wire" {
+    let q = DnsMessage.query(0x1234, "example.test", "SRV")
+    assertEq(q.slice(0, 12).toHex(), "123401000001000000000001")
+    assertEq(q.slice(12, 30).toHex(), "076578616d706c65047465737400" + "0021" + "0001")
+    let txt = new Bytes().appendByte(5).appendString("v=one").appendByte(3).appendString("two")
+    let caa = new Bytes().appendByte(0).appendByte(5).appendString("issue").appendString("letsencrypt.org")
+    let all = new Array<Pair<int, Bytes>>()
+    all.push(new Pair<int, Bytes>(1, Bytes.fromHex("5db8d822")))
+    all.push(new Pair<int, Bytes>(28, Bytes.fromHex("20010db8000000000000000000000001")))
+    all.push(new Pair<int, Bytes>(16, txt))
+    all.push(new Pair<int, Bytes>(15, new Bytes().appendUint(10, 2).appendUint(0xc00c, 2)))
+    all.push(new Pair<int, Bytes>(257, caa))
+    let m = DnsMessage.parse(answer(q, 0, false, all))
+    assertEq(m.id, 0x1234)
+    assertEq(m.answers.size(), 5)
+    assertEq(m.answers[0].toString(), "example.test 120 A 93.184.216.34")
+    assertEq(m.answers[1].data, "2001:db8::1")
+    assertEq(m.answers[2].data, "v=onetwo")
+    assertEq(Str.join(m.answers[2].texts, "|"), "v=one|two")
+    assertEq(m.answers[3].toString(), "example.test 120 MX 10 example.test")
+    assertEq("${m.answers[4].tag} ${m.answers[4].data}", "issue letsencrypt.org")
+    assertEq(DnsMessage.typeCode("srv"), 33)
+    assertEq(DnsMessage.typeName(257), "CAA")
+    assertEq(Dns.reverseName("192.0.2.5"), "5.2.0.192.in-addr.arpa")
+    assert(Str.startsWith(Dns.reverseName("2001:db8::1"), "1.0.0.0.0.0.0.0."))
+    assert(Str.endsWith(Dns.reverseName("2001:db8::1"), ".8.b.d.0.1.0.0.2.ip6.arpa"))
+    let bad = 0
+    try { DnsMessage.parse(Bytes.fromHex("1234")) } catch (e: ValueError) { bad += 1 }
+    try { DnsMessage.parse(Bytes.fromHex("123481800000000100000000c00c")) } catch (e: ValueError) { bad += 1 }
+    try { DnsMessage.typeCode("BOGUS") } catch (e: ValueError) { bad += 1 }
+    assertEq(bad, 3)
+}
+
+test "lookups against a fake server, over UDP and then TCP" {
+    let tcp = TcpListener.bind("127.0.0.1", 0)
+    let udp = UdpSocket.bind("127.0.0.1", tcp.port())
+    let server = Thread.spawn(fn() {
+        // 1: SRV answered; 2: NXDOMAIN; 3: truncated, then the full answer over TCP
+        for (i in 0..3) {
+            let p = udp.receive()
+            let reply = i == 0 ? answer(p.data, 0, false, records()) : (i == 1 ? answer(p.data, 3, false, new Array<Pair<int, Bytes>>()) : answer(p.data, 0, true, new Array<Pair<int, Bytes>>()))
+            udp.sendBytesTo(p.host(), p.port(), reply)
+        }
+        let c = tcp.accept()
+        let len = c.readExactly(2).readUint(0, 2) as int
+        let q = c.readExactly(len)
+        let full = answer(q, 0, false, records())
+        c.writeBytes(new Bytes().appendUint(full.size() as long, 2).append(full))
+        c.close()
+    })
+    let r = new DnsResolver(["127.0.0.1:${tcp.port()}"]).timeoutMs(3000)
+    let srv = r.lookup("_xmpp._tcp.example.test", "SRV")
+    assertEq(srv.size(), 3)
+    assertEq(srv[1].toString(), "_xmpp._tcp.example.test 120 SRV 10 1 5269 a.example.test")
+    // cached: the server is not asked again
+    assertEq(r.lookup("_XMPP._tcp.example.test", "srv").size(), 3)
+    assertEq(r.lookup("missing.example.test", "TXT").size(), 0)
+    assertEq(r.lookup("big.example.test", "SRV").size(), 3)
+    server.join()
+    udp.close()
+    tcp.close()
+    // nobody listening: a timeout
+    let quiet = UdpSocket.bind("127.0.0.1", 0)
+    let caught = false
+    try { new DnsResolver(["127.0.0.1:${quiet.port()}"]).timeoutMs(100).attempts(1).lookup("x.test", "A") } catch (e: TimeoutError) { caught = true }
+    assert(caught)
+    assert(DnsResolver.readResolvConf("/nonexistent").size() == 1)
+}

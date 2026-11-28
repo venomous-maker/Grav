@@ -1,0 +1,4 @@
+running 2 tests
+  ok    queries and answers on the wire
+  ok    lookups against a fake server, over UDP and then TCP
+result: 2 passed, 0 failed

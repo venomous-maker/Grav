@@ -171,6 +171,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [http2](net/http2.md) | `Http2Client`: HTTP/2 requests, many at once on one connection |
 | [websocket](net/websocket.md) | `WebSocket`: two-way connections over HTTP (`ws://`, `wss://`) |
 | [smtp](net/smtp.md) | `SmtpClient`, `EmailMessage`: sending email with STARTTLS and login |
+| [dns](net/dns.md) | `Dns`, `DnsResolver`: SRV, TXT, MX, A/AAAA and other records from the name servers, cached |
 
 ## Conventions
 

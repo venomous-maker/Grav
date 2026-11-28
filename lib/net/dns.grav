@@ -1,0 +1,508 @@
+// lib/net/dns.grav — DNS lookups: SRV and TXT records, and A, AAAA, MX, CNAME, NS, PTR and
+// CAA, straight from the name servers (not through getaddrinfo), with answers cached for
+// their time to live.
+//
+//   for (r in Dns.srv("_xmpp-server._tcp.example.com")) { print("${r.target}:${r.port}") }
+//   Dns.txt("example.com")                          // ["v=spf1 -all", …]
+//   Dns.mx("example.com")[0].target                 // the preferred mail server
+//   let r = new DnsResolver(["1.1.1.1", "8.8.8.8"]).timeoutMs(1500)
+//   r.lookup("example.com", "AAAA")
+//
+// The system resolver's servers come from /etc/resolv.conf (127.0.0.53 under
+// systemd-resolved; 127.0.0.1 when the file is missing). Queries go over UDP with EDNS0
+// (4 KB answers), retry each server in turn, and move to TCP when an answer is truncated.
+// A name that does not exist, or has no records of the type, gives an empty list; a
+// server that fails or does not answer is a NetError (TimeoutError when none answered).
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../concurrency/async.grav"
+import "../data/bytes.grav"
+import "../io/fs.grav"
+import "../sys/time.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "tcp.grav"
+
+namespace std.net {
+    %{
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <poll.h>
+    #include <unistd.h>
+    #include <errno.h>
+    #include <string.h>
+    #include <stdlib.h>
+    #include <time.h>
+    #include <stdio.h>
+
+    static long long gd_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+    static int gd_addr(const char* host, int port, struct sockaddr_storage* sa, socklen_t* len) {
+        memset(sa, 0, sizeof *sa);
+        struct sockaddr_in* a4 = (struct sockaddr_in*)sa;
+        struct sockaddr_in6* a6 = (struct sockaddr_in6*)sa;
+        if (inet_pton(AF_INET, host, &a4->sin_addr) == 1) { a4->sin_family = AF_INET; a4->sin_port = htons((unsigned short)port); *len = sizeof *a4; return AF_INET; }
+        if (inet_pton(AF_INET6, host, &a6->sin6_addr) == 1) { a6->sin6_family = AF_INET6; a6->sin6_port = htons((unsigned short)port); *len = sizeof *a6; return AF_INET6; }
+        return -1;
+    }
+    // Waits for fd to be ready until the deadline; 1 ready, 0 timed out, -1 error.
+    static int gd_wait(int fd, short ev, long long deadline) {
+        for (;;) {
+            long long left = deadline - gd_ms();
+            if (left <= 0) return 0;
+            struct pollfd p = { fd, ev, 0 };
+            int r = poll(&p, 1, (int)left);
+            if (r > 0) return 1;
+            if (r == 0) return 0;
+            if (errno != EINTR) return -1;
+        }
+    }
+    // Sends one query to server:port and returns the answer's length in out (at most cap),
+    // or -1 (error), -2 (timed out). UDP answers must come from the server and carry the id.
+    static int grav_dns_exchange(const char* server, int port, const unsigned char* q, int qn, int tcp, int timeoutMs,
+                                 unsigned char* out, int cap) {
+        struct sockaddr_storage sa; socklen_t salen;
+        int fam = gd_addr(server, port, &sa, &salen);
+        if (fam < 0) return -1;
+        long long deadline = gd_ms() + timeoutMs;
+        int fd = socket(fam, (tcp ? SOCK_STREAM : SOCK_DGRAM) | SOCK_CLOEXEC, 0);
+        if (fd < 0) return -1;
+        int n = -1;
+        if (!tcp) {
+            if (sendto(fd, q, (size_t)qn, 0, (struct sockaddr*)&sa, salen) != qn) { close(fd); return -1; }
+            for (;;) {
+                int w = gd_wait(fd, POLLIN, deadline);
+                if (w <= 0) { n = w == 0 ? -2 : -1; break; }
+                struct sockaddr_storage from; socklen_t fl = sizeof from;
+                int got = (int)recvfrom(fd, out, (size_t)cap, 0, (struct sockaddr*)&from, &fl);
+                if (got < 12) continue;
+                if (out[0] != q[0] || out[1] != q[1]) continue;      // not our answer
+                n = got;
+                break;
+            }
+        } else {
+            if (connect(fd, (struct sockaddr*)&sa, salen) != 0) { close(fd); return -1; }
+            unsigned char len[2] = { (unsigned char)(qn >> 8), (unsigned char)qn };
+            if (write(fd, len, 2) != 2 || write(fd, q, (size_t)qn) != qn) { close(fd); return -1; }
+            int have = 0, need = -1;
+            unsigned char hdr[2];
+            while (have < 2) {
+                int w = gd_wait(fd, POLLIN, deadline);
+                if (w <= 0) { close(fd); return w == 0 ? -2 : -1; }
+                int r = (int)read(fd, hdr + have, (size_t)(2 - have));
+                if (r <= 0) { close(fd); return -1; }
+                have += r;
+            }
+            need = (hdr[0] << 8) | hdr[1];
+            if (need > cap) need = cap;
+            have = 0;
+            while (have < need) {
+                int w = gd_wait(fd, POLLIN, deadline);
+                if (w <= 0) { close(fd); return w == 0 ? -2 : -1; }
+                int r = (int)read(fd, out + have, (size_t)(need - have));
+                if (r <= 0) { close(fd); return -1; }
+                have += r;
+            }
+            n = need;
+        }
+        close(fd);
+        return n;
+    }
+    static unsigned short grav_dns_id(void) {
+        unsigned short v = 0;
+        FILE* f = fopen("/dev/urandom", "rb");
+        if (f) { if (fread(&v, sizeof v, 1, f) != 1) v = 0; fclose(f); }
+        if (!v) v = (unsigned short)(gd_ms() ^ (long long)getpid());
+        return v;
+    }
+    static const char* grav_dns_ntop(const unsigned char* p, int n) {
+        char b[64];
+        if (!inet_ntop(n == 4 ? AF_INET : AF_INET6, p, b, sizeof b)) b[0] = 0;
+        size_t l = strlen(b); char* r = grav_str_new(l); memcpy(r, b, l + 1);
+        return r;
+    }
+    %}
+
+    // One resource record from an answer.
+    class DnsRecord {
+        // The owner name ("example.com"), the type ("A", "SRV", …) and seconds to keep it.
+        public name: string
+        public type: string
+        public ttl: long
+        // A, AAAA: the address. CNAME, NS, PTR: the name. TXT: the strings joined. MX, SRV:
+        // the target. CAA: the value. Other types: the data as hex.
+        public data: string
+        // TXT: each character-string of the record.
+        public texts: Array<string> = new Array<string>()
+        // MX: the preference; SRV: the priority (lower first).
+        public priority: int = 0
+        // SRV: the weight (higher more often among equal priorities) and port.
+        public weight: int = 0
+        public port: int = 0
+        // CAA: the flags and tag ("issue", "iodef", …).
+        public flags: int = 0
+        public tag: string = ""
+
+        constructor(name: string, type: string, ttl: long, data: string) { self.name = name; self.type = type; self.ttl = ttl; self.data = data; }
+        // SRV and MX: the target name.
+        fn target() -> string { return self.data; }
+        fn toString() -> string {
+            if (self.type == "SRV") { return "${self.name} ${self.ttl} SRV ${self.priority} ${self.weight} ${self.port} ${self.data}"; }
+            if (self.type == "MX") { return "${self.name} ${self.ttl} MX ${self.priority} ${self.data}"; }
+            return "${self.name} ${self.ttl} ${self.type} ${self.data}";
+        }
+    }
+
+    // A parsed DNS message (for tests, tools, and servers of your own).
+    class DnsMessage {
+        public id: int = 0
+        // The response code: 0 no error, 2 server failure, 3 the name does not exist, ...
+        public rcode: int = 0
+        public truncated: bool = false
+        public answers: Array<DnsRecord> = new Array<DnsRecord>()
+        constructor() {}
+
+        // A standard query for `name` and a type ("A", "SRV", …) or type number, with
+        // recursion desired and an EDNS0 record offering 4096-byte UDP answers.
+        static fn query(id: int, name: string, type: string) -> Bytes {
+            let b = new Bytes(64);
+            b.appendUint(id as long, 2).appendUint(0x0100, 2).appendUint(1, 2).appendUint(0, 2).appendUint(0, 2).appendUint(1, 2);
+            DnsMessage.writeName(b, name);
+            b.appendUint(DnsMessage.typeCode(type) as long, 2).appendUint(1, 2);
+            // OPT: root name, type 41, UDP size 4096, no flags
+            b.appendByte(0).appendUint(41, 2).appendUint(4096, 2).appendUint(0, 4).appendUint(0, 2);
+            return b;
+        }
+        // Parses an answer; ValueError when it is malformed.
+        static fn parse(data: Bytes) -> DnsMessage {
+            if (data.size() < 12) { throw new ValueError("a DNS message is at least 12 bytes"); }
+            let m = new DnsMessage();
+            m.id = data.readUint(0, 2) as int;
+            let flags = data.readUint(2, 2) as int;
+            m.truncated = (flags & 0x0200) != 0;
+            m.rcode = flags & 15;
+            let qd = data.readUint(4, 2) as int;
+            let an = data.readUint(6, 2) as int;
+            let pos = 12;
+            let name = new Array<string>();
+            for (i in 0..qd) {
+                pos = DnsMessage.readName(data, pos, name);
+                pos += 4;
+            }
+            for (i in 0..an) {
+                // a truncated answer keeps what fits; the resolver asks again over TCP
+                if (pos >= data.size()) { m.truncated = true; break; }
+                let owner = new Array<string>();
+                let start = pos;
+                pos = DnsMessage.readName(data, pos, owner);
+                if (pos > data.size()) { pos = start; m.truncated = true; break; }
+                // some home routers cut answers at 512 bytes without setting TC
+                if (pos + 10 > data.size()) { m.truncated = true; break; }
+                let type = data.readUint(pos, 2) as int;
+                let ttl = data.readUint(pos + 4, 4);
+                let len = data.readUint(pos + 8, 2) as int;
+                pos += 10;
+                if (pos + len > data.size()) { m.truncated = true; break; }
+                m.answers.push(DnsMessage.record(data, owner[0], type, ttl, pos, len));
+                pos += len;
+            }
+            return m;
+        }
+        // The number for a type name ("A" is 1, "SRV" 33); a number in text passes through.
+        static fn typeCode(type: string) -> int {
+            let t = Str.upper(type);
+            let names: Array<string> = ["A", "NS", "CNAME", "SOA", "PTR", "MX", "TXT", "AAAA", "SRV", "NAPTR", "DS", "RRSIG", "DNSKEY", "HTTPS", "SVCB", "CAA", "ANY"]
+            let codes: Array<int> = [1, 2, 5, 6, 12, 15, 16, 28, 33, 35, 43, 46, 48, 65, 64, 257, 255]
+            let i = names.indexOf(t);
+            if (i >= 0) { return codes[i]; }
+            if (Format.isInt(t)) { return Format.toInt(t); }
+            throw new ValueError("unknown DNS record type ${type}");
+        }
+        static fn typeName(code: int) -> string {
+            let names: Array<string> = ["A", "NS", "CNAME", "SOA", "PTR", "MX", "TXT", "AAAA", "SRV", "NAPTR", "DS", "RRSIG", "DNSKEY", "HTTPS", "SVCB", "CAA", "ANY"]
+            let codes: Array<int> = [1, 2, 5, 6, 12, 15, 16, 28, 33, 35, 43, 46, 48, 65, 64, 257, 255]
+            let i = codes.indexOf(code);
+            return i >= 0 ? names[i] : "TYPE${code}";
+        }
+
+        private static fn record(d: Bytes, owner: string, type: int, ttl: long, at: int, len: int) -> DnsRecord {
+            let tn = DnsMessage.typeName(type);
+            let r = new DnsRecord(owner, tn, ttl, "");
+            let p = d.rawData();
+            if ((type == 1 && len == 4) || (type == 28 && len == 16)) {
+                r.data = %{ grav_dns_ntop(p + at, len) %} as string;
+            } else if (type == 2 || type == 5 || type == 12) {
+                let n = new Array<string>();
+                DnsMessage.readName(d, at, n);
+                r.data = n[0];
+            } else if (type == 15 && len >= 3) {
+                r.priority = d.readUint(at, 2) as int;
+                let n = new Array<string>();
+                DnsMessage.readName(d, at + 2, n);
+                r.data = n[0];
+            } else if (type == 33 && len >= 7) {
+                r.priority = d.readUint(at, 2) as int;
+                r.weight = d.readUint(at + 2, 2) as int;
+                r.port = d.readUint(at + 4, 2) as int;
+                let n = new Array<string>();
+                DnsMessage.readName(d, at + 6, n);
+                r.data = n[0];
+            } else if (type == 16) {
+                let k = at;
+                while (k < at + len) {
+                    let l = d.get(k);
+                    let end = k + 1 + l > at + len ? at + len : k + 1 + l;
+                    r.texts.push(d.slice(k + 1, end).toString());
+                    k = end;
+                }
+                r.data = Str.join(r.texts, "");
+            } else if (type == 257 && len >= 2) {
+                r.flags = d.get(at);
+                let tl = d.get(at + 1);
+                r.tag = d.slice(at + 2, at + 2 + tl).toString();
+                r.data = d.slice(at + 2 + tl, at + len).toString();
+            } else {
+                r.data = d.slice(at, at + len).toHex();
+            }
+            return r;
+        }
+        private static fn writeName(b: Bytes, name: string) {
+            let n = Str.trimEnd(name);
+            if (Str.endsWith(n, ".")) { n = n[..n.length - 1]; }
+            if (n != "") {
+                for (label in Str.split(n, ".")) {
+                    if (label.length == 0 || label.length > 63) { throw new ValueError("'${name}' is not a valid DNS name"); }
+                    b.appendByte(label.length).appendString(label);
+                }
+            }
+            b.appendByte(0);
+        }
+        // Reads a (possibly compressed) name at `at` into out[0]; returns the position after
+        // it in the message (after the first pointer when compressed).
+        private static fn readName(d: Bytes, at: int, out: Array<string>) -> int {
+            let labels = new Array<string>();
+            let pos = at;
+            let after = -1;
+            let jumps = 0;
+            while (true) {
+                if (pos >= d.size()) { throw new ValueError("a DNS name runs past the message"); }
+                let l = d.get(pos);
+                if (l == 0) { pos += 1; break; }
+                if ((l & 0xC0) == 0xC0) {
+                    if (pos + 1 >= d.size()) { throw new ValueError("a DNS name pointer is cut short"); }
+                    if (after < 0) { after = pos + 2; }
+                    jumps += 1;
+                    if (jumps > 64) { throw new ValueError("a DNS name has a pointer loop"); }
+                    pos = ((l & 0x3F) << 8) | d.get(pos + 1);
+                    continue;
+                }
+                if (pos + 1 + l > d.size()) { throw new ValueError("a DNS label runs past the message"); }
+                labels.push(d.slice(pos + 1, pos + 1 + l).toString());
+                pos += 1 + l;
+            }
+            out.clear();
+            out.push(Str.join(labels, "."));
+            return after >= 0 ? after : pos;
+        }
+    }
+
+    // Asks name servers, caching answers for their time to live.
+    class DnsResolver {
+        public servers: Array<string>
+        private timeout: int = 2000
+        private tries: int = 2
+        private useCache: bool = true
+        private cache: HashMap<string, Array<DnsRecord>> = new HashMap<string, Array<DnsRecord>>()
+        private expires: HashMap<string, long> = new HashMap<string, long>()
+        private lock: Mutex = new Mutex()
+        private static system: DnsResolver = null
+        private static systemLock: Mutex = new Mutex()
+
+        // A resolver for these servers ("1.1.1.1", "2606:4700:4700::1111"; "host:port" or
+        // "[v6]:port" for another port).
+        constructor(servers: Array<string>) {
+            if (servers.size() == 0) { throw new ValueError("a resolver needs at least one name server"); }
+            self.servers = servers;
+        }
+        // The servers in /etc/resolv.conf (made once and shared).
+        static fn systemResolver() -> DnsResolver {
+            DnsResolver.systemLock.lock();
+            try {
+                if (DnsResolver.system == null) { DnsResolver.system = new DnsResolver(DnsResolver.readResolvConf("/etc/resolv.conf")); }
+                return DnsResolver.system;
+            } finally { DnsResolver.systemLock.unlock(); }
+        }
+        // The nameserver lines of a resolv.conf file (127.0.0.1 when there are none).
+        static fn readResolvConf(path: string) -> Array<string> {
+            let out = new Array<string>();
+            let text = "";
+            try { text = new File(path).read(); } catch (e: Exception) { text = ""; }
+            for (line in Str.lines(text)) {
+                let t = Str.trim(line);
+                if (!Str.startsWith(t, "nameserver")) { continue; }
+                let parts = Str.split(Str.replace(t, "\t", " "), " ");
+                for (k in 1..parts.size()) {
+                    let p = Str.trim(parts[k]);
+                    if (p == "") { continue; }
+                    let pct = Str.indexOf(p, "%");
+                    out.push(pct >= 0 ? p[..pct] : p);
+                    break;
+                }
+            }
+            if (out.size() == 0) { out.push("127.0.0.1"); }
+            return out;
+        }
+        // How long to wait for each server, in milliseconds.
+        fn timeoutMs(ms: int) -> DnsResolver { self.timeout = ms; return self; }
+        // How many rounds through the servers before giving up.
+        fn attempts(n: int) -> DnsResolver { self.tries = n < 1 ? 1 : n; return self; }
+        // Whether answers are cached for their TTL (on by default).
+        fn caching(on: bool) -> DnsResolver { self.useCache = on; return self; }
+        fn clearCache() { self.lock.lock(); self.cache = new HashMap<string, Array<DnsRecord>>(); self.expires = new HashMap<string, long>(); self.lock.unlock(); }
+
+        // The records of `type` for `name` (an empty list when there are none).
+        fn lookup(name: string, type: string) -> Array<DnsRecord> {
+            let code = DnsMessage.typeCode(type);
+            let key = Str.lower(name) + "/" + str(code);
+            let now = Time.monotonicMs();
+            if (self.useCache) {
+                self.lock.lock();
+                let hit = self.cache.containsKey(key) && self.expires.get(key) > now;
+                let cached = hit ? self.cache.get(key) : null;
+                self.lock.unlock();
+                if (cached != null) { return cached; }
+            }
+            let m = self.ask(name, type);
+            let out = new Array<DnsRecord>();
+            let tn = DnsMessage.typeName(code);
+            let minTtl: long = 300;
+            for (r in m.answers) {
+                if (r.type == tn || code == 255) {
+                    out.push(r);
+                    if (r.ttl < minTtl) { minTtl = r.ttl; }
+                }
+            }
+            if (self.useCache) {
+                self.lock.lock();
+                self.cache.put(key, out);
+                // a negative answer is kept for a short while too
+                self.expires.put(key, now + (out.size() == 0 ? 30 : minTtl) * 1000);
+                self.lock.unlock();
+            }
+            return out;
+        }
+        // The answer message itself (uncached), for the rcode and every record.
+        fn ask(name: string, type: string) -> DnsMessage {
+            let lastError = "";
+            let timedOut = false;
+            for (round in 0..self.tries) {
+                for (server in self.servers) {
+                    let host = server;
+                    let port = 53;
+                    if (Str.startsWith(server, "[")) {
+                        let close = Str.indexOf(server, "]");
+                        host = server[1..close];
+                        if (close + 2 < server.length) { port = Format.toInt(server[close + 2..]); }
+                    } else if (Str.count(server, ":") == 1) {
+                        let colon = Str.indexOf(server, ":");
+                        host = server[..colon];
+                        port = Format.toInt(server[colon + 1..]);
+                    }
+                    let id = %{ (int)grav_dns_id() %} as int;
+                    let q = DnsMessage.query(id, name, type);
+                    try {
+                        let m = self.exchange(host, port, q, false);
+                        if (m.truncated) {
+                            // the whole answer over TCP; servers that refuse TCP leave the part that fit
+                            try { m = self.exchange(host, port, q, true); } catch (e: Exception) {}
+                        }
+                        if (m.rcode == 0 || m.rcode == 3) { return m; }
+                        lastError = "${server} answered with code ${m.rcode}";
+                    } catch (e: ValueError) {
+                        lastError = "${server} sent a malformed answer: ${e.message()}";
+                    } catch (e: TimeoutError) {
+                        timedOut = true;
+                        lastError = "${server} did not answer in ${self.timeout} ms";
+                    } catch (e: NetError) {
+                        lastError = e.message();
+                    }
+                }
+            }
+            if (timedOut && Str.contains(lastError, "did not answer")) { throw new TimeoutError("DNS lookup of ${name} ${type}: ${lastError}"); }
+            throw new NetError("DNS lookup of ${name} ${type}: ${lastError}");
+        }
+
+        private fn exchange(host: string, port: int, q: Bytes, tcp: bool) -> DnsMessage {
+            let out = new Bytes(65535);
+            let qp = q.rawData();
+            let qn = q.size();
+            let op = out.rawData();
+            let t = tcp ? 1 : 0;
+            let ms = self.timeout;
+            let n = %{ grav_dns_exchange(host, port, qp, qn, t, ms, op, 65535) %} as int;
+            if (n == -2) { throw new TimeoutError("${host} did not answer"); }
+            if (n < 0) { throw new NetError("cannot query the name server ${host}:${port}"); }
+            %{ out->len = n; %};
+            return DnsMessage.parse(out);
+        }
+    }
+
+    // Lookups through the system's name servers.
+    class Dns {
+        // SRV records, by priority (lowest first) then weight (highest first).
+        static fn srv(name: string) -> Array<DnsRecord> {
+            let rs = DnsResolver.systemResolver().lookup(name, "SRV").copy();
+            rs.sortBy(fn(a: DnsRecord, b: DnsRecord) -> int { return a.priority != b.priority ? a.priority - b.priority : b.weight - a.weight; });
+            return rs;
+        }
+        // The text of each TXT record (a record's strings joined).
+        static fn txt(name: string) -> Array<string> {
+            let out = new Array<string>();
+            for (r in DnsResolver.systemResolver().lookup(name, "TXT")) { out.push(r.data); }
+            return out;
+        }
+        // MX records, most preferred first.
+        static fn mx(name: string) -> Array<DnsRecord> {
+            let rs = DnsResolver.systemResolver().lookup(name, "MX").copy();
+            rs.sortBy(fn(a: DnsRecord, b: DnsRecord) -> int { return a.priority - b.priority; });
+            return rs;
+        }
+        // IPv4 and IPv6 addresses.
+        static fn a(name: string) -> Array<string> { return Dns.datas(name, "A"); }
+        static fn aaaa(name: string) -> Array<string> { return Dns.datas(name, "AAAA"); }
+        static fn cname(name: string) -> Array<string> { return Dns.datas(name, "CNAME"); }
+        static fn ns(name: string) -> Array<string> { return Dns.datas(name, "NS"); }
+        // The name of an IPv4 or IPv6 address (reverse lookup), or "".
+        static fn reverse(ip: string) -> string {
+            let names = Dns.datas(Dns.reverseName(ip), "PTR");
+            return names.size() > 0 ? names[0] : "";
+        }
+        // The in-addr.arpa or ip6.arpa name of an address.
+        static fn reverseName(ip: string) -> string {
+            if (Str.contains(ip, ":")) {
+                let raw = new Bytes(16);
+                let ok = %{ inet_pton(AF_INET6, ip, raw->data) == 1 %} as bool;
+                if (!ok) { throw new ValueError("'${ip}' is not an IP address"); }
+                %{ raw->len = 16; %};
+                let hex = raw.toHex();
+                let parts = new Array<string>();
+                let i = hex.length - 1;
+                while (i >= 0) { parts.push(hex[i..i + 1]); i -= 1; }
+                return Str.join(parts, ".") + ".ip6.arpa";
+            }
+            let octets = Str.split(ip, ".");
+            if (octets.size() != 4) { throw new ValueError("'${ip}' is not an IP address"); }
+            return "${octets[3]}.${octets[2]}.${octets[1]}.${octets[0]}.in-addr.arpa";
+        }
+        // Any record type ("CAA", "NS", "HTTPS", …).
+        static fn lookup(name: string, type: string) -> Array<DnsRecord> { return DnsResolver.systemResolver().lookup(name, type); }
+
+        private static fn datas(name: string, type: string) -> Array<string> {
+            let out = new Array<string>();
+            for (r in DnsResolver.systemResolver().lookup(name, type)) { out.push(r.data); }
+            return out;
+        }
+    }
+}
