@@ -79,6 +79,8 @@ true
 - `fn append(other: Bytes) -> Bytes` — Appends another buffer's bytes; returns this buffer.
 - `fn appendUint(v: long, width: int) -> Bytes` — Big-endian integers of `width` bytes (1, 2, 4 or 8), as network protocols use.
 - `fn readUint(at: int, width: int) -> long` — Reads a `width`-byte big-endian unsigned number starting at `at`.
+- `fn appendUintLE(v: long, width: int) -> Bytes` — Little-endian integers of `width` bytes (1 to 8), as file formats and protobuf use.
+- `fn readUintLE(at: int, width: int) -> long` — Reads a `width`-byte little-endian number starting at `at`.
 - `fn slice(start: int, end: int) -> Bytes` — Bytes [start, end) as a new buffer (bounds are clamped).
 - `fn dropFront(n: int)` — Remove the first `n` bytes (used for consuming parsed input).
 - `fn indexOf(sub: string) -> int` — The index of the first occurrence of `sub`'s bytes, or -1.

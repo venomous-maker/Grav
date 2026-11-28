@@ -124,6 +124,18 @@ namespace std.data {
             for (k in 0..width) { v = (v << 8) | (self.get(at + k) as long); }
             return v;
         }
+        // Little-endian integers of `width` bytes (1 to 8), as file formats and protobuf use.
+        public fn appendUintLE(v: long, width: int) -> Bytes {
+            self.reserve(self.len + width);
+            %{ for (int grav_k = 0; grav_k < width; grav_k++) self->data[self->len + grav_k] = (unsigned char)((unsigned long long)v >> (grav_k * 8)); %};
+            self.len += width;
+            return self;
+        }
+        // Reads a `width`-byte little-endian number starting at `at`.
+        public fn readUintLE(at: int, width: int) -> long {
+            if (at < 0 || at + width > self.len) { throw new IndexError("bytes ${at}..${at + width} are outside ${self.len}"); }
+            return %{ ({ unsigned long long grav_v = 0; for (int grav_k = width - 1; grav_k >= 0; grav_k--) grav_v = (grav_v << 8) | self->data[at + grav_k]; (long long)grav_v; }) %} as long;
+        }
 
         // Bytes [start, end) as a new buffer (bounds are clamped).
         public fn slice(start: int, end: int) -> Bytes {
