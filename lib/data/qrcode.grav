@@ -1,0 +1,443 @@
+// qrcode.grav — QR codes (ISO/IEC 18004, versions 1 to 40), drawn as SVG, PNG, an Image or
+// text for a terminal.
+//
+//   let qr = QrCode.encode("https://pay.example.test/inv/42")
+//   qr.svg()                                       // <svg …> for a web page or a PDF
+//   qr.png(8).write…                               // Bytes: 8 pixels a module
+//   print(qr.text())                               // in a terminal, two rows a line
+//   QrCode.encode(totp.uri("Acme", "ada@acme.test"), QrEcc.Medium)
+//
+// The text is encoded in the densest single mode that fits it (numeric, alphanumeric or
+// bytes: UTF-8), in the smallest version with the error correction asked for (Low recovers
+// 7% of the code, Medium 15%, Quartile 25%, High 30%), and the mask is chosen by the
+// standard's penalty rules. All of it is done in C, once, when the code is made.
+import "../core/exception.grav"
+import "../text/strbuf.grav"
+import "bytes.grav"
+import "image.grav"
+
+namespace std.data {
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdio.h>
+
+    // error correction codewords per block, and blocks, by level (L, M, Q, H) and version
+    static const signed char QR_ECC[4][41] = {
+        {-1,  7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30},
+        {-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28},
+        {-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30},
+        {-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30},
+    };
+    static const signed char QR_BLOCKS[4][41] = {
+        {-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4,  4,  4,  4,  4,  6,  6,  6,  6,  7,  8,  8,  9,  9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25},
+        {-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5,  5,  8,  9,  9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49},
+        {-1, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8,  8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68},
+        {-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81},
+    };
+    static const int QR_FORMAT_BITS[4] = {1, 0, 3, 2};
+
+    typedef struct { int size; unsigned char* m; unsigned char* f; } GQ;
+
+    static int qr_raw_modules(int ver) {
+        int r = (16 * ver + 128) * ver + 64;
+        if (ver >= 2) { int na = ver / 7 + 2; r -= (25 * na - 10) * na - 55; if (ver >= 7) r -= 36; }
+        return r;
+    }
+    static int qr_data_codewords(int ver, int e) { return qr_raw_modules(ver) / 8 - QR_ECC[e][ver] * QR_BLOCKS[e][ver]; }
+    static unsigned char qr_mul(unsigned char x, unsigned char y) {
+        int z = 0;
+        for (int i = 7; i >= 0; i--) { z = (z << 1) ^ ((z >> 7) * 0x11D); z ^= ((y >> i) & 1) * x; }
+        return (unsigned char)z;
+    }
+    static void qr_rs_divisor(int degree, unsigned char* r) {
+        memset(r, 0, (size_t)degree);
+        r[degree - 1] = 1;
+        unsigned char root = 1;
+        for (int i = 0; i < degree; i++) {
+            for (int j = 0; j < degree; j++) { r[j] = qr_mul(r[j], root); if (j + 1 < degree) r[j] ^= r[j + 1]; }
+            root = qr_mul(root, 0x02);
+        }
+    }
+    static void qr_rs_remainder(const unsigned char* data, int len, const unsigned char* gen, int degree, unsigned char* r) {
+        memset(r, 0, (size_t)degree);
+        for (int i = 0; i < len; i++) {
+            unsigned char factor = data[i] ^ r[0];
+            memmove(r, r + 1, (size_t)(degree - 1));
+            r[degree - 1] = 0;
+            for (int j = 0; j < degree; j++) r[j] ^= qr_mul(gen[j], factor);
+        }
+    }
+    static void qr_set(GQ* q, int x, int y, int dark) { q->m[y * q->size + x] = (unsigned char)dark; q->f[y * q->size + x] = 1; }
+    static int qr_align(int ver, int* out) {
+        if (ver == 1) return 0;
+        int na = ver / 7 + 2, step = (ver * 8 + na * 3 + 5) / (na * 4 - 4) * 2;
+        out[0] = 6;
+        for (int i = na - 1, pos = ver * 4 + 10; i >= 1; i--, pos -= step) out[i] = pos;
+        return na;
+    }
+    static void qr_format(GQ* q, int e, int mask) {
+        int data = QR_FORMAT_BITS[e] << 3 | mask, rem = data;
+        for (int i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >> 9) * 0x537);
+        int bits = (data << 10 | rem) ^ 0x5412, s = q->size;
+        for (int i = 0; i <= 5; i++) qr_set(q, 8, i, (bits >> i) & 1);
+        qr_set(q, 8, 7, (bits >> 6) & 1);
+        qr_set(q, 8, 8, (bits >> 7) & 1);
+        qr_set(q, 7, 8, (bits >> 8) & 1);
+        for (int i = 9; i < 15; i++) qr_set(q, 14 - i, 8, (bits >> i) & 1);
+        for (int i = 0; i < 8; i++) qr_set(q, s - 1 - i, 8, (bits >> i) & 1);
+        for (int i = 8; i < 15; i++) qr_set(q, 8, s - 15 + i, (bits >> i) & 1);
+        qr_set(q, 8, s - 8, 1);
+    }
+    static void qr_function_patterns(GQ* q, int ver) {
+        int s = q->size;
+        for (int i = 0; i < s; i++) { qr_set(q, 6, i, i % 2 == 0); qr_set(q, i, 6, i % 2 == 0); }
+        int fx[3] = {3, s - 4, 3}, fy[3] = {3, 3, s - 4};
+        for (int k = 0; k < 3; k++)
+            for (int dy = -4; dy <= 4; dy++)
+                for (int dx = -4; dx <= 4; dx++) {
+                    int ax = abs(dx), ay = abs(dy), d = ax > ay ? ax : ay, xx = fx[k] + dx, yy = fy[k] + dy;
+                    if (xx >= 0 && xx < s && yy >= 0 && yy < s) qr_set(q, xx, yy, d != 2 && d != 4);
+                }
+        int pos[7], na = qr_align(ver, pos);
+        for (int i = 0; i < na; i++)
+            for (int j = 0; j < na; j++) {
+                if ((i == 0 && j == 0) || (i == 0 && j == na - 1) || (i == na - 1 && j == 0)) continue;
+                for (int dy = -2; dy <= 2; dy++)
+                    for (int dx = -2; dx <= 2; dx++) {
+                        int ax = abs(dx), ay = abs(dy);
+                        qr_set(q, pos[i] + dx, pos[j] + dy, (ax > ay ? ax : ay) != 1);
+                    }
+            }
+        qr_format(q, 0, 0);      // reserved now, written for real later
+        if (ver >= 7) {
+            int rem = ver;
+            for (int i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >> 11) * 0x1F25);
+            long bits = (long)ver << 12 | rem;
+            for (int i = 0; i < 18; i++) {
+                int bit = (int)((bits >> i) & 1), a = s - 11 + i % 3, b = i / 3;
+                qr_set(q, a, b, bit);
+                qr_set(q, b, a, bit);
+            }
+        }
+    }
+    static int qr_mask_bit(int mask, int x, int y) {
+        switch (mask) {
+            case 0: return (x + y) % 2 == 0;
+            case 1: return y % 2 == 0;
+            case 2: return x % 3 == 0;
+            case 3: return (x + y) % 3 == 0;
+            case 4: return (x / 3 + y / 2) % 2 == 0;
+            case 5: return x * y % 2 + x * y % 3 == 0;
+            case 6: return (x * y % 2 + x * y % 3) % 2 == 0;
+            default: return ((x + y) % 2 + x * y % 3) % 2 == 0;
+        }
+    }
+    static void qr_apply_mask(GQ* q, int mask) {
+        for (int y = 0; y < q->size; y++)
+            for (int x = 0; x < q->size; x++)
+                if (!q->f[y * q->size + x] && qr_mask_bit(mask, x, y)) q->m[y * q->size + x] ^= 1;
+    }
+    static void qr_hist_add(int len, int* h, int size) {
+        if (h[0] == 0) len += size;
+        memmove(h + 1, h, sizeof(int) * 6);
+        h[0] = len;
+    }
+    static int qr_hist_count(const int* h) {
+        int n = h[1], core = n > 0 && h[2] == n && h[3] == n * 3 && h[4] == n && h[5] == n;
+        return (core && h[0] >= n * 4 && h[6] >= n ? 1 : 0) + (core && h[6] >= n * 4 && h[0] >= n ? 1 : 0);
+    }
+    static int qr_hist_end(int color, int len, int* h, int size) {
+        if (color) { qr_hist_add(len, h, size); len = 0; }
+        len += size;
+        qr_hist_add(len, h, size);
+        return qr_hist_count(h);
+    }
+    static long qr_penalty(const GQ* q) {
+        int s = q->size; long r = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int a = 0; a < s; a++) {
+                int color = 0, run = 0, h[7] = {0};
+                for (int b = 0; b < s; b++) {
+                    int c = pass == 0 ? q->m[a * s + b] : q->m[b * s + a];
+                    if (c == color) { run++; if (run == 5) r += 3; else if (run > 5) r++; }
+                    else { qr_hist_add(run, h, s); if (!color) r += qr_hist_count(h) * 40; color = c; run = 1; }
+                }
+                r += qr_hist_end(color, run, h, s) * 40;
+            }
+        }
+        for (int y = 0; y < s - 1; y++)
+            for (int x = 0; x < s - 1; x++) {
+                int c = q->m[y * s + x];
+                if (c == q->m[y * s + x + 1] && c == q->m[(y + 1) * s + x] && c == q->m[(y + 1) * s + x + 1]) r += 3;
+            }
+        long dark = 0, total = (long)s * s;
+        for (long i = 0; i < total; i++) dark += q->m[i];
+        long k = (labs(dark * 20 - total * 10) + total - 1) / total - 1;
+        r += k * 10;
+        return r;
+    }
+
+    typedef struct { unsigned char* b; int bits; int cap; } GQBits;
+    static void qr_put(GQBits* w, unsigned v, int n) {
+        for (int i = n - 1; i >= 0; i--) {
+            if ((w->bits >> 3) >= w->cap) { w->cap *= 2; w->b = (unsigned char*)realloc(w->b, (size_t)w->cap); memset(w->b + w->cap / 2, 0, (size_t)(w->cap / 2)); }
+            if ((v >> i) & 1) w->b[w->bits >> 3] |= (unsigned char)(0x80 >> (w->bits & 7));
+            w->bits++;
+        }
+    }
+    static const char* QR_ALNUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+    // mode 0 numeric, 1 alphanumeric, 2 bytes
+    static int qr_mode_of(const unsigned char* t, int n) {
+        int numeric = 1, alnum = 1;
+        for (int i = 0; i < n; i++) {
+            if (t[i] < '0' || t[i] > '9') numeric = 0;
+            if (!t[i] || !strchr(QR_ALNUM, t[i])) alnum = 0;
+        }
+        return numeric ? 0 : alnum ? 1 : 2;
+    }
+    static int qr_count_bits(int mode, int ver) {
+        int g = ver <= 9 ? 0 : ver <= 26 ? 1 : 2;
+        static const int bits[3][3] = {{10, 12, 14}, {9, 11, 13}, {8, 16, 16}};
+        return bits[mode][g];
+    }
+    static int qr_data_bits(int mode, int n) {
+        if (mode == 0) return n / 3 * 10 + (n % 3 == 2 ? 7 : n % 3 == 1 ? 4 : 0);
+        if (mode == 1) return n / 2 * 11 + (n % 2) * 6;
+        return n * 8;
+    }
+
+    // The modules of the QR code for t (n bytes) at level e (0 L .. 3 H), at least version
+    // minVer; mask -1 picks the best. Returns the size (0 when it does not fit) and the
+    // modules (malloc'd, size*size bytes of 0 or 1), and the version and mask used.
+    static int grav_qr_encode(const unsigned char* t, int n, int e, int minVer, int maxVer, int maskWanted, int boost,
+                              unsigned char** out, int* verOut, int* maskOut) {
+        int mode = qr_mode_of(t, n), ver;
+        long used = 0;
+        for (ver = minVer; ver <= maxVer; ver++) {
+            if (n >= (1 << qr_count_bits(mode, ver))) continue;
+            used = 4 + qr_count_bits(mode, ver) + qr_data_bits(mode, n);
+            if (used <= (long)qr_data_codewords(ver, e) * 8) break;
+        }
+        if (ver > maxVer) return 0;
+        if (boost) for (int b = e + 1; b <= 3; b++) {
+            if (used <= (long)qr_data_codewords(ver, b) * 8) e = b;
+        }
+        int cap = qr_data_codewords(ver, e);
+        GQBits w; w.cap = cap + 8; w.bits = 0; w.b = (unsigned char*)calloc((size_t)w.cap, 1);
+        qr_put(&w, mode == 0 ? 1 : mode == 1 ? 2 : 4, 4);
+        qr_put(&w, (unsigned)n, qr_count_bits(mode, ver));
+        if (mode == 0) {
+            for (int i = 0; i < n; ) {
+                int k = n - i >= 3 ? 3 : n - i; unsigned v = 0;
+                for (int j = 0; j < k; j++) v = v * 10 + (unsigned)(t[i + j] - '0');
+                qr_put(&w, v, k == 3 ? 10 : k == 2 ? 7 : 4);
+                i += k;
+            }
+        } else if (mode == 1) {
+            for (int i = 0; i < n; i += 2) {
+                unsigned a = (unsigned)(strchr(QR_ALNUM, t[i]) - QR_ALNUM);
+                if (i + 1 < n) qr_put(&w, a * 45 + (unsigned)(strchr(QR_ALNUM, t[i + 1]) - QR_ALNUM), 11);
+                else qr_put(&w, a, 6);
+            }
+        } else for (int i = 0; i < n; i++) qr_put(&w, t[i], 8);
+        int capBits = cap * 8;
+        int term = capBits - w.bits < 4 ? capBits - w.bits : 4;
+        qr_put(&w, 0, term);
+        qr_put(&w, 0, (8 - w.bits % 8) % 8);
+        for (unsigned pad = 0xEC; w.bits < capBits; pad ^= 0xEC ^ 0x11) qr_put(&w, pad, 8);
+        // blocks with their error correction, interleaved
+        int nb = QR_BLOCKS[e][ver], eccLen = QR_ECC[e][ver], raw = qr_raw_modules(ver) / 8;
+        int nShort = nb - raw % nb, shortLen = raw / nb;
+        unsigned char* blocks = (unsigned char*)calloc((size_t)nb * (shortLen + 1), 1);
+        unsigned char gen[30], ecc[30];
+        qr_rs_divisor(eccLen, gen);
+        for (int i = 0, k = 0; i < nb; i++) {
+            int datLen = shortLen - eccLen + (i < nShort ? 0 : 1);
+            unsigned char* blk = blocks + (size_t)i * (shortLen + 1);
+            memcpy(blk, w.b + k, (size_t)datLen);
+            qr_rs_remainder(w.b + k, datLen, gen, eccLen, ecc);
+            k += datLen;
+            int at = datLen + (i < nShort ? 1 : 0);
+            memcpy(blk + at, ecc, (size_t)eccLen);
+        }
+        unsigned char* all = (unsigned char*)malloc((size_t)raw);
+        int len = 0;
+        for (int i = 0; i <= shortLen; i++)
+            for (int j = 0; j < nb; j++)
+                if (i != shortLen - eccLen || j >= nShort) all[len++] = blocks[(size_t)j * (shortLen + 1) + i];
+        free(blocks); free(w.b);
+        GQ q; q.size = ver * 4 + 17;
+        q.m = (unsigned char*)calloc((size_t)q.size * q.size, 1);
+        q.f = (unsigned char*)calloc((size_t)q.size * q.size, 1);
+        qr_function_patterns(&q, ver);
+        long bit = 0;
+        for (int right = q.size - 1; right >= 1; right -= 2) {
+            if (right == 6) right = 5;
+            for (int vert = 0; vert < q.size; vert++)
+                for (int j = 0; j < 2; j++) {
+                    int x = right - j, up = ((right + 1) & 2) == 0, y = up ? q.size - 1 - vert : vert;
+                    if (!q.f[y * q.size + x] && bit < (long)len * 8) {
+                        q.m[y * q.size + x] = (all[bit >> 3] >> (7 - (bit & 7))) & 1;
+                        bit++;
+                    }
+                }
+        }
+        free(all);
+        int mask = maskWanted;
+        if (mask < 0) {
+            long best = -1;
+            for (int k = 0; k < 8; k++) {
+                qr_apply_mask(&q, k);
+                qr_format(&q, e, k);
+                long p = qr_penalty(&q);
+                if (best < 0 || p < best) { best = p; mask = k; }
+                qr_apply_mask(&q, k);
+            }
+        }
+        qr_apply_mask(&q, mask);
+        qr_format(&q, e, mask);
+        free(q.f);
+        *out = q.m; *verOut = ver; *maskOut = mask;
+        return q.size;
+    }
+
+    // The dark modules as one SVG path: a rectangle for each run of dark modules in a row.
+    static const char* grav_qr_svg_path(const unsigned char* m, int s, int border) {
+        size_t cap = 4096, len = 0;
+        char* b = (char*)malloc(cap);
+        for (int y = 0; y < s; y++) {
+            int x = 0;
+            while (x < s) {
+                if (!m[y * s + x]) { x++; continue; }
+                int start = x;
+                while (x < s && m[y * s + x]) x++;
+                if (len + 48 > cap) { cap *= 2; b = (char*)realloc(b, cap); }
+                len += (size_t)snprintf(b + len, cap - len, "M%d %dh%dv1h-%dz", start + border, y + border, x - start, x - start);
+            }
+        }
+        char* r = grav_str_new(len);
+        memcpy(r, b, len); r[len] = 0;
+        free(b);
+        return r;
+    }
+    %}
+
+    // How much of a QR code can be damaged and still read: Low 7%, Medium 15%, Quartile
+    // 25%, High 30% (more correction makes a bigger code for the same text).
+    enum QrEcc { Low, Medium, Quartile, High }
+
+    // A QR code: a square of dark and light modules.
+    class QrCode {
+        // Modules a side (21 for version 1, 4 more each version, 177 for version 40).
+        public size: int
+        // 1 to 40.
+        public version: int
+        // The mask pattern chosen (0 to 7).
+        public mask: int
+        public ecc: QrEcc
+        private m: byte*
+
+        constructor() { self.size = 0; self.version = 0; self.mask = 0; self.ecc = QrEcc.Medium; self.m = null; }
+        destructor() { free(self.m); }
+
+        // The code for `text` at the given error correction, in the smallest version that
+        // holds it (from `minVersion`); ValueError when even version 40 is too small (about
+        // 2,900 bytes at Low). `boostEcc` raises the correction when that costs no size.
+        static fn encode(text: string, ecc: QrEcc = QrEcc.Medium, minVersion: int = 1, boostEcc: bool = false) -> QrCode {
+            let n = text.length;
+            return QrCode.make(%{ (const unsigned char*)text %} as byte*, n, ecc, minVersion, -1, boostEcc);
+        }
+        // The code for raw bytes (byte mode).
+        static fn encodeBytes(data: Bytes, ecc: QrEcc = QrEcc.Medium) -> QrCode {
+            return QrCode.make(data.rawData(), data.size(), ecc, 1, -1, false);
+        }
+        // encode with a fixed mask pattern (0 to 7), for tests and special printers.
+        static fn encodeWithMask(text: string, ecc: QrEcc, mask: int, minVersion: int = 1) -> QrCode {
+            if (mask < 0 || mask > 7) { throw new ValueError("a QR mask is 0 to 7"); }
+            let n = text.length;
+            return QrCode.make(%{ (const unsigned char*)text %} as byte*, n, ecc, minVersion, mask, false);
+        }
+        private static fn make(p: byte*, n: int, ecc: QrEcc, minVersion: int, mask: int, boost: bool) -> QrCode {
+            if (minVersion < 1 || minVersion > 40) { throw new ValueError("a QR version is 1 to 40"); }
+            let e = ecc == QrEcc.Low ? 0 : (ecc == QrEcc.Medium ? 1 : (ecc == QrEcc.Quartile ? 2 : 3));
+            let out: byte* = null;
+            let ver = 0;
+            let chosen = 0;
+            let bst = boost ? 1 : 0;
+            let size = %{ grav_qr_encode(p, n, e, minVersion, 40, mask, bst, &out, &ver, &chosen) %} as int;
+            if (size == 0) { throw new ValueError("${n} bytes do not fit in a QR code at this error correction"); }
+            let q = new QrCode();
+            q.size = size;
+            q.version = ver;
+            q.mask = chosen;
+            q.m = out;
+            // a boosted level is read back from the version's capacity: report what was asked
+            q.ecc = ecc;
+            return q;
+        }
+
+        // Whether the module at (x, y) is dark (outside the code: false).
+        fn get(x: int, y: int) -> bool {
+            if (x < 0 || y < 0 || x >= self.size || y >= self.size) { return false; }
+            return self.m[y * self.size + x] != 0;
+        }
+        // An SVG of the code with a `border` of light modules (4 is what the standard asks),
+        // one path for all dark modules; it scales to any size.
+        fn svg(border: int = 4, dark: string = "#000", light: string = "#fff") -> string {
+            let full = self.size + border * 2;
+            let s = self.size;
+            let path = %{ grav_qr_svg_path(self->m, s, border) %} as string;
+            let sb = new StringBuilder();
+            sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ${full} ${full}\" shape-rendering=\"crispEdges\">");
+            if (light != "") { sb.append("<rect width=\"100%\" height=\"100%\" fill=\"").append(light).append("\"/>"); }
+            sb.append("<path fill=\"").append(dark).append("\" d=\"").append(path).append("\"/></svg>");
+            return sb.toString();
+        }
+        // The code as a grey Image, `scale` pixels a module, with a `border`.
+        fn image(scale: int = 8, border: int = 4) -> Image {
+            if (scale < 1) { throw new ValueError("a QR scale is at least 1"); }
+            let side = (self.size + border * 2) * scale;
+            let img = Image.create(side, side, 1, 0xffffffff);
+            for (y in 0..self.size) {
+                let x = 0;
+                while (x < self.size) {
+                    if (!self.get(x, y)) { x += 1; continue; }
+                    let start = x;
+                    while (x < self.size && self.get(x, y)) { x += 1; }
+                    img.fillRect((start + border) * scale, (y + border) * scale, (x - start) * scale, scale, 0x000000ff);
+                }
+            }
+            return img;
+        }
+        // The code as a PNG.
+        fn png(scale: int = 8, border: int = 4) -> Bytes { return self.image(scale, border).png(9); }
+        // The code drawn with block characters, two module rows a line (dark on a light
+        // terminal: `invert` for a dark one).
+        fn text(border: int = 2, invert: bool = false) -> string {
+            let sb = new StringBuilder();
+            let lo = -border;
+            let hi = self.size + border;
+            let y = lo;
+            while (y < hi) {
+                for (x in lo..hi) {
+                    let top = self.get(x, y) != invert;
+                    let bottom = (y + 1 < hi && self.get(x, y + 1)) != invert;
+                    sb.append(top && bottom ? "█" : (top ? "▀" : (bottom ? "▄" : " ")));
+                }
+                sb.append("\n");
+                y += 2;
+            }
+            return sb.toString();
+        }
+        // The modules as rows of '#' and '.', for tests and debugging.
+        fn toString() -> string {
+            let sb = new StringBuilder();
+            for (y in 0..self.size) {
+                for (x in 0..self.size) { sb.append(self.get(x, y) ? "#" : "."); }
+                sb.append("\n");
+            }
+            return sb.toString();
+        }
+    }
+}

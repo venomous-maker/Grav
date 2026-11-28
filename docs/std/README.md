@@ -114,6 +114,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [xml](data/xml.md) | `Xml`, `XmlNode`: XML parsed, queried by path, written; DTDs refused |
 | [mime](data/mime.md) | `MimeType`: media types by extension and back |
 | [image](data/image.md) | `Image`: PNG and JPEG read and written, resized, cropped, rotated; thumbnails |
+| [qrcode](data/qrcode.md) | `QrCode`: QR codes as SVG, PNG, an Image or terminal text |
 | [pdf](data/pdf.md) | `PdfDocument`, `PdfPage`, `PdfTable`: PDFs with text, fonts, tables, images, QR codes and links |
 | [semver](data/semver.md) | `Semver`: semantic versions, ordering and npm-style ranges |
 

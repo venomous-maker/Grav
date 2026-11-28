@@ -1,0 +1,53 @@
+// QrCode: modules checked against python-qrcode, modes and versions, SVG, PNG and text.
+import "std"
+
+fn bits(q: QrCode) -> string {
+    let sb = new StringBuilder()
+    for (y in 0..q.size) { for (x in 0..q.size) { sb.append(q.get(x, y) ? "1" : "0") } }
+    return sb.toString()
+}
+
+test "the modules match a reference encoder" {
+    // python-qrcode 8.x: "HELLO WORLD", level M, mask 2
+    let q = QrCode.encodeWithMask("HELLO WORLD", QrEcc.Medium, 2)
+    assertEq(q.version, 1)
+    assertEq(q.size, 21)
+    assertEq(bits(q), "111111100100101111111100000100111101000001101110101100101011101101110101011001011101101110101101101011101100000101110101000001111111101010101111111000000001001100000000101111100010101111100101111011000110011111001001110011000101001001100001000000100000011101111011000000100000000001011111001011111111100110101011101100000101111111100110101110101010100001110101110101010100101100101110101001010011000100000100000000000101111111101011010010000")
+}
+
+test "modes, versions and capacity" {
+    assertEq(QrCode.encode("12345678901234567890123456789012345678", QrEcc.Low).version, 1)    // numeric: 41 digits fit v1-L
+    assertEq(QrCode.encode("HELLO WORLD HELLO WORLD", QrEcc.Low).version, 1)               // alphanumeric
+    assertEq(QrCode.encode("hello world hello world", QrEcc.Low).version, 2)               // bytes
+    assertEq(QrCode.encode("x", QrEcc.High, 5).version, 5)
+    assertEq(QrCode.encode(Str.repeat("a", 2953), QrEcc.Low).version, 40)
+    let caught = false
+    try { QrCode.encode(Str.repeat("a", 2954), QrEcc.Low) } catch (e: ValueError) { caught = true }
+    assert(caught)
+    let big = QrCode.encode(Str.repeat("https://example.test/", 30), QrEcc.Quartile)
+    assertEq(big.size, big.version * 4 + 17)
+    assert(big.mask >= 0 && big.mask <= 7)
+    // finder patterns in three corners
+    assert(big.get(0, 0) && big.get(6, 6) && !big.get(7, 7) && big.get(big.size - 1, 0) && big.get(0, big.size - 1))
+    assert(!big.get(-1, 0) && !big.get(big.size, 0))
+}
+
+test "SVG, image, PNG and text" {
+    let q = QrCode.encode("https://pay.example.test/inv/42")
+    let svg = q.svg()
+    let full = q.size + 8
+    assert(Str.startsWith(svg, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ${full} ${full}\""))
+    assert(Str.contains(svg, "<path fill=\"#000\" d=\"M4 4h7v1h-7z"))
+    assert(Str.endsWith(svg, "\"/></svg>"))
+    let img = q.image(4, 2)
+    assertEq(img.width, (q.size + 4) * 4)
+    assertEq(img.get(8, 8), 0x000000ff as long)
+    assertEq(img.get(0, 0), 0xffffffff as long)
+    let back = Image.decode(q.png(3))
+    assertEq(back.width, (q.size + 8) * 3)
+    let lines = Str.lines(q.text(1))
+    assertEq(lines.size(), (q.size + 2 + 1) / 2)
+    assert(Str.startsWith(lines[0], " ▄▄▄▄▄▄▄ "))
+    assert(Str.startsWith(lines[1], " █ ▄▄▄ █ "))
+    assertEq(Str.split(q.toString(), "\n")[0], "#######.${Str.split(q.toString(), "\n")[0][8..]}")
+}

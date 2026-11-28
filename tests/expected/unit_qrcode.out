@@ -1,0 +1,5 @@
+running 3 tests
+  ok    the modules match a reference encoder
+  ok    modes, versions and capacity
+  ok    SVG, image, PNG and text
+result: 3 passed, 0 failed
