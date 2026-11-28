@@ -38,3 +38,4 @@ ignored_examples
 
 # apogee-*: the Apogee web framework's modules, each its own repository, kept here while developing
 /apogee-*/
+site/
