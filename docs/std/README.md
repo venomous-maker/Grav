@@ -147,6 +147,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [shared](concurrency/shared.md) | `ThreadLocal<T>`, `ConcurrentMap<K, V>`, `LruCache<K, V>`: per-thread values, a sharded map, a bounded cache |
 | [retry](concurrency/retry.md) | `Retry`: trying again with exponential backoff and jitter, within a deadline |
 | [ratelimit](concurrency/ratelimit.md) | `TokenBucket`, `TokenBuckets`, `SlidingWindow`: rate limits in memory |
+| [pool](concurrency/pool.md) | `Pool<T>`: reusable connections and buffers, capped, health-checked, shared by threads |
 | [generator](concurrency/generator.md) | `Generator<T>`: what a function that `yield`s becomes |
 
 ### net (import "std/net")

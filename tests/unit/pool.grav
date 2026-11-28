@@ -1,0 +1,134 @@
+// Pool: reuse, the size cap and waiting, time-outs, health checks, discard, eviction,
+// affinity, close, and many threads at once.
+import "std"
+
+class Conn {
+    public id: int
+    public alive: bool = true
+    public uses: int = 0
+    constructor(id: int) { self.id = id; }
+}
+
+class Counter { public n: int = 0 }
+
+fn makePool(max: int, made: AtomicInt, closed: AtomicInt) -> Pool<Conn> {
+    return new Pool<Conn>(fn() -> Conn { return new Conn(made.increment() as int) }, max)
+        .onClose(fn(c: Conn) { closed.increment() })
+}
+
+test "items are made on demand and reused last-in first-out" {
+    let made = new AtomicInt(0)
+    let closed = new AtomicInt(0)
+    let p = makePool(3, made, closed)
+    let a = p.acquire()
+    let b = p.acquire()
+    assertEq(p.size(), 2)
+    assertEq(p.inUse(), 2)
+    p.release(a)
+    p.release(b)
+    assertEq(p.acquire().id, b.id)
+    assertEq(made.get(), 2)
+    assertEq(p.use::<int>(fn(c: Conn) -> int { return c.id }), a.id)
+    p.with(fn(c: Conn) { c.uses += 1 })
+    assertEq(p.idle(), 1)
+}
+
+test "the cap: waiting, time-outs, tryAcquire" {
+    let made = new AtomicInt(0)
+    let closed = new AtomicInt(0)
+    let p = makePool(1, made, closed)
+    let a = p.acquire()
+    assert(p.tryAcquire() == null)
+    let caught = false
+    try { p.acquire(30) } catch (e: TimeoutError) { caught = true }
+    assert(caught)
+    assertEq(p.stats().timeouts, 1 as long)
+    // another thread gives it back while this one waits
+    let t = Thread.spawn(fn() { Time.sleepMs(30); p.release(a) })
+    let b = p.acquire(2000)
+    assertEq(b.id, a.id)
+    t.join()
+    let bad = false
+    p.release(b)
+    try { p.release(b) } catch (e: StateError) { bad = true }
+    assert(bad)
+}
+
+test "health checks after idle time; discard" {
+    let made = new AtomicInt(0)
+    let closed = new AtomicInt(0)
+    let checks = new AtomicInt(0)
+    let p = makePool(2, made, closed).healthCheck(fn(c: Conn) -> bool { checks.increment(); return c.alive }, 0)
+    let a = p.acquire()
+    a.alive = false
+    p.release(a)
+    let b = p.acquire()
+    assert(b.id != a.id)
+    assertEq(closed.get(), 1)
+    assertEq(p.stats().failedChecks, 1 as long)
+    p.discard(b)
+    assertEq(closed.get(), 2)
+    assertEq(p.size(), 0)
+    // a long interval: a fresh item is not checked
+    let q = makePool(2, made, closed).healthCheck(fn(c: Conn) -> bool { checks.increment(); return false }, 60000)
+    let c = q.acquire()
+    q.release(c)
+    assertEq(q.acquire().id, c.id)
+}
+
+test "idle timeout, max idle, close" {
+    let made = new AtomicInt(0)
+    let closed = new AtomicInt(0)
+    let p = makePool(4, made, closed).idleTimeout(20).maxIdle(2)
+    let xs = [p.acquire(), p.acquire(), p.acquire()]
+    for (x in xs) { p.release(x) }
+    assertEq(p.idle(), 2)
+    assertEq(closed.get(), 1)
+    Time.sleepMs(40)
+    p.evictIdle()
+    assertEq(p.idle(), 0)
+    assertEq(closed.get(), 3)
+    let held = p.acquire()
+    p.close()
+    let refused = false
+    try { p.acquire() } catch (e: StateError) { refused = true }
+    assert(refused)
+    p.release(held)
+    assertEq(closed.get(), 4)
+    assertEq(p.size(), 0)
+}
+
+test "thread affinity gives a thread its own item back" {
+    let made = new AtomicInt(0)
+    let closed = new AtomicInt(0)
+    let p = makePool(4, made, closed).threadAffinity()
+    let mine = p.acquire()
+    let other = new Counter()
+    Thread.spawn(fn() { let c = p.acquire(); other.n = c.id; p.release(c) }).join()
+    p.release(mine)
+    // the other thread's item went back last, but this thread gets its own
+    assertEq(p.acquire().id, mine.id)
+}
+
+test "many threads, never more than the cap" {
+    let made = new AtomicInt(0)
+    let closed = new AtomicInt(0)
+    let p = makePool(4, made, closed)
+    let busy = new AtomicInt(0)
+    let peak = new AtomicLong(0)
+    let threads = new Array<Thread>()
+    for (t in 0..16) {
+        threads.push(Thread.spawn(fn() {
+            for (i in 0..300) {
+                p.with(fn(c: Conn) {
+                    peak.updateMax(busy.increment())
+                    busy.decrement()
+                })
+            }
+        }))
+    }
+    for (th in threads) { th.join() }
+    assert(peak.get() <= 4)
+    assert(made.get() <= 4)
+    assertEq(p.inUse(), 0)
+}

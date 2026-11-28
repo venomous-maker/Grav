@@ -1,0 +1,8 @@
+running 6 tests
+  ok    items are made on demand and reused last-in first-out
+  ok    the cap: waiting, time-outs, tryAcquire
+  ok    health checks after idle time; discard
+  ok    idle timeout, max idle, close
+  ok    thread affinity gives a thread its own item back
+  ok    many threads, never more than the cap
+result: 6 passed, 0 failed

@@ -1,0 +1,309 @@
+// lib/concurrency/pool.grav — a pool of reusable, costly things (database connections,
+// sockets, parsers, buffers) shared by threads: checkout and return, a size cap with
+// waiting, health checks for items that sat idle, idle eviction, and per-thread affinity.
+//
+//   let pool = new Pool<Conn>(fn() -> Conn { return Conn.open(url) }, 10)
+//       .onClose(fn(c: Conn) { c.close() })
+//       .healthCheck(fn(c: Conn) -> bool { return c.ping() }, 30000)   // after 30 s idle
+//   let rows = pool.use::<int>(fn(c: Conn) -> int { return c.count("users") })
+//
+//   let c = pool.acquire(2000)                     // wait up to 2 s when all 10 are out
+//   try { work(c) } finally { pool.release(c) }    // or pool.discard(c) when it broke
+//
+// Items are made by the factory on demand (outside the lock: a slow connect does not block
+// the others) and reused last-in first-out, so the warmest ones are used and the rest age
+// out. A health check runs only on an item that has been idle longer than its interval;
+// a failing item is closed and the next one tried.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../sys/time.grav"
+import "async.grav"
+
+namespace std.concurrency {
+    %{
+    #include <pthread.h>
+    #include <time.h>
+    #include <errno.h>
+    #include <stdint.h>
+    // Waits on the pool's condition for up to ms (forever when ms < 0); 0 on time-out.
+    static int grav_pool_wait(GravSync* s, long long ms) {
+        if (ms < 0) { pthread_cond_wait(&s->notEmpty, &s->mu); return 1; }
+        struct timespec t;
+        clock_gettime(CLOCK_REALTIME, &t);
+        t.tv_sec += (time_t)(ms / 1000);
+        t.tv_nsec += (long)(ms % 1000) * 1000000L;
+        if (t.tv_nsec >= 1000000000L) { t.tv_sec++; t.tv_nsec -= 1000000000L; }
+        return pthread_cond_timedwait(&s->notEmpty, &s->mu, &t) != ETIMEDOUT;
+    }
+    %}
+
+    class PoolEntry<T> {
+        public item: T
+        // When it came back (monotonic ms) and the thread that last used it.
+        public since: long
+        public owner: long
+        constructor(item: T, since: long, owner: long) { self.item = item; self.since = since; self.owner = owner; }
+    }
+
+    // What a pool has done so far.
+    class PoolStats {
+        public size: int
+        public idle: int
+        public inUse: int
+        public waiting: int
+        public created: long
+        public closed: long
+        public failedChecks: long
+        public timeouts: long
+        fn toString() -> string {
+            return "size=${self.size} idle=${self.idle} inUse=${self.inUse} waiting=${self.waiting} created=${self.created} closed=${self.closed} failedChecks=${self.failedChecks} timeouts=${self.timeouts}";
+        }
+    }
+
+    // A thread-safe pool of up to `maxSize` items made by `factory`.
+    class Pool<T> {
+        private factory: fn() -> T
+        private closer: fn(T) = null
+        private checker: fn(T) -> bool = null
+        private checkAfterMs: long = 30000
+        private idleTimeoutMs: long = -1
+        private maxIdleCount: int = -1
+        private affinity: bool = false
+        private max: int
+        private idleItems: Array<PoolEntry<T>> = new Array<PoolEntry<T>>()
+        private total: int = 0
+        private out: int = 0
+        private waiters: int = 0
+        private shut: bool = false
+        private made: long = 0
+        private gone: long = 0
+        private badChecks: long = 0
+        private timedOut: long = 0
+        private h: byte*
+
+        constructor(factory: fn() -> T, maxSize: int = 8) {
+            if (maxSize < 1) { throw new ValueError("a pool holds at least one item"); }
+            self.factory = factory;
+            self.max = maxSize;
+            self.h = %{ (unsigned char*)grav_sync_new() %} as byte*;
+        }
+        destructor() { %{ grav_sync_free((GravSync*)self->h); %}; }
+
+        // ── settings (before use) ────────────────────────────────────────────
+        // Called on every item the pool throws away (closed, failed its check, evicted).
+        fn onClose(closer: fn(T)) -> Pool<T> { self.closer = closer; return self; }
+        // Checks an item that has been idle longer than `afterIdleMs` before handing it out;
+        // one that fails is closed and another taken (0: check every time).
+        fn healthCheck(check: fn(T) -> bool, afterIdleMs: long = 30000) -> Pool<T> {
+            self.checker = check;
+            self.checkAfterMs = afterIdleMs;
+            return self;
+        }
+        // Closes items idle longer than this (checked as items come and go).
+        fn idleTimeout(ms: long) -> Pool<T> { self.idleTimeoutMs = ms; return self; }
+        // Keeps at most this many idle items; the oldest extra ones are closed.
+        fn maxIdle(n: int) -> Pool<T> { self.maxIdleCount = n; return self; }
+        // Hands a thread the item it used last when that one is idle (warm caches, the
+        // same session state).
+        fn threadAffinity(on: bool = true) -> Pool<T> { self.affinity = on; return self; }
+
+        // ── use ──────────────────────────────────────────────────────────────
+        // An item, waiting up to `timeoutMs` (-1: as long as it takes) when all are out;
+        // TimeoutError when none came free, StateError once the pool is closed.
+        fn acquire(timeoutMs: long = -1) -> T {
+            let deadline = timeoutMs < 0 ? -1 : Time.monotonicMs() + timeoutMs;
+            let me = Async.threadId();
+            while (true) {
+                self.lock();
+                if (self.shut) { self.unlock(); throw new StateError("the pool is closed"); }
+                self.evictLocked();
+                let n = self.idleItems.size();
+                if (n > 0) {
+                    let at = n - 1;
+                    if (self.affinity) {
+                        let k = n - 1;
+                        while (k >= 0) {
+                            if (self.idleItems[k].owner == me) { at = k; break; }
+                            k -= 1;
+                        }
+                    }
+                    let e = self.idleItems.removeAt(at);
+                    self.out += 1;
+                    self.unlock();
+                    if (self.checker != null && Time.monotonicMs() - e.since >= self.checkAfterMs) {
+                        let ok = false;
+                        try { ok = self.checker(e.item); } catch (err: Exception) { ok = false; }
+                        if (!ok) {
+                            self.lock();
+                            self.out -= 1;
+                            self.total -= 1;
+                            self.badChecks += 1;
+                            self.signalLocked();
+                            self.unlock();
+                            self.destroy(e.item);
+                            continue;
+                        }
+                    }
+                    return e.item;
+                }
+                if (self.total < self.max) {
+                    self.total += 1;
+                    self.out += 1;
+                    self.unlock();
+                    try {
+                        let item = self.factory();
+                        self.lock();
+                        self.made += 1;
+                        self.unlock();
+                        return item;
+                    } catch (err: Exception) {
+                        self.lock();
+                        self.total -= 1;
+                        self.out -= 1;
+                        self.signalLocked();
+                        self.unlock();
+                        throw err;
+                    }
+                }
+                let left: long = -1;
+                if (deadline >= 0) {
+                    left = deadline - Time.monotonicMs();
+                    if (left <= 0) {
+                        self.timedOut += 1;
+                        self.unlock();
+                        throw new TimeoutError("no pool item came free within ${timeoutMs} ms (all ${self.max} in use)");
+                    }
+                }
+                self.waiters += 1;
+                %{ grav_pool_wait((GravSync*)self->h, left); %};
+                self.waiters -= 1;
+                self.unlock();
+            }
+            return self.factory();
+        }
+        // An idle item (or a new one under the cap) without waiting; null when all are out.
+        fn tryAcquire() -> T? {
+            self.lock();
+            let free = !self.shut && (self.idleItems.size() > 0 || self.total < self.max);
+            self.unlock();
+            if (!free) { return null; }
+            try { return self.acquire(0); } catch (e: TimeoutError) { return null; }
+            return null;
+        }
+        // Gives an item back for reuse.
+        fn release(item: T) {
+            let me = Async.threadId();
+            self.lock();
+            if (self.out <= 0) { self.unlock(); throw new StateError("release of an item the pool did not hand out"); }
+            self.out -= 1;
+            if (self.shut) {
+                self.total -= 1;
+                self.unlock();
+                self.destroy(item);
+                return;
+            }
+            self.idleItems.push(new PoolEntry<T>(item, Time.monotonicMs(), me));
+            let extra = new Array<T>();
+            if (self.maxIdleCount >= 0) {
+                while (self.idleItems.size() > self.maxIdleCount && self.idleItems.size() > 0) {
+                    extra.push(self.idleItems.removeAt(0).item);
+                    self.total -= 1;
+                }
+            }
+            self.signalLocked();
+            self.unlock();
+            for (x in extra) { self.destroy(x); }
+        }
+        // Takes back an item that is broken (it is closed, and a new one made when needed).
+        fn discard(item: T) {
+            self.lock();
+            if (self.out <= 0) { self.unlock(); throw new StateError("discard of an item the pool did not hand out"); }
+            self.out -= 1;
+            self.total -= 1;
+            self.signalLocked();
+            self.unlock();
+            self.destroy(item);
+        }
+        // Runs `body` with an item and gives it back afterwards, even when body throws.
+        fn use<R>(body: fn(T) -> R) -> R {
+            let item = self.acquire();
+            try { return body(item); } finally { self.release(item); }
+        }
+        // use, for a body without a result.
+        fn with(body: fn(T)) {
+            let item = self.acquire();
+            try { body(item); } finally { self.release(item); }
+        }
+
+        // Closes the idle items and every item given back from now on; waiting acquires
+        // fail with StateError.
+        fn close() {
+            self.lock();
+            self.shut = true;
+            let idle = new Array<T>();
+            for (e in self.idleItems) { idle.push(e.item); }
+            self.total -= self.idleItems.size();
+            self.idleItems = new Array<PoolEntry<T>>();
+            %{ pthread_cond_broadcast(&((GravSync*)self->h)->notEmpty); %};
+            self.unlock();
+            for (x in idle) { self.destroy(x); }
+        }
+        // Closes idle items past the idle timeout now (the pool otherwise does it as items
+        // come and go).
+        fn evictIdle() {
+            self.lock();
+            self.evictLocked();
+            self.unlock();
+        }
+
+        // ── state ────────────────────────────────────────────────────────────
+        // Items alive (idle and in use), idle, and in use.
+        fn size() -> int { self.lock(); let n = self.total; self.unlock(); return n; }
+        fn idle() -> int { self.lock(); let n = self.idleItems.size(); self.unlock(); return n; }
+        fn inUse() -> int { self.lock(); let n = self.out; self.unlock(); return n; }
+        fn maxSize() -> int { return self.max; }
+        fn isClosed() -> bool { self.lock(); let c = self.shut; self.unlock(); return c; }
+        fn stats() -> PoolStats {
+            let s = new PoolStats();
+            self.lock();
+            s.size = self.total;
+            s.idle = self.idleItems.size();
+            s.inUse = self.out;
+            s.waiting = self.waiters;
+            s.created = self.made;
+            s.closed = self.gone;
+            s.failedChecks = self.badChecks;
+            s.timeouts = self.timedOut;
+            self.unlock();
+            return s;
+        }
+
+        // ── internals ────────────────────────────────────────────────────────
+        private fn lock() { %{ pthread_mutex_lock(&((GravSync*)self->h)->mu); %}; }
+        private fn unlock() { %{ pthread_mutex_unlock(&((GravSync*)self->h)->mu); %}; }
+        private fn signalLocked() { if (self.waiters > 0) { %{ pthread_cond_signal(&((GravSync*)self->h)->notEmpty); %}; } }
+        // Closes idle items past the timeout (the oldest are at the front). Called locked;
+        // the lock is let go while closers run.
+        private fn evictLocked() {
+            if (self.idleTimeoutMs < 0 || self.idleItems.size() == 0) { return; }
+            let gone = new Array<T>();
+            let now = Time.monotonicMs();
+            while (self.idleItems.size() > 0 && now - self.idleItems[0].since > self.idleTimeoutMs) {
+                gone.push(self.idleItems.removeAt(0).item);
+                self.total -= 1;
+            }
+            if (gone.size() == 0) { return; }
+            self.unlock();
+            for (x in gone) { self.destroy(x); }
+            self.lock();
+        }
+        private fn destroy(item: T) {
+            self.lock();
+            self.gone += 1;
+            self.unlock();
+            if (self.closer != null) {
+                try { self.closer(item); } catch (err: Exception) {}
+            }
+        }
+    }
+}
