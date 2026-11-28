@@ -1,0 +1,90 @@
+// BigInt: arithmetic against known values, Karatsuba against schoolbook, division
+// identities, parsing and printing in bases, bits, modular arithmetic and primes.
+import "std"
+
+test "arithmetic and printing" {
+    let a = BigInt.parse("123456789012345678901234567890")
+    assertEq((a * a + BigInt.one()).toString(), "15241578753238836750495351562536198787501905199875019052101")
+    assertEq(BigInt.of(2).pow(100).toString(), "1267650600228229401496703205376")
+    assertEq(BigInt.factorial(30).toString(), "265252859812191058636308480000000")
+    assertEq(BigInt.binomial(100, 50).toString(), "100891344545564193334812497256")
+    assertEq((a - a).toString(), "0")
+    assertEq((BigInt.of(5) - BigInt.of(8)).toString(), "-3")
+    assertEq((BigInt.of(-5) * BigInt.of(8)).toString(), "-40")
+    assertEq(BigInt.of(-9223372036854775807 - 1).toString(), "-9223372036854775808")
+    assertEq(BigInt.of(-9223372036854775807 - 1).toLong(), -9223372036854775807 - 1)
+    assert(!(BigInt.of(9223372036854775807) + 1).fitsLong())
+    assertEq((a / 1000).toString(), "123456789012345678901234567")
+    assertEq((a % 7).toString(), "0")
+    assertEq((a % 11).toString(), "7")
+    assert(a > BigInt.of(1) && BigInt.of(-2) < BigInt.of(1) && a == BigInt.parse("+123_456_789_012_345_678_901_234_567_890"))
+}
+
+test "division truncates; mod is never negative" {
+    assertEq("${BigInt.of(-7) / BigInt.of(2)} ${BigInt.of(-7) % BigInt.of(2)} ${BigInt.of(-7).mod(BigInt.of(2))}", "-3 -1 1")
+    assertEq("${BigInt.of(7) / BigInt.of(-2)} ${BigInt.of(7) % BigInt.of(-2)}", "-3 1")
+    let caught = false
+    try { BigInt.of(1) / BigInt.zero() } catch (e: ArithmeticError) { caught = true }
+    assert(caught)
+    // (a / b) * b + a % b == a over many sizes, through Knuth's division
+    let x = BigInt.of(3).pow(700) + BigInt.of(12345)
+    let ys = [BigInt.of(7), BigInt.of(2).pow(32) - 1, BigInt.of(10).pow(40) + 3, BigInt.of(17).pow(160), BigInt.of(-3).pow(301)]
+    for (y in ys) {
+        let qr = x.divRem(y)
+        assert(qr[0] * y + qr[1] == x)
+        assert(qr[1].abs() < y.abs())
+    }
+}
+
+test "Karatsuba agrees with the schoolbook product" {
+    // (10^k - 1)^2 = 10^2k - 2*10^k + 1, above and below the cut-over
+    for (k in [50, 300, 1000, 3000]) {
+        let t = BigInt.of(10).pow(k)
+        let m = t - 1
+        assert(m * m == t * t - t * 2 + 1)
+    }
+    let p = BigInt.of(7).pow(2000)
+    let q = BigInt.of(11).pow(900)
+    assert((p * q) / q == p)
+    assert(BigInt.factorial(1000).toString().length == 2568)
+}
+
+test "bases, bits and shifts" {
+    assertEq(BigInt.parse("ff", 16).toString(), "255")
+    assertEq(BigInt.parse("-zz", 36).toString(), "-1295")
+    assertEq(BigInt.of(255).toString(2), "11111111")
+    assertEq(BigInt.of(2).pow(64).toHex(), "10000000000000000")
+    assertEq(BigInt.tryParse("12x") == null, true)
+    assertEq(BigInt.of(1).shiftLeft(100).toString(), "1267650600228229401496703205376")
+    assertEq(BigInt.of(1).shiftLeft(100).shiftRight(98).toString(), "4")
+    assertEq(BigInt.of(-5).shiftRight(1).toString(), "-3")
+    assertEq(BigInt.of(-4).shiftRight(1).toString(), "-2")
+    assertEq(BigInt.of(-1).shiftRight(80).toString(), "-1")
+    assertEq(BigInt.of(2).pow(70).bitLength(), 71)
+    assert(BigInt.of(2).pow(70).testBit(70) && !BigInt.of(2).pow(70).testBit(69))
+    assertEq(BigInt.parse("f0f0", 16).and(BigInt.parse("ff00", 16)).toHex(), "f000")
+    assertEq(BigInt.parse("f0f0", 16).or(BigInt.parse("0f", 16)).toHex(), "f0ff")
+    assertEq(BigInt.parse("ff", 16).xor(BigInt.parse("0f", 16)).toHex(), "f0")
+    assertEq(BigInt.of(12).hash(), BigInt.parse("12").hash())
+}
+
+test "modular arithmetic, roots and primes" {
+    assertEq(BigInt.of(7).modPow(BigInt.of(560), BigInt.of(561)).toString(), "1")
+    assertEq(BigInt.of(4).modPow(BigInt.of(13), BigInt.of(497)).toString(), "445")
+    assertEq(BigInt.of(3).modInverse(BigInt.of(11)).toString(), "4")
+    assertEq(BigInt.of(2).modPow(BigInt.of(-1), BigInt.of(7)).toString(), "4")
+    assertEq(BigInt.of(462).gcd(BigInt.of(-1071)).toString(), "21")
+    assertEq(BigInt.of(10).pow(40).sqrt().toString(), "100000000000000000000")
+    assertEq((BigInt.of(10).pow(40) - 1).sqrt().toString(), "99999999999999999999")
+    assert(BigInt.parse("170141183460469231731687303715884105727").isProbablePrime())   // 2^127 - 1
+    assert(!BigInt.of(561).isProbablePrime())
+    assert(!(BigInt.parse("170141183460469231731687303715884105727") * BigInt.of(3)).isProbablePrime())
+    assert(BigInt.of(97).isProbablePrime() && !BigInt.of(1).isProbablePrime())
+    // RSA with small textbook primes
+    let p = BigInt.of(61)
+    let q = BigInt.of(53)
+    let n = p * q
+    let e = BigInt.of(17)
+    let d = e.modInverse((p - 1) * (q - 1))
+    assertEq(BigInt.of(65).modPow(e, n).modPow(d, n).toString(), "65")
+}

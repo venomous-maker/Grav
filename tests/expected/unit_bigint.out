@@ -1,0 +1,7 @@
+running 5 tests
+  ok    arithmetic and printing
+  ok    division truncates; mod is never negative
+  ok    Karatsuba agrees with the schoolbook product
+  ok    bases, bits and shifts
+  ok    modular arithmetic, roots and primes
+result: 5 passed, 0 failed

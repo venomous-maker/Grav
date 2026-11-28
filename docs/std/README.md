@@ -55,6 +55,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [decimal](types/decimal.md) | `Decimal`: exact decimal numbers, for money and DECIMAL/NUMERIC columns |
 | [null](types/null.md) | `Null`: defaults and checks for `T?` values (`port.orElse(8080)`) |
 | [object](types/object.md) | `Object`: any value's type, text, equality, hash and fields |
+| [bigint](types/bigint.md) | `BigInt`: whole numbers of any size, modular arithmetic and primes |
 
 ### collections
 

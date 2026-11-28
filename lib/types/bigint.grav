@@ -1,0 +1,684 @@
+// lib/types/bigint.grav — whole numbers of any size: cryptography, exact factorials and
+// combinatorics, money in the smallest unit past 2^63, IDs from other systems.
+//
+//   let a = BigInt.parse("123456789012345678901234567890")
+//   let b = a * a + BigInt.of(1)
+//   print(b)                                       // 15241578753238836750495351562536198787501905199875019052101
+//   print(BigInt.of(2).pow(100))                   // 1267650600228229401496703205376
+//   print(BigInt.factorial(30))                    // 265252859812191058636308480000000
+//   print(a / 1000, a % 7, a > b)                  // whole numbers mix in on the right
+//   BigInt.of(7).modPow(BigInt.of(560), BigInt.of(561))   // 1
+//
+// A BigInt is immutable. / and % truncate toward zero (the remainder takes the dividend's
+// sign, as for long); mod(m) is never negative. The digits are 32-bit limbs in C:
+// schoolbook multiplication below 40 limbs and Karatsuba above, Knuth's division, and
+// square-and-multiply powers.
+import "../core/exception.grav"
+import "../collections/array.grav"
+
+namespace std.types {
+
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdint.h>
+    #include <math.h>
+
+    typedef unsigned int gb_l;
+    typedef unsigned long long gb_w;
+    #define GB_KARA 40
+
+    static gb_l* gb_alloc(int n) { gb_l* p = (gb_l*)calloc((size_t)(n > 0 ? n : 1), sizeof(gb_l)); if (!p) abort(); return p; }
+    static int gb_trim(const gb_l* a, int n) { while (n > 0 && a[n - 1] == 0) n--; return n; }
+    static int gb_cmp_abs(const gb_l* a, int an, const gb_l* b, int bn) {
+        if (an != bn) return an < bn ? -1 : 1;
+        for (int i = an - 1; i >= 0; i--) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+        return 0;
+    }
+    // r (max(an, bn) + 1 limbs) = |a| + |b|
+    static int gb_add_abs(const gb_l* a, int an, const gb_l* b, int bn, gb_l* r) {
+        if (an < bn) { const gb_l* t = a; a = b; b = t; int tn = an; an = bn; bn = tn; }
+        gb_w c = 0; int i;
+        for (i = 0; i < bn; i++) { c += (gb_w)a[i] + b[i]; r[i] = (gb_l)c; c >>= 32; }
+        for (; i < an; i++) { c += a[i]; r[i] = (gb_l)c; c >>= 32; }
+        r[i] = (gb_l)c;
+        return gb_trim(r, an + 1);
+    }
+    // r (an limbs) = |a| - |b|, with |a| >= |b|
+    static int gb_sub_abs(const gb_l* a, int an, const gb_l* b, int bn, gb_l* r) {
+        gb_w br = 0; int i;
+        for (i = 0; i < bn; i++) { gb_w t = (gb_w)a[i] - b[i] - br; r[i] = (gb_l)t; br = (t >> 63) & 1; }
+        for (; i < an; i++) { gb_w t = (gb_w)a[i] - br; r[i] = (gb_l)t; br = (t >> 63) & 1; }
+        return gb_trim(r, an);
+    }
+    static void gb_add_into(gb_l* r, int rn, const gb_l* x, int xn) {
+        gb_w c = 0; int i;
+        for (i = 0; i < xn; i++) { c += (gb_w)r[i] + x[i]; r[i] = (gb_l)c; c >>= 32; }
+        for (; c && i < rn; i++) { c += r[i]; r[i] = (gb_l)c; c >>= 32; }
+    }
+    static void gb_sub_into(gb_l* r, int rn, const gb_l* x, int xn) {
+        gb_w br = 0; int i;
+        for (i = 0; i < xn; i++) { gb_w t = (gb_w)r[i] - x[i] - br; r[i] = (gb_l)t; br = (t >> 63) & 1; }
+        for (; br && i < rn; i++) { gb_w t = (gb_w)r[i] - br; r[i] = (gb_l)t; br = (t >> 63) & 1; }
+    }
+    static void gb_mul_school(const gb_l* a, int an, const gb_l* b, int bn, gb_l* r) {
+        for (int i = 0; i < an; i++) {
+            gb_w ai = a[i], c = 0;
+            if (!ai) continue;
+            for (int j = 0; j < bn; j++) { c += ai * b[j] + r[i + j]; r[i + j] = (gb_l)c; c >>= 32; }
+            r[i + bn] = (gb_l)c;
+        }
+    }
+    // r (an + bn limbs, zeroed) = |a| * |b|
+    static void gb_mul(const gb_l* a, int an, const gb_l* b, int bn, gb_l* r) {
+        if (an < bn) { const gb_l* t = a; a = b; b = t; int tn = an; an = bn; bn = tn; }
+        if (bn == 0) return;
+        if (bn < GB_KARA) { gb_mul_school(a, an, b, bn, r); return; }
+        int h = (an + 1) / 2;
+        if (bn <= h) {                      // lopsided: b times each bn-limb piece of a
+            gb_l* t = gb_alloc(2 * bn);
+            for (int off = 0; off < an; off += bn) {
+                int len = an - off < bn ? an - off : bn;
+                memset(t, 0, sizeof(gb_l) * (size_t)(len + bn));
+                gb_mul(a + off, gb_trim(a + off, len), b, bn, t);
+                gb_add_into(r + off, an + bn - off, t, gb_trim(t, len + bn));
+            }
+            free(t);
+            return;
+        }
+        int a0n = gb_trim(a, h), b0n = gb_trim(b, h), a1n = an - h, b1n = bn - h;
+        gb_l* z0 = gb_alloc(2 * h);           gb_mul(a, a0n, b, b0n, z0);
+        gb_l* z2 = gb_alloc(a1n + b1n);       gb_mul(a + h, a1n, b + h, b1n, z2);
+        gb_l* sa = gb_alloc(h + 1);           int san = gb_add_abs(a, a0n, a + h, a1n, sa);
+        gb_l* sb = gb_alloc(h + 1);           int sbn = gb_add_abs(b, b0n, b + h, b1n, sb);
+        gb_l* z1 = gb_alloc(2 * h + 2);       gb_mul(sa, san, sb, sbn, z1);
+        int z0n = gb_trim(z0, 2 * h), z2n = gb_trim(z2, a1n + b1n);
+        gb_sub_into(z1, 2 * h + 2, z0, z0n);
+        gb_sub_into(z1, 2 * h + 2, z2, z2n);
+        gb_add_into(r, an + bn, z0, z0n);
+        gb_add_into(r + h, an + bn - h, z1, gb_trim(z1, 2 * h + 2));
+        gb_add_into(r + 2 * h, an + bn - 2 * h, z2, z2n);
+        free(z0); free(z2); free(sa); free(sb); free(z1);
+    }
+    // q (an - bn + 1 limbs) = |a| / |b|, rem (bn limbs) = |a| % |b|; b is not zero (Knuth D)
+    static void gb_divmod(const gb_l* a, int an, const gb_l* b, int bn, gb_l* q, int* qn, gb_l* rem, int* rn) {
+        if (gb_cmp_abs(a, an, b, bn) < 0) {
+            *qn = 0;
+            if (rem) { memcpy(rem, a, sizeof(gb_l) * (size_t)an); *rn = an; }
+            return;
+        }
+        if (bn == 1) {
+            gb_w r = 0, d = b[0];
+            for (int i = an - 1; i >= 0; i--) { gb_w cur = (r << 32) | a[i]; q[i] = (gb_l)(cur / d); r = cur % d; }
+            *qn = gb_trim(q, an);
+            if (rem) { rem[0] = (gb_l)r; *rn = r ? 1 : 0; }
+            return;
+        }
+        int s = __builtin_clz(b[bn - 1]);
+        gb_l* v = gb_alloc(bn);
+        gb_l* u = gb_alloc(an + 1);
+        if (s) {
+            for (int i = bn - 1; i > 0; i--) v[i] = (b[i] << s) | (b[i - 1] >> (32 - s));
+            v[0] = b[0] << s;
+            u[an] = a[an - 1] >> (32 - s);
+            for (int i = an - 1; i > 0; i--) u[i] = (a[i] << s) | (a[i - 1] >> (32 - s));
+            u[0] = a[0] << s;
+        } else {
+            memcpy(v, b, sizeof(gb_l) * (size_t)bn);
+            memcpy(u, a, sizeof(gb_l) * (size_t)an);
+            u[an] = 0;
+        }
+        int m = an - bn;
+        for (int j = m; j >= 0; j--) {
+            gb_w num = ((gb_w)u[j + bn] << 32) | u[j + bn - 1];
+            gb_w qhat = num / v[bn - 1], rhat = num % v[bn - 1];
+            while (qhat >= ((gb_w)1 << 32) || qhat * v[bn - 2] > ((rhat << 32) | u[j + bn - 2])) {
+                qhat--; rhat += v[bn - 1];
+                if (rhat >= ((gb_w)1 << 32)) break;
+            }
+            long long borrow = 0; gb_w carry = 0;
+            for (int i = 0; i < bn; i++) {
+                gb_w p = qhat * v[i] + carry; carry = p >> 32;
+                long long t = (long long)u[i + j] - (long long)(p & 0xFFFFFFFFu) - borrow;
+                u[i + j] = (gb_l)t; borrow = t < 0;
+            }
+            long long t = (long long)u[j + bn] - (long long)carry - borrow;
+            u[j + bn] = (gb_l)t;
+            if (t < 0) {
+                qhat--;
+                gb_w c = 0;
+                for (int i = 0; i < bn; i++) { c += (gb_w)u[i + j] + v[i]; u[i + j] = (gb_l)c; c >>= 32; }
+                u[j + bn] += (gb_l)c;
+            }
+            q[j] = (gb_l)qhat;
+        }
+        *qn = gb_trim(q, m + 1);
+        if (rem) {
+            if (s) {
+                for (int i = 0; i < bn - 1; i++) rem[i] = (u[i] >> s) | (u[i + 1] << (32 - s));
+                rem[bn - 1] = u[bn - 1] >> s;
+            } else memcpy(rem, u, sizeof(gb_l) * (size_t)bn);
+            *rn = gb_trim(rem, bn);
+        }
+        free(u); free(v);
+    }
+
+    // ── signed operations; results are fresh malloc'd limbs ──────────────────
+    static void grav_big_addsub(const gb_l* a, int an, int aneg, const gb_l* b, int bn, int bneg, int sub, gb_l** rd, int* rn, int* rneg) {
+        if (sub) bneg = !bneg;
+        int n = (an > bn ? an : bn) + 1;
+        gb_l* r = gb_alloc(n);
+        if (aneg == bneg) { *rn = gb_add_abs(a, an, b, bn, r); *rneg = aneg; }
+        else {
+            int c = gb_cmp_abs(a, an, b, bn);
+            if (c >= 0) { *rn = gb_sub_abs(a, an, b, bn, r); *rneg = aneg; }
+            else { *rn = gb_sub_abs(b, bn, a, an, r); *rneg = bneg; }
+        }
+        if (*rn == 0) *rneg = 0;
+        *rd = r;
+    }
+    static void grav_big_mul(const gb_l* a, int an, int aneg, const gb_l* b, int bn, int bneg, gb_l** rd, int* rn, int* rneg) {
+        gb_l* r = gb_alloc(an + bn);
+        if (a == b && an == bn && an < GB_KARA) {
+            gb_mul_school(a, an, a, an, r);
+        } else gb_mul(a, an, b, bn, r);
+        *rn = gb_trim(r, an + bn);
+        *rneg = *rn ? (aneg != bneg) : 0;
+        *rd = r;
+    }
+    // Truncated division: the quotient toward zero, the remainder with a's sign.
+    static void grav_big_divmod(const gb_l* a, int an, int aneg, const gb_l* b, int bn, int bneg,
+                                gb_l** qd, int* qn, int* qneg, gb_l** md, int* mn, int* mneg) {
+        gb_l* q = gb_alloc(an - bn + 1 > 0 ? an - bn + 1 : 1);
+        gb_l* m = gb_alloc(an > bn ? an : bn);
+        gb_divmod(a, an, b, bn, q, qn, m, mn);
+        *qneg = *qn ? (aneg != bneg) : 0;
+        *mneg = *mn ? aneg : 0;
+        *qd = q; *md = m;
+    }
+    static void grav_big_from_ll(long long v, gb_l** rd, int* rn, int* rneg) {
+        unsigned long long m = v < 0 ? (unsigned long long)0 - (unsigned long long)v : (unsigned long long)v;
+        gb_l* r = gb_alloc(2);
+        r[0] = (gb_l)m; r[1] = (gb_l)(m >> 32);
+        *rn = gb_trim(r, 2); *rneg = v < 0; *rd = r;
+    }
+    static int grav_big_fits_ll(const gb_l* a, int an, int neg) {
+        if (an <= 1) return 1;
+        if (an > 2) return 0;
+        unsigned long long m = ((unsigned long long)a[1] << 32) | a[0];
+        return neg ? m <= (unsigned long long)1 << 63 : m < (unsigned long long)1 << 63;
+    }
+    static long long grav_big_to_ll(const gb_l* a, int an, int neg) {
+        unsigned long long m = an == 0 ? 0 : (an == 1 ? a[0] : ((unsigned long long)a[1] << 32) | a[0]);
+        return neg ? (long long)((unsigned long long)0 - m) : (long long)m;
+    }
+    static double grav_big_to_double(const gb_l* a, int an, int neg) {
+        double d = 0;
+        for (int i = an - 1; i >= 0; i--) d = d * 4294967296.0 + a[i];
+        return neg ? -d : d;
+    }
+    // Digits in base 2 to 36 (lowercase).
+    static const char* grav_big_to_string(const gb_l* a, int an, int neg, int base) {
+        if (an == 0) return grav_str_retain("0");
+        // the largest power of base that fits in a limb, and its digit count
+        gb_l chunk = (gb_l)base; int per = 1;
+        while ((gb_w)chunk * (gb_w)base < ((gb_w)1 << 32)) { chunk *= (gb_l)base; per++; }
+        gb_l* t = gb_alloc(an);
+        memcpy(t, a, sizeof(gb_l) * (size_t)an);
+        int tn = an;
+        size_t cap = (size_t)an * 32 + 2, len = 0;
+        char* buf = (char*)malloc(cap);
+        static const char* dig = "0123456789abcdefghijklmnopqrstuvwxyz";
+        while (tn > 0) {
+            gb_w r = 0;
+            for (int i = tn - 1; i >= 0; i--) { gb_w cur = (r << 32) | t[i]; t[i] = (gb_l)(cur / chunk); r = cur % chunk; }
+            tn = gb_trim(t, tn);
+            for (int k = 0; k < per && (tn > 0 || r > 0); k++) { buf[len++] = dig[r % (gb_w)base]; r /= (gb_w)base; }
+        }
+        char* out = grav_str_new(len + (size_t)neg);
+        size_t o = 0;
+        if (neg) out[o++] = '-';
+        while (len > 0) out[o++] = buf[--len];
+        out[o] = 0;
+        free(buf); free(t);
+        return out;
+    }
+    // Parses digits in base 2 to 36 (an optional sign, '_' between digits allowed); 0 when bad.
+    static int grav_big_parse(const char* s, int base, gb_l** rd, int* rn, int* rneg) {
+        while (*s == ' ' || *s == '\t' || *s == '\n') s++;
+        int neg = 0;
+        if (*s == '-' || *s == '+') { neg = *s == '-'; s++; }
+        size_t n = strlen(s);
+        while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\n')) n--;
+        if (n == 0) return 0;
+        int cap = (int)(n * 6 / 32) + 2;     // base 36 is under 6 bits a digit
+        gb_l* r = gb_alloc(cap);
+        int len = 0, digits = 0;
+        for (size_t i = 0; i < n; i++) {
+            int c = (unsigned char)s[i], d;
+            if (c == '_' && digits > 0 && i + 1 < n) continue;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
+            else { free(r); return 0; }
+            if (d >= base) { free(r); return 0; }
+            digits++;
+            gb_w carry = (gb_w)d;
+            for (int k = 0; k < len; k++) { carry += (gb_w)r[k] * (gb_w)base; r[k] = (gb_l)carry; carry >>= 32; }
+            if (carry) r[len++] = (gb_l)carry;
+        }
+        if (!digits) { free(r); return 0; }
+        *rn = gb_trim(r, len); *rneg = *rn ? neg : 0; *rd = r;
+        return 1;
+    }
+    // |a| << k (mode 0) or |a| >> k (mode 1, rounding toward -infinity when neg).
+    static void grav_big_shift(const gb_l* a, int an, int neg, int k, int right, gb_l** rd, int* rn) {
+        int w = k / 32, b = k % 32;
+        if (!right) {
+            gb_l* r = gb_alloc(an + w + 1);
+            for (int i = an - 1; i >= 0; i--) {
+                gb_w v = (gb_w)a[i] << b;
+                r[i + w + 1] |= (gb_l)(v >> 32);
+                r[i + w] |= (gb_l)v;
+            }
+            *rn = gb_trim(r, an + w + 1); *rd = r;
+            return;
+        }
+        if (w >= an) {
+            gb_l* r = gb_alloc(1);
+            if (neg && an) { r[0] = 1; *rn = 1; } else *rn = 0;
+            *rd = r; return;
+        }
+        int lost = 0;
+        for (int i = 0; i < w && !lost; i++) if (a[i]) lost = 1;
+        if (b && (a[w] & ((1u << b) - 1))) lost = 1;
+        gb_l* r = gb_alloc(an - w + 1);
+        for (int i = w; i < an; i++) {
+            gb_w v = a[i] >> b;
+            if (b && i + 1 < an) v |= (gb_w)(a[i + 1] << (32 - b)) & 0xFFFFFFFFu;
+            r[i - w] = (gb_l)v;
+        }
+        int n = gb_trim(r, an - w + 1);
+        if (neg && lost) { gb_l one = 1; gb_add_into(r, an - w + 1, &one, 1); n = gb_trim(r, an - w + 1); }
+        *rn = n; *rd = r;
+    }
+    // op 0 and, 1 or, 2 xor, of magnitudes.
+    static void grav_big_bits(const gb_l* a, int an, const gb_l* b, int bn, int op, gb_l** rd, int* rn) {
+        int n = an > bn ? an : bn;
+        gb_l* r = gb_alloc(n);
+        for (int i = 0; i < n; i++) {
+            gb_l x = i < an ? a[i] : 0, y = i < bn ? b[i] : 0;
+            r[i] = op == 0 ? (x & y) : (op == 1 ? (x | y) : (x ^ y));
+        }
+        *rn = gb_trim(r, n); *rd = r;
+    }
+    static int grav_big_bitlen(const gb_l* a, int an) { return an == 0 ? 0 : (an - 1) * 32 + (32 - __builtin_clz(a[an - 1])); }
+    static unsigned long long grav_big_hash(const gb_l* a, int an, int neg) {
+        unsigned long long h = 1469598103934665603ULL ^ (unsigned long long)neg;
+        for (int i = 0; i < an; i++) { h ^= a[i]; h *= 1099511628211ULL; }
+        return h;
+    }
+    // |a| mod |m| into a fresh buffer (for modPow).
+    static gb_l* gb_mod(const gb_l* a, int an, const gb_l* m, int mn, int* rn) {
+        gb_l* q = gb_alloc(an - mn + 1 > 0 ? an - mn + 1 : 1);
+        gb_l* r = gb_alloc(an > mn ? an : mn);
+        int qn;
+        gb_divmod(a, an, m, mn, q, &qn, r, rn);
+        free(q);
+        return r;
+    }
+    // base^exp mod m, all non-negative, m > 0.
+    static void grav_big_modpow(const gb_l* b, int bn, const gb_l* e, int en, const gb_l* m, int mn, gb_l** rd, int* rn) {
+        int xn; gb_l* x = gb_mod(b, bn, m, mn, &xn);
+        gb_l* r = gb_alloc(mn + 1); r[0] = 1; int r_n = 1;
+        if (mn == 1 && m[0] == 1) r_n = 0;
+        gb_l* t = gb_alloc(2 * mn + 2);
+        int bits = grav_big_bitlen(e, en);
+        for (int i = 0; i < bits; i++) {
+            if ((e[i / 32] >> (i % 32)) & 1) {
+                memset(t, 0, sizeof(gb_l) * (size_t)(2 * mn + 2));
+                gb_mul(r, r_n, x, xn, t);
+                int tn = gb_trim(t, r_n + xn);
+                free(r); r = gb_mod(t, tn, m, mn, &r_n);
+            }
+            if (i + 1 < bits) {
+                memset(t, 0, sizeof(gb_l) * (size_t)(2 * mn + 2));
+                gb_mul(x, xn, x, xn, t);
+                int tn = gb_trim(t, 2 * xn);
+                free(x); x = gb_mod(t, tn, m, mn, &xn);
+            }
+        }
+        free(x); free(t);
+        *rd = r; *rn = r_n;
+    }
+    %}
+
+    // An integer of any size.
+    class BigInt {
+        private d: uint*
+        private n: int
+        private neg: bool
+
+        constructor() { self.d = null; self.n = 0; self.neg = false; }
+        destructor() { free(self.d); }
+
+        private static fn wrap(d: uint*, n: int, neg: bool) -> BigInt {
+            let r = new BigInt();
+            r.d = d;
+            r.n = n;
+            r.neg = neg;
+            return r;
+        }
+
+        // ── making one ───────────────────────────────────────────────────────
+        // The value of a long.
+        static fn of(v: long) -> BigInt {
+            let rd: uint* = null;
+            let rn = 0;
+            let rneg = 0;
+            %{ grav_big_from_ll(v, &rd, &rn, &rneg); %};
+            return BigInt.wrap(rd, rn, rneg != 0);
+        }
+        // 0 and 1.
+        static fn zero() -> BigInt { return BigInt.of(0); }
+        static fn one() -> BigInt { return BigInt.of(1); }
+        // Parses digits in `base` (2 to 36; an optional sign; '_' between digits allowed);
+        // ValueError when the text is not a number.
+        static fn parse(text: string, base: int = 10) -> BigInt {
+            if (base < 2 || base > 36) { throw new ValueError("a base is 2 to 36, not ${base}"); }
+            let rd: uint* = null;
+            let rn = 0;
+            let rneg = 0;
+            let ok = %{ grav_big_parse(text, base, &rd, &rn, &rneg) %} as int;
+            if (ok == 0) { throw new ValueError("'${text}' is not a base-${base} integer"); }
+            return BigInt.wrap(rd, rn, rneg != 0);
+        }
+        // parse, or null when the text is not a number.
+        static fn tryParse(text: string, base: int = 10) -> BigInt? {
+            if (base < 2 || base > 36) { return null; }
+            let rd: uint* = null;
+            let rn = 0;
+            let rneg = 0;
+            let ok = %{ grav_big_parse(text, base, &rd, &rn, &rneg) %} as int;
+            if (ok == 0) { return null; }
+            return BigInt.wrap(rd, rn, rneg != 0);
+        }
+        // n! (a product tree: fast for large n).
+        static fn factorial(n: int) -> BigInt {
+            if (n < 0) { throw new ValueError("factorial of a negative number"); }
+            if (n < 2) { return BigInt.one(); }
+            return BigInt.product(2, n as long);
+        }
+        // n choose k.
+        static fn binomial(n: int, k: int) -> BigInt {
+            if (k < 0 || k > n) { return BigInt.zero(); }
+            let kk = k > n - k ? n - k : k;
+            if (kk == 0) { return BigInt.one(); }
+            return BigInt.product((n - kk + 1) as long, n as long) / BigInt.product(1, kk as long);
+        }
+        // lo * (lo + 1) * … * hi, split in halves so the sizes stay balanced.
+        private static fn product(lo: long, hi: long) -> BigInt {
+            if (hi - lo < 16) {
+                let acc = BigInt.of(lo);
+                let small: long = 1;
+                let k = lo + 1;
+                while (k <= hi) {
+                    if (small > 9223372036854775807 / k) { acc = acc * BigInt.of(small); small = 1; }
+                    small *= k;
+                    k += 1;
+                }
+                return small == 1 ? acc : acc * BigInt.of(small);
+            }
+            let mid = (lo + hi) / 2;
+            return BigInt.product(lo, mid) * BigInt.product(mid + 1, hi);
+        }
+
+        // ── reading it ───────────────────────────────────────────────────────
+        // -1, 0 or 1.
+        fn sign() -> int { return self.n == 0 ? 0 : (self.neg ? -1 : 1); }
+        fn isZero() -> bool { return self.n == 0; }
+        fn isNegative() -> bool { return self.neg; }
+        fn isEven() -> bool { return self.n == 0 || (self.d[0] & 1) == 0; }
+        // Whether it fits in a long.
+        fn fitsLong() -> bool { return %{ grav_big_fits_ll(self->d, self->n, self->neg) %} as bool; }
+        // The value as a long; ArithmeticError when it does not fit.
+        fn toLong() -> long {
+            if (!self.fitsLong()) { throw new ArithmeticError("${self.toString()} does not fit in a long"); }
+            return %{ grav_big_to_ll(self->d, self->n, self->neg) %} as long;
+        }
+        // The value as an int; ArithmeticError when it does not fit.
+        fn toInt() -> int {
+            let v = self.toLong();
+            if (v < -2147483648 || v > 2147483647) { throw new ArithmeticError("${self.toString()} does not fit in an int"); }
+            return v as int;
+        }
+        // The nearest double (infinity past its range).
+        fn toDouble() -> double { return %{ grav_big_to_double(self->d, self->n, self->neg) %} as double; }
+        // Decimal digits.
+        fn toString() -> string { return %{ grav_big_to_string(self->d, self->n, self->neg, 10) %} as string; }
+        // Digits in `base` (2 to 36, lowercase letters).
+        fn toString(base: int) -> string {
+            if (base < 2 || base > 36) { throw new ValueError("a base is 2 to 36, not ${base}"); }
+            return %{ grav_big_to_string(self->d, self->n, self->neg, base) %} as string;
+        }
+        // Hex digits (no prefix; a '-' for negative values).
+        fn toHex() -> string { return self.toString(16); }
+        // The number of bits in the magnitude (0 for 0).
+        fn bitLength() -> int { return %{ grav_big_bitlen(self->d, self->n) %} as int; }
+        // Whether bit `i` of the magnitude is set.
+        fn testBit(i: int) -> bool {
+            if (i < 0 || i / 32 >= self.n) { return false; }
+            return ((self.d[i / 32] >> (i % 32)) & 1) != 0;
+        }
+        // A hash of the value (equal values hash alike).
+        fn hash() -> long { return %{ (long long)grav_big_hash(self->d, self->n, self->neg) %} as long; }
+
+        // ── arithmetic ───────────────────────────────────────────────────────
+        fn plus(o: BigInt) -> BigInt { return self.addsub(o, 0); }
+        fn minus(o: BigInt) -> BigInt { return self.addsub(o, 1); }
+        fn times(o: BigInt) -> BigInt {
+            let rd: uint* = null;
+            let rn = 0;
+            let rneg = 0;
+            %{ grav_big_mul(self->d, self->n, self->neg, o->d, o->n, o->neg, &rd, &rn, &rneg); %};
+            return BigInt.wrap(rd, rn, rneg != 0);
+        }
+        // The quotient, toward zero; ArithmeticError for division by zero.
+        fn div(o: BigInt) -> BigInt { return self.divRem(o)[0]; }
+        // The remainder of div (the dividend's sign).
+        fn rem(o: BigInt) -> BigInt { return self.divRem(o)[1]; }
+        // [quotient, remainder] from one division.
+        fn divRem(o: BigInt) -> Array<BigInt> {
+            if (o.n == 0) { throw new ArithmeticError("division by zero"); }
+            let qd: uint* = null;
+            let qn = 0;
+            let qneg = 0;
+            let md: uint* = null;
+            let mn = 0;
+            let mneg = 0;
+            %{ grav_big_divmod(self->d, self->n, self->neg, o->d, o->n, o->neg, &qd, &qn, &qneg, &md, &mn, &mneg); %};
+            let out = new Array<BigInt>();
+            out.push(BigInt.wrap(qd, qn, qneg != 0));
+            out.push(BigInt.wrap(md, mn, mneg != 0));
+            return out;
+        }
+        // The remainder in [0, |m|): modular arithmetic's mod.
+        fn mod(m: BigInt) -> BigInt {
+            let r = self.rem(m);
+            return r.neg ? r + m.abs() : r;
+        }
+        fn negate() -> BigInt {
+            let c = self.copyDigits();
+            return BigInt.wrap(c, self.n, self.n != 0 && !self.neg);
+        }
+        fn abs() -> BigInt { return self.neg ? self.negate() : self; }
+        // self to the power `e` (e >= 0).
+        fn pow(e: int) -> BigInt {
+            if (e < 0) { throw new ValueError("a negative exponent"); }
+            let result = BigInt.one();
+            let base = self;
+            let k = e;
+            while (k > 0) {
+                if ((k & 1) != 0) { result = result * base; }
+                k = k >> 1;
+                if (k > 0) { base = base * base; }
+            }
+            return result;
+        }
+        // self^e mod m (e >= 0, m > 0), without the huge intermediate power.
+        fn modPow(e: BigInt, m: BigInt) -> BigInt {
+            if (m.sign() <= 0) { throw new ValueError("modPow needs a positive modulus"); }
+            if (e.neg) { return self.modInverse(m).modPow(e.negate(), m); }
+            let b = self.mod(m);
+            let rd: uint* = null;
+            let rn = 0;
+            %{ grav_big_modpow(b->d, b->n, e->d, e->n, m->d, m->n, &rd, &rn); %};
+            return BigInt.wrap(rd, rn, false);
+        }
+        // x with self * x ≡ 1 (mod m); ArithmeticError when there is none.
+        fn modInverse(m: BigInt) -> BigInt {
+            let a = self.mod(m);
+            let b = m.abs();
+            let x0 = BigInt.one();
+            let x1 = BigInt.zero();
+            while (!b.isZero()) {
+                let qr = a.divRem(b);
+                let t = x0 - qr[0] * x1;
+                x0 = x1;
+                x1 = t;
+                a = b;
+                b = qr[1];
+            }
+            if (!(a == 1)) { throw new ArithmeticError("${self.toString()} has no inverse mod ${m.toString()}"); }
+            return x0.mod(m);
+        }
+        // The greatest common divisor (never negative).
+        fn gcd(o: BigInt) -> BigInt {
+            let a = self.abs();
+            let b = o.abs();
+            while (!b.isZero()) {
+                let r = a.rem(b);
+                a = b;
+                b = r;
+            }
+            return a;
+        }
+        // The integer square root: the largest r with r*r <= self (self >= 0).
+        fn sqrt() -> BigInt {
+            if (self.neg) { throw new ArithmeticError("square root of a negative number"); }
+            if (self.n == 0) { return self; }
+            // Newton from a power of two above the root
+            let x = BigInt.one().shiftLeft((self.bitLength() + 1) / 2);
+            while (true) {
+                let y = (x + self / x).shiftRight(1);
+                if (y >= x) { return x; }
+                x = y;
+            }
+            return x;
+        }
+        // Miller–Rabin with the first `rounds` primes as witnesses (12 is exact below
+        // 3.3 * 10^24; beyond that a composite passes with odds under 4^-rounds).
+        fn isProbablePrime(rounds: int = 12) -> bool {
+            if (self.neg || self < 2) { return false; }
+            let small = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97]
+            for (p in small) {
+                if (self == (p as long)) { return true; }
+                if (self.rem(BigInt.of(p as long)).isZero()) { return false; }
+            }
+            let one = BigInt.one();
+            let nm1 = self - one;
+            let s = 0;
+            let dd = nm1;
+            while (dd.isEven()) { dd = dd.shiftRight(1); s += 1; }
+            let k = rounds < small.length ? rounds : small.length;
+            for (i in 0..k) {
+                let x = BigInt.of(small[i] as long).modPow(dd, self);
+                if (x == 1 || x == nm1) { continue; }
+                let composite = true;
+                for (r in 1..s) {
+                    x = (x * x).mod(self);
+                    if (x == nm1) { composite = false; break; }
+                }
+                if (composite) { return false; }
+            }
+            return true;
+        }
+
+        // ── bits ─────────────────────────────────────────────────────────────
+        // self * 2^k.
+        fn shiftLeft(k: int) -> BigInt {
+            if (k < 0) { return self.shiftRight(-k); }
+            let rd: uint* = null;
+            let rn = 0;
+            %{ grav_big_shift(self->d, self->n, self->neg, k, 0, &rd, &rn); %};
+            return BigInt.wrap(rd, rn, rn != 0 && self.neg);
+        }
+        // self / 2^k, rounded toward negative infinity (as >> on a long).
+        fn shiftRight(k: int) -> BigInt {
+            if (k < 0) { return self.shiftLeft(-k); }
+            let rd: uint* = null;
+            let rn = 0;
+            %{ grav_big_shift(self->d, self->n, self->neg, k, 1, &rd, &rn); %};
+            return BigInt.wrap(rd, rn, rn != 0 && self.neg);
+        }
+        // Bitwise and, or and xor of non-negative values; ValueError for negative ones.
+        fn and(o: BigInt) -> BigInt { return self.bits(o, 0); }
+        fn or(o: BigInt) -> BigInt { return self.bits(o, 1); }
+        fn xor(o: BigInt) -> BigInt { return self.bits(o, 2); }
+
+        // ── comparing ────────────────────────────────────────────────────────
+        // Negative, zero or positive as self is below, equal to or above o.
+        fn compareTo(o: BigInt) -> int {
+            if (self.neg != o.neg) { return self.neg ? -1 : 1; }
+            let c = %{ gb_cmp_abs(self->d, self->n, o->d, o->n) %} as int;
+            return self.neg ? -c : c;
+        }
+        fn equals(o: BigInt) -> bool { return self.compareTo(o) == 0; }
+        fn max(o: BigInt) -> BigInt { return self.compareTo(o) >= 0 ? self : o; }
+        fn min(o: BigInt) -> BigInt { return self.compareTo(o) <= 0 ? self : o; }
+
+        fn operator+(o: BigInt) -> BigInt { return self.plus(o); }
+        fn operator-(o: BigInt) -> BigInt { return self.minus(o); }
+        fn operator*(o: BigInt) -> BigInt { return self.times(o); }
+        fn operator/(o: BigInt) -> BigInt { return self.div(o); }
+        fn operator%(o: BigInt) -> BigInt { return self.rem(o); }
+        fn operator+(v: long) -> BigInt { return self.plus(BigInt.of(v)); }
+        fn operator-(v: long) -> BigInt { return self.minus(BigInt.of(v)); }
+        fn operator*(v: long) -> BigInt { return self.times(BigInt.of(v)); }
+        fn operator/(v: long) -> BigInt { return self.div(BigInt.of(v)); }
+        fn operator%(v: long) -> BigInt { return self.rem(BigInt.of(v)); }
+        fn operator==(o: BigInt) -> bool { return self.compareTo(o) == 0; }
+        fn operator<(o: BigInt) -> bool { return self.compareTo(o) < 0; }
+        fn operator<=(o: BigInt) -> bool { return self.compareTo(o) <= 0; }
+        fn operator>(o: BigInt) -> bool { return self.compareTo(o) > 0; }
+        fn operator>=(o: BigInt) -> bool { return self.compareTo(o) >= 0; }
+        fn operator==(v: long) -> bool { return self.compareTo(BigInt.of(v)) == 0; }
+        fn operator<(v: long) -> bool { return self.compareTo(BigInt.of(v)) < 0; }
+        fn operator<=(v: long) -> bool { return self.compareTo(BigInt.of(v)) <= 0; }
+        fn operator>(v: long) -> bool { return self.compareTo(BigInt.of(v)) > 0; }
+        fn operator>=(v: long) -> bool { return self.compareTo(BigInt.of(v)) >= 0; }
+
+        // ── internals ────────────────────────────────────────────────────────
+        private fn addsub(o: BigInt, sub: int) -> BigInt {
+            let rd: uint* = null;
+            let rn = 0;
+            let rneg = 0;
+            %{ grav_big_addsub(self->d, self->n, self->neg, o->d, o->n, o->neg, sub, &rd, &rn, &rneg); %};
+            return BigInt.wrap(rd, rn, rneg != 0);
+        }
+        private fn bits(o: BigInt, op: int) -> BigInt {
+            if (self.neg || o.neg) { throw new ValueError("bitwise operations take non-negative BigInts"); }
+            let rd: uint* = null;
+            let rn = 0;
+            %{ grav_big_bits(self->d, self->n, o->d, o->n, op, &rd, &rn); %};
+            return BigInt.wrap(rd, rn, false);
+        }
+        private fn copyDigits() -> uint* {
+            let c: uint* = null;
+            %{ c = gb_alloc(self->n); if (self->n) memcpy(c, self->d, sizeof(gb_l) * (size_t)self->n); %};
+            return c;
+        }
+        // (Mem.sizeOf) the limbs
+        private fn __bytesExtra() -> long { return (self.n as long) * 4; }
+    }
+}
