@@ -86,6 +86,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [markdown](text/markdown.md) | `Markdown`: Markdown to HTML (with a safe mode for users' text) and to plain text |
 | [unicode](text/unicode.md) | `Unicode`: normalization (NFC, NFD, NFKC, NFKD) and accents stripped |
 | [html](text/html.md) | `Html`, `HtmlSanitizer`: escaping, entities, tags stripped, and an allow-list sanitizer for HTML from users |
+| [template](text/template.md) | `Template`: Mustache templates over JSON, HTML-escaped by default |
 
 ### data
 

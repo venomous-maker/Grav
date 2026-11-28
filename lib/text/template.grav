@@ -1,0 +1,249 @@
+// template.grav — Mustache templates over JSON data, HTML-escaped by default.
+//
+//   let t = Template.compile("Hello {{name}}! {{#items}}<li>{{.}}</li>{{/items}}")
+//   t.render(Json.parse("{\"name\": \"<Ada>\", \"items\": [1, 2]}"))
+//   // Hello &lt;Ada&gt;! <li>1</li><li>2</li>
+//
+// Tags: {{name}} (escaped), {{{name}}} and {{& name}} (as is), {{a.b.c}} (dotted names),
+// {{.}} (the current value), {{#section}}…{{/section}} (a list repeats, a false or empty
+// value skips, anything else is entered), {{^inverted}}…{{/inverted}}, {{! comment}},
+// {{> partial}}, and {{=<% %>=}} to change the delimiters. A tag alone on its line takes
+// the line with it, as the Mustache spec says.
+//
+// A template is parsed once into a tree and can be rendered any number of times, from any
+// number of threads; `render` writes straight into one StringBuilder.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../data/json.grav"
+import "string.grav"
+import "strbuf.grav"
+import "html.grav"
+
+namespace std.text {
+
+    // A template that could not be parsed: an unclosed section, a stray closing tag.
+    class TemplateError extends Exception {
+        // The 1-based line of the problem.
+        public line: int
+        constructor(m: string, line: int) { super("line ${line}: ${m}"); self.line = line; }
+        // "TemplateError".
+        public fn kind() -> string { return "TemplateError"; }
+    }
+
+    class TplNode {
+        // 0 text, 1 escaped value, 2 raw value, 3 section, 4 inverted section, 5 partial
+        public kind: int
+        public text: string
+        public path: Array<string> = null
+        public children: Array<TplNode> = null
+        constructor(kind: int, text: string) { self.kind = kind; self.text = text; }
+    }
+
+    // A compiled Mustache template.
+    class Template {
+        private nodes: Array<TplNode>
+        private partials: HashMap<string, Template> = new HashMap<string, Template>()
+        private escaping: bool = true
+
+        constructor(nodes: Array<TplNode>) { self.nodes = nodes; }
+
+        // Parses `source`; TemplateError when a section is not closed or closed twice.
+        static fn compile(source: string) -> Template {
+            let p = new TplParser(source);
+            return new Template(p.parse());
+        }
+        // compile and render in one step (for a template used once).
+        static fn renderString(source: string, data: JsonValue) -> string { return Template.compile(source).render(data); }
+
+        // Makes `{{> name}}` render `partial` (with the data in scope where it appears).
+        fn partial(name: string, partial: Template) -> Template {
+            self.partials.put(name, partial);
+            return self;
+        }
+        // partial, compiled from source.
+        fn partial(name: string, source: string) -> Template { return self.partial(name, Template.compile(source)); }
+        // Turns HTML escaping of {{name}} off (for plain-text output such as e-mail bodies).
+        fn raw() -> Template {
+            self.escaping = false;
+            return self;
+        }
+
+        // The template filled in with `data`.
+        fn render(data: JsonValue) -> string {
+            let sb = new StringBuilder();
+            self.renderTo(sb, data);
+            let out = sb.toString();
+            free(sb);
+            return out;
+        }
+        // render, appended to `sb`.
+        fn renderTo(sb: StringBuilder, data: JsonValue) {
+            let stack = new Array<JsonValue>();
+            stack.push(data);
+            self.walk(self.nodes, stack, sb, self);
+        }
+
+        private fn walk(nodes: Array<TplNode>, stack: Array<JsonValue>, sb: StringBuilder, root: Template) {
+            for (n in nodes) {
+                if (n.kind == 0) { sb.append(n.text); continue; }
+                if (n.kind == 5) {
+                    let part = self.partials.containsKey(n.text) ? self.partials.get(n.text) :
+                               (root.partials.containsKey(n.text) ? root.partials.get(n.text) : null);
+                    if (part != null) { part.walk(part.nodes, stack, sb, root); }
+                    continue;
+                }
+                let v = Template.lookup(stack, n.path);
+                if (n.kind == 1 || n.kind == 2) {
+                    if (v == null) { continue; }
+                    let text = Template.text(v);
+                    sb.append(n.kind == 1 && root.escaping ? Html.escape(text) : text);
+                    continue;
+                }
+                let truthy = Template.truthy(v);
+                if (n.kind == 4) {
+                    if (!truthy) { self.walk(n.children, stack, sb, root); }
+                    continue;
+                }
+                if (!truthy) { continue; }
+                if (v.isArray()) {
+                    for (item in v) {
+                        stack.push(item);
+                        self.walk(n.children, stack, sb, root);
+                        stack.pop();
+                    }
+                } else {
+                    stack.push(v);
+                    self.walk(n.children, stack, sb, root);
+                    stack.pop();
+                }
+            }
+        }
+
+        // The value a name resolves to, or null: the first scope (innermost first) that has
+        // the first part, then down the rest of the parts.
+        private static fn lookup(stack: Array<JsonValue>, path: Array<string>) -> JsonValue {
+            if (path.size() == 0) { return stack[stack.size() - 1]; }
+            let first = path[0];
+            let i = stack.size() - 1;
+            let v: JsonValue = null;
+            while (i >= 0) {
+                let s = stack[i];
+                if (s.isObject() && s.has(first)) { v = s.get(first); break; }
+                i -= 1;
+            }
+            if (v == null) { return null; }
+            for (k in 1..path.size()) {
+                if (!v.isObject() || !v.has(path[k])) { return null; }
+                v = v.get(path[k]);
+            }
+            return v;
+        }
+        private static fn truthy(v: JsonValue) -> bool {
+            if (v == null || v.isNull()) { return false; }
+            if (v.isBool()) { return v.asBool(); }
+            if (v.isArray()) { return v.size() > 0; }
+            return true;
+        }
+        private static fn text(v: JsonValue) -> string {
+            if (v.isString()) { return v.asString(); }
+            if (v.isNull()) { return ""; }
+            if (v.isInteger()) { return str(v.asLong()); }
+            if (v.isBool()) { return v.asBool() ? "true" : "false"; }
+            return v.toJson();
+        }
+    }
+
+    class TplParser {
+        private src: string
+        private pos: int = 0
+        private open: string = "{{"
+        private close: string = "}}"
+        constructor(src: string) { self.src = src; }
+
+        fn parse() -> Array<TplNode> {
+            let root = new Array<TplNode>();
+            let stack = new Array<Array<TplNode>>();
+            let names = new Array<TplNode>();
+            stack.push(root);
+            let n = self.src.length;
+            while (self.pos < n) {
+                let at = Str.indexOf(self.src, self.open, self.pos);
+                if (at < 0) {
+                    TplParser.addText(stack[stack.size() - 1], self.src[self.pos..]);
+                    break;
+                }
+                let tagStart = at + self.open.length;
+                let triple = self.open == "{{" && tagStart < n && self.src[tagStart] == 123;
+                let closer = triple ? "}" + self.close : self.close;
+                let end = Str.indexOf(self.src, closer, tagStart);
+                if (end < 0) { throw new TemplateError("a tag is not closed", self.lineOf(at)); }
+                let inner = Str.trim(self.src[(triple ? tagStart + 1 : tagStart)..end]);
+                let after = end + closer.length;
+                let sigil = triple ? 38 : (inner.length > 0 ? inner[0] as int : 0);
+                let standaloneKind = sigil == 35 || sigil == 94 || sigil == 47 || sigil == 33 || sigil == 62 || sigil == 61;
+                // A section, comment, partial or delimiter tag alone on its line takes the line.
+                let textEnd = at;
+                if (standaloneKind) {
+                    let ls = at;
+                    while (ls > self.pos && (self.src[ls - 1] == 32 || self.src[ls - 1] == 9)) { ls -= 1; }
+                    let lineStart = ls == 0 || self.src[ls - 1] == 10;
+                    let re = after;
+                    while (re < n && (self.src[re] == 32 || self.src[re] == 9)) { re += 1; }
+                    let lineEnd = re == n || self.src[re] == 10 || (self.src[re] == 13 && re + 1 < n && self.src[re + 1] == 10);
+                    if (lineStart && lineEnd) {
+                        textEnd = ls;
+                        after = re == n ? n : (self.src[re] == 13 ? re + 2 : re + 1);
+                    }
+                }
+                if (textEnd > self.pos) { TplParser.addText(stack[stack.size() - 1], self.src[self.pos..textEnd]); }
+                self.pos = after;
+                let body = sigil == 0 || triple ? inner : Str.trim(inner[1..]);
+                let top = stack[stack.size() - 1];
+                if (triple || sigil == 38) {
+                    top.push(TplParser.value(2, body));
+                } else if (sigil == 35 || sigil == 94) {
+                    let node = TplParser.value(sigil == 35 ? 3 : 4, body);
+                    node.children = new Array<TplNode>();
+                    top.push(node);
+                    stack.push(node.children);
+                    names.push(node);
+                } else if (sigil == 47) {
+                    if (names.size() == 0) { throw new TemplateError("{{/${body}}} closes nothing", self.lineOf(at)); }
+                    let opened = names.pop();
+                    if (opened.text != body) { throw new TemplateError("{{/${body}}} closes {{#${opened.text}}}", self.lineOf(at)); }
+                    stack.pop();
+                } else if (sigil == 33) {
+                    // a comment
+                } else if (sigil == 62) {
+                    top.push(new TplNode(5, body));
+                } else if (sigil == 61) {
+                    let d = Str.trim(body[..body.length - 1]);
+                    let sp = Str.indexOf(d, " ");
+                    if (sp < 0) { throw new TemplateError("bad delimiters '${d}'", self.lineOf(at)); }
+                    self.open = Str.trim(d[..sp]);
+                    self.close = Str.trim(d[sp + 1..]);
+                } else {
+                    top.push(TplParser.value(1, inner));
+                }
+            }
+            if (names.size() > 0) { throw new TemplateError("{{#${names[names.size() - 1].text}}} is not closed", self.lineOf(n)); }
+            return root;
+        }
+
+        private static fn value(kind: int, name: string) -> TplNode {
+            let node = new TplNode(kind, name);
+            node.path = name == "." ? new Array<string>() : Str.split(name, ".");
+            return node;
+        }
+        private static fn addText(nodes: Array<TplNode>, text: string) {
+            if (text.length == 0) { return; }
+            nodes.push(new TplNode(0, text));
+        }
+        private fn lineOf(at: int) -> int {
+            let line = 1;
+            for (i in 0..at) { if (self.src[i] == 10) { line += 1; } }
+            return line;
+        }
+    }
+}

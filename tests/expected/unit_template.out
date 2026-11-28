@@ -1,0 +1,8 @@
+running 6 tests
+  ok    values: escaped, raw, dotted, missing
+  ok    sections: lists, objects, falsy values, inverted, the current value
+  ok    a tag alone on its line takes the line
+  ok    partials and delimiters
+  ok    errors say where
+  ok    rendered from many threads at once
+result: 6 passed, 0 failed

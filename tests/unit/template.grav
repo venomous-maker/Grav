@@ -1,0 +1,59 @@
+// Template: Mustache tags, escaping, sections, partials, standalone lines, errors.
+import "std"
+
+test "values: escaped, raw, dotted, missing" {
+    let d = Json.parse("{\"name\": \"<Ada & co>\", \"n\": 3, \"f\": 1.5, \"ok\": true, \"user\": {\"city\": {\"name\": \"Nairobi\"}}}")
+    assertEq(Template.renderString("Hi {{name}}!", d), "Hi &lt;Ada &amp; co&gt;!")
+    assertEq(Template.renderString("{{{name}}}|{{& name}}", d), "<Ada & co>|<Ada & co>")
+    assertEq(Template.renderString("{{n}} {{f}} {{ok}} {{missing}}.", d), "3 1.5 true .")
+    assertEq(Template.renderString("{{user.city.name}} {{user.nope.name}}", d), "Nairobi ")
+    assertEq(Template.compile("{{name}}").raw().render(d), "<Ada & co>")
+}
+
+test "sections: lists, objects, falsy values, inverted, the current value" {
+    let d = Json.parse("{\"items\": [{\"x\": 1}, {\"x\": 2}], \"nums\": [1, 2, 3], \"none\": [], \"who\": {\"n\": \"Bo\"}, \"off\": false, \"top\": \"T\"}")
+    assertEq(Template.renderString("{{#items}}<{{x}}>{{/items}}", d), "<1><2>")
+    assertEq(Template.renderString("{{#nums}}{{.}},{{/nums}}", d), "1,2,3,")
+    assertEq(Template.renderString("{{#none}}x{{/none}}{{^none}}empty{{/none}}", d), "empty")
+    assertEq(Template.renderString("{{#who}}{{n}} and {{top}}{{/who}}", d), "Bo and T")
+    assertEq(Template.renderString("{{#off}}no{{/off}}{{^off}}yes{{/off}}{{^missing}}!{{/missing}}", d), "yes!")
+    assertEq(Template.renderString("{{! a comment }}a{{!x}}b", d), "ab")
+}
+
+test "a tag alone on its line takes the line" {
+    let d = Json.parse("{\"xs\": [\"a\", \"b\"]}")
+    assertEq(Template.renderString("<ul>\n  {{#xs}}\n  <li>{{.}}</li>\n  {{/xs}}\n</ul>\n", d), "<ul>\n  <li>a</li>\n  <li>b</li>\n</ul>\n")
+    assertEq(Template.renderString("a {{#xs}}{{.}}{{/xs}} b\n", d), "a ab b\n")
+    assertEq(Template.renderString("{{! only }}\nline\n", d), "line\n")
+}
+
+test "partials and delimiters" {
+    let t = Template.compile("{{#people}}{{> card}}{{/people}}").partial("card", "[{{name}}]")
+    assertEq(t.render(Json.parse("{\"people\": [{\"name\": \"A\"}, {\"name\": \"B\"}]}")), "[A][B]")
+    assertEq(Template.renderString("{{=<% %>=}}<% x %> {{x}}", Json.parse("{\"x\": 1}")), "1 {{x}}")
+    assertEq(Template.renderString("{{> nope}}x", Json.object()), "x")
+}
+
+test "errors say where" {
+    let caught = ""
+    try { Template.compile("a\n{{#a}}\nb") } catch (e: TemplateError) { caught = e.message() }
+    assertEq(caught, "line 3: {{#a}} is not closed")
+    try { Template.compile("{{#a}}{{/b}}") } catch (e: TemplateError) { caught = e.message() }
+    assertEq(caught, "line 1: {{/b}} closes {{#a}}")
+    try { Template.compile("x {{y") } catch (e: TemplateError) { caught = e.message() }
+    assertEq(caught, "line 1: a tag is not closed")
+}
+
+test "rendered from many threads at once" {
+    let t = Template.compile("{{#xs}}{{.}}{{/xs}}")
+    let d = Json.parse("{\"xs\": [1, 2, 3]}")
+    let bad = new AtomicInt(0)
+    let threads = new Array<Thread>()
+    for (i in 0..8) {
+        threads.push(Thread.spawn(fn() {
+            for (k in 0..500) { if (t.render(d) != "123") { bad.increment() } }
+        }))
+    }
+    for (th in threads) { th.join() }
+    assertEq(bad.get(), 0)
+}
