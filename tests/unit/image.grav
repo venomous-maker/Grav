@@ -1,0 +1,118 @@
+// Image: PNG decoding across colour types, depths and interlacing (fixtures made by Pillow
+// and ImageMagick), PNG and JPEG round trips, resizing, cropping, rotation, conversion.
+import "std"
+
+fn png(hex: string) -> Image { return Image.decode(Bytes.fromHex(hex)) }
+
+test "PNG decoding: palette + tRNS, 1-bit, 16-bit, grey+alpha, Adam7 interlacing" {
+    let pal = png("89504e470d0a1a0a0000000d4948445200000003000000020203000000e01a8e890000000c504c5445ff000000ff000000ff000000fbbe46e40000000274524e53ff00e5b7304a0000000c49444154789c6390606200000050001b61a995f00000000049454e44ae426082")
+    assertEq("${pal.width}x${pal.height}x${pal.channels}", "3x2x4")
+    assertEq(pal.get(0, 0), 0xff0000ff as long)
+    assertEq(pal.get(1, 1), 0x00ff0000 as long)
+    assertEq(pal.get(2, 1), 0x0000ffff as long)
+    let bits = png("89504e470d0a1a0a0000000d494844520000000a000000020100000000491a707d0000000e49444154789c630c7dcdf08301000751023a4e7aa2020000000049454e44ae426082")
+    assertEq(bits.channels, 1)
+    assertEq("${bits.get(0, 0) >> 24} ${bits.get(1, 0) >> 24} ${bits.get(4, 1) >> 24} ${bits.get(5, 1) >> 24}", "0 255 255 0")
+    let g16 = png("89504e470d0a1a0a0000000d494844520000000200000001100000000081d9fc150000000d49444154789c631032f9ff1f0003e602452e4296750000000049454e44ae426082")
+    assertEq("${g16.get(0, 0) >> 24} ${g16.get(1, 0) >> 24}", "18 255")
+    let la = png("89504e470d0a1a0a0000000d49484452000000020000000108040000005e2bb7010000000d49444154789c63e01239f11f0002f801e65c90ecab0000000049454e44ae426082")
+    assertEq(la.get(0, 0), 0x0a0a0a14 as long)
+    assertEq(la.get(1, 0), 0xc8c8c8ff as long)
+    let inter = png("89504e470d0a1a0a0000000d4948445200000005000000030403000001de1fe85d0000002d504c544500000032001464002896003cc8005000641432642864643c966450c8646400c82832c83c64c85096c864c8c87813795e78000000194944415408d76360607060506058f3804198612f4358c504001a61041bf184bf3b0000000049454e44ae426082")
+    let ok = true
+    for (y in 0..3) {
+        for (x in 0..5) {
+            let want = (((x * 50) as long) << 24) | (((y * 100) as long) << 16) | ((((x + y) * 20) as long) << 8) | 255
+            if (inter.get(x, y) != want) { ok = false }
+        }
+    }
+    assert(ok)
+    let bad = 0
+    try { Image.decode(Bytes.fromString("GIF89a....")) } catch (e: ValueError) { bad += 1 }
+    try { Image.decode(Bytes.fromHex("89504e470d0a1a0a0000000d4948445200000005")) } catch (e: ValueError) { bad += 1 }
+    assertEq(bad, 2)
+}
+
+test "PNG round trip for every channel count" {
+    for (ch in 1..=4) {
+        let img = new Image(37, 23, ch)
+        for (y in 0..23) { for (x in 0..37) { img.set(x, y, ((x * 7) << 24 | (y * 11) << 16 | ((x * y) & 255) << 8 | (x + y) * 3) as long) } }
+        let back = Image.decode(img.png())
+        assertEq("${back.width}x${back.height}x${back.channels}", "37x23x${ch}")
+        assert(back.pixels() == img.pixels())
+        assert(Image.decode(img.png(0)).pixels() == img.pixels())
+    }
+    assertEq(Image.sniff(new Image(2, 2, 3).png()), "png")
+}
+
+test "JPEG round trip" {
+    if (!Image.jpegAvailable()) { return }
+    let img = Image.create(64, 48, 3, 0x3366ccff)
+    img.fillRect(0, 0, 32, 48, 0xff8800ff)
+    let j = img.jpeg(90)
+    assertEq(Image.sniff(j), "jpeg")
+    let back = Image.decode(j)
+    assertEq("${back.width}x${back.height}x${back.channels}", "64x48x3")
+    let p = back.get(10, 10)
+    assert(((p >> 24) & 255) > 240 && ((p >> 16) & 255) > 120 && ((p >> 16) & 255) < 150)
+    assertEq(Image.decode(Image.create(8, 8, 1, 0x808080ff).jpeg()).channels, 1)
+    assertEq(Image.decode(Image.create(8, 8, 4, 0xff000080).jpeg()).channels, 3)
+}
+
+test "resize, thumbnail, cover, crop" {
+    let img = Image.create(400, 300, 3, 0xffffffff)
+    img.fillRect(0, 0, 200, 300, 0x000000ff)
+    let small = img.resize(40, 30)
+    assertEq("${small.width}x${small.height}", "40x30")
+    assertEq(small.get(5, 15) >> 8, 0 as long)
+    assertEq(small.get(35, 15) >> 8, 0xffffff as long)
+    let t = img.thumbnail(100, 100)
+    assertEq("${t.width}x${t.height}", "100x75")
+    assertEq(img.thumbnail(1000, 1000).width, 400)
+    let c = img.cover(50, 50)
+    assertEq("${c.width}x${c.height}", "50x50")
+    assertEq(img.resizeToWidth(200).height, 150)
+    for (f in [Resample.Nearest, Resample.Bilinear, Resample.Bicubic, Resample.Lanczos]) {
+        let r = img.resize(800, 600, f)
+        assertEq(r.get(10, 10) >> 8, 0 as long)
+    }
+    let cr = img.crop(190, 10, 20, 5)
+    assertEq("${cr.width}x${cr.height}", "20x5")
+    assertEq(cr.get(0, 0) >> 8, 0 as long)
+    assertEq(cr.get(19, 0) >> 8, 0xffffff as long)
+    // a transparent half does not bleed dark into the opaque half
+    let rgba = Image.create(100, 10, 4, 0x00000000)
+    rgba.fillRect(50, 0, 50, 10, 0xff0000ff)
+    let half = rgba.resize(10, 1)
+    assertEq((half.get(5, 0) >> 24) & 255, 255 as long)
+}
+
+test "rotation, flips, orientation, conversion, drawing" {
+    let img = new Image(3, 2, 3)
+    img.set(0, 0, 0xff0000ff)
+    let r = img.rotate(90)
+    assertEq("${r.width}x${r.height}", "2x3")
+    assertEq(r.get(1, 0), 0xff0000ff as long)
+    assertEq(img.rotate(180).get(2, 1), 0xff0000ff as long)
+    assertEq(img.rotate(270).get(0, 2), 0xff0000ff as long)
+    assertEq(img.flipHorizontal().get(2, 0), 0xff0000ff as long)
+    assertEq(img.flipVertical().get(0, 1), 0xff0000ff as long)
+    assertEq(img.oriented(6).get(1, 0), 0xff0000ff as long)
+    assertEq(img.toGray().get(0, 0), 0x4c4c4cff as long)
+    assertEq(Image.create(1, 1, 4, 0x00000000).toRgb().get(0, 0), 0xffffffff as long)
+    let base = Image.create(4, 4, 3, 0x000000ff)
+    base.draw(Image.create(2, 2, 4, 0xffffff80), 1, 1)
+    assertEq(base.get(1, 1), 0x808080ff as long)
+    assertEq(base.get(0, 0), 0x000000ff as long)
+    let caught = false
+    try { base.get(4, 0) } catch (e: IndexError) { caught = true }
+    assert(caught)
+}
+
+test "a large photo shrinks quickly" {
+    let big = Image.create(4000, 3000, 3, 0x336699ff)
+    let t0 = Time.monotonicMs()
+    let t = big.thumbnail(320, 320)
+    assertEq("${t.width}x${t.height}", "320x240")
+    assert(Time.monotonicMs() - t0 < 2000)
+}

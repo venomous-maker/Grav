@@ -1,0 +1,874 @@
+// image.grav — raster images: PNG and JPEG read and written, resized, cropped, rotated,
+// thumbnails, and pixels read and set.
+//
+//   let img = Image.read("photo.jpg")              // EXIF orientation applied
+//   img.thumbnail(320, 320).write("thumb.jpg")     // fits in 320x320, aspect kept
+//   img.cover(200, 200).png()                      // fills 200x200, centre cropped: Bytes
+//   let logo = Image.decode(bytes).resize(64, 64)  // PNG or JPEG, sniffed
+//   let blank = Image.create(100, 50, 4, 0xffffffff)   // white RGBA
+//
+// Pixels are 8 bits per channel: 1 (grey), 2 (grey + alpha), 3 (RGB) or 4 (RGBA) channels,
+// rows top to bottom with no padding. PNG is done here (every colour type, bit depth and
+// interlacing read; adaptive row filters when written) on the system zlib that Compress
+// uses. JPEG goes through libturbojpeg, loaded when first needed (Debian and Ubuntu:
+// libturbojpeg0; macOS: brew install jpeg-turbo). Resizing is separable Lanczos-3 (or
+// bicubic, bilinear, nearest) on premultiplied alpha, with a fast box reduction first
+// when shrinking a lot, so a 12-megapixel photo becomes a thumbnail in milliseconds.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "bytes.grav"
+import "compress.grav"
+
+namespace std.data {
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdio.h>
+    #include <math.h>
+    #include <dlfcn.h>
+    #include <pthread.h>
+
+    #define GI_MAX_PIXELS (1LL << 28)
+
+    static unsigned int gi_crc_table[256];
+    static pthread_once_t gi_crc_once = PTHREAD_ONCE_INIT;
+    static void gi_crc_init(void) {
+        for (unsigned int n = 0; n < 256; n++) {
+            unsigned int c = n;
+            for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            gi_crc_table[n] = c;
+        }
+    }
+    static unsigned int gi_crc(unsigned int c, const unsigned char* p, size_t n) {
+        c ^= 0xFFFFFFFFu;
+        while (n--) c = gi_crc_table[(c ^ *p++) & 255] ^ (c >> 8);
+        return c ^ 0xFFFFFFFFu;
+    }
+    static unsigned int gi_be32(const unsigned char* p) { return ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) | ((unsigned)p[2] << 8) | p[3]; }
+
+    static int gi_paeth(int a, int b, int c) {
+        int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+        return pa <= pb && pa <= pc ? a : (pb <= pc ? b : c);
+    }
+    static int gi_unfilter(unsigned char* row, const unsigned char* prev, int stride, int bpp, int type) {
+        switch (type) {
+            case 0: break;
+            case 1: for (int i = bpp; i < stride; i++) row[i] = (unsigned char)(row[i] + row[i - bpp]); break;
+            case 2: if (prev) for (int i = 0; i < stride; i++) row[i] = (unsigned char)(row[i] + prev[i]); break;
+            case 3:
+                for (int i = 0; i < stride; i++) {
+                    int a = i >= bpp ? row[i - bpp] : 0, b = prev ? prev[i] : 0;
+                    row[i] = (unsigned char)(row[i] + ((a + b) >> 1));
+                }
+                break;
+            case 4:
+                for (int i = 0; i < stride; i++) {
+                    int a = i >= bpp ? row[i - bpp] : 0, b = prev ? prev[i] : 0, c = (i >= bpp && prev) ? prev[i - bpp] : 0;
+                    row[i] = (unsigned char)(row[i] + gi_paeth(a, b, c));
+                }
+                break;
+            default: return 0;
+        }
+        return 1;
+    }
+
+    // A PNG decoded to 8-bit pixels (malloc'd); NULL with *err.
+    static unsigned char* grav_png_decode(const unsigned char* d, long long n, int* W, int* H, int* CH, const char** err) {
+        static const unsigned char sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+        if (n < 8 || memcmp(d, sig, 8) != 0) { *err = "not a PNG"; return NULL; }
+        long long p = 8;
+        int w = 0, h = 0, depth = 0, ctype = -1, interlace = 0;
+        unsigned char pal[256][4]; int npal = 0;
+        int hasTrns = 0; unsigned int trns[3] = {0, 0, 0};
+        for (int i = 0; i < 256; i++) { pal[i][0] = pal[i][1] = pal[i][2] = 0; pal[i][3] = 255; }
+        unsigned char* idat = NULL; long long idatLen = 0, idatCap = 0;
+        int sawEnd = 0;
+        while (p + 8 <= n) {
+            unsigned int len = gi_be32(d + p);
+            const unsigned char* type = d + p + 4;
+            const unsigned char* body = d + p + 8;
+            if ((long long)len > n - p - 12) { break; }
+            if (!memcmp(type, "IHDR", 4) && len >= 13) {
+                w = (int)gi_be32(body); h = (int)gi_be32(body + 4);
+                depth = body[8]; ctype = body[9]; interlace = body[12];
+            } else if (!memcmp(type, "PLTE", 4)) {
+                npal = (int)(len / 3); if (npal > 256) npal = 256;
+                for (int i = 0; i < npal; i++) { pal[i][0] = body[3 * i]; pal[i][1] = body[3 * i + 1]; pal[i][2] = body[3 * i + 2]; }
+            } else if (!memcmp(type, "tRNS", 4)) {
+                hasTrns = 1;
+                if (ctype == 3) { for (unsigned int i = 0; i < len && i < 256; i++) pal[i][3] = body[i]; }
+                else if (ctype == 0 && len >= 2) trns[0] = ((unsigned)body[0] << 8) | body[1];
+                else if (ctype == 2 && len >= 6) { for (int k = 0; k < 3; k++) trns[k] = ((unsigned)body[2 * k] << 8) | body[2 * k + 1]; }
+                else hasTrns = 0;
+            } else if (!memcmp(type, "IDAT", 4)) {
+                if (idatLen + len > idatCap) {
+                    idatCap = (idatLen + len) * 2;
+                    idat = (unsigned char*)realloc(idat, (size_t)idatCap); if (!idat) abort();
+                }
+                memcpy(idat + idatLen, body, len); idatLen += len;
+            } else if (!memcmp(type, "IEND", 4)) { sawEnd = 1; break; }
+            p += 12 + (long long)len;
+        }
+        (void)sawEnd;
+        if (w <= 0 || h <= 0 || ctype < 0) { free(idat); *err = "a PNG without a header"; return NULL; }
+        if ((long long)w * h > GI_MAX_PIXELS) { free(idat); *err = "the PNG is too large"; return NULL; }
+        int inCh = ctype == 0 ? 1 : ctype == 2 ? 3 : ctype == 3 ? 1 : ctype == 4 ? 2 : ctype == 6 ? 4 : 0;
+        if (!inCh || !(depth == 1 || depth == 2 || depth == 4 || depth == 8 || depth == 16) || (ctype == 3 && depth == 16) ||
+            ((ctype == 2 || ctype == 4 || ctype == 6) && depth < 8) || interlace > 1) {
+            free(idat); *err = "an unsupported PNG format"; return NULL;
+        }
+        if (!idat) { *err = "a PNG without image data"; return NULL; }
+        int outCh = ctype == 0 ? (hasTrns ? 2 : 1) : ctype == 2 ? (hasTrns ? 4 : 3) : ctype == 3 ? (hasTrns ? 4 : 3) : inCh;
+        int bitsPP = inCh * depth;
+        int bpp = bitsPP >= 8 ? bitsPP / 8 : 1;
+        // the inflated size, pass by pass
+        static const int sx[7] = {0, 4, 0, 2, 0, 1, 0}, sy[7] = {0, 0, 4, 0, 2, 0, 1}, dx[7] = {8, 8, 4, 4, 2, 2, 1}, dy[7] = {8, 8, 8, 4, 4, 2, 2};
+        int passes = interlace ? 7 : 1;
+        long long need = 0;
+        for (int ps = 0; ps < passes; ps++) {
+            int pw = interlace ? (w - sx[ps] + dx[ps] - 1) / dx[ps] : w;
+            int ph = interlace ? (h - sy[ps] + dy[ps] - 1) / dy[ps] : h;
+            if (pw > 0 && ph > 0) need += (long long)ph * (1 + ((long long)pw * bitsPP + 7) / 8);
+        }
+        if (!grav_z_ready()) { free(idat); *err = "PNG needs zlib (libz), which could not be loaded"; return NULL; }
+        long long rawLen = 0, rawCap = 0; const char* zerr = NULL;
+        unsigned char* raw = grav_z_inflate(idat, idatLen, 15, need + 1, &rawLen, &rawCap, &zerr);
+        free(idat);
+        if (!raw) { *err = zerr ? zerr : "bad PNG data"; return NULL; }
+        if (rawLen < need) { free(raw); *err = "the PNG data is cut short"; return NULL; }
+        unsigned char* out = (unsigned char*)malloc((size_t)w * h * outCh);
+        if (!out) abort();
+        long long at = 0;
+        int maxv = (1 << depth) - 1;
+        for (int ps = 0; ps < passes; ps++) {
+            int pw = interlace ? (w - sx[ps] + dx[ps] - 1) / dx[ps] : w;
+            int ph = interlace ? (h - sy[ps] + dy[ps] - 1) / dy[ps] : h;
+            if (pw <= 0 || ph <= 0) continue;
+            int stride = (int)(((long long)pw * bitsPP + 7) / 8);
+            unsigned char* prev = NULL;
+            for (int y = 0; y < ph; y++) {
+                unsigned char* row = raw + at + 1;
+                if (!gi_unfilter(row, prev, stride, bpp, raw[at])) { free(raw); free(out); *err = "a bad PNG row filter"; return NULL; }
+                at += 1 + stride;
+                prev = row;
+                int oy = interlace ? sy[ps] + y * dy[ps] : y;
+                for (int x = 0; x < pw; x++) {
+                    int ox = interlace ? sx[ps] + x * dx[ps] : x;
+                    unsigned char* o = out + ((size_t)oy * w + ox) * outCh;
+                    unsigned int s[4];
+                    for (int c = 0; c < inCh; c++) {
+                        if (depth == 8) s[c] = row[x * inCh + c];
+                        else if (depth == 16) s[c] = ((unsigned)row[(x * inCh + c) * 2] << 8) | row[(x * inCh + c) * 2 + 1];
+                        else { int bit = x * depth; s[c] = (row[bit >> 3] >> (8 - depth - (bit & 7))) & (unsigned)maxv; }
+                    }
+                    if (ctype == 3) {
+                        unsigned int i = s[0];
+                        o[0] = pal[i][0]; o[1] = pal[i][1]; o[2] = pal[i][2];
+                        if (outCh == 4) o[3] = pal[i][3];
+                        continue;
+                    }
+                    for (int c = 0; c < inCh; c++)
+                        o[c] = depth == 8 ? (unsigned char)s[c] : depth == 16 ? (unsigned char)(s[c] >> 8) : (unsigned char)(s[c] * 255 / (unsigned)maxv);
+                    if (ctype == 0 && hasTrns) o[1] = s[0] == trns[0] ? 0 : 255;
+                    if (ctype == 2 && hasTrns) o[3] = (s[0] == trns[0] && s[1] == trns[1] && s[2] == trns[2]) ? 0 : 255;
+                }
+            }
+        }
+        free(raw);
+        *W = w; *H = h; *CH = outCh;
+        return out;
+    }
+
+    static void gi_chunk(unsigned char** buf, size_t* len, size_t* cap, const char* type, const unsigned char* body, size_t n) {
+        if (*len + n + 12 > *cap) { *cap = (*len + n + 12) * 2; *buf = (unsigned char*)realloc(*buf, *cap); if (!*buf) abort(); }
+        unsigned char* p = *buf + *len;
+        p[0] = (unsigned char)(n >> 24); p[1] = (unsigned char)(n >> 16); p[2] = (unsigned char)(n >> 8); p[3] = (unsigned char)n;
+        memcpy(p + 4, type, 4);
+        if (n) memcpy(p + 8, body, n);
+        unsigned int c = gi_crc(0, p + 4, n + 4);
+        p[8 + n] = (unsigned char)(c >> 24); p[9 + n] = (unsigned char)(c >> 16); p[10 + n] = (unsigned char)(c >> 8); p[11 + n] = (unsigned char)c;
+        *len += n + 12;
+    }
+    // 8-bit pixels as a PNG (malloc'd), each row with the filter that leaves the smallest sum.
+    static unsigned char* grav_png_encode(const unsigned char* px, int w, int h, int ch, int level, long long* outLen, const char** err) {
+        pthread_once(&gi_crc_once, gi_crc_init);
+        if (!grav_z_ready()) { *err = "PNG needs zlib (libz), which could not be loaded"; return NULL; }
+        int stride = w * ch;
+        unsigned char* raw = (unsigned char*)malloc((size_t)(stride + 1) * h);
+        unsigned char* cand = (unsigned char*)malloc((size_t)stride * 5);
+        if (!raw || !cand) abort();
+        for (int y = 0; y < h; y++) {
+            const unsigned char* row = px + (size_t)y * stride;
+            const unsigned char* prev = y ? row - stride : NULL;
+            long best = -1; int bestType = 0;
+            for (int t = 0; t < 5; t++) {
+                if (level == 0 && t > 0) break;
+                if (!prev && (t == 2 || t == 4)) continue;      // the same as None and Sub on the first row
+                unsigned char* f = cand + (size_t)t * stride;
+                long sum = 0;
+                int i = 0;
+                #define GI_ROW(PRED) for (; i < stride; i++) { unsigned char v = (unsigned char)(row[i] - (PRED)); f[i] = v; sum += v < 128 ? v : 256 - v; \
+                                         if ((i & 255) == 255 && best >= 0 && sum >= best) break; }
+                switch (t) {
+                    case 0: GI_ROW(0); break;
+                    case 1: for (; i < ch && i < stride; i++) { f[i] = row[i]; sum += row[i] < 128 ? row[i] : 256 - row[i]; }
+                            GI_ROW(row[i - ch]); break;
+                    case 2: GI_ROW(prev[i]); break;
+                    case 3: if (!prev) { for (; i < ch && i < stride; i++) { f[i] = row[i]; sum += row[i] < 128 ? row[i] : 256 - row[i]; }
+                                         GI_ROW(row[i - ch] >> 1); }
+                            else { for (; i < ch && i < stride; i++) { unsigned char v = (unsigned char)(row[i] - (prev[i] >> 1)); f[i] = v; sum += v < 128 ? v : 256 - v; }
+                                   GI_ROW((row[i - ch] + prev[i]) >> 1); }
+                            break;
+                    default: for (; i < ch && i < stride; i++) { unsigned char v = (unsigned char)(row[i] - prev[i]); f[i] = v; sum += v < 128 ? v : 256 - v; }
+                             GI_ROW(gi_paeth(row[i - ch], prev[i], prev[i - ch])); break;
+                }
+                #undef GI_ROW
+                if (i < stride) continue;                       // stopped early: worse than the best
+                if (best < 0 || sum < best) { best = sum; bestType = t; }
+            }
+            raw[(size_t)y * (stride + 1)] = (unsigned char)bestType;
+            memcpy(raw + (size_t)y * (stride + 1) + 1, cand + (size_t)bestType * stride, (size_t)stride);
+        }
+        free(cand);
+        long long zLen = 0, zCap = 0; const char* zerr = NULL;
+        unsigned char* z = grav_z_deflate(raw, (long long)(stride + 1) * h, level, 15, &zLen, &zCap, &zerr);
+        free(raw);
+        if (!z) { *err = zerr ? zerr : "compression failed"; return NULL; }
+        size_t len = 0, cap = (size_t)zLen + 128;
+        unsigned char* out = (unsigned char*)malloc(cap);
+        if (!out) abort();
+        static const unsigned char sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+        memcpy(out, sig, 8); len = 8;
+        unsigned char ihdr[13];
+        ihdr[0] = (unsigned char)(w >> 24); ihdr[1] = (unsigned char)(w >> 16); ihdr[2] = (unsigned char)(w >> 8); ihdr[3] = (unsigned char)w;
+        ihdr[4] = (unsigned char)(h >> 24); ihdr[5] = (unsigned char)(h >> 16); ihdr[6] = (unsigned char)(h >> 8); ihdr[7] = (unsigned char)h;
+        ihdr[8] = 8; ihdr[9] = (unsigned char)(ch == 1 ? 0 : ch == 2 ? 4 : ch == 3 ? 2 : 6); ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+        gi_chunk(&out, &len, &cap, "IHDR", ihdr, 13);
+        gi_chunk(&out, &len, &cap, "IDAT", z, (size_t)zLen);
+        gi_chunk(&out, &len, &cap, "IEND", NULL, 0);
+        free(z);
+        *outLen = (long long)len;
+        return out;
+    }
+
+    // ── JPEG through libturbojpeg ──────────────────────────────────────────
+    static struct {
+        void* (*initDecompress)(void);
+        void* (*initCompress)(void);
+        int (*decompressHeader3)(void*, const unsigned char*, unsigned long, int*, int*, int*, int*);
+        int (*decompress2)(void*, const unsigned char*, unsigned long, unsigned char*, int, int, int, int, int);
+        int (*compress2)(void*, const unsigned char*, int, int, int, int, unsigned char**, unsigned long*, int, int, int);
+        void (*tjFree)(unsigned char*);
+        int (*destroy)(void*);
+        char* (*errorStr2)(void*);
+    } gi_tj;
+    static int gi_tj_ok = 0;
+    static pthread_once_t gi_tj_once = PTHREAD_ONCE_INIT;
+    static void gi_tj_load(void) {
+        static const char* const names[] = { "libturbojpeg.so.0", "libturbojpeg.so", "libturbojpeg.0.dylib", "libturbojpeg.dylib", "/opt/homebrew/lib/libturbojpeg.dylib", "/usr/local/lib/libturbojpeg.dylib", 0 };
+        void* h = 0;
+        for (int i = 0; names[i] && !h; i++) h = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
+        if (!h) return;
+        *(void**)(&gi_tj.initDecompress) = dlsym(h, "tjInitDecompress");
+        *(void**)(&gi_tj.initCompress) = dlsym(h, "tjInitCompress");
+        *(void**)(&gi_tj.decompressHeader3) = dlsym(h, "tjDecompressHeader3");
+        *(void**)(&gi_tj.decompress2) = dlsym(h, "tjDecompress2");
+        *(void**)(&gi_tj.compress2) = dlsym(h, "tjCompress2");
+        *(void**)(&gi_tj.tjFree) = dlsym(h, "tjFree");
+        *(void**)(&gi_tj.destroy) = dlsym(h, "tjDestroy");
+        *(void**)(&gi_tj.errorStr2) = dlsym(h, "tjGetErrorStr2");
+        gi_tj_ok = gi_tj.initDecompress && gi_tj.initCompress && gi_tj.decompressHeader3 && gi_tj.decompress2 &&
+                   gi_tj.compress2 && gi_tj.tjFree && gi_tj.destroy;
+    }
+    static int grav_jpeg_ready(void) { pthread_once(&gi_tj_once, gi_tj_load); return gi_tj_ok; }
+    static unsigned char* grav_jpeg_decode(const unsigned char* d, long long n, int* W, int* H, int* CH, const char** err) {
+        if (!grav_jpeg_ready()) { *err = "JPEG needs libturbojpeg (Debian/Ubuntu: libturbojpeg0), which could not be loaded"; return NULL; }
+        void* tj = gi_tj.initDecompress();
+        if (!tj) { *err = "cannot start a JPEG decoder"; return NULL; }
+        int w, h, sub, cs;
+        if (gi_tj.decompressHeader3(tj, d, (unsigned long)n, &w, &h, &sub, &cs) != 0) { gi_tj.destroy(tj); *err = "not a JPEG, or a damaged one"; return NULL; }
+        if ((long long)w * h > GI_MAX_PIXELS) { gi_tj.destroy(tj); *err = "the JPEG is too large"; return NULL; }
+        if (cs == 3 || cs == 4) { gi_tj.destroy(tj); *err = "CMYK JPEGs are not supported"; return NULL; }
+        int gray = cs == 2, ch = gray ? 1 : 3;
+        unsigned char* out = (unsigned char*)malloc((size_t)w * h * ch);
+        if (!out) abort();
+        if (gi_tj.decompress2(tj, d, (unsigned long)n, out, w, 0, h, gray ? 6 : 0, 0) != 0 && !(gi_tj.errorStr2 && strstr(gi_tj.errorStr2(tj), "warning"))) {
+            // a damaged tail still leaves most of the picture: only a hard failure is an error
+            const char* e = gi_tj.errorStr2 ? gi_tj.errorStr2(tj) : "";
+            if (!strstr(e, "Premature end") && !strstr(e, "extraneous")) { free(out); gi_tj.destroy(tj); *err = "a damaged JPEG"; return NULL; }
+        }
+        gi_tj.destroy(tj);
+        *W = w; *H = h; *CH = ch;
+        return out;
+    }
+    static unsigned char* grav_jpeg_encode(const unsigned char* px, int w, int h, int ch, int quality, int subsamp, long long* outLen, const char** err) {
+        if (!grav_jpeg_ready()) { *err = "JPEG needs libturbojpeg (Debian/Ubuntu: libturbojpeg0), which could not be loaded"; return NULL; }
+        if (ch == 2 || ch == 4) { *err = "internal: alpha must be removed first"; return NULL; }
+        void* tj = gi_tj.initCompress();
+        if (!tj) { *err = "cannot start a JPEG encoder"; return NULL; }
+        unsigned char* jb = NULL; unsigned long jl = 0;
+        int rc = gi_tj.compress2(tj, px, w, 0, h, ch == 1 ? 6 : 0, &jb, &jl, ch == 1 ? 3 : subsamp, quality, 0);
+        gi_tj.destroy(tj);
+        if (rc != 0 || !jb) { if (jb) gi_tj.tjFree(jb); *err = "JPEG encoding failed"; return NULL; }
+        unsigned char* out = (unsigned char*)malloc(jl);
+        if (!out) abort();
+        memcpy(out, jb, jl);
+        gi_tj.tjFree(jb);
+        *outLen = (long long)jl;
+        return out;
+    }
+    // The EXIF orientation (1 to 8) of a JPEG; 1 when it has none.
+    static int grav_jpeg_orientation(const unsigned char* d, long long n) {
+        if (n < 4 || d[0] != 0xFF || d[1] != 0xD8) return 1;
+        long long p = 2;
+        while (p + 4 <= n && d[p] == 0xFF) {
+            int marker = d[p + 1];
+            if (marker == 0xD9 || marker == 0xDA) break;
+            int len = (d[p + 2] << 8) | d[p + 3];
+            if (marker == 0xE1 && len >= 16 && p + 2 + len <= n && !memcmp(d + p + 4, "Exif\0\0", 6)) {
+                const unsigned char* t = d + p + 10; long long tn = len - 8;
+                int le = t[0] == 'I';
+                #define GI_U16(q) (le ? (unsigned)((q)[0] | ((q)[1] << 8)) : (unsigned)(((q)[0] << 8) | (q)[1]))
+                #define GI_U32(q) (le ? ((unsigned)(q)[0] | ((unsigned)(q)[1] << 8) | ((unsigned)(q)[2] << 16) | ((unsigned)(q)[3] << 24)) : gi_be32(q))
+                unsigned off = GI_U32(t + 4);
+                if (off + 2 > tn) return 1;
+                unsigned count = GI_U16(t + off);
+                for (unsigned i = 0; i < count && off + 2 + (i + 1) * 12 <= tn; i++) {
+                    const unsigned char* e = t + off + 2 + i * 12;
+                    if (GI_U16(e) == 0x0112) { unsigned v = GI_U16(e + 8); return v >= 1 && v <= 8 ? (int)v : 1; }
+                }
+                return 1;
+            }
+            p += 2 + len;
+        }
+        return 1;
+    }
+
+    // ── geometry ───────────────────────────────────────────────────────────
+    // op: 0 flip left-right, 1 flip top-bottom, 2 rotate 90 clockwise, 3 rotate 180, 4 rotate 270, 5 transpose, 6 transverse
+    static unsigned char* grav_img_transform(const unsigned char* s, int w, int h, int ch, int op, int* ow, int* oh) {
+        int swap = op == 2 || op == 4 || op == 5 || op == 6;
+        int W = swap ? h : w, H = swap ? w : h;
+        unsigned char* d = (unsigned char*)malloc((size_t)w * h * ch);
+        if (!d) abort();
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int X, Y;
+                switch (op) {
+                    case 0: X = w - 1 - x; Y = y; break;
+                    case 1: X = x; Y = h - 1 - y; break;
+                    case 2: X = h - 1 - y; Y = x; break;
+                    case 3: X = w - 1 - x; Y = h - 1 - y; break;
+                    case 4: X = y; Y = w - 1 - x; break;
+                    case 5: X = y; Y = x; break;
+                    default: X = h - 1 - y; Y = w - 1 - x; break;
+                }
+                memcpy(d + ((size_t)Y * W + X) * ch, s + ((size_t)y * w + x) * ch, (size_t)ch);
+            }
+        }
+        *ow = W; *oh = H;
+        return d;
+    }
+    // Channel conversion: grey, grey+alpha, RGB, RGBA in any direction (alpha dropped onto
+    // `bg` when removed; grey by Rec. 601 luma).
+    static unsigned char* grav_img_convert(const unsigned char* s, int w, int h, int from, int to, unsigned int bg) {
+        size_t n = (size_t)w * h;
+        unsigned char* d = (unsigned char*)malloc(n * to);
+        if (!d) abort();
+        int br = (bg >> 24) & 255, bgc = (bg >> 16) & 255, bb = (bg >> 8) & 255;
+        for (size_t i = 0; i < n; i++) {
+            const unsigned char* p = s + i * from;
+            int r, g, b, a;
+            if (from <= 2) { r = g = b = p[0]; a = from == 2 ? p[1] : 255; }
+            else { r = p[0]; g = p[1]; b = p[2]; a = from == 4 ? p[3] : 255; }
+            if ((to == 1 || to == 3) && a < 255) {
+                r = (r * a + br * (255 - a) + 127) / 255; g = (g * a + bgc * (255 - a) + 127) / 255; b = (b * a + bb * (255 - a) + 127) / 255;
+            }
+            unsigned char* q = d + i * to;
+            if (to <= 2) { q[0] = (unsigned char)((r * 299 + g * 587 + b * 114 + 500) / 1000); if (to == 2) q[1] = (unsigned char)a; }
+            else { q[0] = (unsigned char)r; q[1] = (unsigned char)g; q[2] = (unsigned char)b; if (to == 4) q[3] = (unsigned char)a; }
+        }
+        return d;
+    }
+    static unsigned char* grav_img_crop(const unsigned char* s, int w, int ch, int x, int y, int cw, int chh) {
+        unsigned char* d = (unsigned char*)malloc((size_t)cw * chh * ch);
+        if (!d) abort();
+        for (int r = 0; r < chh; r++) memcpy(d + (size_t)r * cw * ch, s + ((size_t)(y + r) * w + x) * ch, (size_t)cw * ch);
+        return d;
+    }
+
+    // ── resampling ─────────────────────────────────────────────────────────
+    static double gi_sinc(double x) { if (x == 0) return 1; x *= M_PI; return sin(x) / x; }
+    static double gi_kernel(int f, double x) {
+        x = fabs(x);
+        switch (f) {
+            case 1: return x < 1 ? 1 - x : 0;
+            case 2: { const double a = -0.5;
+                      if (x < 1) return ((a + 2) * x - (a + 3)) * x * x + 1;
+                      if (x < 2) return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a;
+                      return 0; }
+            case 3: return x < 3 ? gi_sinc(x) * gi_sinc(x / 3) : 0;
+            default: return x <= 0.5 ? 1 : 0;
+        }
+    }
+    static double gi_support(int f) { return f == 1 ? 1 : f == 2 ? 2 : f == 3 ? 3 : 0.5; }
+    typedef struct { int* start; int* len; float* w; int stride; } GIWeights;
+    static void gi_weights(int src, int dst, int f, GIWeights* c) {
+        double scale = (double)src / dst, fs = scale > 1 ? scale : 1, support = gi_support(f) * fs;
+        int maxw = (int)ceil(support) * 2 + 2;
+        c->start = (int*)malloc(sizeof(int) * (size_t)dst);
+        c->len = (int*)malloc(sizeof(int) * (size_t)dst);
+        c->w = (float*)malloc(sizeof(float) * (size_t)dst * maxw);
+        c->stride = maxw;
+        for (int i = 0; i < dst; i++) {
+            double center = (i + 0.5) * scale;
+            int lo = (int)floor(center - support), hi = (int)ceil(center + support);
+            if (lo < 0) lo = 0;
+            if (hi > src) hi = src;
+            if (hi - lo > maxw) hi = lo + maxw;
+            double total = 0;
+            float* w = c->w + (size_t)i * maxw;
+            for (int j = lo; j < hi; j++) { double v = gi_kernel(f, (j + 0.5 - center) / fs); w[j - lo] = (float)v; total += v; }
+            if (total == 0) { lo = (int)center < src ? (int)center : src - 1; hi = lo + 1; w[0] = 1; total = 1; }
+            for (int j = 0; j < hi - lo; j++) w[j] = (float)(w[j] / total);
+            c->start[i] = lo; c->len[i] = hi - lo;
+        }
+    }
+    static void gi_weights_free(GIWeights* c) { free(c->start); free(c->len); free(c->w); }
+    // Shrinks by whole factors fx, fy by averaging boxes (the fast first step of a big shrink).
+    static unsigned char* gi_box(const unsigned char* s, int w, int h, int ch, int fx, int fy, int* ow, int* oh) {
+        int W = w / fx, H = h / fy;
+        unsigned char* d = (unsigned char*)malloc((size_t)W * H * ch);
+        unsigned int* acc = (unsigned int*)malloc(sizeof(unsigned int) * (size_t)W * ch);
+        if (!d || !acc) abort();
+        unsigned int area = (unsigned)(fx * fy), half = area / 2;
+        for (int Y = 0; Y < H; Y++) {
+            memset(acc, 0, sizeof(unsigned int) * (size_t)W * ch);
+            for (int dy = 0; dy < fy; dy++) {
+                const unsigned char* row = s + (size_t)(Y * fy + dy) * w * ch;
+                for (int X = 0; X < W; X++) {
+                    const unsigned char* p = row + (size_t)X * fx * ch;
+                    unsigned int* a = acc + (size_t)X * ch;
+                    for (int dx = 0; dx < fx; dx++, p += ch) for (int c = 0; c < ch; c++) a[c] += p[c];
+                }
+            }
+            unsigned char* o = d + (size_t)Y * W * ch;
+            for (int i = 0; i < W * ch; i++) o[i] = (unsigned char)((acc[i] + half) / area);
+        }
+        free(acc);
+        *ow = W; *oh = H;
+        return d;
+    }
+    static unsigned char* grav_img_resize(const unsigned char* src, int w, int h, int ch, int W, int H, int f) {
+        unsigned char* reduced = NULL;
+        if (f != 0) {
+            int fx = w / W / 2, fy = h / H / 2;      // keep at least 2x for the filter to work on
+            if (fx >= 2 || fy >= 2) {
+                if (fx < 1) fx = 1;
+                if (fy < 1) fy = 1;
+                int rw, rh;
+                reduced = gi_box(src, w, h, ch, fx, fy, &rw, &rh);
+                src = reduced; w = rw; h = rh;
+            }
+        }
+        int alpha = ch == 2 || ch == 4;
+        GIWeights cx, cy;
+        gi_weights(w, W, f, &cx);
+        gi_weights(h, H, f, &cy);
+        float* tmp = (float*)malloc(sizeof(float) * (size_t)W * h * ch);
+        if (!tmp) abort();
+        for (int y = 0; y < h; y++) {
+            const unsigned char* row = src + (size_t)y * w * ch;
+            float* t = tmp + (size_t)y * W * ch;
+            for (int x = 0; x < W; x++) {
+                float acc[4] = {0, 0, 0, 0};
+                const float* wt = cx.w + (size_t)x * cx.stride;
+                const unsigned char* p = row + (size_t)cx.start[x] * ch;
+                for (int k = 0; k < cx.len[x]; k++, p += ch) {
+                    float wk = wt[k];
+                    if (alpha) {
+                        float a = p[ch - 1] * wk;
+                        for (int c = 0; c < ch - 1; c++) acc[c] += p[c] * a;
+                        acc[ch - 1] += a;
+                    } else for (int c = 0; c < ch; c++) acc[c] += p[c] * wk;
+                }
+                for (int c = 0; c < ch; c++) t[x * ch + c] = acc[c];
+            }
+        }
+        unsigned char* out = (unsigned char*)malloc((size_t)W * H * ch);
+        if (!out) abort();
+        float* acc = (float*)malloc(sizeof(float) * (size_t)W * ch);
+        for (int y = 0; y < H; y++) {
+            memset(acc, 0, sizeof(float) * (size_t)W * ch);
+            const float* wt = cy.w + (size_t)y * cy.stride;
+            for (int k = 0; k < cy.len[y]; k++) {
+                const float* t = tmp + (size_t)(cy.start[y] + k) * W * ch;
+                float wk = wt[k];
+                for (int i = 0; i < W * ch; i++) acc[i] += t[i] * wk;
+            }
+            unsigned char* o = out + (size_t)y * W * ch;
+            for (int x = 0; x < W; x++) {
+                float* a = acc + (size_t)x * ch;
+                if (alpha) {
+                    float al = a[ch - 1];
+                    for (int c = 0; c < ch - 1; c++) {
+                        float v = al > 0.0001f ? a[c] / al : 0;
+                        o[x * ch + c] = (unsigned char)(v < 0 ? 0 : v > 255 ? 255 : v + 0.5f);
+                    }
+                    o[x * ch + ch - 1] = (unsigned char)(al < 0 ? 0 : al > 255 ? 255 : al + 0.5f);
+                } else {
+                    for (int c = 0; c < ch; c++) { float v = a[c]; o[x * ch + c] = (unsigned char)(v < 0 ? 0 : v > 255 ? 255 : v + 0.5f); }
+                }
+            }
+        }
+        free(acc); free(tmp); free(reduced);
+        gi_weights_free(&cx); gi_weights_free(&cy);
+        return out;
+    }
+
+    static unsigned char* grav_img_read_file(const char* path, long long* n) {
+        FILE* f = fopen(path, "rb");
+        if (!f) return NULL;
+        fseek(f, 0, SEEK_END); long long len = ftell(f); fseek(f, 0, SEEK_SET);
+        unsigned char* b = (unsigned char*)malloc(len > 0 ? (size_t)len : 1);
+        if (!b) abort();
+        long long got = (long long)fread(b, 1, (size_t)len, f);
+        fclose(f);
+        *n = got;
+        return b;
+    }
+    static int grav_img_write_file(const char* path, const unsigned char* b, long long n) {
+        FILE* f = fopen(path, "wb");
+        if (!f) return 0;
+        int ok = fwrite(b, 1, (size_t)n, f) == (size_t)n;
+        return fclose(f) == 0 && ok;
+    }
+    %}
+
+    // How resize samples: Lanczos-3 (sharpest; the default), bicubic, bilinear or nearest
+    // (blocky; for pixel art and masks).
+    enum Resample { Nearest, Bilinear, Bicubic, Lanczos }
+
+    // An 8-bit raster image.
+    class Image {
+        public width: int
+        public height: int
+        // 1 grey, 2 grey + alpha, 3 RGB, 4 RGBA.
+        public channels: int
+        private px: byte*
+
+        constructor(width: int, height: int, channels: int) {
+            if (width <= 0 || height <= 0) { throw new ValueError("an image is at least 1x1, not ${width}x${height}"); }
+            if (channels < 1 || channels > 4) { throw new ValueError("an image has 1 to 4 channels, not ${channels}"); }
+            if ((width as long) * (height as long) > 268435456) { throw new ValueError("${width}x${height} is too many pixels"); }
+            self.width = width;
+            self.height = height;
+            self.channels = channels;
+            let n = (width as long) * (height as long) * (channels as long);
+            self.px = %{ (unsigned char*)calloc((size_t)n, 1) %} as byte*;
+        }
+        destructor() { free(self.px); }
+
+        private static fn adopt(px: byte*, w: int, h: int, ch: int) -> Image {
+            let img = new Image(1, 1, 1);
+            free(img.px);
+            img.px = px;
+            img.width = w;
+            img.height = h;
+            img.channels = ch;
+            return img;
+        }
+
+        // ── making and reading ───────────────────────────────────────────────
+        // A `width` x `height` image filled with `color` (0xRRGGBBAA).
+        static fn create(width: int, height: int, channels: int = 4, color: long = 0x000000ff) -> Image {
+            let img = new Image(width, height, channels);
+            img.fill(color);
+            return img;
+        }
+        // A PNG or JPEG decoded (the format is sniffed); JPEGs are turned upright by their
+        // EXIF orientation. ValueError for anything else or damaged data.
+        static fn decode(data: Bytes) -> Image {
+            let p = data.rawData();
+            let n = data.size() as long;
+            return Image.decodeRaw(p, n);
+        }
+        // decode, from a file.
+        static fn read(path: string) -> Image {
+            let n: long = 0;
+            let p = %{ grav_img_read_file(path, &n) %} as byte*;
+            if (p == null) { throw new IOError("cannot read ${path}"); }
+            try { return Image.decodeRaw(p, n); } finally { free(p); }
+        }
+        // "png", "jpeg" or "" for data that is neither.
+        static fn sniff(data: Bytes) -> string {
+            if (data.size() >= 8 && data.get(0) == 137 && data.get(1) == 80 && data.get(2) == 78 && data.get(3) == 71) { return "png"; }
+            if (data.size() >= 3 && data.get(0) == 255 && data.get(1) == 216 && data.get(2) == 255) { return "jpeg"; }
+            return "";
+        }
+        // Whether JPEG support (libturbojpeg) could be loaded.
+        static fn jpegAvailable() -> bool { return %{ grav_jpeg_ready() %} as bool; }
+
+        private static fn decodeRaw(p: byte*, n: long) -> Image {
+            let w = 0;
+            let h = 0;
+            let ch = 0;
+            let err = %{ (const char*)0 %} as byte*;
+            let isPng = n >= 8 && p[0] == 137 && p[1] == 80;
+            let isJpeg = n >= 3 && p[0] == 255 && p[1] == 216;
+            if (!isPng && !isJpeg) { throw new ValueError("not a PNG or JPEG image"); }
+            let out = isPng ? %{ grav_png_decode(p, n, &w, &h, &ch, (const char**)&err) %} as byte*
+                            : %{ grav_jpeg_decode(p, n, &w, &h, &ch, (const char**)&err) %} as byte*;
+            if (out == null) { throw new ValueError(%{ grav_strdup((const char*)err) %} as string); }
+            let img = Image.adopt(out, w, h, ch);
+            if (isJpeg) {
+                let o = %{ grav_jpeg_orientation(p, n) %} as int;
+                if (o != 1) { img = img.oriented(o); }
+            }
+            return img;
+        }
+
+        // ── writing ──────────────────────────────────────────────────────────
+        // The image as a PNG (`level` 0 to 9: zlib's effort; 6 is the usual balance).
+        fn png(level: int = 6) -> Bytes {
+            if (level < 0 || level > 9) { throw new ValueError("a PNG level is 0 to 9"); }
+            let len: long = 0;
+            let err = %{ (const char*)0 %} as byte*;
+            let out = %{ grav_png_encode(self->px, self->width, self->height, self->channels, level, &len, (const char**)&err) %} as byte*;
+            if (out == null) { throw new StateError(%{ grav_strdup((const char*)err) %} as string); }
+            return Image.toBytes(out, len);
+        }
+        // The image as a JPEG (`quality` 1 to 100). Transparency is flattened onto white;
+        // colour is subsampled 4:2:0 below quality 90 and kept full (4:4:4) from 90.
+        fn jpeg(quality: int = 85) -> Bytes {
+            if (quality < 1 || quality > 100) { throw new ValueError("a JPEG quality is 1 to 100"); }
+            let src = self.channels == 2 ? self.toGray() : (self.channels == 4 ? self.toRgb() : self);
+            let sub = quality >= 90 ? 0 : 2;
+            let len: long = 0;
+            let err = %{ (const char*)0 %} as byte*;
+            let out = %{ grav_jpeg_encode(src->px, src->width, src->height, src->channels, quality, sub, &len, (const char**)&err) %} as byte*;
+            if (out == null) { throw new StateError(%{ grav_strdup((const char*)err) %} as string); }
+            return Image.toBytes(out, len);
+        }
+        // Writes a PNG or JPEG, by the path's extension (.png, .jpg, .jpeg).
+        fn write(path: string, quality: int = 85) {
+            let lower = Image.lowerExt(path);
+            let data = lower == "png" ? self.png() : (lower == "jpg" || lower == "jpeg" ? self.jpeg(quality) : null);
+            if (data == null) { throw new ValueError("write needs a .png, .jpg or .jpeg path, not ${path}"); }
+            let p = data.rawData();
+            let n = data.size() as long;
+            if (!(%{ grav_img_write_file(path, p, n) %} as bool)) { throw new IOError("cannot write ${path}"); }
+        }
+
+        // ── pixels ───────────────────────────────────────────────────────────
+        // The pixel at (x, y) as 0xRRGGBBAA (grey repeats into R, G and B; no alpha is ff).
+        fn get(x: int, y: int) -> long {
+            self.check(x, y);
+            let r = 0;
+            let g = 0;
+            let b = 0;
+            let a = 255;
+            let at = ((y as long) * (self.width as long) + (x as long)) * (self.channels as long);
+            if (self.channels <= 2) { r = self.px[at] as int; g = r; b = r; if (self.channels == 2) { a = self.px[at + 1] as int; } }
+            else { r = self.px[at] as int; g = self.px[at + 1] as int; b = self.px[at + 2] as int; if (self.channels == 4) { a = self.px[at + 3] as int; } }
+            return ((r as long) << 24) | ((g as long) << 16) | ((b as long) << 8) | (a as long);
+        }
+        // Sets the pixel at (x, y) from 0xRRGGBBAA (grey images take the luma).
+        fn set(x: int, y: int, color: long) {
+            self.check(x, y);
+            let at = ((y as long) * (self.width as long) + (x as long)) * (self.channels as long);
+            Image.put(self.px, at, self.channels, color);
+        }
+        // Every pixel set to `color`.
+        fn fill(color: long) { self.fillRect(0, 0, self.width, self.height, color); }
+        // A rectangle set to `color` (clipped to the image).
+        fn fillRect(x: int, y: int, w: int, h: int, color: long) {
+            let x0 = x < 0 ? 0 : x;
+            let y0 = y < 0 ? 0 : y;
+            let x1 = x + w > self.width ? self.width : x + w;
+            let y1 = y + h > self.height ? self.height : y + h;
+            if (x0 >= x1 || y0 >= y1) { return; }
+            let ch = self.channels;
+            let width = self.width;
+            // one pixel, then copied along the first row, then the row copied down
+            let first = ((y0 as long) * (width as long) + (x0 as long)) * (ch as long);
+            Image.put(self.px, first, ch, color);
+            %{ { unsigned char* p = self->px; size_t rowLen = (size_t)(x1 - x0) * ch;
+                 for (size_t i = ch; i < rowLen; i++) p[first + i] = p[first + i - ch];
+                 for (int yy = y0 + 1; yy < y1; yy++) memcpy(p + ((size_t)yy * width + x0) * ch, p + first, rowLen); } %};
+        }
+        // `other` drawn over this image with its top-left corner at (x, y), blended by
+        // its alpha (a watermark, a logo, a QR code).
+        fn draw(other: Image, x: int, y: int) {
+            for (yy in 0..other.height) {
+                let ty = y + yy;
+                if (ty < 0 || ty >= self.height) { continue; }
+                for (xx in 0..other.width) {
+                    let tx = x + xx;
+                    if (tx < 0 || tx >= self.width) { continue; }
+                    let src = other.get(xx, yy);
+                    let a = src & 255;
+                    if (a == 255) { self.set(tx, ty, src); continue; }
+                    if (a == 0) { continue; }
+                    let dst = self.get(tx, ty);
+                    let mix = fn(s: long, d: long) -> long { return (s * a + d * (255 - a) + 127) / 255; };
+                    let r = mix((src >> 24) & 255, (dst >> 24) & 255);
+                    let g = mix((src >> 16) & 255, (dst >> 16) & 255);
+                    let b = mix((src >> 8) & 255, (dst >> 8) & 255);
+                    let oa = a + (dst & 255) * (255 - a) / 255;
+                    self.set(tx, ty, (r << 24) | (g << 16) | (b << 8) | oa);
+                }
+            }
+        }
+        // The raw pixel bytes (rows top to bottom, `channels` bytes a pixel).
+        fn pixels() -> Bytes {
+            let n = (self.width as long) * (self.height as long) * (self.channels as long);
+            let b = new Bytes();
+            b.appendRaw(self.px, n as int);
+            return b;
+        }
+        // An image from raw pixel bytes.
+        static fn fromPixels(data: Bytes, width: int, height: int, channels: int) -> Image {
+            let img = new Image(width, height, channels);
+            let n = width * height * channels;
+            if (data.size() != n) { throw new ValueError("${width}x${height}x${channels} needs ${n} bytes, not ${data.size()}"); }
+            let p = data.rawData();
+            %{ memcpy(img->px, p, (size_t)n); %};
+            return img;
+        }
+
+        // ── new images from this one ─────────────────────────────────────────
+        // A copy.
+        fn copy() -> Image { return self.crop(0, 0, self.width, self.height); }
+        // The `w` x `h` rectangle at (x, y) (clipped to the image).
+        fn crop(x: int, y: int, w: int, h: int) -> Image {
+            let x0 = x < 0 ? 0 : x;
+            let y0 = y < 0 ? 0 : y;
+            let x1 = x + w > self.width ? self.width : x + w;
+            let y1 = y + h > self.height ? self.height : y + h;
+            if (x0 >= x1 || y0 >= y1) { throw new ValueError("the crop is outside the ${self.width}x${self.height} image"); }
+            let cw = x1 - x0;
+            let chh = y1 - y0;
+            let out = %{ grav_img_crop(self->px, self->width, self->channels, x0, y0, cw, chh) %} as byte*;
+            return Image.adopt(out, cw, chh, self.channels);
+        }
+        // Scaled to exactly `w` x `h`.
+        fn resize(w: int, h: int, filter: Resample = Resample.Lanczos) -> Image {
+            if (w <= 0 || h <= 0) { throw new ValueError("a size is at least 1x1"); }
+            if (w == self.width && h == self.height) { return self.copy(); }
+            let f = filter == Resample.Nearest ? 0 : (filter == Resample.Bilinear ? 1 : (filter == Resample.Bicubic ? 2 : 3));
+            let out = %{ grav_img_resize(self->px, self->width, self->height, self->channels, w, h, f) %} as byte*;
+            return Image.adopt(out, w, h, self.channels);
+        }
+        // Scaled to `w` wide, the height following the aspect ratio.
+        fn resizeToWidth(w: int) -> Image { return self.resize(w, Image.atLeast1((self.height as long) * (w as long) / (self.width as long))); }
+        // Scaled to `h` high, the width following the aspect ratio.
+        fn resizeToHeight(h: int) -> Image { return self.resize(Image.atLeast1((self.width as long) * (h as long) / (self.height as long)), h); }
+        // Scaled down (never up) to fit in `maxW` x `maxH`, aspect kept.
+        fn thumbnail(maxW: int, maxH: int) -> Image {
+            if (self.width <= maxW && self.height <= maxH) { return self.copy(); }
+            return self.fit(maxW, maxH);
+        }
+        // Scaled (up or down) to fit in `w` x `h`, aspect kept.
+        fn fit(w: int, h: int) -> Image {
+            let sw = (w as double) / self.width;
+            let sh = (h as double) / self.height;
+            let s = sw < sh ? sw : sh;
+            return self.resize(Image.atLeast1((self.width * s + 0.5) as long), Image.atLeast1((self.height * s + 0.5) as long));
+        }
+        // Scaled to fill `w` x `h`, aspect kept, and the overflow cropped evenly (an avatar).
+        fn cover(w: int, h: int) -> Image {
+            let sw = (w as double) / self.width;
+            let sh = (h as double) / self.height;
+            let s = sw > sh ? sw : sh;
+            let rw = Image.atLeast1((self.width * s + 0.5) as long);
+            let rh = Image.atLeast1((self.height * s + 0.5) as long);
+            if (rw < w) { rw = w; }
+            if (rh < h) { rh = h; }
+            return self.resize(rw, rh).crop((rw - w) / 2, (rh - h) / 2, w, h);
+        }
+        fn flipHorizontal() -> Image { return self.transform(0); }
+        fn flipVertical() -> Image { return self.transform(1); }
+        // Turned 90, 180 or 270 degrees clockwise.
+        fn rotate(degrees: int) -> Image {
+            let d = ((degrees % 360) + 360) % 360;
+            if (d == 90) { return self.transform(2); }
+            if (d == 180) { return self.transform(3); }
+            if (d == 270) { return self.transform(4); }
+            if (d == 0) { return self.copy(); }
+            throw new ValueError("rotate takes 90, 180 or 270 degrees, not ${degrees}");
+        }
+        // Turned upright from an EXIF orientation (1 to 8).
+        fn oriented(orientation: int) -> Image {
+            if (orientation == 2) { return self.transform(0); }
+            if (orientation == 3) { return self.transform(3); }
+            if (orientation == 4) { return self.transform(1); }
+            if (orientation == 5) { return self.transform(5); }
+            if (orientation == 6) { return self.transform(2); }
+            if (orientation == 7) { return self.transform(6); }
+            if (orientation == 8) { return self.transform(4); }
+            return self.copy();
+        }
+        // Converted to grey (Rec. 601 luma; transparency flattened onto white).
+        fn toGray() -> Image { return self.convert(1); }
+        // Converted to RGB (transparency flattened onto `background`, 0xRRGGBBAA).
+        fn toRgb(background: long = 0xffffffff) -> Image { return self.convertOn(3, background); }
+        // Converted to RGBA.
+        fn toRgba() -> Image { return self.convert(4); }
+        // Converted to `channels` channels.
+        fn convert(channels: int) -> Image { return self.convertOn(channels, 0xffffffff); }
+
+        // (Mem.sizeOf) the pixels
+        private fn __bytesExtra() -> long { return (self.width as long) * (self.height as long) * (self.channels as long); }
+
+        private fn convertOn(to: int, bg: long) -> Image {
+            if (to < 1 || to > 4) { throw new ValueError("an image has 1 to 4 channels, not ${to}"); }
+            if (to == self.channels) { return self.copy(); }
+            let b = bg as uint;
+            let out = %{ grav_img_convert(self->px, self->width, self->height, self->channels, to, b) %} as byte*;
+            return Image.adopt(out, self.width, self.height, to);
+        }
+        private fn transform(op: int) -> Image {
+            let w = 0;
+            let h = 0;
+            let out = %{ grav_img_transform(self->px, self->width, self->height, self->channels, op, &w, &h) %} as byte*;
+            return Image.adopt(out, w, h, self.channels);
+        }
+        private fn check(x: int, y: int) {
+            if (x < 0 || y < 0 || x >= self.width || y >= self.height) {
+                throw new IndexError("(${x}, ${y}) is outside the ${self.width}x${self.height} image");
+            }
+        }
+        private static fn put(px: byte*, at: long, ch: int, color: long) {
+            let r = ((color >> 24) & 255) as int;
+            let g = ((color >> 16) & 255) as int;
+            let b = ((color >> 8) & 255) as int;
+            let a = (color & 255) as int;
+            if (ch <= 2) {
+                px[at] = ((r * 299 + g * 587 + b * 114 + 500) / 1000) as byte;
+                if (ch == 2) { px[at + 1] = a as byte; }
+            } else {
+                px[at] = r as byte;
+                px[at + 1] = g as byte;
+                px[at + 2] = b as byte;
+                if (ch == 4) { px[at + 3] = a as byte; }
+            }
+        }
+        private static fn toBytes(p: byte*, n: long) -> Bytes {
+            let b = new Bytes();
+            b.appendRaw(p, n as int);
+            free(p);
+            return b;
+        }
+        private static fn atLeast1(n: long) -> int { return n < 1 ? 1 : n as int; }
+        private static fn lowerExt(path: string) -> string {
+            let dot = -1;
+            for (i in 0..path.length) { if (path[i] as int == 46) { dot = i; } }
+            if (dot < 0) { return ""; }
+            let ext = path[dot + 1..];
+            let out = ext;
+            %{ { char* r = grav_str_new(strlen(ext)); size_t i = 0; for (; ext[i]; i++) r[i] = (char)((ext[i] >= 'A' && ext[i] <= 'Z') ? ext[i] + 32 : ext[i]); r[i] = 0; out = r; } %};
+            return out;
+        }
+    }
+}

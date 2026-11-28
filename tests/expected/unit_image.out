@@ -1,0 +1,8 @@
+running 6 tests
+  ok    PNG decoding: palette + tRNS, 1-bit, 16-bit, grey+alpha, Adam7 interlacing
+  ok    PNG round trip for every channel count
+  ok    JPEG round trip
+  ok    resize, thumbnail, cover, crop
+  ok    rotation, flips, orientation, conversion, drawing
+  ok    a large photo shrinks quickly
+result: 6 passed, 0 failed

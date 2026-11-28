@@ -113,6 +113,8 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [zip](data/zip.md) | `ZipWriter`, `ZipReader`: ZIP archives (stored or deflated), safe extraction |
 | [xml](data/xml.md) | `Xml`, `XmlNode`: XML parsed, queried by path, written; DTDs refused |
 | [mime](data/mime.md) | `MimeType`: media types by extension and back |
+| [image](data/image.md) | `Image`: PNG and JPEG read and written, resized, cropped, rotated; thumbnails |
+| [pdf](data/pdf.md) | `PdfDocument`, `PdfPage`, `PdfTable`: PDFs with text, fonts, tables, images, QR codes and links |
 | [semver](data/semver.md) | `Semver`: semantic versions, ordering and npm-style ranges |
 
 ### io
