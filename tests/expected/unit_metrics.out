@@ -1,0 +1,6 @@
+running 4 tests
+  ok    counters, gauges and the text format
+  ok    histograms: buckets, sum, count, percentiles
+  ok    process metrics and gauge functions
+  ok    updates from many threads add up
+result: 4 passed, 0 failed

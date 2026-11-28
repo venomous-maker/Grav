@@ -1,0 +1,80 @@
+// Metrics: counters, gauges, histograms, labels, the Prometheus text, process metrics,
+// and updates from many threads.
+import "std"
+
+test "counters, gauges and the text format" {
+    let m = new MetricsRegistry()
+    let c = m.counter("jobs_total", "Jobs run.")
+    c.inc()
+    c.add(4)
+    let g = m.gauge("queue_depth", "Jobs waiting.")
+    g.set(3.5)
+    g.dec()
+    let reqs = m.counterVec("http_requests_total", "Requests by \"method\".", ["method", "code"])
+    reqs.labels("GET", "200").inc()
+    reqs.labels("GET", "200").inc()
+    reqs.labels("POST", "a\"b\\c\nd").inc()
+    assertEq(m.prometheus(), "# HELP jobs_total Jobs run.\n# TYPE jobs_total counter\njobs_total 5\n" +
+        "# HELP queue_depth Jobs waiting.\n# TYPE queue_depth gauge\nqueue_depth 2.5\n" +
+        "# HELP http_requests_total Requests by \"method\".\n# TYPE http_requests_total counter\n" +
+        "http_requests_total{method=\"GET\",code=\"200\"} 2\nhttp_requests_total{method=\"POST\",code=\"a\\\"b\\\\c\\nd\"} 1\n")
+    assertEq(m.counter("jobs_total", "again").get(), 5 as long)
+    let bad = 0
+    try { m.gauge("jobs_total", "x") } catch (e: ValueError) { bad += 1 }
+    try { m.counter("2bad", "x") } catch (e: ValueError) { bad += 1 }
+    try { reqs.labels("GET") } catch (e: ValueError) { bad += 1 }
+    try { c.add(-1) } catch (e: ValueError) { bad += 1 }
+    assertEq(bad, 4)
+}
+
+test "histograms: buckets, sum, count, percentiles" {
+    let m = new MetricsRegistry()
+    let h = m.histogram("req_seconds", "Request time.", [0.1, 0.5, 1.0])
+    for (v in [0.05, 0.1, 0.2, 0.3, 0.7, 2.0]) { h.observe(v) }
+    assertEq(m.prometheus(), "# HELP req_seconds Request time.\n# TYPE req_seconds histogram\n" +
+        "req_seconds_bucket{le=\"0.1\"} 2\nreq_seconds_bucket{le=\"0.5\"} 4\nreq_seconds_bucket{le=\"1\"} 5\nreq_seconds_bucket{le=\"+Inf\"} 6\n" +
+        "req_seconds_sum 3.35\nreq_seconds_count 6\n")
+    assertEq(h.count(), 6 as long)
+    assert(h.percentile(0.5) > 0.2999999 && h.percentile(0.5) < 0.3000001)
+    assertEq(h.percentile(1.0), 1.0)
+    let byRoute = m.histogramVec("route_seconds", "By route.", ["route"], MetricHistogram.linearBuckets(1.0, 1.0, 2))
+    byRoute.labels("/a").observe(1.5)
+    assert(Str.contains(m.prometheus(), "route_seconds_bucket{route=\"/a\",le=\"2\"} 1\n"))
+    assertEq(MetricHistogram.exponentialBuckets(1.0, 2.0, 4).size(), 4)
+    let t = new MetricHistogram([1.0])
+    t.time(fn() { Time.sleepMs(5) })
+    assert(t.sum() >= 0.004)
+}
+
+test "process metrics and gauge functions" {
+    let m = new MetricsRegistry().processMetrics().processMetrics()
+    let text = m.prometheus()
+    for (name in ["process_resident_memory_bytes", "process_cpu_seconds_total", "process_threads", "process_open_fds", "process_start_time_seconds", "grav_gc_pending_roots"]) {
+        assert(Str.contains(text, "\n${name} "))
+    }
+    assert(Metrics.residentBytes() > 0)
+    assert(Metrics.threads() >= 1)
+    assert(Metrics.openFiles() >= 3)
+    let n = new AtomicInt(7)
+    m.gaugeFunc("answer", "From a function.", fn() -> double { return n.get() as double })
+    assert(Str.contains(m.prometheus(), "\nanswer 7\n"))
+    assertEq(MetricsRegistry.contentType(), "text/plain; version=0.0.4; charset=utf-8")
+}
+
+test "updates from many threads add up" {
+    let m = new MetricsRegistry()
+    let c = m.counter("hits_total", "Hits.")
+    let g = m.gauge("level", "Level.")
+    let h = m.histogram("size", "Size.", [10.0])
+    let threads = new Array<Thread>()
+    for (t in 0..8) {
+        threads.push(Thread.spawn(fn() {
+            for (i in 0..10000) { c.inc(); g.add(0.5); h.observe(1.0) }
+        }))
+    }
+    for (th in threads) { th.join() }
+    assertEq(c.get(), 80000 as long)
+    assertEq(g.get(), 40000.0)
+    assertEq(h.count(), 80000 as long)
+    assertEq(h.sum(), 80000.0)
+}

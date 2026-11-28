@@ -1,0 +1,495 @@
+// lib/sys/metrics.grav — application metrics: counters, gauges and histograms (with labels),
+// the process's memory, CPU, threads and open files, written in the Prometheus text format
+// for a /metrics endpoint.
+//
+//   let m = Metrics.global()
+//   let requests = m.counterVec("http_requests_total", "HTTP requests", ["method", "status"])
+//   let latency = m.histogram("http_request_seconds", "Request time")
+//   m.processMetrics()                             // process_resident_memory_bytes, cpu, threads, fds, gc
+//
+//   requests.labels("GET", "200").inc()
+//   let t = latency.startTimer()
+//   handle(req)
+//   latency.observeSince(t)
+//
+//   router.get("/metrics", fn(req) { return Response.text(m.prometheus()) })
+//
+// Updates are lock-free atomics (a counter add is one instruction; a histogram observe is
+// a bucket search and three atomic adds), so they are cheap on hot paths and safe from any
+// thread. Look up a labelled child once and keep it where you can: labels() takes a lock.
+import "../core/exception.grav"
+import "../core/gc.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../concurrency/async.grav"
+import "../text/strbuf.grav"
+import "../text/string.grav"
+import "time.grav"
+import "process.grav"
+
+namespace std.sys {
+    %{
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <dirent.h>
+    #include <sys/resource.h>
+    #include <unistd.h>
+    #include <math.h>
+
+    static double grav_m_bits_to_d(long long b) { double d; memcpy(&d, &b, sizeof d); return d; }
+    static long long grav_m_d_to_bits(double d) { long long b; memcpy(&b, &d, sizeof b); return b; }
+    static void grav_m_add_double(long long* cell, double v) {
+        long long old = __atomic_load_n(cell, __ATOMIC_RELAXED), nw;
+        do { nw = grav_m_d_to_bits(grav_m_bits_to_d(old) + v); }
+        while (!__atomic_compare_exchange_n(cell, &old, nw, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+    }
+    // A number as Prometheus writes it: the shortest text that reads back the same.
+    static const char* grav_m_num(double v) {
+        char b[40];
+        if (isnan(v)) return grav_str_retain("NaN");
+        if (isinf(v)) return grav_str_retain(v > 0 ? "+Inf" : "-Inf");
+        if (v == floor(v) && fabs(v) < 1e15) snprintf(b, sizeof b, "%.0f", v);
+        else {
+            snprintf(b, sizeof b, "%.15g", v);
+            if (strtod(b, NULL) != v) snprintf(b, sizeof b, "%.17g", v);
+        }
+        size_t n = strlen(b);
+        char* r = grav_str_new(n); memcpy(r, b, n + 1);
+        return r;
+    }
+    static double grav_m_cpu_seconds(void) {
+        struct rusage u; getrusage(RUSAGE_SELF, &u);
+        return (double)u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + (double)u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6;
+    }
+    // A "Key:   value" number from /proc/self/status (kB values in bytes); -1 when absent.
+    static double grav_m_status(const char* key) {
+        FILE* f = fopen("/proc/self/status", "r");
+        if (!f) return -1;
+        char line[256]; size_t k = strlen(key); double v = -1;
+        while (fgets(line, sizeof line, f)) {
+            if (strncmp(line, key, k) == 0 && line[k] == ':') {
+                v = strtod(line + k + 1, NULL);
+                if (strstr(line, "kB")) v *= 1024;
+                break;
+            }
+        }
+        fclose(f);
+        return v;
+    }
+    static double grav_m_open_fds(void) {
+        DIR* d = opendir("/proc/self/fd");
+        if (!d) return -1;
+        int n = 0; struct dirent* e;
+        while ((e = readdir(d)) != NULL) if (e->d_name[0] != '.') n++;
+        closedir(d);
+        return n - 1;   // the directory's own descriptor
+    }
+    static double grav_m_max_fds(void) { struct rlimit r; return getrlimit(RLIMIT_NOFILE, &r) == 0 ? (double)r.rlim_cur : -1; }
+    // The process start time (unix seconds), from /proc/self/stat and the boot time.
+    static double grav_m_start_time(void) {
+        FILE* f = fopen("/proc/self/stat", "r");
+        if (!f) return -1;
+        char buf[1024]; size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[n] = 0;
+        char* p = strrchr(buf, ')'); if (!p) return -1;
+        unsigned long long start = 0; int field = 2;
+        for (char* t = strtok(p + 1, " "); t; t = strtok(NULL, " ")) { if (++field == 22) { start = strtoull(t, NULL, 10); break; } }
+        FILE* s = fopen("/proc/stat", "r"); if (!s) return -1;
+        char line[256]; double btime = -1;
+        while (fgets(line, sizeof line, s)) if (strncmp(line, "btime ", 6) == 0) { btime = strtod(line + 6, NULL); break; }
+        fclose(s);
+        if (btime < 0) return -1;
+        return btime + (double)start / (double)sysconf(_SC_CLK_TCK);
+    }
+    %}
+
+    // A count that only goes up (requests served, errors, bytes sent).
+    class MetricCounter {
+        private v: long = 0
+        constructor() {}
+        fn inc() { %{ __atomic_add_fetch(&self->v, 1, __ATOMIC_RELAXED); %}; }
+        // Adds n (n >= 0).
+        fn add(n: long) {
+            if (n < 0) { throw new ValueError("a counter only goes up"); }
+            %{ __atomic_add_fetch(&self->v, n, __ATOMIC_RELAXED); %};
+        }
+        fn get() -> long { return %{ __atomic_load_n(&self->v, __ATOMIC_RELAXED) %} as long; }
+    }
+
+    // A value that goes up and down (queue length, connections open, temperature).
+    class MetricGauge {
+        private bits: long = 0
+        private source: fn() -> double = null
+        constructor() {}
+        fn set(x: double) { let b = %{ grav_m_d_to_bits(x) %} as long; %{ __atomic_store_n(&self->bits, b, __ATOMIC_RELAXED); %}; }
+        fn add(x: double) { %{ grav_m_add_double(&self->bits, x); %}; }
+        fn inc() { self.add(1.0); }
+        fn dec() { self.add(-1.0); }
+        // Sets it to the current unix time (for "last success" gauges).
+        fn setToNow() { self.set(Time.nowMs() as double / 1000.0); }
+        fn get() -> double {
+            if (self.source != null) { return self.source(); }
+            let b = %{ __atomic_load_n(&self->bits, __ATOMIC_RELAXED) %} as long;
+            return %{ grav_m_bits_to_d(b) %} as double;
+        }
+        // A gauge read from `source` whenever metrics are written.
+        static fn of(source: fn() -> double) -> MetricGauge {
+            let g = new MetricGauge();
+            g.source = source;
+            return g;
+        }
+    }
+
+    // How values are spread (request times, sizes): counts in buckets by upper bound, a sum
+    // and a count.
+    class MetricHistogram {
+        // The bucket upper bounds, rising (+Inf is implied).
+        public bounds: Array<double>
+        private counts: long*
+        private n: int
+        private total: long = 0
+        private sumBits: long = 0
+        constructor(bounds: Array<double>) {
+            for (i in 1..bounds.size()) {
+                if (bounds[i] <= bounds[i - 1]) { throw new ValueError("histogram buckets must rise"); }
+            }
+            self.bounds = bounds;
+            self.n = bounds.size();
+            let k = self.n + 1;
+            self.counts = %{ (long long*)calloc((size_t)k, sizeof(long long)) %} as long*;
+        }
+        destructor() { free(self.counts); }
+
+        // Prometheus' default buckets: 5 ms to 10 s.
+        static fn defaultBuckets() -> Array<double> { return [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]; }
+        // `count` buckets from `start`, each `factor` times the last.
+        static fn exponentialBuckets(start: double, factor: double, count: int) -> Array<double> {
+            let out = new Array<double>();
+            let v = start;
+            for (i in 0..count) { out.push(v); v = v * factor; }
+            return out;
+        }
+        // `count` buckets from `start`, `width` apart.
+        static fn linearBuckets(start: double, width: double, count: int) -> Array<double> {
+            let out = new Array<double>();
+            for (i in 0..count) { out.push(start + width * i); }
+            return out;
+        }
+
+        // Records one value.
+        fn observe(x: double) {
+            // binary search for the first bound >= x
+            let lo = 0;
+            let hi = self.n;
+            while (lo < hi) {
+                let mid = (lo + hi) / 2;
+                if (self.bounds[mid] >= x) { hi = mid; } else { lo = mid + 1; }
+            }
+            %{ __atomic_add_fetch(&self->counts[lo], 1, __ATOMIC_RELAXED);
+               __atomic_add_fetch(&self->total, 1, __ATOMIC_RELAXED);
+               grav_m_add_double(&self->sumBits, x); %};
+        }
+        // A start time for observeSince.
+        fn startTimer() -> long { return Time.monotonicNs(); }
+        // Records the seconds since startTimer().
+        fn observeSince(startNs: long) { self.observe((Time.monotonicNs() - startNs) as double / 1000000000.0); }
+        // Runs body and records how long it took, in seconds.
+        fn time(body: fn()) {
+            let t = self.startTimer();
+            try { body(); } finally { self.observeSince(t); }
+        }
+        fn count() -> long { return %{ __atomic_load_n(&self->total, __ATOMIC_RELAXED) %} as long; }
+        fn sum() -> double { let b = %{ __atomic_load_n(&self->sumBits, __ATOMIC_RELAXED) %} as long; return %{ grav_m_bits_to_d(b) %} as double; }
+        // Values in bucket i alone (above bounds[i - 1], at or under bounds[i]).
+        fn bucket(i: int) -> long { return %{ __atomic_load_n(&self->counts[i], __ATOMIC_RELAXED) %} as long; }
+        // Values at or under bounds[i] (cumulative, as Prometheus reports them); i == the
+        // number of bounds is +Inf, every value.
+        fn cumulative(i: int) -> long {
+            let c: long = 0;
+            for (k in 0..=i) { c += %{ __atomic_load_n(&self->counts[k], __ATOMIC_RELAXED) %} as long; }
+            return c;
+        }
+        // An estimate of the q-quantile (0.5 the median, 0.99 the 99th percentile),
+        // interpolated within its bucket as Prometheus' histogram_quantile does.
+        fn percentile(q: double) -> double {
+            let total = self.count();
+            if (total == 0) { return 0.0; }
+            let rank = q * total;
+            let below: long = 0;
+            for (i in 0..=self.n) {
+                let c = %{ __atomic_load_n(&self->counts[i], __ATOMIC_RELAXED) %} as long;
+                if ((below + c) as double >= rank && c > 0) {
+                    if (i == self.n) { return self.n == 0 ? 0.0 : self.bounds[self.n - 1]; }
+                    let lower = i == 0 ? 0.0 : self.bounds[i - 1];
+                    let upper = self.bounds[i];
+                    return lower + (upper - lower) * ((rank - below) / c);
+                }
+                below += c;
+            }
+            return self.n == 0 ? 0.0 : self.bounds[self.n - 1];
+        }
+    }
+
+    // One named metric with its help, type and labelled children.
+    class MetricFamily {
+        public name: string
+        public help: string
+        // "counter", "gauge" or "histogram".
+        public type: string
+        public labelNames: Array<string>
+        private keys: Array<string> = new Array<string>()
+        private values: Array<Array<string>> = new Array<Array<string>>()
+        private counters: HashMap<string, MetricCounter> = new HashMap<string, MetricCounter>()
+        private gauges: HashMap<string, MetricGauge> = new HashMap<string, MetricGauge>()
+        private histograms: HashMap<string, MetricHistogram> = new HashMap<string, MetricHistogram>()
+        private buckets: Array<double> = null
+        private lock: Mutex = new Mutex()
+
+        constructor(name: string, help: string, type: string, labelNames: Array<string>, buckets: Array<double>) {
+            self.name = name; self.help = help; self.type = type; self.labelNames = labelNames; self.buckets = buckets;
+        }
+
+        fn counter(values: Array<string>) -> MetricCounter {
+            let key = self.keyOf(values);
+            self.lock.lock();
+            try {
+                if (!self.counters.containsKey(key)) { self.counters.put(key, new MetricCounter()); self.remember(key, values); }
+                return self.counters.get(key);
+            } finally { self.lock.unlock(); }
+        }
+        fn gauge(values: Array<string>) -> MetricGauge {
+            let key = self.keyOf(values);
+            self.lock.lock();
+            try {
+                if (!self.gauges.containsKey(key)) { self.gauges.put(key, new MetricGauge()); self.remember(key, values); }
+                return self.gauges.get(key);
+            } finally { self.lock.unlock(); }
+        }
+        fn histogram(values: Array<string>) -> MetricHistogram {
+            let key = self.keyOf(values);
+            self.lock.lock();
+            try {
+                if (!self.histograms.containsKey(key)) { self.histograms.put(key, new MetricHistogram(self.buckets)); self.remember(key, values); }
+                return self.histograms.get(key);
+            } finally { self.lock.unlock(); }
+        }
+        fn setGauge(g: MetricGauge) {
+            self.lock.lock();
+            if (!self.gauges.containsKey("")) { self.remember("", new Array<string>()); }
+            self.gauges.put("", g);
+            self.lock.unlock();
+        }
+
+        // The family in the Prometheus text format.
+        fn writeTo(sb: StringBuilder) {
+            sb.append("# HELP ").append(self.name).append(" ").append(MetricFamily.escapeHelp(self.help)).append("\n");
+            sb.append("# TYPE ").append(self.name).append(" ").append(self.type).append("\n");
+            self.lock.lock();
+            let keys = self.keys.copy();
+            let values = self.values.copy();
+            self.lock.unlock();
+            for (i in 0..keys.size()) {
+                let labels = self.labelText(values[i], "");
+                if (self.type == "counter") {
+                    sb.append(self.name).append(labels).append(" ").append(str(self.counters.get(keys[i]).get())).append("\n");
+                } else if (self.type == "gauge") {
+                    sb.append(self.name).append(labels).append(" ").append(MetricFamily.num(self.gauges.get(keys[i]).get())).append("\n");
+                } else {
+                    let h = self.histograms.get(keys[i]);
+                    let running: long = 0;
+                    for (b in 0..=h.bounds.size()) {
+                        running += h.bucket(b);
+                        let le = b == h.bounds.size() ? "+Inf" : MetricFamily.num(h.bounds[b]);
+                        sb.append(self.name).append("_bucket").append(self.labelText(values[i], le)).append(" ").append(str(running)).append("\n");
+                    }
+                    sb.append(self.name).append("_sum").append(labels).append(" ").append(MetricFamily.num(h.sum())).append("\n");
+                    sb.append(self.name).append("_count").append(labels).append(" ").append(str(running)).append("\n");
+                }
+            }
+        }
+
+        private fn keyOf(values: Array<string>) -> string {
+            if (values.size() != self.labelNames.size()) {
+                throw new ValueError("${self.name} has ${self.labelNames.size()} labels, not ${values.size()}");
+            }
+            return Str.join(values, "\u{1}");
+        }
+        private fn remember(key: string, values: Array<string>) {
+            self.keys.push(key);
+            self.values.push(values.copy());
+        }
+        private fn labelText(values: Array<string>, le: string) -> string {
+            if (values.size() == 0 && le == "") { return ""; }
+            let sb = new StringBuilder();
+            sb.append("{");
+            for (i in 0..values.size()) {
+                if (i > 0) { sb.append(","); }
+                sb.append(self.labelNames[i]).append("=\"").append(MetricFamily.escapeValue(values[i])).append("\"");
+            }
+            if (le != "") {
+                if (values.size() > 0) { sb.append(","); }
+                sb.append("le=\"").append(le).append("\"");
+            }
+            sb.append("}");
+            return sb.toString();
+        }
+        static fn num(v: double) -> string { return %{ grav_m_num(v) %} as string; }
+        private static fn escapeValue(s: string) -> string {
+            return Str.replace(Str.replace(Str.replace(s, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n");
+        }
+        private static fn escapeHelp(s: string) -> string { return Str.replace(Str.replace(s, "\\", "\\\\"), "\n", "\\n"); }
+    }
+
+    // A counter with labels: labels("GET", "200") is the counter for those values.
+    class MetricCounterVec {
+        private f: MetricFamily
+        constructor(f: MetricFamily) { self.f = f; }
+        // The child for these label values, in the order the names were given.
+        fn labels(values: Array<string>) -> MetricCounter { return self.f.counter(values); }
+        fn labels(a: string) -> MetricCounter { return self.f.counter([a]); }
+        fn labels(a: string, b: string) -> MetricCounter { return self.f.counter([a, b]); }
+        fn labels(a: string, b: string, c: string) -> MetricCounter { return self.f.counter([a, b, c]); }
+        fn labels(a: string, b: string, c: string, d: string) -> MetricCounter { return self.f.counter([a, b, c, d]); }
+    }
+    // A gauge with labels.
+    class MetricGaugeVec {
+        private f: MetricFamily
+        constructor(f: MetricFamily) { self.f = f; }
+        // The child for these label values, in the order the names were given.
+        fn labels(values: Array<string>) -> MetricGauge { return self.f.gauge(values); }
+        fn labels(a: string) -> MetricGauge { return self.f.gauge([a]); }
+        fn labels(a: string, b: string) -> MetricGauge { return self.f.gauge([a, b]); }
+        fn labels(a: string, b: string, c: string) -> MetricGauge { return self.f.gauge([a, b, c]); }
+        fn labels(a: string, b: string, c: string, d: string) -> MetricGauge { return self.f.gauge([a, b, c, d]); }
+    }
+    // A histogram with labels.
+    class MetricHistogramVec {
+        private f: MetricFamily
+        constructor(f: MetricFamily) { self.f = f; }
+        // The child for these label values, in the order the names were given.
+        fn labels(values: Array<string>) -> MetricHistogram { return self.f.histogram(values); }
+        fn labels(a: string) -> MetricHistogram { return self.f.histogram([a]); }
+        fn labels(a: string, b: string) -> MetricHistogram { return self.f.histogram([a, b]); }
+        fn labels(a: string, b: string, c: string) -> MetricHistogram { return self.f.histogram([a, b, c]); }
+        fn labels(a: string, b: string, c: string, d: string) -> MetricHistogram { return self.f.histogram([a, b, c, d]); }
+    }
+
+    // A set of metrics, written together.
+    class MetricsRegistry {
+        private families: Array<MetricFamily> = new Array<MetricFamily>()
+        private byName: HashMap<string, MetricFamily> = new HashMap<string, MetricFamily>()
+        private lock: Mutex = new Mutex()
+        private processAdded: bool = false
+        constructor() {}
+
+        fn counter(name: string, help: string) -> MetricCounter { return self.family(name, help, "counter", new Array<string>(), null).counter(new Array<string>()); }
+        fn counterVec(name: string, help: string, labelNames: Array<string>) -> MetricCounterVec {
+            return new MetricCounterVec(self.family(name, help, "counter", labelNames, null));
+        }
+        fn gauge(name: string, help: string) -> MetricGauge { return self.family(name, help, "gauge", new Array<string>(), null).gauge(new Array<string>()); }
+        fn gaugeVec(name: string, help: string, labelNames: Array<string>) -> MetricGaugeVec {
+            return new MetricGaugeVec(self.family(name, help, "gauge", labelNames, null));
+        }
+        // A gauge whose value is read from `source` each time metrics are written.
+        fn gaugeFunc(name: string, help: string, source: fn() -> double) -> MetricGauge {
+            let g = MetricGauge.of(source);
+            self.family(name, help, "gauge", new Array<string>(), null).setGauge(g);
+            return g;
+        }
+        // A histogram (the default buckets, 5 ms to 10 s, when `buckets` is null).
+        fn histogram(name: string, help: string, buckets: Array<double> = null) -> MetricHistogram {
+            return self.family(name, help, "histogram", new Array<string>(), buckets).histogram(new Array<string>());
+        }
+        fn histogramVec(name: string, help: string, labelNames: Array<string>, buckets: Array<double> = null) -> MetricHistogramVec {
+            return new MetricHistogramVec(self.family(name, help, "histogram", labelNames, buckets));
+        }
+
+        // Adds the process's own metrics, read when written: resident and virtual memory,
+        // CPU seconds, threads, open and maximum file descriptors, start time, and the cycle
+        // collector's pending roots.
+        fn processMetrics() -> MetricsRegistry {
+            self.lock.lock();
+            let added = self.processAdded;
+            self.processAdded = true;
+            self.lock.unlock();
+            if (added) { return self; }
+            self.gaugeFunc("process_resident_memory_bytes", "Resident memory size in bytes.", fn() -> double { return Process.memoryUsage() as double; });
+            self.gaugeFunc("process_virtual_memory_bytes", "Virtual memory size in bytes.", fn() -> double { return %{ grav_m_status("VmSize") %} as double; });
+            self.gaugeFunc("process_max_resident_memory_bytes", "The most resident memory held at once, in bytes.", fn() -> double { return Process.peakMemoryUsage() as double; });
+            self.gaugeFunc("process_cpu_seconds_total", "User and system CPU time spent in seconds.", fn() -> double { return %{ grav_m_cpu_seconds() %} as double; });
+            self.gaugeFunc("process_threads", "Threads in the process.", fn() -> double { return %{ grav_m_status("Threads") %} as double; });
+            self.gaugeFunc("process_open_fds", "Open file descriptors.", fn() -> double { return %{ grav_m_open_fds() %} as double; });
+            self.gaugeFunc("process_max_fds", "The limit on open file descriptors.", fn() -> double { return %{ grav_m_max_fds() %} as double; });
+            let started = %{ grav_m_start_time() %} as double;
+            self.gaugeFunc("process_start_time_seconds", "Start time of the process since the unix epoch in seconds.", fn() -> double { return started; });
+            self.gaugeFunc("grav_gc_pending_roots", "Objects waiting for the cycle collector.", fn() -> double { return GC.pending() as double; });
+            return self;
+        }
+
+        // Every metric in the Prometheus text format (version 0.0.4), in the order they were
+        // registered.
+        fn prometheus() -> string {
+            let sb = new StringBuilder();
+            self.lock.lock();
+            let fams = self.families.copy();
+            self.lock.unlock();
+            for (f in fams) { f.writeTo(sb); }
+            return sb.toString();
+        }
+        // The Content-Type a /metrics response should carry.
+        static fn contentType() -> string { return "text/plain; version=0.0.4; charset=utf-8"; }
+        // The registered metric names.
+        fn names() -> Array<string> {
+            let out = new Array<string>();
+            self.lock.lock();
+            for (f in self.families) { out.push(f.name); }
+            self.lock.unlock();
+            return out;
+        }
+
+        private fn family(name: string, help: string, type: string, labels: Array<string>, buckets: Array<double>) -> MetricFamily {
+            if (!MetricsRegistry.validName(name)) { throw new ValueError("'${name}' is not a valid metric name"); }
+            for (l in labels) {
+                if (!MetricsRegistry.validName(l) || Str.contains(l, ":") || l == "le") { throw new ValueError("'${l}' is not a valid label name"); }
+            }
+            self.lock.lock();
+            try {
+                if (self.byName.containsKey(name)) {
+                    let f = self.byName.get(name);
+                    if (f.type != type || f.labelNames.size() != labels.size()) {
+                        throw new ValueError("${name} is already registered as a ${f.type} with ${f.labelNames.size()} labels");
+                    }
+                    return f;
+                }
+                let f = new MetricFamily(name, help, type, labels.copy(), buckets == null ? MetricHistogram.defaultBuckets() : buckets);
+                self.families.push(f);
+                self.byName.put(name, f);
+                return f;
+            } finally { self.lock.unlock(); }
+        }
+        private static fn validName(s: string) -> bool {
+            if (s.length == 0) { return false; }
+            for (i in 0..s.length) {
+                let c = s[i] as int;
+                let ok = (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 || c == 58 || (i > 0 && c >= 48 && c <= 57);
+                if (!ok) { return false; }
+            }
+            return true;
+        }
+    }
+
+    // The process-wide registry, and the process's numbers read directly.
+    class Metrics {
+        private static shared: MetricsRegistry = new MetricsRegistry()
+        // The registry most applications use.
+        static fn global() -> MetricsRegistry { return Metrics.shared; }
+        // CPU time used so far (user + system), in seconds.
+        static fn cpuSeconds() -> double { return %{ grav_m_cpu_seconds() %} as double; }
+        // Threads in the process.
+        static fn threads() -> int { return %{ (int)grav_m_status("Threads") %} as int; }
+        // Open file descriptors.
+        static fn openFiles() -> int { return %{ (int)grav_m_open_fds() %} as int; }
+        // Resident memory, in bytes.
+        static fn residentBytes() -> long { return Process.memoryUsage(); }
+    }
+}

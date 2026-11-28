@@ -137,6 +137,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [cron](sys/cron.md) | `Cron`: cron expressions, when they are next or last due |
 | [log](sys/log.md) | `Log` and `Logger`: leveled logging to standard error or a file |
 | [args](sys/args.md) | `Args`: command-line options, flags and `--help` |
+| [metrics](sys/metrics.md) | `MetricsRegistry`: counters, gauges, histograms and process metrics in the Prometheus format |
 
 ### concurrency
 
