@@ -85,6 +85,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [regex](text/regex.md) | `Regex`: regular expressions: find, match, replace, split |
 | [markdown](text/markdown.md) | `Markdown`: Markdown to HTML (with a safe mode for users' text) and to plain text |
 | [unicode](text/unicode.md) | `Unicode`: normalization (NFC, NFD, NFKC, NFKD) and accents stripped |
+| [html](text/html.md) | `Html`, `HtmlSanitizer`: escaping, entities, tags stripped, and an allow-list sanitizer for HTML from users |
 
 ### data
 

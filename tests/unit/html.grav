@@ -1,0 +1,51 @@
+// Html: escaping, entities, stripping tags, and the sanitizer against the usual attacks.
+import "std"
+
+test "escape and unescape" {
+    assertEq(Html.escape("<b>Tom & \"Jerry\" 'x'</b>"), "&lt;b&gt;Tom &amp; &quot;Jerry&quot; &#39;x&#39;&lt;/b&gt;")
+    assertEq(Html.escape("plain"), "plain")
+    assertEq(Html.unescape("caf&eacute; &#x263A; &#9731; &lt;&amp;&gt; &bogus; & &#0;"), "café ☺ ☃ <&> &bogus; & \u{FFFD}")
+    assertEq(Html.unescape(Html.escape("a<b>&\"'c")), "a<b>&\"'c")
+    assertEq(Html.unescape("&nbsp;").length, 2)
+}
+
+test "stripTags keeps the text, drops scripts, breaks lines after blocks" {
+    assertEq(Html.stripTags("<p>Hi <b>there</b></p><p>A &amp; B</p>"), "Hi there\nA & B")
+    assertEq(Html.stripTags("x<script>alert(1)</script>y<style>p{}</style>z<!-- c -->!"), "xyz!")
+    assertEq(Html.stripTags("1 < 2 and 3 > 2"), "1 < 2 and 3 > 2")
+    assertEq(Html.stripTags("<ul><li>a</li><li>b</li></ul>"), "a\nb")
+}
+
+test "sanitize: formatting and links kept" {
+    assertEq(Html.sanitize("<p>Hello <b>bold</b> <a href=\"https://x.test/?a=1&amp;b=2\" title=hi>link</a></p>"),
+             "<p>Hello <b>bold</b> <a href=\"https://x.test/?a=1&amp;b=2\" title=\"hi\">link</a></p>")
+    assertEq(Html.sanitize("<IMG SRC=\"/a.png\" ALT='a \"q\"'><br/>"), "<img src=\"/a.png\" alt=\"a &quot;q&quot;\"><br>")
+    assertEq(Html.sanitize("<ul><li>one<li>two</ul>"), "<ul><li>one<li>two</li></li></ul>")
+}
+
+test "sanitize: scripts, handlers and bad links removed" {
+    assertEq(Html.sanitize("a<script>alert(1)</script>b"), "ab")
+    assertEq(Html.sanitize("<SCRIPT SRC=//evil></SCRIPT>ok"), "ok")
+    assertEq(Html.sanitize("<img src=x onerror=alert(1)>"), "<img src=\"x\">")
+    assertEq(Html.sanitize("<a href=\"javascript:alert(1)\">x</a>"), "<a>x</a>")
+    assertEq(Html.sanitize("<a href=\"jav&#x61;script:alert(1)\">x</a>"), "<a>x</a>")
+    assertEq(Html.sanitize("<a href=\" java\tscript:alert(1)\">x</a>"), "<a>x</a>")
+    assertEq(Html.sanitize("<a href=\"data:text/html,x\">x</a>"), "<a>x</a>")
+    assertEq(Html.sanitize("<a href=\"mailto:a@b.test\">m</a>"), "<a href=\"mailto:a@b.test\">m</a>")
+    assertEq(Html.sanitize("<iframe src=x>in</iframe><style>*{}</style><svg><script>1</script></svg>t"), "t")
+    assertEq(Html.sanitize("<div style=\"x\" class=c id=i>d</div>"), "<div>d</div>")
+    assertEq(Html.sanitize("<b>open <i>more"), "<b>open <i>more</i></b>")
+    assertEq(Html.sanitize("</b>stray</p> x < y & z"), "stray x &lt; y &amp; z")
+    assertEq(Html.sanitize("<!-- <script>x</script> -->c<!doctype html>"), "c")
+    assertEq(Html.sanitize("<a title=\"\"><x-y>z</x-y>"), "<a title=\"\">z</a>")
+}
+
+test "a sanitizer of your own" {
+    let s = new HtmlSanitizer().allowTags("table TR td").allowAttrs("td", "colspan").allowAttrs("*", "class").removeTags("img").nofollow()
+    assertEq(s.sanitize("<table><tr><td colspan=2 class=k rowspan=3>x</td></tr></table><img src=a>"),
+             "<table><tr><td colspan=\"2\" class=\"k\">x</td></tr></table>")
+    assertEq(s.sanitize("<a href=\"https://a.test\" rel=\"me\">a</a>"), "<a href=\"https://a.test\" rel=\"nofollow noopener noreferrer\">a</a>")
+    let t = new HtmlSanitizer().allowSchemes("tel")
+    assertEq(t.sanitize("<a href=\"tel:+254700\">c</a>"), "<a href=\"tel:+254700\">c</a>")
+    assertEq(HtmlSanitizer.none().sanitize("<b>x</b> & <i>y</i>"), "x &amp; y")
+}

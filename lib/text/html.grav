@@ -1,0 +1,455 @@
+// html.grav — HTML text: escaping, entities, tags stripped, and an allow-list sanitizer
+// for HTML from users (comments, rich-text editors, imported e-mail).
+//
+//   Html.escape("<b>Tom & Jerry</b>")             // &lt;b&gt;Tom &amp; Jerry&lt;/b&gt;
+//   Html.unescape("caf&eacute; &#x263A;")         // café ☺
+//   Html.stripTags("<p>Hi <b>there</b></p>")      // Hi there
+//   Html.sanitize(userHtml)                       // formatting and links kept, scripts gone
+//
+//   let s = new HtmlSanitizer().allowTags("table thead tbody tr th td").allowAttrs("td", "colspan")
+//   s.sanitize(html)
+//
+// The sanitizer keeps only allowed tags and attributes, drops <script>, <style> and the like
+// with their contents, checks link schemes after decoding entities (so "jav&#x61;script:" is
+// caught), closes what was left open, and writes every attribute value quoted and escaped.
+// It is one pass in C over the input: no regular expressions, no tree.
+import "../core/exception.grav"
+
+namespace std.text {
+    %{
+    #include <stdlib.h>
+    #include <string.h>
+    #include <ctype.h>
+    #include <stdio.h>
+    #include <strings.h>
+
+    typedef struct { char* p; size_t n, cap; } GHBuf;
+    static void gh_grow(GHBuf* b, size_t more) {
+        if (b->n + more + 1 <= b->cap) return;
+        size_t c = b->cap ? b->cap * 2 : 256;
+        while (c < b->n + more + 1) c *= 2;
+        b->p = (char*)realloc(b->p, c); if (!b->p) abort();
+        b->cap = c;
+    }
+    static void gh_put(GHBuf* b, const char* s, size_t n) { gh_grow(b, n); memcpy(b->p + b->n, s, n); b->n += n; }
+    static void gh_putc(GHBuf* b, char c) { gh_grow(b, 1); b->p[b->n++] = c; }
+    static void gh_puts(GHBuf* b, const char* s) { gh_put(b, s, strlen(s)); }
+    // The buffer as a Grav string (and the buffer freed).
+    static const char* gh_done(GHBuf* b) {
+        char* r = grav_str_new(b->n);
+        if (b->n) memcpy(r, b->p, b->n);
+        r[b->n] = 0;
+        free(b->p);
+        return r;
+    }
+    static void gh_esc(GHBuf* b, const char* s, size_t n) {
+        size_t run = 0;
+        for (size_t i = 0; i < n; i++) {
+            const char* e = NULL;
+            switch (s[i]) {
+                case '&': e = "&amp;"; break;
+                case '<': e = "&lt;"; break;
+                case '>': e = "&gt;"; break;
+                case '"': e = "&quot;"; break;
+                case '\'': e = "&#39;"; break;
+                default: continue;
+            }
+            gh_put(b, s + run, i - run);
+            gh_puts(b, e);
+            run = i + 1;
+        }
+        gh_put(b, s + run, n - run);
+    }
+    static const char* grav_html_escape(const char* s) {
+        size_t n = strlen(s);
+        if (strcspn(s, "&<>\"'") == n) return grav_str_retain(s);
+        GHBuf b = {0}; gh_esc(&b, s, n); return gh_done(&b);
+    }
+
+    static void gh_utf8(GHBuf* b, unsigned long c) {
+        if (c == 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) c = 0xFFFD;
+        char t[4]; int k;
+        if (c < 0x80) { t[0] = (char)c; k = 1; }
+        else if (c < 0x800) { t[0] = (char)(0xC0 | (c >> 6)); t[1] = (char)(0x80 | (c & 63)); k = 2; }
+        else if (c < 0x10000) { t[0] = (char)(0xE0 | (c >> 12)); t[1] = (char)(0x80 | ((c >> 6) & 63)); t[2] = (char)(0x80 | (c & 63)); k = 3; }
+        else { t[0] = (char)(0xF0 | (c >> 18)); t[1] = (char)(0x80 | ((c >> 12) & 63)); t[2] = (char)(0x80 | ((c >> 6) & 63)); t[3] = (char)(0x80 | (c & 63)); k = 4; }
+        gh_put(b, t, (size_t)k);
+    }
+    // The named entities people actually write (sorted for the binary search).
+    static const struct { const char* name; unsigned short cp; } gh_ents[] = {
+        {"AElig",198},{"Aacute",193},{"Agrave",192},{"Auml",196},{"Ccedil",199},{"Eacute",201},{"Ntilde",209},
+        {"Oacute",211},{"Ouml",214},{"Uacute",218},{"Uuml",220},{"aacute",225},{"acirc",226},{"aelig",230},
+        {"agrave",224},{"amp",38},{"apos",39},{"aring",229},{"atilde",227},{"auml",228},{"bdquo",8222},
+        {"bull",8226},{"ccedil",231},{"cent",162},{"copy",169},{"dagger",8224},{"deg",176},{"divide",247},
+        {"eacute",233},{"ecirc",234},{"egrave",232},{"euml",235},{"euro",8364},{"frac12",189},{"frac14",188},
+        {"frac34",190},{"gt",62},{"hellip",8230},{"iacute",237},{"icirc",238},{"iexcl",161},{"igrave",236},
+        {"iquest",191},{"iuml",239},{"laquo",171},{"ldquo",8220},{"lsaquo",8249},{"lsquo",8216},{"lt",60},
+        {"mdash",8212},{"micro",181},{"middot",183},{"nbsp",160},{"ndash",8211},{"not",172},{"ntilde",241},
+        {"oacute",243},{"ocirc",244},{"ograve",242},{"ordf",170},{"ordm",186},{"oslash",248},{"otilde",245},
+        {"ouml",246},{"para",182},{"permil",8240},{"plusmn",177},{"pound",163},{"quot",34},{"raquo",187},
+        {"rdquo",8221},{"reg",174},{"rsaquo",8250},{"rsquo",8217},{"sbquo",8218},{"sect",167},{"shy",173},
+        {"szlig",223},{"times",215},{"trade",8482},{"uacute",250},{"ucirc",251},{"ugrave",249},{"uuml",252},
+        {"yacute",253},{"yen",165},{"yuml",255}
+    };
+    // Decodes the entity at s[0] == '&' into b; returns the bytes it used (0: not an entity).
+    static size_t gh_entity(GHBuf* b, const char* s, size_t n) {
+        if (n < 3) return 0;
+        if (s[1] == '#') {
+            size_t i = 2; unsigned long v = 0; int hex = 0, digits = 0;
+            if (i < n && (s[i] == 'x' || s[i] == 'X')) { hex = 1; i++; }
+            for (; i < n && digits < 8; i++, digits++) {
+                int c = (unsigned char)s[i], d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (hex && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (hex && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else break;
+                v = v * (hex ? 16 : 10) + (unsigned long)d;
+            }
+            if (!digits) return 0;
+            gh_utf8(b, v);
+            return i < n && s[i] == ';' ? i + 1 : i;
+        }
+        size_t i = 1;
+        while (i < n && i < 10 && isalnum((unsigned char)s[i])) i++;
+        if (i == 1 || i >= n || s[i] != ';') return 0;
+        char name[12]; memcpy(name, s + 1, i - 1); name[i - 1] = 0;
+        int lo = 0, hi = (int)(sizeof gh_ents / sizeof gh_ents[0]) - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2, c = strcmp(name, gh_ents[mid].name);
+            if (!c) { gh_utf8(b, gh_ents[mid].cp); return i + 1; }
+            if (c < 0) hi = mid - 1; else lo = mid + 1;
+        }
+        return 0;
+    }
+    static void gh_unesc(GHBuf* b, const char* s, size_t n) {
+        size_t run = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (s[i] != '&') continue;
+            gh_put(b, s + run, i - run);
+            size_t used = gh_entity(b, s + i, n - i);
+            if (used) { i += used - 1; run = i + 1; } else run = i;
+        }
+        gh_put(b, s + run, n - run);
+    }
+    static const char* grav_html_unescape(const char* s) {
+        if (!strchr(s, '&')) return grav_str_retain(s);
+        GHBuf b = {0}; gh_unesc(&b, s, strlen(s)); return gh_done(&b);
+    }
+
+    // ── the tag scanner ────────────────────────────────────────────────────
+    typedef struct { const char* name; size_t nlen; const char* val; size_t vlen; int hasval; } GHAttr;
+    typedef struct {
+        char name[16]; int closing, selfclose, bogus;
+        GHAttr attrs[32]; int nattr;
+        size_t end;                     // the index after '>'
+    } GHTag;
+    // Reads a tag starting at s[i] == '<'. Returns 0 when it is not one (a lone '<').
+    static int gh_tag(const char* s, size_t n, size_t i, GHTag* t) {
+        t->name[0] = 0; t->closing = t->selfclose = t->bogus = 0; t->nattr = 0; t->end = 0;
+        size_t p = i + 1;
+        if (p < n && s[p] == '/') { t->closing = 1; p++; }
+        if (p >= n || !isalpha((unsigned char)s[p])) return 0;
+        size_t k = 0;
+        while (p < n && (isalnum((unsigned char)s[p]) || s[p] == '-' || s[p] == ':')) {
+            if (k < sizeof t->name - 1) t->name[k++] = (char)tolower((unsigned char)s[p]); else t->bogus = 1;
+            p++;
+        }
+        t->name[k] = 0;
+        for (;;) {
+            while (p < n && (isspace((unsigned char)s[p]) || s[p] == '/')) { if (s[p] == '/') t->selfclose = 1; p++; }
+            if (p >= n) { t->end = n; return 1; }
+            if (s[p] == '>') { t->end = p + 1; return 1; }
+            t->selfclose = 0;
+            size_t a = p;
+            while (p < n && !isspace((unsigned char)s[p]) && s[p] != '=' && s[p] != '>' && s[p] != '/') p++;
+            if (p == a) { p++; continue; }
+            GHAttr at = { s + a, p - a, NULL, 0, 0 };
+            while (p < n && isspace((unsigned char)s[p])) p++;
+            if (p < n && s[p] == '=') {
+                p++;
+                while (p < n && isspace((unsigned char)s[p])) p++;
+                at.hasval = 1;
+                if (p < n && (s[p] == '"' || s[p] == '\'')) {
+                    char q = s[p++]; size_t v = p;
+                    while (p < n && s[p] != q) p++;
+                    at.val = s + v; at.vlen = p - v;
+                    if (p < n) p++;
+                } else {
+                    size_t v = p;
+                    while (p < n && !isspace((unsigned char)s[p]) && s[p] != '>') p++;
+                    at.val = s + v; at.vlen = p - v;
+                }
+            }
+            if (t->nattr < 32) t->attrs[t->nattr++] = at;
+        }
+    }
+    // Whether `word` (n bytes, lowercase) is in the list ",a,b,c,".
+    static int gh_in(const char* list, const char* word, size_t n) {
+        for (const char* p = list; (p = strchr(p, ',')) != NULL; p++) {
+            if (strncmp(p + 1, word, n) == 0 && p[1 + n] == ',') return 1;
+        }
+        return 0;
+    }
+    static int gh_void(const char* t) {
+        return gh_in(",area,br,col,hr,img,input,source,track,wbr,", t, strlen(t));
+    }
+    // Tags dropped together with everything inside them.
+    static int gh_drop(const char* t) {
+        return gh_in(",script,style,iframe,object,embed,noscript,template,svg,math,textarea,select,title,head,frame,frameset,applet,noembed,noframes,xmp,plaintext,", t, strlen(t));
+    }
+    // Skips to after the closing tag of `name` (case-insensitive), or to the end.
+    static size_t gh_skip(const char* s, size_t n, size_t p, const char* name) {
+        size_t k = strlen(name);
+        for (; p + 2 + k <= n; p++) {
+            if (s[p] == '<' && s[p + 1] == '/' && strncasecmp(s + p + 2, name, k) == 0) {
+                const char* e = memchr(s + p, '>', n - p);
+                return e ? (size_t)(e - s) + 1 : n;
+            }
+        }
+        return n;
+    }
+    static int gh_urlattr(const char* a) {
+        return gh_in(",href,src,cite,action,formaction,poster,background,longdesc,usemap,xlink:href,", a, strlen(a));
+    }
+    // Whether a decoded URL is relative or uses an allowed scheme.
+    static int gh_url_ok(const char* u, size_t n, const char* schemes) {
+        char sc[24]; size_t k = 0;
+        for (size_t i = 0; i < n; i++) {
+            unsigned char c = (unsigned char)u[i];
+            if (c <= ' ' || c == 127) continue;          // browsers ignore these inside a scheme
+            if (c == ':') { sc[k] = 0; return k > 0 && gh_in(schemes, sc, k); }
+            if (c == '/' || c == '?' || c == '#') return 1;
+            if (k >= sizeof sc - 1) return 0;
+            sc[k++] = (char)tolower(c);
+        }
+        return 1;
+    }
+
+    // The text of `s` between tags, with entities normalized.
+    static void gh_text(GHBuf* b, const char* s, size_t n) {
+        GHBuf t = {0};
+        gh_unesc(&t, s, n);
+        gh_esc(b, t.p ? t.p : "", t.n);
+        free(t.p);
+    }
+
+    static const char* grav_html_sanitize(const char* s, const char* tags, const char* attrs, const char* schemes, int nofollow) {
+        size_t n = strlen(s), i = 0, run = 0;
+        GHBuf b = {0};
+        char stack[128][16]; int depth = 0;
+        GHTag t;
+        while (i < n) {
+            const char* lt = memchr(s + i, '<', n - i);
+            if (!lt) break;
+            i = (size_t)(lt - s);
+            if (i + 3 < n && strncmp(s + i, "<!--", 4) == 0) {
+                gh_text(&b, s + run, i - run);
+                const char* e = strstr(s + i + 4, "-->");
+                i = run = e ? (size_t)(e - s) + 3 : n;
+                continue;
+            }
+            if (i + 1 < n && (s[i + 1] == '!' || s[i + 1] == '?')) {
+                gh_text(&b, s + run, i - run);
+                const char* e = memchr(s + i, '>', n - i);
+                i = run = e ? (size_t)(e - s) + 1 : n;
+                continue;
+            }
+            if (!gh_tag(s, n, i, &t)) { i++; continue; }
+            gh_text(&b, s + run, i - run);
+            i = run = t.end;
+            size_t tl = strlen(t.name);
+            if (!t.closing && gh_drop(t.name)) { i = run = gh_skip(s, n, i, t.name); continue; }
+            if (t.bogus || !gh_in(tags, t.name, tl)) continue;
+            if (t.closing) {
+                int at = depth - 1;
+                while (at >= 0 && strcmp(stack[at], t.name) != 0) at--;
+                if (at < 0) continue;
+                while (depth > at) { depth--; gh_puts(&b, "</"); gh_puts(&b, stack[depth]); gh_putc(&b, '>'); }
+                continue;
+            }
+            gh_putc(&b, '<'); gh_puts(&b, t.name);
+            int isa = strcmp(t.name, "a") == 0;
+            for (int k = 0; k < t.nattr; k++) {
+                GHAttr* a = &t.attrs[k];
+                char an[32]; size_t al = a->nlen < sizeof an - 1 ? a->nlen : 0;
+                if (!al) continue;
+                for (size_t j = 0; j < al; j++) an[j] = (char)tolower((unsigned char)a->name[j]);
+                an[al] = 0;
+                if (strncmp(an, "on", 2) == 0) continue;
+                char key[52]; snprintf(key, sizeof key, "%s.%s", t.name, an);
+                char any[40]; snprintf(any, sizeof any, "*.%s", an);
+                if (!gh_in(attrs, key, strlen(key)) && !gh_in(attrs, any, strlen(any))) continue;
+                GHBuf v = {0};
+                gh_unesc(&v, a->val ? a->val : "", a->vlen);
+                if (gh_urlattr(an) && !gh_url_ok(v.p ? v.p : "", v.n, schemes)) { free(v.p); continue; }
+                if (isa && nofollow && strcmp(an, "rel") == 0) { free(v.p); continue; }
+                gh_putc(&b, ' '); gh_puts(&b, an);
+                gh_puts(&b, "=\""); gh_esc(&b, v.p ? v.p : "", v.n); gh_putc(&b, '"');
+                free(v.p);
+            }
+            if (isa && nofollow) gh_puts(&b, " rel=\"nofollow noopener noreferrer\"");
+            if (gh_void(t.name)) { gh_putc(&b, '>'); continue; }
+            gh_putc(&b, '>');
+            if (depth < 128) { strcpy(stack[depth++], t.name); }
+        }
+        gh_text(&b, s + run, n - run);
+        while (depth > 0) { depth--; gh_puts(&b, "</"); gh_puts(&b, stack[depth]); gh_putc(&b, '>'); }
+        return gh_done(&b);
+    }
+
+    // The list ",a,b," with each word of `names` (lowercased, after `prefix`) added once.
+    static const char* grav_html_listadd(const char* list, const char* names, const char* prefix) {
+        GHBuf b = {0};
+        gh_puts(&b, list);
+        if (!b.n || b.p[b.n - 1] != ',') gh_putc(&b, ',');
+        const char* p = names;
+        for (;;) {
+            while (*p == ' ' || *p == ',' || *p == '\t' || *p == '\n') p++;
+            if (!*p) break;
+            size_t k = 0; char w[64];
+            for (const char* q = prefix; *q && k < 62; q++) w[k++] = (char)tolower((unsigned char)*q);
+            while (*p && *p != ' ' && *p != ',' && *p != '\t' && *p != '\n') { if (k < 62) w[k++] = (char)tolower((unsigned char)*p); p++; }
+            w[k] = 0;
+            gh_putc(&b, 0); b.n--;
+            if (!gh_in(b.p, w, k)) { gh_put(&b, w, k); gh_putc(&b, ','); }
+        }
+        return gh_done(&b);
+    }
+    // The list without the words of `names`.
+    static const char* grav_html_listdrop(const char* list, const char* names) {
+        GHBuf b = {0};
+        gh_putc(&b, ',');
+        const char* p = list;
+        while (*p) {
+            while (*p == ',') p++;
+            if (!*p) break;
+            const char* e = strchr(p, ','); size_t k = e ? (size_t)(e - p) : strlen(p);
+            char key[66]; key[0] = ','; size_t kk = k < 63 ? k : 63; memcpy(key + 1, p, kk); key[kk + 1] = ','; key[kk + 2] = 0;
+            GHBuf low = {0}; gh_putc(&low, ',');
+            for (const char* q = names; *q; q++) gh_putc(&low, (*q == ' ' || *q == '\t') ? ',' : (char)tolower((unsigned char)*q));
+            gh_putc(&low, ','); gh_putc(&low, 0);
+            if (!strstr(low.p, key)) { gh_put(&b, p, k); gh_putc(&b, ','); }
+            free(low.p);
+            p += k;
+        }
+        return gh_done(&b);
+    }
+
+    static int gh_block(const char* t) {
+        return gh_in(",p,div,br,li,tr,h1,h2,h3,h4,h5,h6,blockquote,pre,section,article,header,footer,ul,ol,table,hr,dt,dd,", t, strlen(t));
+    }
+    static const char* grav_html_strip(const char* s) {
+        size_t n = strlen(s), i = 0, run = 0;
+        GHBuf b = {0};
+        GHTag t;
+        while (i < n) {
+            const char* lt = memchr(s + i, '<', n - i);
+            if (!lt) break;
+            i = (size_t)(lt - s);
+            if (i + 3 < n && strncmp(s + i, "<!--", 4) == 0) {
+                gh_unesc(&b, s + run, i - run);
+                const char* e = strstr(s + i + 4, "-->");
+                i = run = e ? (size_t)(e - s) + 3 : n;
+                continue;
+            }
+            if (i + 1 < n && (s[i + 1] == '!' || s[i + 1] == '?')) {
+                gh_unesc(&b, s + run, i - run);
+                const char* e = memchr(s + i, '>', n - i);
+                i = run = e ? (size_t)(e - s) + 1 : n;
+                continue;
+            }
+            if (!gh_tag(s, n, i, &t)) { i++; continue; }
+            gh_unesc(&b, s + run, i - run);
+            i = run = t.end;
+            if (!t.closing && gh_drop(t.name)) { i = run = gh_skip(s, n, i, t.name); continue; }
+            if (gh_block(t.name) && b.n && b.p[b.n - 1] != '\n') gh_putc(&b, '\n');
+        }
+        gh_unesc(&b, s + run, n - run);
+        while (b.n && (b.p[b.n - 1] == '\n' || b.p[b.n - 1] == ' ')) b.n--;
+        return gh_done(&b);
+    }
+    %}
+
+    // HTML escaping, entities and tags.
+    class Html {
+        // `s` with & < > " ' escaped: safe as element text and inside a quoted attribute.
+        // Returns `s` itself (no copy) when there is nothing to escape.
+        static fn escape(s: string) -> string { return %{ grav_html_escape(s) %} as string; }
+        // escape, for an attribute value (the same set: both quote styles are covered).
+        static fn escapeAttr(s: string) -> string { return %{ grav_html_escape(s) %} as string; }
+        // Entities decoded: named ones (&amp; &eacute; &nbsp; and the other common ones) and
+        // numeric ones (&#233; &#xE9;). Unknown entities are left as they are.
+        static fn unescape(s: string) -> string { return %{ grav_html_unescape(s) %} as string; }
+        // The text of an HTML fragment: tags removed, <script> and <style> dropped with their
+        // contents, entities decoded, a line break after block elements (p, div, li, br, ...).
+        static fn stripTags(html: string) -> string { return %{ grav_html_strip(html) %} as string; }
+        // `html` cleaned with the default HtmlSanitizer (formatting, lists, links, images).
+        static fn sanitize(html: string) -> string { return HtmlSanitizer.shared().sanitize(html); }
+    }
+
+    // Keeps only allowed tags, attributes and link schemes of untrusted HTML.
+    //
+    // By default: text formatting (b, strong, i, em, u, s, sub, sup, mark, small, code, kbd, br),
+    // blocks (p, div, span, blockquote, pre, h1 to h6, hr), lists (ul, ol, li, dl, dt, dd),
+    // links (a href title) and images (img src alt title width height), with http, https and
+    // mailto links (and relative ones). `class` and `id` are not allowed until asked for.
+    class HtmlSanitizer {
+        private tags: string = ",b,strong,i,em,u,s,strike,del,ins,sub,sup,mark,small,code,kbd,samp,var,br,p,div,span,blockquote,pre,h1,h2,h3,h4,h5,h6,hr,ul,ol,li,dl,dt,dd,a,img,abbr,cite,q,time,figure,figcaption,"
+        private attrs: string = ",a.href,a.title,img.src,img.alt,img.title,img.width,img.height,abbr.title,q.cite,blockquote.cite,time.datetime,ol.start,li.value,"
+        private schemes: string = ",http,https,mailto,"
+        private follow: bool = true
+        private static defaultOne: HtmlSanitizer = new HtmlSanitizer()
+
+        constructor() {}
+        // The default sanitizer, made once.
+        static fn shared() -> HtmlSanitizer { return HtmlSanitizer.defaultOne; }
+        // A sanitizer that allows nothing: every tag is removed and the text kept (escaped).
+        static fn none() -> HtmlSanitizer {
+            let s = new HtmlSanitizer();
+            s.tags = ",";
+            s.attrs = ",";
+            return s;
+        }
+        // Also allows these tags (space-separated: "table tr td").
+        fn allowTags(names: string) -> HtmlSanitizer {
+            self.tags = HtmlSanitizer.add(self.tags, names, "");
+            return self;
+        }
+        // Stops allowing these tags (space-separated).
+        fn removeTags(names: string) -> HtmlSanitizer {
+            self.tags = HtmlSanitizer.drop(self.tags, names);
+            return self;
+        }
+        // Allows these attributes (space-separated) on `tag`; "*" for every allowed tag.
+        // Event handlers (on...) are never allowed.
+        fn allowAttrs(tag: string, names: string) -> HtmlSanitizer {
+            self.attrs = HtmlSanitizer.add(self.attrs, names, tag + ".");
+            return self;
+        }
+        // Also allows these URL schemes (space-separated: "tel ftp") in href and src.
+        fn allowSchemes(names: string) -> HtmlSanitizer {
+            self.schemes = HtmlSanitizer.add(self.schemes, names, "");
+            return self;
+        }
+        // rel="nofollow noopener noreferrer" on every link (instead of the link's own rel).
+        fn nofollow(on: bool = true) -> HtmlSanitizer {
+            self.follow = !on;
+            return self;
+        }
+        // The cleaned HTML.
+        fn sanitize(html: string) -> string {
+            let tags = self.tags;
+            let attrs = self.attrs;
+            let schemes = self.schemes;
+            let nf = !self.follow;
+            return %{ grav_html_sanitize(html, tags, attrs, schemes, nf) %} as string;
+        }
+
+        private static fn add(list: string, names: string, prefix: string) -> string {
+            return %{ grav_html_listadd(list, names, prefix) %} as string;
+        }
+        private static fn drop(list: string, name: string) -> string {
+            return %{ grav_html_listdrop(list, name) %} as string;
+        }
+    }
+}
