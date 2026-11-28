@@ -1,0 +1,80 @@
+// Locale: numbers, money, percentages, plurals and dates in several locales.
+import "std"
+
+test "numbers and grouping" {
+    let en = Locale.of("en")
+    assertEq(en.number(1234567.891), "1,234,567.891")
+    assertEq(en.number(1234.5), "1,234.5")
+    assertEq(en.number(1234.5, 2), "1,234.50")
+    assertEq(en.number(-0.004, 2), "0.00")
+    assertEq(en.number(1.005, 2), "1.01")
+    assertEq(en.integer(-9876543210), "-9,876,543,210")
+    assertEq(Locale.of("en-IN").number(12345678.9), "1,23,45,678.9")
+    assertEq(Locale.of("de-DE").number(1234567.5, 2), "1.234.567,50")
+    assertEq(Locale.of("es").number(1234), "1234")
+    assertEq(Locale.of("es").number(12345), "12.345")
+    assertEq(Locale.of("fr-FR").number(1234.5), "1\u{202f}234,5")
+    assertEq(Locale.of("de").parseNumber("1.234,5"), 1234.5)
+    assertEq(Locale.of("en").parseNumber(" -1,234.25 "), -1234.25)
+    let bad = false
+    try { Locale.of("en").parseNumber("12abc") } catch (e: ValueError) { bad = true }
+    assert(bad)
+}
+
+test "money and percentages" {
+    let ke = Locale.of("en-KE")
+    assertEq(ke.currency(1234.5, "KES"), "KES 1,234.50")
+    assertEq(ke.currency(1234.5, "kes", true), "KSh1,234.50")
+    assertEq(ke.currency(-20, "KES"), "-KES 20.00")
+    assertEq(Locale.of("en-US").currency(1234.5, "USD", true), "$1,234.50")
+    assertEq(Locale.of("en-US").currency(1234.5, "JPY"), "JPY 1,235")
+    assertEq(Locale.of("en").currency(1.2345, "KWD"), "KWD 1.235")
+    assertEq(Locale.of("de-DE").currency(1234.5, "EUR", true), "1.234,50 €")
+    assertEq(Locale.of("pt-BR").currency(1234.5, "BRL", true), "R$ 1.234,50")
+    assertEq(Locale.of("en").percent(0.256), "26%")
+    assertEq(Locale.of("de").percent(0.256, 1), "25,6\u{a0}%")
+    assertEq(Locale.of("en").bytes(1500000), "1.5 MB")
+    assertEq(Locale.of("en").bytes(1024, true), "1 KiB")
+    assertEq(Locale.of("en").bytes(999), "999 B")
+}
+
+test "plurals" {
+    let en = Locale.of("en")
+    assertEq(en.plural(1), "one")
+    assertEq(en.plural(0), "other")
+    assertEq(en.plural(1.5), "other")
+    assertEq(Locale.of("fr").plural(0), "one")
+    assertEq(Locale.of("fr").plural(1.5), "one")
+    let ru = Locale.of("ru")
+    assertEq("${ru.plural(1)} ${ru.plural(21)} ${ru.plural(3)} ${ru.plural(5)} ${ru.plural(11)} ${ru.plural(14)} ${ru.plural(22)} ${ru.plural(1.5)}", "one one few many many many few other")
+    assertEq(Locale.of("ja").plural(1), "other")
+    assertEq(en.choose(1, "one:# file|other:# files"), "1 file")
+    assertEq(en.choose(1200, "one:# file|other:# files"), "1,200 files")
+    assertEq(ru.choose(3, "one:# файл|few:# файла|many:# файлов|other:# файла"), "3 файла")
+    assertEq(ru.choose(7, "one:# файл|other:# файла"), "7 файла")
+}
+
+test "dates and times" {
+    let d = DateTime.of(2025, 1, 15, 15, 4, 5)
+    let us = Locale.of("en-US")
+    assertEq(us.date(d, "short"), "1/15/2025")
+    assertEq(us.date(d), "Jan 15, 2025")
+    assertEq(us.date(d, "full"), "Wednesday, January 15, 2025")
+    assertEq(us.time(d), "3:04 PM")
+    assertEq(us.dateTime(d), "Jan 15, 2025, 3:04 PM")
+    let ke = Locale.of("en-KE")
+    assertEq(ke.date(d, "short"), "15/01/2025")
+    assertEq(ke.dateTime(d, "long", "medium"), "15 January 2025, 15:04:05")
+    assertEq(Locale.of("sw-KE").date(d, "full"), "Jumatano, 15 Januari 2025")
+    assertEq(Locale.of("fr").date(d, "full"), "mercredi 15 janvier 2025")
+    assertEq(Locale.of("de").date(d, "long"), "15. Januar 2025")
+    assertEq(Locale.of("es").date(d, "long"), "15 de enero de 2025")
+    assertEq(Locale.of("pt-BR").date(d, "full"), "quarta-feira, 15 de janeiro de 2025")
+    assertEq(Locale.of("ru").date(d, "long"), "15 января 2025 г.")
+    assertEq(Locale.of("ja").date(d, "full"), "2025年1月15日水曜日")
+    assertEq(Locale.of("zh-CN").time(d), "15:04")
+    assertEq(Locale.of("en").format(d, "EEE d MMM yy 'at' h:mm a, ''x''"), "Wed 15 Jan 25 at 3:04 PM, 'x'")
+    assertEq(Locale.of("xx-YY").date(d), "Jan 15, 2025")
+    assertEq(Locale.of("xx-YY").tag, "xx-YY")
+    assertEq(Locale.of("pt_br").tag, "pt-BR")
+}

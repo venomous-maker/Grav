@@ -1,0 +1,6 @@
+running 4 tests
+  ok    numbers and grouping
+  ok    money and percentages
+  ok    plurals
+  ok    dates and times
+result: 4 passed, 0 failed

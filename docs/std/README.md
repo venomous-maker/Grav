@@ -88,6 +88,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [html](text/html.md) | `Html`, `HtmlSanitizer`: escaping, entities, tags stripped, and an allow-list sanitizer for HTML from users |
 | [template](text/template.md) | `Template`: Mustache templates over JSON, HTML-escaped by default |
 | [diff](text/diff.md) | `Diff`: line, word and character diffs; unified output and HTML |
+| [locale](text/locale.md) | `Locale`: numbers, money (`KES 1,234.50`), dates and plural rules by country |
 
 ### data
 

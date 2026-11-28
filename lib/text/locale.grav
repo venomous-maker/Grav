@@ -1,0 +1,490 @@
+// locale.grav — numbers, money, dates and plurals the way people in a country write them.
+//
+//   let ke = Locale.of("en-KE")
+//   ke.currency(1234.5, "KES")                     // KES 1,234.50
+//   Locale.of("de-DE").currency(1234.5, "EUR", true)   // 1.234,50 €
+//   Locale.of("en-IN").number(12345678.9)          // 1,23,45,678.9
+//   Locale.of("fr").date(DateTime.of(2025, 1, 15), "long")   // 15 janvier 2025
+//   Locale.of("ru").plural(3)                      // few
+//   Locale.of("en").choose(3, "one:# file|other:# files")    // 3 files
+//
+// Built in: en (US, GB, KE, IN, NG, ZA, AU, CA and other regions), sw, fr, de, es, pt
+// (BR, PT), it, nl, ru, ja and zh. An unknown tag falls back to its language, then to en.
+// The data follows CLDR (separators, grouping, plural rules, month and day names, date
+// patterns), trimmed to what applications use. Currency spacing is a plain space.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../sys/datetime.grav"
+import "../concurrency/async.grav"
+import "string.grav"
+import "strbuf.grav"
+
+namespace std.text {
+    %{
+    #include <math.h>
+    #include <stdio.h>
+    #include <string.h>
+    #include <stdlib.h>
+
+    // |x| rounded to `decimals` places (half away from zero, with the binary fuzz of values
+    // such as 1.005 taken out), its digits written with `dec` and grouping `grp`: the first
+    // group of `g1` digits, then `g2` (3 and 3; 3 and 2 in India), only from `minGroup` digits.
+    static const char* grav_loc_number(double x, int decimals, int trim, const char* dec, const char* grp, int g1, int g2, int minGroup) {
+        char digits[400];
+        int neg = x < 0;
+        double a = fabs(x);
+        if (!isfinite(a)) return grav_str_retain(isnan(a) ? "NaN" : (neg ? "-∞" : "∞"));
+        if (decimals < 0) decimals = 0;
+        if (decimals > 15) decimals = 15;
+        double p = pow(10.0, decimals);
+        double scaled = a * p;
+        if (scaled < 9007199254740992.0) {
+            double r = floor(scaled + 0.5 + scaled * 1e-15);
+            snprintf(digits, sizeof digits, "%.0f", r);
+        } else {
+            snprintf(digits, sizeof digits, "%.0f", scaled);
+        }
+        int len = (int)strlen(digits);
+        while (len <= decimals) {           // 5 with 2 decimals -> "005"
+            memmove(digits + 1, digits, (size_t)len + 1); digits[0] = '0'; len++;
+        }
+        int intLen = len - decimals;
+        int fracLen = decimals;
+        if (trim) while (fracLen > 0 && digits[intLen + fracLen - 1] == '0') fracLen--;
+        int allZero = 1;
+        for (int i = 0; i < intLen + fracLen; i++) if (digits[i] != '0') { allZero = 0; break; }
+        if (allZero) neg = 0;
+        size_t dl = strlen(dec), gl = strlen(grp);
+        char* out = grav_str_new((size_t)len * (gl + 1) + dl + 2);
+        size_t o = 0;
+        if (neg) out[o++] = '-';
+        int grouping = intLen >= minGroup && gl > 0;
+        for (int i = 0; i < intLen; i++) {
+            out[o++] = digits[i];
+            int left = intLen - 1 - i;      // digits still to come
+            if (grouping && left > 0) {
+                int sep = left == g1 || (left > g1 && (left - g1) % g2 == 0);
+                if (sep) { memcpy(out + o, grp, gl); o += gl; }
+            }
+        }
+        if (fracLen > 0) {
+            memcpy(out + o, dec, dl); o += dl;
+            memcpy(out + o, digits + intLen, (size_t)fracLen); o += (size_t)fracLen;
+        }
+        out[o] = 0;
+        return out;
+    }
+    %}
+
+    // How one locale writes numbers, money, dates and plurals.
+    class Locale {
+        // The tag it was made for ("en-KE").
+        public tag: string
+        // The language ("en") and region ("KE", or "").
+        public language: string
+        public region: string
+        // The decimal mark and the group separator.
+        public decimal: string = "."
+        public group: string = ","
+        // Digits in the first group and in the ones before it (3 and 3; 3 and 2 in India),
+        // and the fewest integer digits that get grouped at all (2 in Spanish: 1234, 12.345).
+        public groupFirst: int = 3
+        public groupRest: int = 3
+        public minGroup: int = 1
+        // Whether money is written "KES 12.50" (true) or "12,50 KES".
+        public currencyFirst: bool = true
+        // Whether a currency symbol touches the number ("$12.50") or is spaced ("R$ 12,50").
+        public symbolSpaced: bool = false
+        // January first, short and long; Sunday first, short and long. "|"-separated in the data.
+        public monthsShort: Array<string>
+        public months: Array<string>
+        // Month names as used inside a date (Russian declines them: "15 января").
+        public monthsInDate: Array<string>
+        public daysShort: Array<string>
+        public days: Array<string>
+        // Date patterns: short, medium, long, full; time patterns: short, medium.
+        public datePatterns: Array<string>
+        public timePatterns: Array<string>
+        // How the date and the time are joined ("{date}, {time}").
+        public dateTimeJoin: string = "{date}, {time}"
+        // AM and PM.
+        public am: string = "AM"
+        public pm: string = "PM"
+        private pluralRule: string = "one"
+
+        private static cache: HashMap<string, Locale> = new HashMap<string, Locale>()
+        private static lock: Mutex = new Mutex()
+
+        constructor(tag: string) {
+            let t = Str.replace(Str.trim(tag), "_", "-");
+            let dash = Str.indexOf(t, "-");
+            self.language = Str.lower(dash < 0 ? t : t[..dash]);
+            self.region = dash < 0 ? "" : Str.upper(t[dash + 1..]);
+            self.tag = self.region == "" ? self.language : self.language + "-" + self.region;
+            self.load();
+        }
+
+        // The locale for a BCP 47 tag ("en-KE", "fr", "pt_BR"); made once and shared.
+        static fn of(tag: string) -> Locale {
+            Locale.lock.lock();
+            try {
+                if (Locale.cache.containsKey(tag)) { return Locale.cache.get(tag); }
+                let l = new Locale(tag);
+                Locale.cache.put(tag, l);
+                return l;
+            } finally { Locale.lock.unlock(); }
+        }
+        // The languages with data of their own.
+        static fn languages() -> Array<string> { return Str.split("en sw fr de es pt it nl ru ja zh", " "); }
+
+        // ── numbers ──────────────────────────────────────────────────────────
+        // `x` with this locale's separators: up to 3 decimals without trailing zeros, or
+        // exactly `decimals` of them.
+        fn number(x: double, decimals: int = -1) -> string {
+            let d = decimals < 0 ? 3 : decimals;
+            let trim = decimals < 0;
+            return self.digits(x, d, trim);
+        }
+        // A whole number with group separators.
+        fn integer(n: long) -> string { return self.digits(n as double, 0, false); }
+        // `ratio` as a percentage (0.256 -> "26%"; "25,6 %" in French and German).
+        fn percent(ratio: double, decimals: int = 0) -> string {
+            let s = self.digits(ratio * 100.0, decimals, false);
+            if (self.language == "fr") { return s + "\u{202f}%"; }
+            if (self.language == "de" || self.language == "es" || self.language == "ru") { return s + "\u{a0}%"; }
+            return s + "%";
+        }
+        // An amount of money: "KES 1,234.50" with the currency code, or with its symbol
+        // ("$1,234.50", "1.234,50 €") when `symbol` is true and one is known. The decimals are
+        // the currency's (2 for KES, 0 for JPY, 3 for KWD).
+        fn currency(amount: double, code: string, symbol: bool = false) -> string {
+            let c = Str.upper(code);
+            let signed = self.digits(amount, Locale.currencyDigits(c), false);
+            let negative = Str.startsWith(signed, "-");
+            let digits = negative ? signed[1..] : signed;
+            let mark = symbol ? Locale.symbolOf(c, self.region) : c;
+            let isSymbol = mark != c;
+            let text = "";
+            if (self.currencyFirst) {
+                text = isSymbol && !self.symbolSpaced ? mark + digits : mark + " " + digits;
+            } else {
+                text = digits + " " + mark;
+            }
+            return negative ? "-" + text : text;
+        }
+        // A size in bytes: "1.5 MB" (powers of 1000; "MiB" units with `binary`).
+        fn bytes(n: long, binary: bool = false) -> string {
+            let base = binary ? 1024.0 : 1000.0;
+            let units = binary ? ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] : ["B", "kB", "MB", "GB", "TB", "PB"];
+            let v = n as double;
+            let u = 0;
+            while ((v >= base || v <= -base) && u < 5) { v = v / base; u += 1; }
+            return self.digits(v, u == 0 ? 0 : 1, true) + " " + units[u];
+        }
+        // A number written in this locale read back ("1.234,5" in German is 1234.5);
+        // ValueError when it is not one.
+        fn parseNumber(text: string) -> double {
+            let t = Str.trim(text);
+            t = Str.replace(t, self.group, "");
+            t = Str.replace(t, "\u{a0}", "");
+            t = Str.replace(t, "\u{202f}", "");
+            if (self.decimal != ".") { t = Str.replace(t, self.decimal, "."); }
+            if (t == "" || !Locale.isNumeral(t)) { throw new ValueError("'${text}' is not a number in ${self.tag}"); }
+            return %{ atof(t) %} as double;
+        }
+
+        // ── plurals ──────────────────────────────────────────────────────────
+        // The CLDR plural category of `n`: "zero", "one", "two", "few", "many" or "other".
+        fn plural(n: double) -> string {
+            let whole = n == (n as long) as double;
+            let i = (n < 0 ? -n : n) as long;
+            let r = self.pluralRule;
+            if (r == "none") { return "other"; }
+            if (r == "one") { return whole && i == 1 ? "one" : "other"; }
+            if (r == "zero-one") { return i == 0 || i == 1 ? "one" : "other"; }
+            if (r == "slavic") {
+                if (!whole) { return "other"; }
+                let m10 = i % 10;
+                let m100 = i % 100;
+                if (m10 == 1 && m100 != 11) { return "one"; }
+                if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) { return "few"; }
+                return "many";
+            }
+            return "other";
+        }
+        // The form of `forms` ("one:# file|other:# files") that fits `n`, with # replaced by
+        // `n` written in this locale. "other" is used when the category has no form.
+        fn choose(n: double, forms: string) -> string {
+            let want = self.plural(n);
+            let fallback = "";
+            for (part in Str.split(forms, "|")) {
+                let colon = Str.indexOf(part, ":");
+                if (colon < 0) { continue; }
+                let cat = Str.trim(part[..colon]);
+                let text = part[colon + 1..];
+                if (cat == want) { return Str.replace(text, "#", self.number(n)); }
+                if (cat == "other") { fallback = text; }
+            }
+            return Str.replace(fallback, "#", self.number(n));
+        }
+
+        // ── dates ────────────────────────────────────────────────────────────
+        // The date in a style: "short" (15/01/2025), "medium" (15 Jan 2025), "long"
+        // (15 January 2025) or "full" (Wednesday, 15 January 2025).
+        fn date(dt: DateTime, style: string = "medium") -> string { return self.format(dt, self.datePatterns[Locale.styleIndex(style)]); }
+        // The time in a style: "short" (15:04 or 3:04 PM) or "medium" (with seconds).
+        fn time(dt: DateTime, style: string = "short") -> string {
+            return self.format(dt, self.timePatterns[style == "short" ? 0 : 1]);
+        }
+        // The date and the time ("15 Jan 2025, 15:04").
+        fn dateTime(dt: DateTime, dateStyle: string = "medium", timeStyle: string = "short") -> string {
+            return Str.replace(Str.replace(self.dateTimeJoin, "{date}", self.date(dt, dateStyle)), "{time}", self.time(dt, timeStyle));
+        }
+        // The month's name (1 is January), long or short.
+        fn monthName(month: int, short: bool = false) -> string { return short ? self.monthsShort[month - 1] : self.months[month - 1]; }
+        // The weekday's name (0 is Sunday, as DateTime.weekday counts), long or short.
+        fn dayName(weekday: int, short: bool = false) -> string { return short ? self.daysShort[weekday] : self.days[weekday]; }
+        // The date written with a CLDR-style pattern: yyyy yy MMMM MMM MM M dd d EEEE EEE
+        // HH H hh h mm ss a, and 'quoted text' as is.
+        fn format(dt: DateTime, pattern: string) -> string {
+            let sb = new StringBuilder();
+            let n = pattern.length;
+            let i = 0;
+            while (i < n) {
+                let c = pattern[i] as int;
+                if (c == 39) {
+                    let end = Str.indexOf(pattern, "'", i + 1);
+                    if (end < 0) { end = n; }
+                    sb.append(end == i + 1 ? "'" : pattern[i + 1..end]);
+                    i = end + 1;
+                    continue;
+                }
+                let isLetter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+                if (!isLetter) { sb.appendChar(c); i += 1; continue; }
+                let j = i;
+                while (j < n && pattern[j] as int == c) { j += 1; }
+                let run = j - i;
+                i = j;
+                if (c == 121) { sb.append(run == 2 ? Locale.pad(dt.year() % 100) : str(dt.year())); }
+                else if (c == 77 || c == 76) {
+                    if (run >= 4) { sb.append(c == 77 ? self.monthsInDate[dt.month() - 1] : self.months[dt.month() - 1]); }
+                    else if (run == 3) { sb.append(self.monthsShort[dt.month() - 1]); }
+                    else if (run == 2) { sb.append(Locale.pad(dt.month())); }
+                    else { sb.append(str(dt.month())); }
+                }
+                else if (c == 100) { sb.append(run == 2 ? Locale.pad(dt.day()) : str(dt.day())); }
+                else if (c == 69) { sb.append(run >= 4 ? self.days[dt.weekday()] : self.daysShort[dt.weekday()]); }
+                else if (c == 72) { sb.append(run == 2 ? Locale.pad(dt.hour()) : str(dt.hour())); }
+                else if (c == 104) {
+                    let h = dt.hour() % 12;
+                    if (h == 0) { h = 12; }
+                    sb.append(run == 2 ? Locale.pad(h) : str(h));
+                }
+                else if (c == 109) { sb.append(Locale.pad(dt.minute())); }
+                else if (c == 115) { sb.append(Locale.pad(dt.second())); }
+                else if (c == 97) { sb.append(dt.hour() < 12 ? self.am : self.pm); }
+                else { for (k in 0..run) { sb.appendChar(c); } }
+            }
+            return sb.toString();
+        }
+
+        // ── currency data ────────────────────────────────────────────────────
+        // The decimals a currency is written with (ISO 4217).
+        static fn currencyDigits(code: string) -> int {
+            if (Str.contains(" BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX UYI VND VUV XAF XOF XPF ", " " + code + " ")) { return 0; }
+            if (Str.contains(" BHD IQD JOD KWD LYD OMR TND ", " " + code + " ")) { return 3; }
+            return 2;
+        }
+        // A currency's symbol ($, €, KSh), or the code when there is no well-known one.
+        static fn symbolOf(code: string, region: string = "") -> string {
+            if (code == "USD") { return region == "US" || region == "" ? "$" : "US$"; }
+            if (code == "EUR") { return "€"; }
+            if (code == "GBP") { return "£"; }
+            if (code == "JPY") { return "¥"; }
+            if (code == "CNY") { return region == "CN" ? "¥" : "CN¥"; }
+            if (code == "INR") { return "₹"; }
+            if (code == "KES") { return "KSh"; }
+            if (code == "TZS") { return "TSh"; }
+            if (code == "UGX") { return "USh"; }
+            if (code == "NGN") { return "₦"; }
+            if (code == "GHS") { return "GH₵"; }
+            if (code == "ZAR") { return "R"; }
+            if (code == "BRL") { return "R$"; }
+            if (code == "RUB") { return "₽"; }
+            if (code == "KRW") { return "₩"; }
+            if (code == "CHF") { return "CHF"; }
+            if (code == "CAD") { return region == "CA" ? "$" : "CA$"; }
+            if (code == "AUD") { return region == "AU" ? "$" : "A$"; }
+            return code;
+        }
+
+        // ── internals ────────────────────────────────────────────────────────
+        private fn digits(x: double, decimals: int, trim: bool) -> string {
+            let dec = self.decimal;
+            let grp = self.group;
+            let g1 = self.groupFirst;
+            let g2 = self.groupRest;
+            let mg = self.minGroup;
+            return %{ grav_loc_number(x, decimals, trim, dec, grp, g1, g2, mg) %} as string;
+        }
+        private static fn pad(n: int) -> string { return n < 10 ? "0" + str(n) : str(n); }
+        private static fn styleIndex(style: string) -> int {
+            if (style == "short") { return 0; }
+            if (style == "long") { return 2; }
+            if (style == "full") { return 3; }
+            return 1;
+        }
+        private static fn isNumeral(t: string) -> bool {
+            let seen = false;
+            let i = 0;
+            if (t[0] as int == 45 || t[0] as int == 43) { i = 1; }
+            let dot = false;
+            while (i < t.length) {
+                let c = t[i] as int;
+                if (c >= 48 && c <= 57) { seen = true; }
+                else if (c == 46 && !dot) { dot = true; }
+                else { return false; }
+                i += 1;
+            }
+            return seen;
+        }
+        private static fn list(s: string) -> Array<string> { return Str.split(s, "|"); }
+
+        private fn load() {
+            let l = self.language;
+            let r = self.region;
+            let known = Str.contains(" en sw fr de es pt it nl ru ja zh ", " " + l + " ");
+            if (!known) { l = "en"; r = ""; }
+            // English (and the default)
+            self.monthsShort = Locale.list("Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec");
+            self.months = Locale.list("January|February|March|April|May|June|July|August|September|October|November|December");
+            self.daysShort = Locale.list("Sun|Mon|Tue|Wed|Thu|Fri|Sat");
+            self.days = Locale.list("Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday");
+            self.datePatterns = Locale.list("dd/MM/yyyy|d MMM yyyy|d MMMM yyyy|EEEE, d MMMM yyyy");
+            self.timePatterns = Locale.list("HH:mm|HH:mm:ss");
+            if (l == "en") {
+                if (r == "US" || r == "" || r == "PH") {
+                    self.datePatterns = Locale.list("M/d/yyyy|MMM d, yyyy|MMMM d, yyyy|EEEE, MMMM d, yyyy");
+                    self.timePatterns = Locale.list("h:mm a|h:mm:ss a");
+                } else if (r == "CA") {
+                    self.datePatterns = Locale.list("yyyy-MM-dd|MMM d, yyyy|MMMM d, yyyy|EEEE, MMMM d, yyyy");
+                    self.timePatterns = Locale.list("h:mm a|h:mm:ss a");
+                } else if (r == "IN" || r == "AU") {
+                    self.timePatterns = Locale.list("h:mm a|h:mm:ss a");
+                    if (r == "IN") { self.groupRest = 2; }
+                } else if (r == "ZA") {
+                    self.datePatterns = Locale.list("yyyy/MM/dd|dd MMM yyyy|dd MMMM yyyy|EEEE, dd MMMM yyyy");
+                    self.decimal = ",";
+                    self.group = "\u{a0}";
+                }
+            } else if (l == "sw") {
+                self.monthsShort = Locale.list("Jan|Feb|Mac|Apr|Mei|Jun|Jul|Ago|Sep|Okt|Nov|Des");
+                self.months = Locale.list("Januari|Februari|Machi|Aprili|Mei|Juni|Julai|Agosti|Septemba|Oktoba|Novemba|Desemba");
+                self.daysShort = Locale.list("Jumapili|Jumatatu|Jumanne|Jumatano|Alhamisi|Ijumaa|Jumamosi");
+                self.days = self.daysShort;
+                self.am = "AM";
+                self.pm = "PM";
+            } else if (l == "fr") {
+                self.decimal = ",";
+                self.group = "\u{202f}";
+                self.currencyFirst = false;
+                self.monthsShort = Locale.list("janv.|févr.|mars|avr.|mai|juin|juil.|août|sept.|oct.|nov.|déc.");
+                self.months = Locale.list("janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre");
+                self.daysShort = Locale.list("dim.|lun.|mar.|mer.|jeu.|ven.|sam.");
+                self.days = Locale.list("dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi");
+                self.datePatterns = Locale.list("dd/MM/yyyy|d MMM yyyy|d MMMM yyyy|EEEE d MMMM yyyy");
+                self.dateTimeJoin = "{date} {time}";
+                self.pluralRule = "zero-one";
+                if (r == "CA") { self.datePatterns[0] = "yyyy-MM-dd"; }
+                if (r == "CH") { self.group = "\u{202f}"; self.datePatterns[0] = "dd.MM.yyyy"; }
+            } else if (l == "de") {
+                self.decimal = ",";
+                self.group = ".";
+                self.currencyFirst = false;
+                self.monthsShort = Locale.list("Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez.");
+                self.months = Locale.list("Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember");
+                self.daysShort = Locale.list("So.|Mo.|Di.|Mi.|Do.|Fr.|Sa.");
+                self.days = Locale.list("Sonntag|Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag");
+                self.datePatterns = Locale.list("dd.MM.yyyy|dd.MM.yyyy|d. MMMM yyyy|EEEE, d. MMMM yyyy");
+                if (r == "CH") { self.group = "’"; self.decimal = "."; self.currencyFirst = true; self.symbolSpaced = true; }
+                if (r == "AT") { self.group = "\u{a0}"; self.currencyFirst = true; self.symbolSpaced = true; }
+            } else if (l == "es") {
+                self.decimal = ",";
+                self.group = ".";
+                self.minGroup = 5;
+                self.currencyFirst = false;
+                self.monthsShort = Locale.list("ene|feb|mar|abr|may|jun|jul|ago|sept|oct|nov|dic");
+                self.months = Locale.list("enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre");
+                self.daysShort = Locale.list("dom|lun|mar|mié|jue|vie|sáb");
+                self.days = Locale.list("domingo|lunes|martes|miércoles|jueves|viernes|sábado");
+                self.datePatterns = Locale.list("dd/MM/yyyy|d MMM yyyy|d 'de' MMMM 'de' yyyy|EEEE, d 'de' MMMM 'de' yyyy");
+                if (r == "MX" || r == "US") {
+                    self.decimal = "."; self.group = ","; self.currencyFirst = true; self.minGroup = 1;
+                }
+            } else if (l == "pt") {
+                self.decimal = ",";
+                self.group = ".";
+                self.symbolSpaced = true;
+                self.monthsShort = Locale.list("jan.|fev.|mar.|abr.|mai.|jun.|jul.|ago.|set.|out.|nov.|dez.");
+                self.months = Locale.list("janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro");
+                self.daysShort = Locale.list("dom.|seg.|ter.|qua.|qui.|sex.|sáb.");
+                self.days = Locale.list("domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado");
+                self.datePatterns = Locale.list("dd/MM/yyyy|d 'de' MMM 'de' yyyy|d 'de' MMMM 'de' yyyy|EEEE, d 'de' MMMM 'de' yyyy");
+                self.pluralRule = "zero-one";
+                if (r == "PT") { self.group = "\u{a0}"; self.currencyFirst = false; self.pluralRule = "one"; self.minGroup = 5; }
+            } else if (l == "it") {
+                self.decimal = ",";
+                self.group = ".";
+                self.currencyFirst = false;
+                self.monthsShort = Locale.list("gen|feb|mar|apr|mag|giu|lug|ago|set|ott|nov|dic");
+                self.months = Locale.list("gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre");
+                self.daysShort = Locale.list("dom|lun|mar|mer|gio|ven|sab");
+                self.days = Locale.list("domenica|lunedì|martedì|mercoledì|giovedì|venerdì|sabato");
+                self.datePatterns = Locale.list("dd/MM/yyyy|d MMM yyyy|d MMMM yyyy|EEEE d MMMM yyyy");
+            } else if (l == "nl") {
+                self.decimal = ",";
+                self.group = ".";
+                self.symbolSpaced = true;
+                self.monthsShort = Locale.list("jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec");
+                self.months = Locale.list("januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december");
+                self.daysShort = Locale.list("zo|ma|di|wo|do|vr|za");
+                self.days = Locale.list("zondag|maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag");
+                self.datePatterns = Locale.list("dd-MM-yyyy|d MMM yyyy|d MMMM yyyy|EEEE d MMMM yyyy");
+                self.dateTimeJoin = "{date} {time}";
+            } else if (l == "ru") {
+                self.decimal = ",";
+                self.group = "\u{a0}";
+                self.currencyFirst = false;
+                self.monthsShort = Locale.list("янв.|февр.|мар.|апр.|мая|июн.|июл.|авг.|сент.|окт.|нояб.|дек.");
+                self.months = Locale.list("январь|февраль|март|апрель|май|июнь|июль|август|сентябрь|октябрь|ноябрь|декабрь");
+                self.daysShort = Locale.list("вс|пн|вт|ср|чт|пт|сб");
+                self.days = Locale.list("воскресенье|понедельник|вторник|среда|четверг|пятница|суббота");
+                self.datePatterns = Locale.list("dd.MM.yyyy|d MMM yyyy 'г.'|d MMMM yyyy 'г.'|EEEE, d MMMM yyyy 'г.'");
+                self.pluralRule = "slavic";
+            } else if (l == "ja" || l == "zh") {
+                self.monthsShort = Locale.list("1月|2月|3月|4月|5月|6月|7月|8月|9月|10月|11月|12月");
+                self.months = self.monthsShort;
+                self.pluralRule = "none";
+                self.dateTimeJoin = "{date} {time}";
+                if (l == "ja") {
+                    self.daysShort = Locale.list("日|月|火|水|木|金|土");
+                    self.days = Locale.list("日曜日|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日");
+                    self.datePatterns = Locale.list("yyyy/MM/dd|yyyy/MM/dd|yyyy年M月d日|yyyy年M月d日EEEE");
+                    self.am = "午前";
+                    self.pm = "午後";
+                } else {
+                    self.daysShort = Locale.list("周日|周一|周二|周三|周四|周五|周六");
+                    self.days = Locale.list("星期日|星期一|星期二|星期三|星期四|星期五|星期六");
+                    self.datePatterns = Locale.list("yyyy/M/d|yyyy年M月d日|yyyy年M月d日|yyyy年M月d日EEEE");
+                    self.am = "上午";
+                    self.pm = "下午";
+                }
+            }
+            self.monthsInDate = self.months;
+            if (l == "ru") {
+                self.monthsInDate = Locale.list("января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря");
+            }
+        }
+    }
+}
