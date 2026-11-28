@@ -1,0 +1,82 @@
+// Protobuf: the wire format by hand, and schema encoding checked byte for byte against
+// Google's protobuf runtime (python-protobuf 4.21 made the reference bytes).
+import "std"
+
+let SCHEMA: string = r"""
+syntax = "proto3";
+package demo;
+option go_package = "x/demo"; import "google/protobuf/timestamp.proto";
+
+// a person
+message Person {
+  string name = 1;
+  int32 id = 2;
+  repeated string emails = 3;
+  enum Kind { UNKNOWN = 0; ADMIN = 1; USER = 2; }
+  Kind kind = 4;
+  message Address { string city = 1; sint64 zip = 2; }
+  Address home = 5;
+  repeated int32 scores = 6;
+  map<string, int64> counts = 7;
+  double ratio = 8;
+  bytes blob = 9;
+  bool active = 10;
+  fixed32 f32 = 11;
+  sfixed64 sf64 = 12;
+  float fl = 13;
+  int64 big = 14;
+  uint32 u32 = 15;
+  oneof contact { string phone = 16; string skype = 17; }
+  reserved 99;
+}
+
+/* a service, ignored for now */
+service People { rpc Get (Person) returns (Person); }
+"""
+
+let REFERENCE: string = "0a0c416461204c6f76656c61636510f9ffffffffffffffff011a086140782e746573741a086240792e7465737420012a0c0a074e6169726f6269108f03320d01feffffffffffffffff01ac023a050a0178102a41000000000000d03f4a030001ff50015d00286bee61fbffffffffffffff6d0000c03f70818080808080801078ffffffff0f820100"
+
+test "schema encoding matches the reference implementation" {
+    let schema = ProtoSchema.parse(SCHEMA)
+    assert(schema.hasMessage("demo.Person") && schema.hasMessage("Person.Address"))
+    let person = Json.parse("{\"emails\": [\"a@x.test\", \"b@y.test\"], \"name\": \"Ada Lovelace\", \"id\": -7, \"kind\": \"ADMIN\", \"home\": {\"city\": \"Nairobi\", \"zip\": -200}, \"scores\": [1, -2, 300], \"counts\": {\"x\": 42}, \"ratio\": 0.25, \"blob\": \"AAH/\", \"active\": true, \"f32\": 4000000000, \"sf64\": -5, \"fl\": 1.5, \"big\": 9007199254740993, \"u32\": 4294967295, \"phone\": \"\"}")
+    assertEq(schema.encode("Person", person).toHex(), REFERENCE)
+}
+
+test "decoding the reference bytes" {
+    let schema = ProtoSchema.parse(SCHEMA)
+    let p = schema.decode("demo.Person", Bytes.fromHex(REFERENCE))
+    assertEq(p.toJson(), "{\"name\":\"Ada Lovelace\",\"id\":-7,\"emails\":[\"a@x.test\",\"b@y.test\"],\"kind\":\"ADMIN\",\"home\":{\"city\":\"Nairobi\",\"zip\":-200},\"scores\":[1,-2,300],\"counts\":{\"x\":42},\"ratio\":0.25,\"blob\":\"AAH/\",\"active\":true,\"f32\":4000000000,\"sf64\":-5,\"fl\":1.5,\"big\":9007199254740993,\"u32\":4294967295,\"phone\":\"\"}")
+    // proto3 defaults are left out; camelCase names are accepted
+    let s2 = ProtoSchema.parse("syntax = \"proto3\"; message M { int32 a = 1; string user_name = 2; repeated int32 xs = 3 [packed = false]; }")
+    assertEq(s2.encode("M", Json.parse("{\"a\": 0, \"userName\": \"\", \"xs\": []}")).size(), 0)
+    assertEq(s2.encode("M", Json.parse("{\"xs\": [1, 2]}")).toHex(), "18011802")
+    assertEq(s2.decode("M", Bytes.fromHex("18011802")).toJson(), "{\"xs\":[1,2]}")
+    // unknown fields are skipped
+    assertEq(s2.decode("M", Bytes.fromHex("0801a20603616263b80601")).toJson(), "{\"a\":1}")
+}
+
+test "the wire format by hand" {
+    let inner = new ProtoWriter().string(1, "x")
+    let w = new ProtoWriter().int32(1, 150).sint64(2, -1).boolean(3, true).float64(4, 1.0).fixed32(5, 7).message(6, inner).packedVarints(7, [1, 2, 3])
+    assertEq(w.toBytes().toHex(), "0896011001180121000000000000f03f2d0700000032030a01783a03010203")
+    let r = new ProtoReader(w.toBytes())
+    let seen = new Array<string>()
+    while (r.next()) {
+        if (r.field == 1) { seen.push(str(r.varint())) }
+        else if (r.field == 2) { seen.push(str(r.sint())) }
+        else if (r.field == 3) { seen.push(str(r.boolean())) }
+        else if (r.field == 4) { seen.push(str(r.float64())) }
+        else if (r.field == 6) { let m = r.message(); m.next(); seen.push(m.string()) }
+        else if (r.field == 7) { seen.push(str(r.packedVarints().size())) }
+        else { r.skip() }
+    }
+    assertEq(Str.join(seen, ","), "150,-1,true,1,x,3")
+    let bad = 0
+    try { let t = new ProtoReader(Bytes.fromHex("0a05ab")); t.next(); t.string() } catch (e: ValueError) { bad += 1 }
+    try { let t = new ProtoReader(Bytes.fromHex("08ff")); t.next(); t.varint() } catch (e: ValueError) { bad += 1 }
+    try { ProtoSchema.parse("message M { int32 a = ; }") } catch (e: ValueError) { bad += 1 }
+    try { ProtoSchema.parse("message M { Missing a = 1; }") } catch (e: ValueError) { bad += 1 }
+    try { ProtoSchema.parse(SCHEMA).encode("Person", Json.parse("{\"nope\": 1}")) } catch (e: ValueError) { bad += 1 }
+    assertEq(bad, 5)
+}

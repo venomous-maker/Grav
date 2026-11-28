@@ -1,0 +1,744 @@
+// lib/data/protobuf.grav — Protocol Buffers (protobuf.dev): the wire format read and written
+// field by field, and messages encoded and decoded from a .proto schema with no code
+// generation, as JSON values.
+//
+//   let schema = ProtoSchema.parse("syntax = \"proto3\"; message Person { string name = 1; int32 id = 2; repeated string emails = 3; }")
+//   let bytes = schema.encode("Person", Json.parse("{\"name\": \"Ada\", \"id\": 7, \"emails\": [\"a@x.test\"]}"))
+//   schema.decode("Person", bytes)                  // {"name":"Ada","id":7,"emails":["a@x.test"]}
+//
+//   let w = new ProtoWriter().string(1, "Ada").int32(2, 7)       // by hand
+//   let r = new ProtoReader(w.toBytes())
+//   while (r.next()) { if (r.field == 1) { print(r.string()) } else { r.skip() } }
+//
+// The schema parser takes proto2 and proto3 files: packages, nested messages and enums,
+// repeated and packed fields, oneofs, maps, and the scalar types; services, options,
+// reserved ranges and imports are read and ignored. JSON follows the protobuf JSON mapping
+// except that field names stay as declared (camelCase names are accepted on input), 64-bit
+// integers are numbers, and default values are left out both ways. bytes are Base64.
+import "../core/exception.grav"
+import "../collections/array.grav"
+import "../collections/hashmap.grav"
+import "../text/string.grav"
+import "../text/convert.grav"
+import "bytes.grav"
+import "encoding.grav"
+import "json.grav"
+
+namespace std.data {
+    %{
+    #include <string.h>
+    #include <stdint.h>
+    static int grav_pb_put_varint(unsigned char* p, unsigned long long v) {
+        int n = 0;
+        while (v >= 0x80) { p[n++] = (unsigned char)(v | 0x80); v >>= 7; }
+        p[n++] = (unsigned char)v;
+        return n;
+    }
+    // A varint at p (at most end); the bytes it took, 0 when cut short or too long.
+    static int grav_pb_get_varint(const unsigned char* p, const unsigned char* end, unsigned long long* v) {
+        unsigned long long r = 0; int shift = 0, n = 0;
+        while (p + n < end && n < 10) {
+            unsigned char b = p[n++];
+            r |= (unsigned long long)(b & 0x7F) << shift;
+            if (!(b & 0x80)) { *v = r; return n; }
+            shift += 7;
+        }
+        return 0;
+    }
+    static long long grav_pb_dbits(double d) { long long b; memcpy(&b, &d, 8); return b; }
+    static double grav_pb_bitsd(long long b) { double d; memcpy(&d, &b, 8); return d; }
+    static unsigned int grav_pb_fbits(double d) { float f = (float)d; unsigned int b; memcpy(&b, &f, 4); return b; }
+    static double grav_pb_bitsf(unsigned int b) { float f; memcpy(&f, &b, 4); return (double)f; }
+    %}
+
+    // Builds a message in the protobuf wire format, field by field.
+    class ProtoWriter {
+        private buf: Bytes = new Bytes()
+        constructor() {}
+
+        fn int32(field: int, v: long) -> ProtoWriter { return self.int64(field, v); }
+        fn int64(field: int, v: long) -> ProtoWriter { self.tag(field, 0); self.varint(v); return self; }
+        fn uint32(field: int, v: long) -> ProtoWriter { self.tag(field, 0); self.varint(v & 0xffffffff); return self; }
+        fn uint64(field: int, v: long) -> ProtoWriter { self.tag(field, 0); self.varint(v); return self; }
+        fn sint32(field: int, v: long) -> ProtoWriter { return self.sint64(field, v); }
+        fn sint64(field: int, v: long) -> ProtoWriter { self.tag(field, 0); self.varint((v << 1) ^ (v >> 63)); return self; }
+        fn boolean(field: int, v: bool) -> ProtoWriter { self.tag(field, 0); self.varint(v ? 1 : 0); return self; }
+        fn enumValue(field: int, v: int) -> ProtoWriter { return self.int64(field, v as long); }
+        fn fixed32(field: int, v: long) -> ProtoWriter { self.tag(field, 5); self.buf.appendUintLE(v & 0xffffffff, 4); return self; }
+        fn sfixed32(field: int, v: long) -> ProtoWriter { return self.fixed32(field, v); }
+        fn fixed64(field: int, v: long) -> ProtoWriter { self.tag(field, 1); self.buf.appendUintLE(v, 8); return self; }
+        fn sfixed64(field: int, v: long) -> ProtoWriter { return self.fixed64(field, v); }
+        fn float32(field: int, v: double) -> ProtoWriter { self.tag(field, 5); self.buf.appendUintLE(%{ (long long)grav_pb_fbits(v) %} as long, 4); return self; }
+        fn float64(field: int, v: double) -> ProtoWriter { self.tag(field, 1); self.buf.appendUintLE(%{ grav_pb_dbits(v) %} as long, 8); return self; }
+        fn string(field: int, v: string) -> ProtoWriter {
+            self.tag(field, 2);
+            self.varint(v.length as long);
+            self.buf.appendString(v);
+            return self;
+        }
+        fn bytes(field: int, v: Bytes) -> ProtoWriter {
+            self.tag(field, 2);
+            self.varint(v.size() as long);
+            self.buf.append(v);
+            return self;
+        }
+        // A nested message (written by its own ProtoWriter).
+        fn message(field: int, m: ProtoWriter) -> ProtoWriter { return self.bytes(field, m.buf); }
+        // A packed repeated field of varints (int32, int64, uint, bool, enum); zigzag for sint.
+        fn packedVarints(field: int, values: Array<long>, zigzag: bool = false) -> ProtoWriter {
+            let inner = new ProtoWriter();
+            for (v in values) { inner.varint(zigzag ? (v << 1) ^ (v >> 63) : v); }
+            return self.bytes(field, inner.buf);
+        }
+        // A packed repeated field of doubles.
+        fn packedDoubles(field: int, values: Array<double>) -> ProtoWriter {
+            let inner = new Bytes(values.size() * 8);
+            for (v in values) { inner.appendUintLE(%{ grav_pb_dbits(v) %} as long, 8); }
+            return self.bytes(field, inner);
+        }
+        // The message so far.
+        fn toBytes() -> Bytes { return self.buf; }
+        fn size() -> int { return self.buf.size(); }
+
+        // A field's key: (field << 3) | wire type.
+        fn tag(field: int, wire: int) {
+            if (field < 1 || field > 536870911) { throw new ValueError("a protobuf field number is 1 to 536870911, not ${field}"); }
+            self.varint(((field as long) << 3) | (wire as long));
+        }
+        // A raw varint.
+        fn varint(v: long) {
+            self.buf.reserve(self.buf.size() + 10);
+            let b = self.buf;
+            %{ { int grav_n = grav_pb_put_varint(b->data + b->len, (unsigned long long)v); b->len += grav_n; } %};
+        }
+    }
+
+    // Reads a message in the wire format: next() moves to each field in turn, then one of
+    // the readers takes its value (or skip() passes it).
+    class ProtoReader {
+        // The current field's number and wire type (0 varint, 1 64-bit, 2 length-delimited,
+        // 5 32-bit).
+        public field: int = 0
+        public wireType: int = 0
+        private data: Bytes
+        private pos: int
+        private end: int
+
+        constructor(data: Bytes, start: int = 0, end: int = -1) {
+            self.data = data;
+            self.pos = start;
+            self.end = end < 0 ? data.size() : end;
+        }
+        // Moves to the next field; false at the end.
+        fn next() -> bool {
+            if (self.pos >= self.end) { return false; }
+            let key = self.rawVarint();
+            self.field = (key >> 3) as int;
+            self.wireType = (key & 7) as int;
+            if (self.field == 0) { throw new ValueError("a protobuf field number 0"); }
+            if (self.wireType == 3 || self.wireType == 4 || self.wireType > 5) { throw new ValueError("protobuf wire type ${self.wireType} is not supported"); }
+            return true;
+        }
+        fn varint() -> long { self.expect(0); return self.rawVarint(); }
+        fn int32() -> long { return (self.varint() as int) as long; }
+        fn sint() -> long { let v = self.varint(); return ((v >> 1) & 0x7fffffffffffffff) ^ -(v & 1); }
+        fn boolean() -> bool { return self.varint() != 0; }
+        fn fixed32() -> long { self.expect(5); self.need(4); let v = self.data.readUintLE(self.pos, 4); self.pos += 4; return v; }
+        fn sfixed32() -> long { return (self.fixed32() as int) as long; }
+        fn fixed64() -> long { self.expect(1); self.need(8); let v = self.data.readUintLE(self.pos, 8); self.pos += 8; return v; }
+        fn float32() -> double { let b = self.fixed32(); return %{ grav_pb_bitsf((unsigned int)b) %} as double; }
+        fn float64() -> double { let b = self.fixed64(); return %{ grav_pb_bitsd(b) %} as double; }
+        fn bytes() -> Bytes {
+            let n = self.length();
+            let out = self.data.slice(self.pos, self.pos + n);
+            self.pos += n;
+            return out;
+        }
+        fn string() -> string { return self.bytes().toString(); }
+        // A nested message, read by a reader of its own (no copy).
+        fn message() -> ProtoReader {
+            let n = self.length();
+            let r = new ProtoReader(self.data, self.pos, self.pos + n);
+            self.pos += n;
+            return r;
+        }
+        // A packed repeated field of varints (zigzag-decoded for sint).
+        fn packedVarints(zigzag: bool = false) -> Array<long> {
+            let n = self.length();
+            let stop = self.pos + n;
+            let out = new Array<long>();
+            while (self.pos < stop) {
+                let v = self.rawVarint();
+                out.push(zigzag ? (((v >> 1) & 0x7fffffffffffffff) ^ -(v & 1)) : v);
+            }
+            return out;
+        }
+        // Passes over the current field's value.
+        fn skip() {
+            if (self.wireType == 0) { self.rawVarint(); }
+            else if (self.wireType == 1) { self.need(8); self.pos += 8; }
+            else if (self.wireType == 5) { self.need(4); self.pos += 4; }
+            else { let n = self.length(); self.pos += n; }
+        }
+        // Bytes left to read.
+        fn remaining() -> int { return self.end - self.pos; }
+
+        fn rawVarint() -> long {
+            let v: ulong = 0;
+            let d = self.data.rawData();
+            let p = self.pos;
+            let e = self.end;
+            let used = %{ grav_pb_get_varint(d + p, d + e, &v) %} as int;
+            if (used == 0) { throw new ValueError("a protobuf varint is cut short or too long"); }
+            self.pos += used;
+            return v as long;
+        }
+        private fn length() -> int {
+            self.expect(2);
+            let n = self.rawVarint();
+            if (n < 0 || n > (self.end - self.pos) as long) { throw new ValueError("a protobuf field runs past the end of the message"); }
+            return n as int;
+        }
+        private fn need(n: int) { if (self.end - self.pos < n) { throw new ValueError("a protobuf value is cut short"); } }
+        private fn expect(wire: int) {
+            if (self.wireType != wire) { throw new ValueError("protobuf field ${self.field} has wire type ${self.wireType}, not ${wire}"); }
+        }
+    }
+
+    // A field of a message type.
+    class ProtoField {
+        public name: string
+        public jsonName: string
+        public number: int
+        // A scalar type ("int32", "string", ...) or a message or enum's full name.
+        public type: string
+        public repeated: bool = false
+        public packed: bool = true
+        public isMap: bool = false
+        public mapKey: string = ""
+        public mapValue: string = ""
+        // In a oneof, or marked optional: written even when it holds the default.
+        public explicit: bool = false
+        constructor(name: string, number: int, type: string) {
+            self.name = name;
+            self.number = number;
+            self.type = type;
+            self.jsonName = ProtoField.camel(name);
+        }
+        private static fn camel(s: string) -> string {
+            let parts = Str.split(s, "_");
+            let out = parts[0];
+            for (i in 1..parts.size()) {
+                let p = parts[i];
+                if (p.length > 0) { out = out + Str.upper(p[..1]) + p[1..]; }
+            }
+            return out;
+        }
+    }
+
+    class ProtoMessageType {
+        public name: string
+        public fields: Array<ProtoField> = new Array<ProtoField>()
+        public byNumber: HashMap<int, ProtoField> = new HashMap<int, ProtoField>()
+        public byName: HashMap<string, ProtoField> = new HashMap<string, ProtoField>()
+        public proto3: bool
+        constructor(name: string, proto3: bool) { self.name = name; self.proto3 = proto3; }
+        // Keeps fields in number order: messages are written that way, as protoc's code does.
+        fn add(f: ProtoField) {
+            let at = self.fields.size();
+            while (at > 0 && self.fields[at - 1].number > f.number) { at -= 1; }
+            self.fields.insert(at, f);
+            self.byNumber.put(f.number, f);
+            self.byName.put(f.name, f);
+            if (f.jsonName != f.name) { self.byName.put(f.jsonName, f); }
+        }
+    }
+
+    class ProtoEnumType {
+        public name: string
+        public byNumber: HashMap<long, string> = new HashMap<long, string>()
+        public byName: HashMap<string, long> = new HashMap<string, long>()
+        constructor(name: string) { self.name = name; }
+    }
+
+    // The messages and enums of one or more .proto files.
+    class ProtoSchema {
+        private messages: HashMap<string, ProtoMessageType> = new HashMap<string, ProtoMessageType>()
+        private enums: HashMap<string, ProtoEnumType> = new HashMap<string, ProtoEnumType>()
+        private pending: Array<ProtoField> = new Array<ProtoField>()
+        private scopes: Array<string> = new Array<string>()
+        constructor() {}
+
+        // A schema from .proto source; ValueError (with the line) when it does not parse.
+        static fn parse(source: string) -> ProtoSchema {
+            let s = new ProtoSchema();
+            s.add(source);
+            return s;
+        }
+        // Adds another file's types (for imports: add the imported file first or after).
+        fn add(source: string) -> ProtoSchema {
+            let p = new ProtoParser(source, self);
+            p.file();
+            self.resolve();
+            return self;
+        }
+        // The full names of the message types ("pkg.Person", "pkg.Person.Address").
+        fn messageNames() -> Array<string> { return self.messages.keys(); }
+        fn hasMessage(name: string) -> bool { return self.findMessage(name) != null; }
+
+        // A message as protobuf bytes, from JSON (`type` its full or short name).
+        fn encode(type: string, value: JsonValue) -> Bytes {
+            let m = self.requireMessage(type);
+            let w = new ProtoWriter();
+            self.writeMessage(m, value, w);
+            return w.toBytes();
+        }
+        // Protobuf bytes as JSON.
+        fn decode(type: string, data: Bytes) -> JsonValue {
+            let m = self.requireMessage(type);
+            return self.readMessage(m, new ProtoReader(data));
+        }
+
+        // ── for the parser ───────────────────────────────────────────────────
+        fn defineMessage(m: ProtoMessageType) { self.messages.put(m.name, m); }
+        fn defineEnum(e: ProtoEnumType) { self.enums.put(e.name, e); }
+        fn want(f: ProtoField, scope: string) { self.pending.push(f); self.scopes.push(scope); }
+
+        // ── internals ────────────────────────────────────────────────────────
+        private fn resolve() {
+            for (i in 0..self.pending.size()) {
+                let f = self.pending[i];
+                let scope = self.scopes[i];
+                if (f.isMap) {
+                    f.mapValue = self.resolveName(f.mapValue, scope, f.name);
+                } else {
+                    f.type = self.resolveName(f.type, scope, f.name);
+                }
+            }
+            self.pending = new Array<ProtoField>();
+            self.scopes = new Array<string>();
+        }
+        private fn resolveName(t: string, scope: string, field: string) -> string {
+            if (ProtoSchema.isScalar(t)) { return t; }
+            if (Str.startsWith(t, ".")) {
+                let full = t[1..];
+                if (self.messages.containsKey(full) || self.enums.containsKey(full)) { return full; }
+                throw new ValueError("unknown type ${t} for field ${field}");
+            }
+            // innermost scope outward, as protoc resolves
+            let sc = scope;
+            while (true) {
+                let candidate = sc == "" ? t : sc + "." + t;
+                if (self.messages.containsKey(candidate) || self.enums.containsKey(candidate)) { return candidate; }
+                if (sc == "") { break; }
+                let dot = Str.lastIndexOf(sc, ".");
+                sc = dot < 0 ? "" : sc[..dot];
+            }
+            throw new ValueError("unknown type ${t} for field ${field}");
+        }
+        private fn findMessage(name: string) -> ProtoMessageType? {
+            if (self.messages.containsKey(name)) { return self.messages.get(name); }
+            for (k in self.messages.keys()) {
+                if (Str.endsWith(k, "." + name)) { return self.messages.get(k); }
+            }
+            return null;
+        }
+        private fn requireMessage(name: string) -> ProtoMessageType {
+            let m = self.findMessage(name);
+            if (m == null) { throw new ValueError("no message type ${name} in the schema"); }
+            return m;
+        }
+        static fn isScalar(t: string) -> bool {
+            return Str.contains(" double float int32 int64 uint32 uint64 sint32 sint64 fixed32 fixed64 sfixed32 sfixed64 bool string bytes ", " " + t + " ");
+        }
+        private static fn isVarint(t: string) -> bool {
+            return Str.contains(" int32 int64 uint32 uint64 sint32 sint64 bool ", " " + t + " ");
+        }
+
+        private fn writeMessage(m: ProtoMessageType, v: JsonValue, w: ProtoWriter) {
+            if (!v.isObject()) { throw new ValueError("${m.name} must be a JSON object"); }
+            for (k in v.keys()) {
+                if (!m.byName.containsKey(k)) { throw new ValueError("${m.name} has no field ${k}"); }
+            }
+            for (f in m.fields) {
+                let x = v.has(f.name) ? v.get(f.name) : v.get(f.jsonName);
+                if (x.isNull()) { continue; }
+                if (f.isMap) {
+                    if (!x.isObject()) { throw new ValueError("${m.name}.${f.name} is a map: give an object"); }
+                    for (mk in x.keys()) {
+                        let entry = new ProtoWriter();
+                        self.writeValue("key", f.mapKey, 1, ProtoSchema.mapKeyValue(f.mapKey, mk), entry, true);
+                        self.writeValue("value", f.mapValue, 2, x.get(mk), entry, true);
+                        w.message(f.number, entry);
+                    }
+                    continue;
+                }
+                if (f.repeated) {
+                    if (!x.isArray()) { throw new ValueError("${m.name}.${f.name} is repeated: give an array"); }
+                    if (f.packed && (ProtoSchema.isVarint(f.type) || self.enums.containsKey(f.type) || f.type == "double" || f.type == "float" || Str.contains(f.type, "fixed"))) {
+                        if (x.size() == 0) { continue; }
+                        let inner = new ProtoWriter();
+                        for (item in x) { self.writeBare(f.type, item, inner); }
+                        w.bytes(f.number, inner.toBytes());
+                    } else {
+                        for (item in x) { self.writeValue(f.name, f.type, f.number, item, w, true); }
+                    }
+                    continue;
+                }
+                self.writeValue(f.name, f.type, f.number, x, w, f.explicit || !m.proto3);
+            }
+        }
+        private static fn mapKeyValue(type: string, key: string) -> JsonValue {
+            if (type == "string") { return JsonValue.ofString(key); }
+            if (type == "bool") { return JsonValue.ofBool(key == "true"); }
+            return JsonValue.ofInt(Format.toLong(key));
+        }
+        // One value with its key; proto3 leaves out a default unless `always`.
+        private fn writeValue(name: string, type: string, number: int, x: JsonValue, w: ProtoWriter, always: bool) {
+            if (self.messages.containsKey(type)) {
+                let inner = new ProtoWriter();
+                self.writeMessage(self.messages.get(type), x, inner);
+                w.message(number, inner);
+                return;
+            }
+            if (!always && ProtoSchema.isDefault(type, x, self)) { return; }
+            if (type == "string") { w.string(number, x.asString()); return; }
+            if (type == "bytes") { w.bytes(number, Base64.decodeBytes(x.asString())); return; }
+            w.tag(number, ProtoSchema.wireOf(type, self));
+            self.writeBare(type, x, w);
+        }
+        // A scalar without its key (for packed fields too).
+        private fn writeBare(type: string, x: JsonValue, w: ProtoWriter) {
+            let b = w.toBytes();
+            if (type == "double") { let d = ProtoSchema.num(x); b.appendUintLE(%{ grav_pb_dbits(d) %} as long, 8); return; }
+            if (type == "float") { let d = ProtoSchema.num(x); b.appendUintLE(%{ (long long)grav_pb_fbits(d) %} as long, 4); return; }
+            if (type == "fixed32" || type == "sfixed32") { b.appendUintLE(ProtoSchema.int(x) & 0xffffffff, 4); return; }
+            if (type == "fixed64" || type == "sfixed64") { b.appendUintLE(ProtoSchema.int(x), 8); return; }
+            if (type == "bool") { w.varint(x.isBool() ? (x.asBool() ? 1 : 0) : (ProtoSchema.int(x) != 0 ? 1 : 0)); return; }
+            if (type == "sint32" || type == "sint64") { let v = ProtoSchema.int(x); w.varint((v << 1) ^ (v >> 63)); return; }
+            if (type == "uint32") { w.varint(ProtoSchema.int(x) & 0xffffffff); return; }
+            if (self.enums.containsKey(type)) {
+                let e = self.enums.get(type);
+                if (x.isString()) {
+                    if (!e.byName.containsKey(x.asString())) { throw new ValueError("${x.asString()} is not a value of ${type}"); }
+                    w.varint(e.byName.get(x.asString()));
+                } else { w.varint(ProtoSchema.int(x)); }
+                return;
+            }
+            // int32 (negative ones take ten bytes, as the format says), int64, uint64
+            w.varint(ProtoSchema.int(x));
+        }
+        private static fn wireOf(type: string, s: ProtoSchema) -> int {
+            if (type == "double" || type == "fixed64" || type == "sfixed64") { return 1; }
+            if (type == "float" || type == "fixed32" || type == "sfixed32") { return 5; }
+            if (type == "string" || type == "bytes" || s.messages.containsKey(type)) { return 2; }
+            return 0;
+        }
+        private static fn isDefault(type: string, x: JsonValue, s: ProtoSchema) -> bool {
+            if (x.isBool()) { return !x.asBool(); }
+            if (x.isString()) {
+                if (s.enums.containsKey(type)) {
+                    let e = s.enums.get(type);
+                    return e.byName.containsKey(x.asString()) && e.byName.get(x.asString()) == 0;
+                }
+                return x.asString() == "" && (type == "string" || type == "bytes") || (x.asString() == "0" && !(type == "string" || type == "bytes"));
+            }
+            if (x.isNumber()) { return x.asFloat() == 0.0; }
+            return false;
+        }
+        private static fn int(x: JsonValue) -> long {
+            if (x.isString()) { return Format.toLong(x.asString()); }
+            if (x.isBool()) { return x.asBool() ? 1 : 0; }
+            return x.isInteger() ? x.asLong() : x.asFloat() as long;
+        }
+        private static fn num(x: JsonValue) -> double {
+            if (x.isString()) { return Format.toDouble(x.asString()); }
+            return x.asFloat();
+        }
+
+        private fn readMessage(m: ProtoMessageType, r: ProtoReader) -> JsonValue {
+            let out = Json.object();
+            while (r.next()) {
+                if (!m.byNumber.containsKey(r.field)) { r.skip(); continue; }
+                let f = m.byNumber.get(r.field);
+                if (f.isMap) {
+                    let er = r.message();
+                    let key = "";
+                    let val: JsonValue = Json.nil();
+                    while (er.next()) {
+                        if (er.field == 1) { key = ProtoSchema.keyText(self.readScalar(f.mapKey, er)); }
+                        else if (er.field == 2) { val = self.readOne(f.mapValue, er); }
+                        else { er.skip(); }
+                    }
+                    if (!out.has(f.name)) { out.set(f.name, Json.object()); }
+                    out.get(f.name).set(key, val);
+                    continue;
+                }
+                if (f.repeated) {
+                    if (!out.has(f.name)) { out.set(f.name, Json.array()); }
+                    let arr = out.get(f.name);
+                    if (r.wireType == 2 && ProtoSchema.wireOf(f.type, self) != 2) {
+                        // packed
+                        let pr = r.message();
+                        while (pr.remaining() > 0) {
+                            pr.wireType = ProtoSchema.wireOf(f.type, self);
+                            arr.push(self.readScalar(f.type, pr));
+                        }
+                    } else { arr.push(self.readOne(f.type, r)); }
+                    continue;
+                }
+                if (self.messages.containsKey(f.type) && out.has(f.name)) {
+                    // a message field seen twice merges
+                    let more = self.readOne(f.type, r);
+                    for (k in more.keys()) { out.get(f.name).set(k, more.get(k)); }
+                    continue;
+                }
+                out.set(f.name, self.readOne(f.type, r));
+            }
+            return out;
+        }
+        private fn readOne(type: string, r: ProtoReader) -> JsonValue {
+            if (self.messages.containsKey(type)) { return self.readMessage(self.messages.get(type), r.message()); }
+            return self.readScalar(type, r);
+        }
+        private fn readScalar(type: string, r: ProtoReader) -> JsonValue {
+            if (type == "string") { return JsonValue.ofString(r.string()); }
+            if (type == "bytes") { return JsonValue.ofString(Base64.encodeBytes(r.bytes())); }
+            if (type == "double") { return JsonValue.ofFloat(r.float64()); }
+            if (type == "float") { return JsonValue.ofFloat(r.float32()); }
+            if (type == "fixed32") { return JsonValue.ofInt(r.fixed32()); }
+            if (type == "sfixed32") { return JsonValue.ofInt(r.sfixed32()); }
+            if (type == "fixed64" || type == "sfixed64") { return JsonValue.ofInt(r.fixed64()); }
+            if (type == "bool") { return JsonValue.ofBool(r.boolean()); }
+            if (type == "sint32" || type == "sint64") { return JsonValue.ofInt(r.sint()); }
+            if (type == "int32") { return JsonValue.ofInt(r.int32()); }
+            if (type == "uint32") { return JsonValue.ofInt(r.varint() & 0xffffffff); }
+            if (self.enums.containsKey(type)) {
+                let v = r.varint();
+                let e = self.enums.get(type);
+                return e.byNumber.containsKey(v) ? JsonValue.ofString(e.byNumber.get(v)) : JsonValue.ofInt(v);
+            }
+            return JsonValue.ofInt(r.varint());
+        }
+        private static fn keyText(v: JsonValue) -> string {
+            if (v.isString()) { return v.asString(); }
+            if (v.isBool()) { return v.asBool() ? "true" : "false"; }
+            return str(v.asLong());
+        }
+    }
+
+    // Reads .proto source into a ProtoSchema.
+    class ProtoParser {
+        private toks: Array<string> = new Array<string>()
+        private lines: Array<int> = new Array<int>()
+        private at: int = 0
+        private schema: ProtoSchema
+        private pkg: string = ""
+        private proto3: bool = false
+
+        constructor(source: string, schema: ProtoSchema) {
+            self.schema = schema;
+            self.lex(source);
+        }
+
+        fn file() {
+            while (self.at < self.toks.size()) {
+                let t = self.take();
+                if (t == "syntax" || t == "edition") {
+                    self.expect("=");
+                    let v = self.take();
+                    self.proto3 = v == "\"proto3\"" || t == "edition";
+                    self.expect(";");
+                } else if (t == "package") {
+                    self.pkg = self.fullIdent();
+                    self.expect(";");
+                } else if (t == "import" || t == "option") {
+                    self.skipStatement();
+                } else if (t == "message") {
+                    self.message(self.pkg);
+                } else if (t == "enum") {
+                    self.enumType(self.pkg);
+                } else if (t == "service" || t == "extend") {
+                    self.take();
+                    self.skipBlock();
+                } else if (t == ";") {
+                    // empty statement
+                } else {
+                    self.fail("unexpected '${t}'");
+                }
+            }
+        }
+
+        private fn message(scope: string) {
+            let name = self.take();
+            let full = scope == "" ? name : scope + "." + name;
+            let m = new ProtoMessageType(full, self.proto3);
+            self.schema.defineMessage(m);
+            self.expect("{");
+            while (self.peek() != "}") {
+                let t = self.peek();
+                if (t == "message") { self.take(); self.message(full); }
+                else if (t == "enum") { self.take(); self.enumType(full); }
+                else if (t == "option" || t == "reserved" || t == "extensions") { self.skipStatement(); }
+                else if (t == "extend") { self.take(); self.take(); self.skipBlock(); }
+                else if (t == "oneof") {
+                    self.take();
+                    self.take();
+                    self.expect("{");
+                    while (self.peek() != "}") {
+                        if (self.peek() == "option") { self.skipStatement(); continue; }
+                        let f = self.field(full);
+                        f.explicit = true;
+                        m.add(f);
+                    }
+                    self.expect("}");
+                }
+                else if (t == ";") { self.take(); }
+                else { m.add(self.field(full)); }
+            }
+            self.expect("}");
+        }
+        private fn field(scope: string) -> ProtoField {
+            let label = "";
+            if (self.peek() == "repeated" || self.peek() == "optional" || self.peek() == "required") { label = self.take(); }
+            let f: ProtoField = null;
+            if (self.peek() == "map") {
+                self.take();
+                self.expect("<");
+                let k = self.take();
+                self.expect(",");
+                let v = self.fullIdent();
+                self.expect(">");
+                let name = self.take();
+                self.expect("=");
+                f = new ProtoField(name, self.number(), "map");
+                f.isMap = true;
+                f.mapKey = k;
+                f.mapValue = v;
+                f.repeated = false;
+            } else {
+                let type = self.fullIdent();
+                let name = self.take();
+                self.expect("=");
+                f = new ProtoField(name, self.number(), type);
+                f.repeated = label == "repeated";
+                f.explicit = label == "optional" || label == "required";
+                f.packed = self.proto3;
+            }
+            if (self.peek() == "[") {
+                self.take();
+                while (self.peek() != "]") {
+                    let opt = self.take();
+                    if (opt == "packed") {
+                        self.expect("=");
+                        f.packed = self.take() == "true";
+                    } else if (opt == "=") {
+                        self.take();
+                    }
+                    if (self.peek() == ",") { self.take(); }
+                }
+                self.expect("]");
+            }
+            self.expect(";");
+            self.schema.want(f, scope);
+            return f;
+        }
+        private fn enumType(scope: string) {
+            let name = self.take();
+            let e = new ProtoEnumType(scope == "" ? name : scope + "." + name);
+            self.expect("{");
+            while (self.peek() != "}") {
+                let t = self.take();
+                if (t == "option" || t == "reserved") { self.at -= 1; self.skipStatement(); continue; }
+                if (t == ";") { continue; }
+                self.expect("=");
+                let neg = false;
+                if (self.peek() == "-") { self.take(); neg = true; }
+                let v = Format.toLong(self.take());
+                if (neg) { v = -v; }
+                if (self.peek() == "[") { while (self.take() != "]") {} }
+                self.expect(";");
+                if (!e.byNumber.containsKey(v)) { e.byNumber.put(v, t); }
+                e.byName.put(t, v);
+            }
+            self.expect("}");
+            self.schema.defineEnum(e);
+        }
+        private fn number() -> int {
+            let t = self.take();
+            if (!Format.isInt(t)) { self.fail("a field number, not '${t}'"); }
+            return Format.toInt(t);
+        }
+        private fn fullIdent() -> string {
+            let s = self.take();
+            while (self.peek() == ".") { self.take(); s = s + "." + self.take(); }
+            return s;
+        }
+        private fn skipStatement() {
+            while (self.at < self.toks.size()) {
+                let t = self.take();
+                if (t == ";") { return; }
+                if (t == "{") { self.at -= 1; self.skipBlock(); return; }
+            }
+        }
+        private fn skipBlock() {
+            while (self.at < self.toks.size() && self.peek() != "{") { self.take(); }
+            self.expect("{");
+            let depth = 1;
+            while (depth > 0 && self.at < self.toks.size()) {
+                let t = self.take();
+                if (t == "{") { depth += 1; } else if (t == "}") { depth -= 1; }
+            }
+        }
+        private fn peek() -> string { return self.at < self.toks.size() ? self.toks[self.at] : ""; }
+        private fn take() -> string {
+            if (self.at >= self.toks.size()) { self.fail("the file ends early"); }
+            self.at += 1;
+            return self.toks[self.at - 1];
+        }
+        private fn expect(t: string) {
+            let got = self.peek();
+            if (got != t) { self.fail("expected '${t}', found '${got}'"); }
+            self.at += 1;
+        }
+        private fn fail(why: string) {
+            let line = self.at < self.lines.size() ? self.lines[self.at] : (self.lines.size() > 0 ? self.lines[self.lines.size() - 1] : 1);
+            throw new ValueError(".proto line ${line}: ${why}");
+        }
+        // Identifiers, numbers, strings and single punctuation; comments dropped.
+        private fn lex(src: string) {
+            let n = src.length;
+            let i = 0;
+            let line = 1;
+            while (i < n) {
+                let c = src[i] as int;
+                if (c == 10) { line += 1; i += 1; continue; }
+                if (c == 32 || c == 9 || c == 13) { i += 1; continue; }
+                if (c == 47 && i + 1 < n && src[i + 1] as int == 47) {
+                    while (i < n && src[i] as int != 10) { i += 1; }
+                    continue;
+                }
+                if (c == 47 && i + 1 < n && src[i + 1] as int == 42) {
+                    i += 2;
+                    while (i + 1 < n && !(src[i] as int == 42 && src[i + 1] as int == 47)) { if (src[i] as int == 10) { line += 1; } i += 1; }
+                    i += 2;
+                    continue;
+                }
+                let start = i;
+                if (c == 34 || c == 39) {
+                    i += 1;
+                    while (i < n && src[i] as int != c) { if (src[i] as int == 92) { i += 1; } i += 1; }
+                    i += 1;
+                } else if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95) {
+                    while (i < n) {
+                        let d = src[i] as int;
+                        if (!((d >= 48 && d <= 57) || (d >= 65 && d <= 90) || (d >= 97 && d <= 122) || d == 95)) { break; }
+                        i += 1;
+                    }
+                } else { i += 1; }
+                self.toks.push(src[start..(i > n ? n : i)]);
+                self.lines.push(line);
+            }
+        }
+    }
+}

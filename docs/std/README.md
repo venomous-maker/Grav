@@ -116,6 +116,7 @@ them too: `"42" as int`, `price as float`, `19.99 as Decimal`.
 | [image](data/image.md) | `Image`: PNG and JPEG read and written, resized, cropped, rotated; thumbnails |
 | [qrcode](data/qrcode.md) | `QrCode`: QR codes as SVG, PNG, an Image or terminal text |
 | [pdf](data/pdf.md) | `PdfDocument`, `PdfPage`, `PdfTable`: PDFs with text, fonts, tables, images, QR codes and links |
+| [protobuf](data/protobuf.md) | `ProtoSchema`, `ProtoWriter`, `ProtoReader`: Protocol Buffers from a .proto schema, as JSON |
 | [semver](data/semver.md) | `Semver`: semantic versions, ordering and npm-style ranges |
 
 ### io
