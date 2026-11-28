@@ -12,6 +12,8 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+## 1.14.0 (2026-11-28)
+
 - Twelve standard-library modules, each with a page under docs/std and tests checked against a
   reference implementation where there is one:
   - `std/text`: `Html` (escape, unescape, strip tags) and `HtmlSanitizer`, an allow-list sanitizer

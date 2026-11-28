@@ -68,7 +68,7 @@ add_executable(gravc
 )
 target_include_directories(gravc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # `import "std"` falls back to this tree's lib/ when no installed copy is found.
-target_compile_definitions(gravc PRIVATE GRAV_SOURCE_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/lib" GRAV_VERSION="1.13.4")
+target_compile_definitions(gravc PRIVATE GRAV_SOURCE_STD_DIR="${CMAKE_CURRENT_SOURCE_DIR}/lib" GRAV_VERSION="1.14.0")
 
 # `cmake --install build --prefix ~/.local` installs bin/grav and share/grav/lib.
 install(PROGRAMS $<TARGET_FILE:gravc> DESTINATION bin RENAME grav)
