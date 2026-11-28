@@ -13,11 +13,12 @@ import "std/net"
 
 fn main() {
     for (r in Dns.srv("_xmpp-server._tcp.example.com")) {
-        print("${r.target}:${r.port} (priority ${r.priority}, weight ${r.weight})")
+        print("${r.target()}:${r.port} (priority ${r.priority}, weight ${r.weight})")
     }
     for (spf in Dns.txt("example.com")) { print(spf) }
-    print(Dns.mx("example.com")[0].target)
-    print(Dns.a("example.com"), Dns.aaaa("example.com"))
+    print(Dns.mx("example.com")[0].target())
+    print(Dns.a("example.com"))
+    print(Dns.aaaa("example.com"))
     print(Dns.reverse("1.1.1.1"))
 
     let r = new DnsResolver(["1.1.1.1", "[2606:4700:4700::1111]:53"]).timeoutMs(1500).attempts(2)

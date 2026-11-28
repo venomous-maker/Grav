@@ -2,9 +2,9 @@
 // CAA, straight from the name servers (not through getaddrinfo), with answers cached for
 // their time to live.
 //
-//   for (r in Dns.srv("_xmpp-server._tcp.example.com")) { print("${r.target}:${r.port}") }
+//   for (r in Dns.srv("_xmpp-server._tcp.example.com")) { print("${r.target()}:${r.port}") }
 //   Dns.txt("example.com")                          // ["v=spf1 -all", …]
-//   Dns.mx("example.com")[0].target                 // the preferred mail server
+//   Dns.mx("example.com")[0].target()               // the preferred mail server
 //   let r = new DnsResolver(["1.1.1.1", "8.8.8.8"]).timeoutMs(1500)
 //   r.lookup("example.com", "AAAA")
 //
