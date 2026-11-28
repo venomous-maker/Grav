@@ -12,6 +12,34 @@ Packages state the compiler versions they need in `grav.toml`
 
 ## Unreleased
 
+- Twelve standard-library modules, each with a page under docs/std and tests checked against a
+  reference implementation where there is one:
+  - `std/text`: `Html` (escape, unescape, strip tags) and `HtmlSanitizer`, an allow-list sanitizer
+    for HTML from users, done as one pass in C. `Template`: Mustache templates over `JsonValue`,
+    HTML-escaped by default, compiled once and safe to render from many threads. `Diff`: line,
+    word and character diffs (Myers' linear-space algorithm, in C), with unified output that matches
+    `diff -u` and `<del>`/`<ins>` HTML. `Locale`: numbers, money (`KES 1,234.50`), dates and CLDR
+    plural rules for English (many regions), Swahili, French, German, Spanish, Portuguese, Italian,
+    Dutch, Russian, Japanese and Chinese.
+  - `std/types`: `BigInt`, integers of any size with Karatsuba multiplication, Knuth division,
+    `modPow`, `modInverse`, Miller–Rabin and product-tree factorials.
+  - `std/concurrency`: `Pool<T>` for connections and buffers: a size cap with waiting and timeouts,
+    health checks after idle time, idle eviction, discard, and per-thread affinity.
+  - `std/sys`: `MetricsRegistry`, with lock-free counters, gauges and histograms (with labels) and
+    the process's memory, CPU, threads, open files and GC backlog, in the Prometheus text format.
+  - `std/data`: `Image` reads and writes PNG (every colour type, depth and interlacing; adaptive
+    filters, as fast as Pillow) and JPEG (through libturbojpeg, loaded on first use, EXIF orientation
+    applied), with Lanczos/bicubic resizing, thumbnails, cover crops, rotation and conversion.
+    `QrCode` encodes QR codes, versions 1 to 40, matching python-qrcode module for module, as SVG,
+    PNG, an Image or terminal text. `PdfDocument` writes PDFs: the standard fonts with real metrics,
+    embedded TrueType fonts for any script, wrapped and justified text, shapes, images, vector QR
+    codes, links, and tables that continue onto new pages. `ProtoSchema` encodes and decodes
+    Protocol Buffers from a `.proto` file as JSON values (byte-identical to Google's runtime), and
+    `ProtoWriter` and `ProtoReader` handle the wire format by hand.
+  - `std/net`: `Dns` and `DnsResolver` query name servers directly for SRV, TXT, MX, A, AAAA, CNAME,
+    NS, PTR and CAA records, over UDP with EDNS0 and over TCP for truncated answers, cached by TTL.
+- `Bytes.appendUintLE` and `Bytes.readUintLE` write and read little-endian integers.
+
 ## 1.13.4 (2026-11-26)
 
 - std/net: multipart bodies are split without `memmem`, which glibc before 2.38 (Debian bookworm's)
